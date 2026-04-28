@@ -1,5 +1,36 @@
-use alas::terminal::{CommandSpec, TerminalSessionId, TerminalSessionRegistry};
+use alas::terminal::{
+    CommandSpec, TerminalBackend, TerminalBackendSession, TerminalSessionId,
+    TerminalSessionRegistry,
+};
 use std::path::PathBuf;
+
+#[derive(Default)]
+struct FakeBackend {
+    started: Vec<CommandSpec>,
+}
+
+impl TerminalBackend for FakeBackend {
+    fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
+        self.started.push(command);
+        Ok(TerminalBackendSession {
+            backend_id: self.started.len() as u64,
+        })
+    }
+}
+
+#[test]
+fn backend_starts_command_in_worktree_cwd() {
+    let mut backend = FakeBackend::default();
+    let command = CommandSpec {
+        command: "claude".to_string(),
+        cwd: PathBuf::from("/repo/wt"),
+    };
+
+    let session = backend.start(command.clone()).unwrap();
+
+    assert_eq!(session.backend_id, 1);
+    assert_eq!(backend.started, vec![command]);
+}
 
 #[test]
 fn session_id_is_stable_for_repo_and_worktree() {
