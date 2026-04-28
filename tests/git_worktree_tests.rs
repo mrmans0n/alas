@@ -1,6 +1,6 @@
 mod support;
 
-use alas::git::{GitRunner, GitWorktreeService, WorktreeKind};
+use alas::git::{GitInspectorService, GitRunner, GitWorktreeService, WorktreeKind};
 
 #[test]
 fn test_repo_helper_creates_valid_repo() {
@@ -30,6 +30,23 @@ fn git_runner_reports_stderr_on_failure() {
     assert!(message.contains(&repo.path().display().to_string()));
     assert!(message.contains("stderr:"));
     assert!(message.contains("not a git command"));
+}
+
+#[test]
+fn inspector_reports_changed_files_and_recent_commits() {
+    let repo = support::git_repo::TestRepo::new();
+    std::fs::write(repo.path().join("README.md"), "changed\n").unwrap();
+
+    let inspector = GitInspectorService::new(GitRunner::new());
+    let state = inspector.inspect(repo.path(), 5).unwrap();
+
+    assert!(state.changed_files.iter().any(|f| f.path == "README.md"));
+    assert!(
+        state
+            .recent_commits
+            .iter()
+            .any(|c| c.summary.contains("initial"))
+    );
 }
 
 #[test]
