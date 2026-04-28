@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::config::AppConfig;
 use crate::git::{WorktreeInfo, WorktreeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -46,6 +47,49 @@ impl WorktreeNode {
 }
 
 impl AlasModel {
+    pub fn repository_nodes_from_discovery(
+        config: &AppConfig,
+        repo_id: &str,
+        worktrees: Vec<WorktreeInfo>,
+    ) -> Vec<RepositoryNode> {
+        let Some(repository) = config
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repo_id)
+        else {
+            return Vec::new();
+        };
+
+        let archived_paths = config.archived_worktrees.get(repo_id);
+        let worktrees = worktrees
+            .into_iter()
+            .map(|worktree| {
+                let is_archived = archived_paths
+                    .is_some_and(|paths| paths.iter().any(|path| path == &worktree.path));
+                WorktreeNode::from_info(worktree, is_archived)
+            })
+            .collect();
+
+        let name = repository.name.clone().unwrap_or_else(|| {
+            repository
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("repository")
+                .to_string()
+        });
+
+        vec![RepositoryNode {
+            id: repository.id.clone(),
+            name,
+            path: repository.path.clone(),
+            worktrees,
+            show_archived: false,
+            unavailable: false,
+        }]
+    }
+
     pub fn set_repositories(&mut self, repositories: Vec<RepositoryNode>) {
         self.repositories = repositories;
     }

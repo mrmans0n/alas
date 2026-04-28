@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use alas::app::{AlasModel, RepositoryNode, WorktreeNode};
+use alas::config::{AppConfig, AppRepository};
 use alas::git::{WorktreeInfo, WorktreeKind};
 
 fn worktree(path: &str, kind: WorktreeKind) -> WorktreeInfo {
@@ -22,6 +23,32 @@ fn selecting_worktree_updates_selection() {
     let selected = model.selected_worktree().expect("selected worktree");
     assert_eq!(selected.repo_id, "repo-1");
     assert_eq!(selected.path, path);
+}
+
+#[test]
+fn model_builds_repository_nodes_with_archived_flags() {
+    let mut config = AppConfig::default();
+    config.repositories.push(AppRepository {
+        id: "repo-1".to_string(),
+        path: PathBuf::from("/repo"),
+        name: Some("repo".to_string()),
+    });
+    config
+        .archived_worktrees
+        .insert("repo-1".to_string(), vec![PathBuf::from("/repo/old")]);
+
+    let nodes = AlasModel::repository_nodes_from_discovery(
+        &config,
+        "repo-1",
+        vec![
+            worktree("/repo", WorktreeKind::Main),
+            worktree("/repo/old", WorktreeKind::Linked),
+        ],
+    );
+
+    assert_eq!(nodes.len(), 1);
+    assert!(!nodes[0].worktrees[0].archived);
+    assert!(nodes[0].worktrees[1].archived);
 }
 
 #[test]
