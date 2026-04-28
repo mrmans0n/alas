@@ -1,0 +1,1 @@
+//! Configuration types placeholder.

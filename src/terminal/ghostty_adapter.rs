@@ -1,0 +1,1 @@
+//! Ghostty terminal adapter placeholder.

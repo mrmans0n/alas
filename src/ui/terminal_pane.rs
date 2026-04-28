@@ -1,0 +1,1 @@
+//! UI terminal pane placeholder.

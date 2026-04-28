@@ -1,0 +1,1 @@
+//! Git command runner placeholder.

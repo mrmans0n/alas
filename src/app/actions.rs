@@ -1,0 +1,1 @@
+//! Application actions placeholder.

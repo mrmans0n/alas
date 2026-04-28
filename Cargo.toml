@@ -1,0 +1,29 @@
+[package]
+name = "alas"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+directories = "6"
+indexmap = { version = "2", features = ["serde"] }
+
+# GPUI is the Rust UI framework used by Zed. If crates.io does not have the
+# needed version, switch this dependency to Zed's Git repository during this task.
+gpui = { version = "0.2", features = ["runtime_shaders"] }
+
+# libghostty-rs currently exposes Ghostty VT bindings through libghostty-vt.
+# Alas keeps this behind src/terminal/ghostty_adapter.rs. If the project adds
+# higher-level PTY/process crates, add them here without changing TerminalBackend.
+libghostty-vt = { version = "0.1", optional = true }
+
+[features]
+default = []
+ghostty-vt = ["dep:libghostty-vt"]
+
+[dev-dependencies]
+tempfile = "3"
+pretty_assertions = "1"
