@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 
 use super::GitRunner;
 
@@ -42,6 +42,72 @@ impl GitWorktreeService {
             .with_context(|| format!("failed to list Git worktrees for {}", repo_path.display()))?;
 
         Ok(parse_worktrees(&output.stdout))
+    }
+
+    pub fn create_worktree(
+        &self,
+        repo_path: &Path,
+        base_ref: &str,
+        branch_name: &str,
+        target_path: &Path,
+    ) -> anyhow::Result<()> {
+        let target_path = target_path.to_str().with_context(|| {
+            format!(
+                "worktree path is not valid UTF-8: {}",
+                target_path.display()
+            )
+        })?;
+
+        self.runner
+            .run(
+                repo_path,
+                &["worktree", "add", "-b", branch_name, target_path, base_ref],
+            )
+            .with_context(|| format!("failed to create Git worktree at {target_path}"))?;
+
+        Ok(())
+    }
+
+    pub fn remove_worktree(&self, repo_path: &Path, worktree_path: &Path) -> anyhow::Result<()> {
+        let worktrees = self.list_worktrees(repo_path)?;
+        let worktree = worktrees
+            .iter()
+            .find(|worktree| paths_match(&worktree.path, worktree_path))
+            .with_context(|| format!("Git worktree not found: {}", worktree_path.display()))?;
+
+        if worktree.kind == WorktreeKind::Main {
+            bail!("cannot remove main worktree: {}", worktree_path.display());
+        }
+
+        let worktree_path = worktree_path.to_str().with_context(|| {
+            format!(
+                "worktree path is not valid UTF-8: {}",
+                worktree_path.display()
+            )
+        })?;
+
+        self.runner
+            .run(repo_path, &["worktree", "remove", worktree_path])
+            .with_context(|| format!("failed to remove Git worktree at {worktree_path}"))?;
+
+        Ok(())
+    }
+
+    pub fn prune_worktrees(&self, repo_path: &Path) -> anyhow::Result<()> {
+        self.runner
+            .run(repo_path, &["worktree", "prune"])
+            .with_context(|| {
+                format!("failed to prune Git worktrees for {}", repo_path.display())
+            })?;
+
+        Ok(())
+    }
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
 }
 

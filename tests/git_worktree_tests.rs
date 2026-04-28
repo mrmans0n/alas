@@ -70,3 +70,41 @@ fn discovers_main_and_linked_worktrees() {
         w.path.canonicalize().unwrap() == linked_path && w.branch.as_deref() == Some("feature-a")
     }));
 }
+
+#[test]
+fn creates_worktree_from_base_ref() {
+    let repo = support::git_repo::TestRepo::new();
+    let linked = repo.worktree_path("feature-b");
+    let service = GitWorktreeService::new(GitRunner::new());
+
+    service
+        .create_worktree(repo.path(), "HEAD", "feature-b", &linked)
+        .unwrap();
+
+    assert!(linked.exists());
+    let linked_path = linked.canonicalize().unwrap();
+    let worktrees = service.list_worktrees(repo.path()).unwrap();
+    assert!(
+        worktrees
+            .iter()
+            .any(|w| w.path.canonicalize().unwrap() == linked_path)
+    );
+}
+
+#[test]
+fn removes_linked_worktree_but_rejects_main_worktree() {
+    let repo = support::git_repo::TestRepo::new();
+    let linked = repo.worktree_path("feature-c");
+    let service = GitWorktreeService::new(GitRunner::new());
+    service
+        .create_worktree(repo.path(), "HEAD", "feature-c", &linked)
+        .unwrap();
+
+    service.remove_worktree(repo.path(), &linked).unwrap();
+    assert!(!linked.exists());
+
+    let err = service
+        .remove_worktree(repo.path(), repo.path())
+        .unwrap_err();
+    assert!(err.to_string().contains("main worktree"));
+}
