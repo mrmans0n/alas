@@ -1,6 +1,110 @@
-use alas::config::{AppConfig, CommandConfig, CommandEntry, RepoConfigFile, ResolvedRepoConfig};
+use alas::config::{
+    AppConfig, AppConfigStore, AppRepository, CommandConfig, CommandEntry, RepoConfigFile,
+    RepoConfigStore, ResolvedRepoConfig,
+};
 use indexmap::IndexMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use tempfile::{NamedTempFile, tempdir};
+
+static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+#[test]
+fn app_config_round_trips_repositories_and_archives() {
+    let temp = tempdir().unwrap();
+    let config_path = temp.path().join("alas").join("config.toml");
+    let store = AppConfigStore::new(config_path.clone());
+
+    assert_eq!(store.path(), config_path.as_path());
+    assert_eq!(store.load().unwrap(), AppConfig::default());
+
+    let mut archived_worktrees = IndexMap::new();
+    archived_worktrees.insert(
+        "repo-1".to_string(),
+        vec![
+            PathBuf::from("/tmp/repo-1-worktree-a"),
+            PathBuf::from("/tmp/repo-1-worktree-b"),
+        ],
+    );
+    let config = AppConfig {
+        repositories: vec![AppRepository {
+            id: "repo-1".to_string(),
+            path: PathBuf::from("/tmp/repo-1"),
+            name: Some("Repo One".to_string()),
+        }],
+        archived_worktrees,
+    };
+
+    store.save(&config).unwrap();
+
+    assert!(config_path.exists());
+    assert_eq!(store.load().unwrap(), config);
+}
+
+#[test]
+fn app_config_save_supports_current_directory_file_paths() {
+    let _lock = CWD_LOCK.lock().unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+    let temp = tempdir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+
+    let result = (|| {
+        let config_path = PathBuf::from("config.toml");
+        let store = AppConfigStore::new(config_path.clone());
+        let config = AppConfig::default();
+
+        store.save(&config)?;
+
+        assert!(config_path.exists());
+        assert_eq!(store.load()?, config);
+        anyhow::Ok(())
+    })();
+
+    std::env::set_current_dir(original_dir).unwrap();
+    result.unwrap();
+}
+
+#[test]
+fn app_config_save_preserves_error_context_for_parent_creation() {
+    let parent_file = NamedTempFile::new().unwrap();
+    let store = AppConfigStore::new(parent_file.path().join("config.toml"));
+
+    let error = store.save(&AppConfig::default()).unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(message.contains("failed to create app config directory"));
+    assert!(message.contains(&parent_file.path().display().to_string()));
+}
+
+#[test]
+fn repo_config_store_writes_to_dot_alas_config() {
+    let temp = tempdir().unwrap();
+    let store = RepoConfigStore::for_repo(temp.path());
+
+    assert_eq!(store.path(), temp.path().join(".alas/config.toml"));
+    assert_eq!(store.load().unwrap(), None);
+
+    let mut entries = IndexMap::new();
+    entries.insert(
+        "claude".to_string(),
+        CommandEntry {
+            command: "claude".to_string(),
+        },
+    );
+    let config = RepoConfigFile {
+        default_command: None,
+        commands: Some(CommandConfig {
+            default: "claude".to_string(),
+            entries,
+        }),
+    };
+
+    store.save(&config).unwrap();
+
+    assert_eq!(store.path(), temp.path().join(".alas").join("config.toml"));
+    assert!(store.path().exists());
+    assert_eq!(store.load().unwrap(), Some(config));
+}
 
 #[test]
 fn repo_config_supports_named_commands() {
