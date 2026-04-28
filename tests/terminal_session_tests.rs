@@ -38,6 +38,22 @@ impl TerminalBackend for CountingBackend {
     }
 }
 
+#[derive(Default)]
+struct FailingOnceBackend {
+    calls: usize,
+}
+
+impl TerminalBackend for FailingOnceBackend {
+    fn start(&mut self, _command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
+        self.calls += 1;
+        if self.calls == 1 {
+            anyhow::bail!("backend failed to start");
+        }
+
+        Ok(TerminalBackendSession { backend_id: 1 })
+    }
+}
+
 #[test]
 fn backend_starts_command_in_worktree_cwd() {
     let mut backend = FakeBackend::default();
@@ -56,7 +72,7 @@ fn command_spec_runs_through_shell_with_cwd() {
 
     assert_eq!(command.display, "$SHELL");
     assert_eq!(command.program, default_shell_program());
-    assert_eq!(command.args.last().map(String::as_str), Some("$SHELL"));
+    assert_eq!(command.args, vec!["-lc".to_string(), "$SHELL".to_string()]);
     assert_eq!(command.cwd, cwd);
 }
 
@@ -82,6 +98,27 @@ fn registry_reuses_existing_session_for_worktree() {
     assert_eq!(first.handle, second.handle);
     assert_eq!(first.backend_session, second.backend_session);
     assert_eq!(backend.started.len(), 1);
+}
+
+#[test]
+fn registry_does_not_store_session_when_backend_start_fails() {
+    let mut registry = TerminalSessionRegistry::default();
+    let mut backend = FailingOnceBackend::default();
+    let id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"));
+    let command = CommandSpec::shell_command("claude", PathBuf::from("/repo/wt"));
+
+    let error = registry
+        .get_or_start(id.clone(), command.clone(), &mut backend)
+        .unwrap_err();
+    assert_eq!(error.to_string(), "backend failed to start");
+
+    let session = registry
+        .get_or_start(id, command, &mut backend)
+        .expect("retry should start a fresh session after the failed start was not stored");
+
+    assert_eq!(backend.calls, 2);
+    assert_eq!(session.handle.0, 1);
+    assert_eq!(session.backend_session.backend_id, 1);
 }
 
 #[test]

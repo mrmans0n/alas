@@ -71,8 +71,8 @@ impl TerminalSessionRegistry {
             return Ok(session.clone());
         }
 
-        self.next_handle += 1;
         let backend_session = backend.start(command.clone())?;
+        self.next_handle += 1;
         let session = TerminalSessionRef {
             id: id.clone(),
             handle: TerminalHandle(self.next_handle),
