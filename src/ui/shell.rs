@@ -18,6 +18,10 @@ use crate::{
         CommandSpec, GhosttyRenderFrame, GhosttyTerminalBackend, TerminalBackend, TerminalKeyInput,
         TerminalMetrics, TerminalScreenMode, TerminalSessionId, TerminalSessionRef,
         TerminalSessionRegistry, TerminalSize, TerminalStatus, TerminalViewport,
+        ghostty_input::{
+            TerminalKeyModifiers, TerminalMouseAction, TerminalMouseButton, TerminalMouseInput,
+            mouse_cell_position,
+        },
     },
     ui::{
         command_picker::render_command_picker,
@@ -34,9 +38,10 @@ use crate::{
     },
 };
 use gpui::{
-    App, Application, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
-    PathPromptOptions, PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window,
-    WindowOptions, div, prelude::*, px, rgb,
+    App, Application, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels,
+    PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window, WindowOptions, div,
+    prelude::*, px, rgb,
 };
 use indexmap::IndexMap;
 use std::borrow::BorrowMut;
@@ -106,6 +111,7 @@ pub struct AlasShell {
     terminal_metrics: TerminalMetrics,
     terminal_size: Option<TerminalSize>,
     terminal_body_size_px: Option<(f32, f32)>,
+    terminal_body_bounds: Option<Bounds<Pixels>>,
     terminal_scroll_offset_rows: usize,
     inspector_state: InspectorPaneState,
     inspector_request_generation: u64,
@@ -142,6 +148,7 @@ impl AlasShell {
             terminal_metrics: TerminalMetrics::fallback(),
             terminal_size: None,
             terminal_body_size_px: None,
+            terminal_body_bounds: None,
             terminal_scroll_offset_rows: 0,
             inspector_state: InspectorPaneState::default(),
             inspector_request_generation: 0,
@@ -239,16 +246,21 @@ impl AlasShell {
         self.terminal_size = Some(size);
     }
 
-    fn update_terminal_body_size(&mut self, width_px: f32, height_px: f32) -> bool {
+    fn update_terminal_body_bounds(&mut self, bounds: Bounds<Pixels>) -> bool {
+        let width_px = f32::from(bounds.size.width);
+        let height_px = f32::from(bounds.size.height);
         if width_px <= 0.0 || height_px <= 0.0 {
             return false;
         }
 
-        let next = (width_px.floor(), height_px.floor());
-        if self.terminal_body_size_px == Some(next) {
+        let next_size = (width_px.floor(), height_px.floor());
+        if self.terminal_body_size_px == Some(next_size)
+            && self.terminal_body_bounds == Some(bounds)
+        {
             return false;
         }
-        self.terminal_body_size_px = Some(next);
+        self.terminal_body_size_px = Some(next_size);
+        self.terminal_body_bounds = Some(bounds);
         true
     }
 
@@ -384,6 +396,80 @@ impl AlasShell {
                 true
             }
         }
+    }
+
+    fn write_terminal_mouse_input(&mut self, input: TerminalMouseInput) -> bool {
+        let Some(session) = self.active_terminal.as_ref() else {
+            return false;
+        };
+
+        match self
+            .terminal_backend
+            .write_mouse_input(session.backend_session, input)
+        {
+            Ok(handled) => handled,
+            Err(error) => {
+                let id = session.id.clone();
+                self.mark_terminal_tab_failed(&id, error.to_string());
+                true
+            }
+        }
+    }
+
+    fn write_terminal_mouse_event(
+        &mut self,
+        action: TerminalMouseAction,
+        button: TerminalMouseButton,
+        position: gpui::Point<Pixels>,
+        modifiers: gpui::Modifiers,
+    ) -> bool {
+        let Some(input) = self.terminal_mouse_input(action, button, position, modifiers) else {
+            return false;
+        };
+        self.write_terminal_mouse_input(input)
+    }
+
+    fn write_terminal_wheel_input(&mut self, event: &ScrollWheelEvent) -> bool {
+        let rows = terminal_scroll_rows(event);
+        if rows == 0 {
+            return false;
+        }
+
+        let action = if rows > 0 {
+            TerminalMouseAction::WheelUp
+        } else {
+            TerminalMouseAction::WheelDown
+        };
+        self.write_terminal_mouse_event(
+            action,
+            TerminalMouseButton::None,
+            event.position,
+            event.modifiers,
+        )
+    }
+
+    fn terminal_mouse_input(
+        &self,
+        action: TerminalMouseAction,
+        button: TerminalMouseButton,
+        position: gpui::Point<Pixels>,
+        modifiers: gpui::Modifiers,
+    ) -> Option<TerminalMouseInput> {
+        let bounds = self.terminal_body_bounds?;
+        let x_px = f32::from(position.x) - f32::from(bounds.origin.x);
+        let y_px = f32::from(position.y) - f32::from(bounds.origin.y);
+        let cell = mouse_cell_position(x_px, y_px, self.terminal_metrics)?;
+
+        Some(TerminalMouseInput {
+            action,
+            button,
+            col: cell.col,
+            row: cell.row,
+            x_px,
+            y_px,
+            metrics: self.terminal_metrics,
+            modifiers: terminal_mouse_modifiers(modifiers),
+        })
     }
 
     fn scroll_terminal(
@@ -1611,6 +1697,25 @@ fn terminal_scroll_rows(event: &ScrollWheelEvent) -> isize {
     }
 }
 
+fn terminal_mouse_modifiers(modifiers: gpui::Modifiers) -> TerminalKeyModifiers {
+    TerminalKeyModifiers {
+        control: modifiers.control,
+        alt: modifiers.alt,
+        shift: modifiers.shift,
+        platform: modifiers.platform,
+        function: modifiers.function,
+    }
+}
+
+fn terminal_mouse_button(button: MouseButton) -> Option<TerminalMouseButton> {
+    match button {
+        MouseButton::Left => Some(TerminalMouseButton::Left),
+        MouseButton::Right => Some(TerminalMouseButton::Right),
+        MouseButton::Middle => Some(TerminalMouseButton::Middle),
+        MouseButton::Navigate(_) => None,
+    }
+}
+
 fn render_command_settings_field(
     id: String,
     label: String,
@@ -1885,21 +1990,65 @@ impl Render for AlasShell {
             window.focus(&shell.terminal_focus);
             cx.notify();
         });
+        let on_terminal_mouse_down = cx.listener(|shell, event: &MouseDownEvent, window, cx| {
+            window.focus(&shell.terminal_focus);
+            let Some(button) = terminal_mouse_button(event.button) else {
+                return;
+            };
+            if shell.write_terminal_mouse_event(
+                TerminalMouseAction::Press,
+                button,
+                event.position,
+                event.modifiers,
+            ) {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
+        let on_terminal_mouse_up = cx.listener(|shell, event: &MouseUpEvent, _window, cx| {
+            let Some(button) = terminal_mouse_button(event.button) else {
+                return;
+            };
+            if shell.write_terminal_mouse_event(
+                TerminalMouseAction::Release,
+                button,
+                event.position,
+                event.modifiers,
+            ) {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
+        let on_terminal_mouse_move = cx.listener(|shell, event: &MouseMoveEvent, _window, cx| {
+            let button = event
+                .pressed_button
+                .and_then(terminal_mouse_button)
+                .unwrap_or(TerminalMouseButton::None);
+            if shell.write_terminal_mouse_event(
+                TerminalMouseAction::Motion,
+                button,
+                event.position,
+                event.modifiers,
+            ) {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
         let terminal_screen_mode = TerminalScreenMode::Main;
         let terminal_scrollback_rows = usize::MAX;
         let on_terminal_scroll =
             cx.listener(move |shell, event: &ScrollWheelEvent, _window, cx| {
-                if shell.scroll_terminal(event, terminal_screen_mode, terminal_scrollback_rows) {
+                if shell.write_terminal_wheel_input(event)
+                    || shell.scroll_terminal(event, terminal_screen_mode, terminal_scrollback_rows)
+                {
                     cx.stop_propagation();
                     cx.notify();
                 }
             });
         let view = cx.entity().downgrade();
         let on_terminal_body_bounds = move |bounds: gpui::Bounds<gpui::Pixels>, app: &mut App| {
-            let width = f32::from(bounds.size.width);
-            let height = f32::from(bounds.size.height);
             view.update(app, |shell, cx| {
-                if shell.update_terminal_body_size(width, height) {
+                if shell.update_terminal_body_bounds(bounds) {
                     cx.notify();
                 }
             })
@@ -2336,6 +2485,9 @@ impl Render for AlasShell {
                                     on_restart_terminal,
                                     on_focus_terminal,
                                     on_terminal_scroll,
+                                    on_terminal_mouse_down,
+                                    on_terminal_mouse_up,
+                                    on_terminal_mouse_move,
                                     on_terminal_body_bounds,
                                 ),
                             )),

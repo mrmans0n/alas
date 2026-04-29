@@ -5,12 +5,57 @@ use libghostty_vt::{
     terminal::Mode,
 };
 
-use super::terminal_input_bytes;
+use super::{terminal_input_bytes, terminal_metrics::TerminalMetrics};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PasteMode {
     Plain,
     Bracketed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseCellPosition {
+    pub col: u16,
+    pub row: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalMouseAction {
+    Press,
+    Release,
+    Motion,
+    WheelUp,
+    WheelDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalMouseButton {
+    Left,
+    Right,
+    Middle,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TerminalMouseInput {
+    pub action: TerminalMouseAction,
+    pub button: TerminalMouseButton,
+    pub col: u16,
+    pub row: u16,
+    pub x_px: f32,
+    pub y_px: f32,
+    pub metrics: TerminalMetrics,
+    pub modifiers: TerminalKeyModifiers,
+}
+
+pub fn mouse_cell_position(
+    x_px: f32,
+    y_px: f32,
+    metrics: TerminalMetrics,
+) -> Option<MouseCellPosition> {
+    metrics
+        .cell_at(x_px, y_px)
+        .map(|(col, row)| MouseCellPosition { col, row })
 }
 
 impl PasteMode {
@@ -313,6 +358,14 @@ fn ghostty_key_for_input(key: &str) -> Option<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_position_uses_metrics_to_find_cell() {
+        let metrics = crate::terminal::TerminalMetrics::fallback();
+        let position = mouse_cell_position(18.0, 38.0, metrics).unwrap();
+        assert_eq!(position.col, 2);
+        assert_eq!(position.row, 2);
+    }
 
     #[test]
     fn bracketed_paste_wraps_normalized_text() {

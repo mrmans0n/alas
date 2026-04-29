@@ -24,9 +24,9 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use super::{
     CommandSpec, GhosttyCellStyle, GhosttyCellWidth, GhosttyRenderCell, GhosttyRenderCursor,
     GhosttyRenderFrame, GhosttyRenderRow, TerminalCell, TerminalCellStyle, TerminalColor,
-    TerminalCursor, TerminalCursorShape, TerminalGridSnapshot, TerminalRow, TerminalScreenMode,
-    TerminalStatus, TerminalViewport,
-    ghostty_input::{self, TerminalKeyInput},
+    TerminalCursor, TerminalCursorShape, TerminalGridSnapshot, TerminalMetrics, TerminalRow,
+    TerminalScreenMode, TerminalStatus, TerminalViewport,
+    ghostty_input::{self, TerminalKeyInput, TerminalMouseInput},
 };
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
@@ -344,6 +344,108 @@ fn convert_rgb(color: libghostty_vt::style::RgbColor) -> TerminalColor {
 }
 
 #[cfg(feature = "ghostty-vt")]
+fn mouse_encoder_size(
+    size: TerminalSize,
+    metrics: TerminalMetrics,
+) -> libghostty_vt::mouse::EncoderSize {
+    let cell_width = mouse_metric_px(metrics.cell_width_px);
+    let cell_height = mouse_metric_px(metrics.cell_height_px);
+
+    libghostty_vt::mouse::EncoderSize {
+        screen_width: u32::from(size.cols).saturating_mul(cell_width),
+        screen_height: u32::from(size.rows).saturating_mul(cell_height),
+        cell_width,
+        cell_height,
+        padding_top: 0,
+        padding_bottom: 0,
+        padding_right: 0,
+        padding_left: 0,
+    }
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn mouse_metric_px(value: f32) -> u32 {
+    if value.is_finite() {
+        value.round().max(1.0) as u32
+    } else {
+        1
+    }
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn ghostty_mouse_event(
+    input: &TerminalMouseInput,
+) -> anyhow::Result<libghostty_vt::mouse::Event<'static>> {
+    let mut event = libghostty_vt::mouse::Event::new().context("create Ghostty mouse event")?;
+    event
+        .set_action(ghostty_mouse_action(input.action))
+        .set_button(ghostty_mouse_button(input))
+        .set_mods(ghostty_mouse_mods(&input.modifiers))
+        .set_position(libghostty_vt::mouse::Position {
+            x: input.x_px,
+            y: input.y_px,
+        });
+    Ok(event)
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn ghostty_mouse_action(
+    action: ghostty_input::TerminalMouseAction,
+) -> libghostty_vt::mouse::Action {
+    match action {
+        ghostty_input::TerminalMouseAction::Press
+        | ghostty_input::TerminalMouseAction::WheelUp
+        | ghostty_input::TerminalMouseAction::WheelDown => libghostty_vt::mouse::Action::Press,
+        ghostty_input::TerminalMouseAction::Release => libghostty_vt::mouse::Action::Release,
+        ghostty_input::TerminalMouseAction::Motion => libghostty_vt::mouse::Action::Motion,
+    }
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn ghostty_mouse_button(input: &TerminalMouseInput) -> Option<libghostty_vt::mouse::Button> {
+    match input.action {
+        ghostty_input::TerminalMouseAction::WheelUp => Some(libghostty_vt::mouse::Button::Four),
+        ghostty_input::TerminalMouseAction::WheelDown => Some(libghostty_vt::mouse::Button::Five),
+        ghostty_input::TerminalMouseAction::Press
+        | ghostty_input::TerminalMouseAction::Release
+        | ghostty_input::TerminalMouseAction::Motion => match input.button {
+            ghostty_input::TerminalMouseButton::Left => Some(libghostty_vt::mouse::Button::Left),
+            ghostty_input::TerminalMouseButton::Right => Some(libghostty_vt::mouse::Button::Right),
+            ghostty_input::TerminalMouseButton::Middle => {
+                Some(libghostty_vt::mouse::Button::Middle)
+            }
+            ghostty_input::TerminalMouseButton::None => None,
+        },
+    }
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn ghostty_mouse_mods(modifiers: &ghostty_input::TerminalKeyModifiers) -> libghostty_vt::key::Mods {
+    let mut mods = libghostty_vt::key::Mods::empty();
+    if modifiers.control {
+        mods |= libghostty_vt::key::Mods::CTRL;
+    }
+    if modifiers.alt {
+        mods |= libghostty_vt::key::Mods::ALT;
+    }
+    if modifiers.shift {
+        mods |= libghostty_vt::key::Mods::SHIFT;
+    }
+    if modifiers.platform {
+        mods |= libghostty_vt::key::Mods::SUPER;
+    }
+    mods
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn mouse_input_has_button_pressed(input: &TerminalMouseInput) -> bool {
+    matches!(
+        input.action,
+        ghostty_input::TerminalMouseAction::Press | ghostty_input::TerminalMouseAction::Motion
+    ) && input.button != ghostty_input::TerminalMouseButton::None
+}
+
+#[cfg(feature = "ghostty-vt")]
 fn convert_width(width: CellWide) -> GhosttyCellWidth {
     match width {
         CellWide::Narrow => GhosttyCellWidth::Narrow,
@@ -581,6 +683,41 @@ impl GhosttyTerminalBackend {
         let Some(bytes) = ghostty_input::encode_key_input(&state.vt.terminal, &input)? else {
             return Ok(false);
         };
+        state.write_bytes(&bytes)?;
+        Ok(true)
+    }
+
+    pub fn write_mouse_input(
+        &mut self,
+        session: TerminalBackendSession,
+        input: TerminalMouseInput,
+    ) -> anyhow::Result<bool> {
+        let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
+            anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+        })?;
+        state.poll_exit()?;
+        state.drain_output()?;
+        state.fail_on_read_error()?;
+
+        let mut encoder =
+            libghostty_vt::mouse::Encoder::new().context("create Ghostty mouse encoder")?;
+        encoder.set_options_from_terminal(&state.vt.terminal);
+        encoder
+            .set_size(mouse_encoder_size(state.size, input.metrics))
+            .set_any_button_pressed(mouse_input_has_button_pressed(&input));
+
+        let event = ghostty_mouse_event(&input)?;
+        let mut bytes = Vec::new();
+        match encoder.encode_to_vec(&event, &mut bytes) {
+            Ok(()) => {}
+            Err(libghostty_vt::Error::InvalidValue) => return Ok(false),
+            Err(error) => return Err(error).context("encode mouse input with Ghostty"),
+        }
+
+        if bytes.is_empty() {
+            return Ok(false);
+        }
+
         state.write_bytes(&bytes)?;
         Ok(true)
     }

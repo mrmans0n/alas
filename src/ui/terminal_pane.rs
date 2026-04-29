@@ -11,8 +11,8 @@ use crate::{
     },
 };
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, IntoElement, ParentElement, Pixels, ScrollWheelEvent,
-    SharedString, Styled, Window, div, prelude::*,
+    AnyElement, App, Bounds, ClickEvent, IntoElement, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, ScrollWheelEvent, SharedString, Styled, Window, div, prelude::*,
 };
 
 pub fn render_terminal_pane(
@@ -27,6 +27,9 @@ pub fn render_terminal_pane(
     on_restart: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_focus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_scroll: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
+    on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    on_mouse_up: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+    on_mouse_move: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
     on_body_bounds: impl Fn(Bounds<Pixels>, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
@@ -124,6 +127,9 @@ pub fn render_terminal_pane(
                             .flex_1()
                             .overflow_hidden()
                             .relative()
+                            .on_any_mouse_down(on_mouse_down)
+                            .capture_any_mouse_up(on_mouse_up)
+                            .on_mouse_move(on_mouse_move)
                             .child(render_terminal_body(terminal_frame, terminal_metrics))
                             .child(
                                 div()
