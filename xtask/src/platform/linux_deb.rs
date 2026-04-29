@@ -36,10 +36,7 @@ pub fn deb_paths(dist_dir: &Path, meta: &PackageMetadata) -> DebPaths {
             .join("usr/share/doc")
             .join(&meta.name)
             .join("copyright"),
-        output: dist_dir.join(format!(
-            "{}_{}_{}.deb",
-            meta.name, meta.version.debian, meta.arch.debian
-        )),
+        output: dist_dir.join(crate::metadata::deb_name(meta)),
         package_root,
         debian_dir,
     }
@@ -104,6 +101,7 @@ pub fn default_depends() -> Vec<String> {
     ]
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub fn parse_shlibdeps_substvars(text: &str) -> Vec<String> {
     text.lines()
         .find_map(|line| line.strip_prefix("shlibs:Depends="))

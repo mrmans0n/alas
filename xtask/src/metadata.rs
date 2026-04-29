@@ -49,7 +49,10 @@ pub fn appimage_name(meta: &PackageMetadata) -> String {
 }
 
 pub fn deb_name(meta: &PackageMetadata) -> String {
-    format!("alas_{}_{}.deb", meta.version.debian, meta.arch.debian)
+    format!(
+        "{}_{}_{}.deb",
+        meta.name, meta.version.debian, meta.arch.debian
+    )
 }
 
 #[derive(Debug, Deserialize)]
