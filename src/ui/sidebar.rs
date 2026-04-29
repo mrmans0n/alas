@@ -10,6 +10,7 @@ pub fn render_sidebar(
     repositories: &[RepositoryNode],
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
@@ -38,6 +39,7 @@ pub fn render_sidebar(
             render_repository(
                 repository,
                 on_remove_repository.clone(),
+                on_create_worktree.clone(),
                 on_toggle_show_archived.clone(),
                 on_archive_worktree.clone(),
                 on_unarchive_worktree.clone(),
@@ -76,6 +78,7 @@ pub fn render_sidebar(
 fn render_repository(
     repository: &RepositoryNode,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
@@ -84,6 +87,7 @@ fn render_repository(
 ) -> impl IntoElement {
     let repo_id = repository.id.clone();
     let repo_name = repository.name.clone();
+    let create_worktree_repo_id = repository.id.clone();
     let remove_label: SharedString = "Remove from Alas".into();
     let show_archived_label: SharedString = if repository.show_archived {
         "Hide archived".into()
@@ -108,12 +112,25 @@ fn render_repository(
                 )
                 .child(
                     div()
+                        .id(SharedString::from(format!(
+                            "create-worktree-{create_worktree_repo_id}"
+                        )))
                         .text_sm()
                         .when(repository.unavailable, |element| {
                             element.text_color(rgb(0xdc2626)).child("Unavailable")
                         })
                         .when(!repository.unavailable, |element| {
-                            element.text_color(rgb(0x2563eb)).child("+ Worktree")
+                            element
+                                .text_color(rgb(0x2563eb))
+                                .child("+ Worktree")
+                                .on_click(move |event, window, cx| {
+                                    on_create_worktree(
+                                        create_worktree_repo_id.clone(),
+                                        event,
+                                        window,
+                                        cx,
+                                    );
+                                })
                         }),
                 ),
         )

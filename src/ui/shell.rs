@@ -5,15 +5,18 @@ use crate::{
     config::{AppConfig, AppConfigStore, AppRepository, repository_id_for_path},
     git::{GitRunner, GitWorktreeService},
     ui::{
-        dialogs::{AddRepositoryDialogState, ConfirmRemoveRepositoryDialog},
+        dialogs::{
+            AddRepositoryDialogState, ConfirmRemoveRepositoryDialog, CreateWorktreeDialogState,
+            CreateWorktreeField,
+        },
         inspector::render_inspector_placeholder,
         sidebar::render_sidebar,
         terminal_pane::render_terminal_placeholder,
     },
 };
 use gpui::{
-    App, Application, Context, IntoElement, PathPromptOptions, PromptLevel, Render, Window,
-    WindowOptions, div, prelude::*,
+    App, Application, Context, FocusHandle, IntoElement, KeyDownEvent, PathPromptOptions,
+    PromptLevel, Render, SharedString, Window, WindowOptions, div, prelude::*, px, rgb,
 };
 
 pub struct AlasShell {
@@ -21,6 +24,8 @@ pub struct AlasShell {
     config: AppConfig,
     app_config_store: AppConfigStore,
     add_repository_dialog: Option<AddRepositoryDialogState>,
+    create_worktree_dialog: Option<CreateWorktreeDialogState>,
+    create_worktree_focus: FocusHandle,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     active_terminal: Option<()>,
     git_inspector: Option<()>,
@@ -28,7 +33,7 @@ pub struct AlasShell {
 }
 
 impl AlasShell {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         let app_config_store =
             AppConfigStore::default_store().expect("failed to resolve app config store");
         let config = app_config_store.load().unwrap_or_default();
@@ -38,6 +43,8 @@ impl AlasShell {
             config,
             app_config_store,
             add_repository_dialog: None,
+            create_worktree_dialog: None,
+            create_worktree_focus: cx.focus_handle(),
             confirm_remove_repository_dialog: None,
             active_terminal: None,
             git_inspector: None,
@@ -150,6 +157,157 @@ impl AlasShell {
             .add_repository_dialog
             .get_or_insert_with(AddRepositoryDialogState::default);
         dialog.error = Some(error.into());
+    }
+
+    fn open_create_worktree_dialog(&mut self, repo_id: String, cx: &mut Context<Self>) {
+        let Some(repo_path) = self.repository_path(&repo_id) else {
+            self.create_worktree_dialog = Some(CreateWorktreeDialogState {
+                repo_id,
+                base_ref: "HEAD".to_string(),
+                branch_name: "new-worktree".to_string(),
+                target_path_text: String::new(),
+                error: Some("Repository not found".to_string()),
+                active_field: CreateWorktreeField::BaseRef,
+            });
+            cx.notify();
+            return;
+        };
+
+        let suggested_name = "new-worktree";
+        let target_path_text = repo_path
+            .parent()
+            .map(|parent| parent.join(suggested_name).display().to_string())
+            .unwrap_or_else(|| suggested_name.to_string());
+        self.create_worktree_dialog = Some(CreateWorktreeDialogState {
+            repo_id,
+            base_ref: "HEAD".to_string(),
+            branch_name: suggested_name.to_string(),
+            target_path_text,
+            error: None,
+            active_field: CreateWorktreeField::BaseRef,
+        });
+        cx.notify();
+    }
+
+    fn set_create_worktree_field(&mut self, field: CreateWorktreeField) {
+        if let Some(dialog) = self.create_worktree_dialog.as_mut() {
+            dialog.active_field = field;
+            dialog.error = None;
+        }
+    }
+
+    fn edit_create_worktree_field(&mut self, event: &KeyDownEvent) -> bool {
+        if self.create_worktree_dialog.is_none() {
+            return false;
+        }
+
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.create_worktree_dialog = None;
+                return true;
+            }
+            "enter" => {
+                self.create_worktree_from_dialog();
+                return true;
+            }
+            "tab" => {
+                if let Some(dialog) = self.create_worktree_dialog.as_mut() {
+                    dialog.active_field = match dialog.active_field {
+                        CreateWorktreeField::BaseRef => CreateWorktreeField::BranchName,
+                        CreateWorktreeField::BranchName => CreateWorktreeField::TargetPath,
+                        CreateWorktreeField::TargetPath => CreateWorktreeField::BaseRef,
+                    };
+                    dialog.error = None;
+                }
+                return true;
+            }
+            "backspace" => {
+                if let Some(text) = self.active_create_worktree_text_mut() {
+                    text.pop();
+                }
+                if let Some(dialog) = self.create_worktree_dialog.as_mut() {
+                    dialog.error = None;
+                }
+                return true;
+            }
+            _ => {}
+        }
+
+        if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
+            return false;
+        }
+        if let Some(text) = event.keystroke.key_char.as_deref() {
+            if let Some(active_text) = self.active_create_worktree_text_mut() {
+                active_text.push_str(text);
+            }
+            if let Some(dialog) = self.create_worktree_dialog.as_mut() {
+                dialog.error = None;
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn active_create_worktree_text_mut(&mut self) -> Option<&mut String> {
+        let dialog = self.create_worktree_dialog.as_mut()?;
+        Some(match dialog.active_field {
+            CreateWorktreeField::BaseRef => &mut dialog.base_ref,
+            CreateWorktreeField::BranchName => &mut dialog.branch_name,
+            CreateWorktreeField::TargetPath => &mut dialog.target_path_text,
+        })
+    }
+
+    fn close_create_worktree_dialog(&mut self) {
+        self.create_worktree_dialog = None;
+    }
+
+    fn create_worktree_from_dialog(&mut self) {
+        let Some(dialog) = self.create_worktree_dialog.clone() else {
+            return;
+        };
+        let target_path = match dialog.validate() {
+            Ok(path) => path,
+            Err(error) => {
+                self.set_create_worktree_error(error);
+                return;
+            }
+        };
+        let Some(repo_path) = self.repository_path(&dialog.repo_id) else {
+            self.set_create_worktree_error("Repository not found");
+            return;
+        };
+
+        let service = GitWorktreeService::new(GitRunner::new());
+        if let Err(error) = service.create_worktree(
+            &repo_path,
+            dialog.base_ref.trim(),
+            dialog.branch_name.trim(),
+            &target_path,
+        ) {
+            self.set_create_worktree_error(error.to_string());
+            return;
+        }
+
+        self.refresh_repositories();
+        self.model
+            .select_worktree(dialog.repo_id.clone(), target_path.clone());
+        self.create_worktree_dialog = None;
+        self.active_terminal = None;
+    }
+
+    fn set_create_worktree_error(&mut self, error: impl Into<String>) {
+        if let Some(dialog) = self.create_worktree_dialog.as_mut() {
+            dialog.error = Some(error.into());
+        }
+    }
+
+    fn repository_path(&self, repo_id: &str) -> Option<PathBuf> {
+        self.config
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .map(|repository| repository.path.clone())
     }
 
     fn confirm_remove_repository(
@@ -277,6 +435,53 @@ impl AlasShell {
     }
 }
 
+fn render_create_worktree_field(
+    label: &'static str,
+    value: &str,
+    field: CreateWorktreeField,
+    active_field: CreateWorktreeField,
+    on_select_field: impl Fn(CreateWorktreeField, &gpui::ClickEvent, &mut Window, &mut App)
+    + Clone
+    + 'static,
+) -> impl IntoElement {
+    let is_active = field == active_field;
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(0x374151))
+                .child(label),
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("create-worktree-{field:?}")))
+                .px_2()
+                .py_1()
+                .min_h(px(28.0))
+                .rounded_md()
+                .border_1()
+                .border_color(if is_active {
+                    rgb(0x2563eb)
+                } else {
+                    rgb(0xd1d5db)
+                })
+                .bg(rgb(0xffffff))
+                .text_sm()
+                .child(if value.is_empty() {
+                    SharedString::from(" ")
+                } else {
+                    SharedString::from(value.to_string())
+                })
+                .on_click(move |event, window, cx| {
+                    on_select_field(field, event, window, cx);
+                }),
+        )
+}
+
 impl Render for AlasShell {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().downgrade();
@@ -287,6 +492,16 @@ impl Render for AlasShell {
                                          app: &mut App| {
             view.update(app, |shell, cx| {
                 shell.confirm_remove_repository(repo_id, repo_name, window, cx);
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_create_worktree = move |repo_id: String,
+                                       _event: &gpui::ClickEvent,
+                                       _window: &mut Window,
+                                       app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.open_create_worktree_dialog(repo_id, cx);
             })
             .ok();
         };
@@ -330,6 +545,34 @@ impl Render for AlasShell {
             })
             .ok();
         };
+        let view = cx.entity().downgrade();
+        let on_select_create_worktree_field =
+            move |field: CreateWorktreeField,
+                  _event: &gpui::ClickEvent,
+                  window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.set_create_worktree_field(field);
+                    window.focus(&shell.create_worktree_focus);
+                    cx.notify();
+                })
+                .ok();
+            };
+        let on_submit_create_worktree = cx.listener(|shell, _event, _window, cx| {
+            shell.create_worktree_from_dialog();
+            cx.notify();
+        });
+        let on_cancel_create_worktree = cx.listener(|shell, _event, _window, cx| {
+            shell.close_create_worktree_dialog();
+            cx.notify();
+        });
+        let on_create_worktree_key_down =
+            cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+                if shell.edit_create_worktree_field(event) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
 
         div()
             .flex()
@@ -338,12 +581,116 @@ impl Render for AlasShell {
                 self.model.repositories(),
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
                 on_remove_repository,
+                on_create_worktree,
                 on_toggle_show_archived,
                 on_archive_worktree,
                 on_unarchive_worktree,
                 self.add_repository_error(),
             ))
-            .child(render_terminal_placeholder())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .when(self.create_worktree_dialog.is_some(), |element| {
+                        let dialog = self.create_worktree_dialog.as_ref().unwrap();
+                        element.child(
+                            div()
+                                .m_3()
+                                .p_3()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(0xbfdbfe))
+                                .bg(rgb(0xeff6ff))
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .track_focus(&self.create_worktree_focus)
+                                .on_key_down(on_create_worktree_key_down)
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("Create Worktree"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x4b5563))
+                                        .child(format!("Repository: {}", dialog.repo_id)),
+                                )
+                                .child(render_create_worktree_field(
+                                    "Base ref",
+                                    &dialog.base_ref,
+                                    CreateWorktreeField::BaseRef,
+                                    dialog.active_field,
+                                    on_select_create_worktree_field.clone(),
+                                ))
+                                .child(render_create_worktree_field(
+                                    "Branch name",
+                                    &dialog.branch_name,
+                                    CreateWorktreeField::BranchName,
+                                    dialog.active_field,
+                                    on_select_create_worktree_field.clone(),
+                                ))
+                                .child(render_create_worktree_field(
+                                    "Target path",
+                                    &dialog.target_path_text,
+                                    CreateWorktreeField::TargetPath,
+                                    dialog.active_field,
+                                    on_select_create_worktree_field.clone(),
+                                ))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x6b7280))
+                                        .child("Click a field, type to edit, Tab switches fields, Enter submits, Esc cancels."),
+                                )
+                                .when(dialog.error.is_some(), |element| {
+                                    element.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(0xdc2626))
+                                            .child(SharedString::from(
+                                                dialog.error.clone().unwrap_or_default(),
+                                            )),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("submit-create-worktree")
+                                                .px_3()
+                                                .py_2()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(0xffffff))
+                                                .bg(rgb(0x2563eb))
+                                                .child("Create")
+                                                .on_click(on_submit_create_worktree),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("cancel-create-worktree")
+                                                .px_3()
+                                                .py_2()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(0x374151))
+                                                .bg(rgb(0xe5e7eb))
+                                                .child("Cancel")
+                                                .on_click(on_cancel_create_worktree),
+                                        ),
+                                ),
+                        )
+                    })
+                    .child(render_terminal_placeholder()),
+            )
             .child(render_inspector_placeholder())
     }
 }
@@ -351,7 +698,7 @@ impl Render for AlasShell {
 pub fn run() -> anyhow::Result<()> {
     Application::new().run(|cx: &mut App| {
         cx.open_window(WindowOptions::default(), |_, cx| {
-            cx.new(|_| AlasShell::new())
+            cx.new(|cx| AlasShell::new(cx))
         })
         .expect("failed to open Alas window");
     });
