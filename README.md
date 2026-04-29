@@ -65,6 +65,60 @@ build at it:
 GHOSTTY_SOURCE_DIR=/path/to/ghostty cargo test --all-features
 ```
 
+## Building installable artifacts
+
+During development, `cargo run` still works, but Alas can also be packaged as a desktop app.
+
+Local packaging commands:
+
+```bash
+cargo xtask dist macos          # macOS host only; creates dist/macos/Alas.app and a zip
+cargo xtask dist linux-appimage # Linux host only; creates an AppImage
+cargo xtask dist linux-deb      # Linux host only; creates a .deb
+cargo xtask dist all            # all package formats supported by the current host
+```
+
+The equivalent command without the Cargo alias is:
+
+```bash
+cargo run -p xtask -- dist <target>
+```
+
+### macOS
+
+The first macOS artifact is an unsigned local `Alas.app`. You can launch it from
+`dist/macos/Alas.app` after building. Because it is unsigned and not notarized,
+Gatekeeper may require right-click → Open or a local security exception.
+
+Signing, notarization, and DMG creation are planned future release improvements.
+
+### Linux
+
+Linux packaging currently targets AppImage and Debian packages.
+
+Build prerequisites are the same as development plus packaging tools:
+
+```bash
+sudo apt-get install -y \
+  libfontconfig1-dev \
+  libwayland-dev \
+  libxkbcommon-dev \
+  pkg-config \
+  dpkg-dev
+```
+
+AppImage builds also require `appimagetool` on `PATH`.
+
+The AppImage bundles the Alas executable and app metadata, but some desktop
+runtime libraries such as Wayland/X11, GL, fontconfig, and libc may still be
+provided by the host distribution. The `.deb` declares runtime dependencies
+instead of bundling system libraries.
+
+### Release artifacts
+
+Pull request and push CI only format, lint, build, and test. GitHub release
+artifacts are built only when a release is published.
+
 ## Manual testing
 
 Automated tests cover the app model, configuration, Git/worktree services,
