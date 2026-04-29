@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    app::{AlasModel, RepositoryNode, TerminalTabId},
+    app::{AlasModel, RepositoryNode, TerminalTabId, WorkspaceSession},
     config::{
         AppConfig, AppConfigStore, AppRepository, RepoConfigStore, ResolvedRepoConfig,
         repository_id_for_path,
@@ -53,6 +53,8 @@ pub struct AlasShell {
     confirm_prune_worktrees_dialog: Option<ConfirmPruneWorktreesDialog>,
     terminal_registry: TerminalSessionRegistry,
     terminal_backend: GhosttyTerminalBackend,
+    workspace_session: WorkspaceSession,
+    active_terminal_tab: Option<TerminalTabId>,
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
@@ -82,6 +84,8 @@ impl AlasShell {
             confirm_prune_worktrees_dialog: None,
             terminal_registry: TerminalSessionRegistry::default(),
             terminal_backend: GhosttyTerminalBackend::new(),
+            workspace_session: WorkspaceSession::default(),
+            active_terminal_tab: None,
             active_terminal: None,
             terminal_error: None,
             terminal_focus: cx.focus_handle(),
@@ -625,9 +629,13 @@ impl AlasShell {
         self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
 
         let command = self.resolve_default_command(&repo_id, path.clone());
-        // Temporary until WorkspaceSession terminal tabs are wired into the shell;
-        // production currently preserves the existing one-session-per-worktree behavior.
-        let id = TerminalSessionId::new(repo_id, path, TerminalTabId(1));
+        let tab_id = self.workspace_session.ensure_default_terminal_tab(
+            &repo_id,
+            path.clone(),
+            command.clone(),
+        );
+        let id = TerminalSessionId::new(repo_id, path, tab_id);
+        self.active_terminal_tab = Some(tab_id);
 
         match self
             .terminal_registry
