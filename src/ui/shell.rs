@@ -15,9 +15,9 @@ use crate::{
     git::{GitInspectorService, GitRunner, GitWorktreeService},
     project::FileTreeService,
     terminal::{
-        CommandSpec, GhosttyRenderFrame, GhosttyTerminalBackend, TerminalBackend, TerminalMetrics,
-        TerminalScreenMode, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
-        TerminalSize, TerminalStatus, TerminalViewport, terminal_input_bytes,
+        CommandSpec, GhosttyRenderFrame, GhosttyTerminalBackend, TerminalBackend, TerminalKeyInput,
+        TerminalMetrics, TerminalScreenMode, TerminalSessionId, TerminalSessionRef,
+        TerminalSessionRegistry, TerminalSize, TerminalStatus, TerminalViewport,
     },
     ui::{
         command_picker::render_command_picker,
@@ -59,6 +59,26 @@ const INSPECTOR_FILE_TREE_MAX_DEPTH: usize = 3;
 
 fn terminal_refresh_interval() -> Duration {
     Duration::from_millis(16)
+}
+
+fn is_terminal_paste_key(event: &KeyDownEvent) -> bool {
+    if !event.keystroke.key.eq_ignore_ascii_case("v") {
+        return false;
+    }
+
+    let modifiers = &event.keystroke.modifiers;
+    let platform_paste = modifiers.platform
+        && !modifiers.control
+        && !modifiers.alt
+        && !modifiers.shift
+        && !modifiers.function;
+    let secondary_paste = modifiers.secondary()
+        && !modifiers.platform
+        && !modifiers.alt
+        && !modifiers.shift
+        && !modifiers.function;
+
+    platform_paste || secondary_paste
 }
 
 pub struct AlasShell {
@@ -333,15 +353,31 @@ impl AlasShell {
         let Some(session) = self.active_terminal.as_ref() else {
             return false;
         };
-        let Some(bytes) = terminal_input_bytes(event) else {
+        let input = TerminalKeyInput::from(event);
+
+        match self
+            .terminal_backend
+            .write_key_input(session.backend_session, input)
+        {
+            Ok(handled) => handled,
+            Err(error) => {
+                let id = session.id.clone();
+                self.mark_terminal_tab_failed(&id, error.to_string());
+                true
+            }
+        }
+    }
+
+    fn write_terminal_paste(&mut self, text: &str) -> bool {
+        let Some(session) = self.active_terminal.as_ref() else {
             return false;
         };
 
         match self
             .terminal_backend
-            .write_input(session.backend_session, &bytes)
+            .write_paste_input(session.backend_session, text)
         {
-            Ok(()) => true,
+            Ok(handled) => handled,
             Err(error) => {
                 let id = session.id.clone();
                 self.mark_terminal_tab_failed(&id, error.to_string());
@@ -1812,6 +1848,15 @@ impl Render for AlasShell {
             });
         let on_terminal_key_down = cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
             if shell.handle_command_picker_key_down(event) {
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+
+            if is_terminal_paste_key(event)
+                && let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+                && shell.write_terminal_paste(&text)
+            {
                 cx.stop_propagation();
                 cx.notify();
                 return;

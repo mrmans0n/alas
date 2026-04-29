@@ -26,6 +26,7 @@ use super::{
     GhosttyRenderFrame, GhosttyRenderRow, TerminalCell, TerminalCellStyle, TerminalColor,
     TerminalCursor, TerminalCursorShape, TerminalGridSnapshot, TerminalRow, TerminalScreenMode,
     TerminalStatus, TerminalViewport,
+    ghostty_input::{self, TerminalKeyInput},
 };
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
@@ -482,6 +483,24 @@ impl BackendSessionState {
     fn render_frame(&mut self, viewport: TerminalViewport) -> anyhow::Result<GhosttyRenderFrame> {
         self.vt.render_frame(viewport)
     }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
+        self.writer.write_all(bytes).with_context(|| {
+            format!(
+                "write input to command '{}' in cwd {}",
+                self.command.display,
+                self.command.cwd.display()
+            )
+        })?;
+        self.writer.flush().with_context(|| {
+            format!(
+                "flush input to command '{}' in cwd {}",
+                self.command.display,
+                self.command.cwd.display()
+            )
+        })?;
+        Ok(())
+    }
 }
 
 impl Drop for BackendSessionState {
@@ -527,6 +546,43 @@ impl GhosttyTerminalBackend {
         } else {
             Ok(TerminalStatus::Running)
         }
+    }
+
+    pub fn write_paste_input(
+        &mut self,
+        session: TerminalBackendSession,
+        text: &str,
+    ) -> anyhow::Result<bool> {
+        let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
+            anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+        })?;
+        state.poll_exit()?;
+        state.drain_output()?;
+        state.fail_on_read_error()?;
+
+        let mode = ghostty_input::paste_mode_from_terminal(&state.vt.terminal)?;
+        let bytes = ghostty_input::paste_bytes(text, mode);
+        state.write_bytes(&bytes)?;
+        Ok(true)
+    }
+
+    pub fn write_key_input(
+        &mut self,
+        session: TerminalBackendSession,
+        input: TerminalKeyInput,
+    ) -> anyhow::Result<bool> {
+        let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
+            anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+        })?;
+        state.poll_exit()?;
+        state.drain_output()?;
+        state.fail_on_read_error()?;
+
+        let Some(bytes) = ghostty_input::encode_key_input(&state.vt.terminal, &input)? else {
+            return Ok(false);
+        };
+        state.write_bytes(&bytes)?;
+        Ok(true)
     }
 
     fn start_with_size(
@@ -627,21 +683,7 @@ impl TerminalBackend for GhosttyTerminalBackend {
         let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
-        state.writer.write_all(bytes).with_context(|| {
-            format!(
-                "write input to command '{}' in cwd {}",
-                state.command.display,
-                state.command.cwd.display()
-            )
-        })?;
-        state.writer.flush().with_context(|| {
-            format!(
-                "flush input to command '{}' in cwd {}",
-                state.command.display,
-                state.command.cwd.display()
-            )
-        })?;
-        Ok(())
+        state.write_bytes(bytes)
     }
 
     fn resize(
