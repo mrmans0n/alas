@@ -28,3 +28,7 @@ ghostty-vt = ["dep:libghostty-vt"]
 [dev-dependencies]
 tempfile = "3"
 pretty_assertions = "1"
+
+[workspace]
+members = ["xtask"]
+resolver = "3"
