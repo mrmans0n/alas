@@ -10,6 +10,21 @@ pub struct AppConfig {
     pub archived_worktrees: IndexMap<String, Vec<PathBuf>>,
 }
 
+impl AppConfig {
+    pub fn archive_worktree(&mut self, repo_id: impl Into<String>, path: PathBuf) {
+        let paths = self.archived_worktrees.entry(repo_id.into()).or_default();
+        if !paths.iter().any(|archived_path| archived_path == &path) {
+            paths.push(path);
+        }
+    }
+
+    pub fn unarchive_worktree(&mut self, repo_id: &str, path: &Path) {
+        if let Some(paths) = self.archived_worktrees.get_mut(repo_id) {
+            paths.retain(|archived_path| archived_path != path);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppRepository {
     pub id: String,

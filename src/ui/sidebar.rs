@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::app::RepositoryNode;
 use gpui::{
     App, ClickEvent, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div,
@@ -8,6 +10,11 @@ pub fn render_sidebar(
     repositories: &[RepositoryNode],
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
+    + Clone
+    + 'static,
     add_repository_error: Option<&str>,
 ) -> impl IntoElement {
     div()
@@ -27,11 +34,15 @@ pub fn render_sidebar(
                 .font_weight(FontWeight::BOLD)
                 .child("Repositories"),
         )
-        .children(
-            repositories
-                .iter()
-                .map(|repository| render_repository(repository, on_remove_repository.clone())),
-        )
+        .children(repositories.iter().map(|repository| {
+            render_repository(
+                repository,
+                on_remove_repository.clone(),
+                on_toggle_show_archived.clone(),
+                on_archive_worktree.clone(),
+                on_unarchive_worktree.clone(),
+            )
+        }))
         .child(
             div()
                 .mt_auto()
@@ -65,10 +76,20 @@ pub fn render_sidebar(
 fn render_repository(
     repository: &RepositoryNode,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
+    + Clone
+    + 'static,
 ) -> impl IntoElement {
     let repo_id = repository.id.clone();
     let repo_name = repository.name.clone();
     let remove_label: SharedString = "Remove from Alas".into();
+    let show_archived_label: SharedString = if repository.show_archived {
+        "Hide archived".into()
+    } else {
+        "Show archived".into()
+    };
 
     div()
         .flex()
@@ -111,19 +132,44 @@ fn render_repository(
                 )
                 .child(
                     div()
-                        .id(SharedString::from(format!("remove-repository-{repo_id}")))
-                        .text_xs()
-                        .text_color(rgb(0xdc2626))
-                        .child(remove_label)
-                        .on_click(move |event, window, cx| {
-                            on_remove_repository(
-                                repo_id.clone(),
-                                repo_name.clone(),
-                                event,
-                                window,
-                                cx,
-                            );
-                        }),
+                        .flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("toggle-archived-{repo_id}")))
+                                .text_xs()
+                                .text_color(rgb(0x2563eb))
+                                .child(show_archived_label)
+                                .on_click({
+                                    let repo_id = repo_id.clone();
+                                    let show_archived = repository.show_archived;
+                                    move |event, window, cx| {
+                                        on_toggle_show_archived(
+                                            repo_id.clone(),
+                                            !show_archived,
+                                            event,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("remove-repository-{repo_id}")))
+                                .text_xs()
+                                .text_color(rgb(0xdc2626))
+                                .child(remove_label)
+                                .on_click(move |event, window, cx| {
+                                    on_remove_repository(
+                                        repo_id.clone(),
+                                        repo_name.clone(),
+                                        event,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                        ),
                 ),
         )
         .children(
@@ -136,6 +182,16 @@ fn render_repository(
                         .branch
                         .clone()
                         .unwrap_or_else(|| worktree.path.display().to_string());
+                    let repo_id = repository.id.clone();
+                    let worktree_path = worktree.path.clone();
+                    let is_archived = worktree.archived;
+                    let action_label: SharedString = if is_archived {
+                        "Unarchive".into()
+                    } else {
+                        "Archive".into()
+                    };
+                    let on_archive_worktree = on_archive_worktree.clone();
+                    let on_unarchive_worktree = on_unarchive_worktree.clone();
 
                     div()
                         .ml_3()
@@ -143,9 +199,41 @@ fn render_repository(
                         .py_1()
                         .rounded_md()
                         .text_sm()
-                        .truncate()
                         .bg(rgb(0xffffff))
-                        .child(label)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(div().truncate().child(label))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "archive-worktree-{repo_id}-{}",
+                                    worktree_path.display()
+                                )))
+                                .text_xs()
+                                .text_color(rgb(0x2563eb))
+                                .child(action_label)
+                                .on_click(move |event, window, cx| {
+                                    if is_archived {
+                                        on_unarchive_worktree(
+                                            repo_id.clone(),
+                                            worktree_path.clone(),
+                                            event,
+                                            window,
+                                            cx,
+                                        );
+                                    } else {
+                                        on_archive_worktree(
+                                            repo_id.clone(),
+                                            worktree_path.clone(),
+                                            event,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                        )
                 }),
         )
 }

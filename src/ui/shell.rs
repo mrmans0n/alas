@@ -212,6 +212,28 @@ impl AlasShell {
         Ok(())
     }
 
+    fn set_show_archived(&mut self, repo_id: &str, show: bool) {
+        self.model.set_show_archived(repo_id, show);
+    }
+
+    fn archive_worktree(&mut self, repo_id: &str, path: PathBuf) -> anyhow::Result<()> {
+        let mut next_config = self.config.clone();
+        next_config.archive_worktree(repo_id.to_string(), path);
+        self.app_config_store.save(&next_config)?;
+        self.config = next_config;
+        self.refresh_repositories();
+        Ok(())
+    }
+
+    fn unarchive_worktree(&mut self, repo_id: &str, path: &Path) -> anyhow::Result<()> {
+        let mut next_config = self.config.clone();
+        next_config.unarchive_worktree(repo_id, path);
+        self.app_config_store.save(&next_config)?;
+        self.config = next_config;
+        self.refresh_repositories();
+        Ok(())
+    }
+
     fn clear_selection_and_active_terminal(&mut self) {
         self.model.clear_selection();
         self.active_terminal = None;
@@ -268,6 +290,46 @@ impl Render for AlasShell {
             })
             .ok();
         };
+        let view = cx.entity().downgrade();
+        let on_toggle_show_archived = move |repo_id: String,
+                                            show: bool,
+                                            _event: &gpui::ClickEvent,
+                                            _window: &mut Window,
+                                            app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.set_show_archived(&repo_id, show);
+                cx.notify();
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_archive_worktree = move |repo_id: String,
+                                        path: PathBuf,
+                                        _event: &gpui::ClickEvent,
+                                        _window: &mut Window,
+                                        app: &mut App| {
+            view.update(app, |shell, cx| {
+                if let Err(error) = shell.archive_worktree(&repo_id, path) {
+                    shell.set_add_repository_error(error.to_string());
+                }
+                cx.notify();
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_unarchive_worktree = move |repo_id: String,
+                                          path: PathBuf,
+                                          _event: &gpui::ClickEvent,
+                                          _window: &mut Window,
+                                          app: &mut App| {
+            view.update(app, |shell, cx| {
+                if let Err(error) = shell.unarchive_worktree(&repo_id, &path) {
+                    shell.set_add_repository_error(error.to_string());
+                }
+                cx.notify();
+            })
+            .ok();
+        };
 
         div()
             .flex()
@@ -276,6 +338,9 @@ impl Render for AlasShell {
                 self.model.repositories(),
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
                 on_remove_repository,
+                on_toggle_show_archived,
+                on_archive_worktree,
+                on_unarchive_worktree,
                 self.add_repository_error(),
             ))
             .child(render_terminal_placeholder())

@@ -14,6 +14,18 @@ fn worktree(path: &str, kind: WorktreeKind) -> WorktreeInfo {
 }
 
 #[test]
+fn archiving_and_unarchiving_updates_app_config_paths() {
+    let mut config = AppConfig::default();
+    config.archive_worktree("repo-1", PathBuf::from("/repo/old"));
+    assert_eq!(
+        config.archived_worktrees["repo-1"],
+        vec![PathBuf::from("/repo/old")]
+    );
+    config.unarchive_worktree("repo-1", &PathBuf::from("/repo/old"));
+    assert!(config.archived_worktrees.get("repo-1").unwrap().is_empty());
+}
+
+#[test]
 fn selecting_worktree_updates_selection() {
     let mut model = AlasModel::default();
     let path = PathBuf::from("/repo/feature");
