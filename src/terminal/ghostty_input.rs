@@ -264,10 +264,46 @@ fn ghostty_key_for_input(key: &str) -> Option<Key> {
         "tab" => Key::Tab,
         "delete" => Key::Delete,
         "escape" => Key::Escape,
+        "end" => Key::End,
+        "home" => Key::Home,
+        "insert" => Key::Insert,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
         "down" => Key::ArrowDown,
         "left" => Key::ArrowLeft,
         "right" => Key::ArrowRight,
         "up" => Key::ArrowUp,
+        "f1" => Key::F1,
+        "f2" => Key::F2,
+        "f3" => Key::F3,
+        "f4" => Key::F4,
+        "f5" => Key::F5,
+        "f6" => Key::F6,
+        "f7" => Key::F7,
+        "f8" => Key::F8,
+        "f9" => Key::F9,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
+        "f13" => Key::F13,
+        "f14" => Key::F14,
+        "f15" => Key::F15,
+        "f16" => Key::F16,
+        "f17" => Key::F17,
+        "f18" => Key::F18,
+        "f19" => Key::F19,
+        "f20" => Key::F20,
+        "f21" => Key::F21,
+        "f22" => Key::F22,
+        "f23" => Key::F23,
+        "f24" => Key::F24,
+        "f25" => Key::F25,
+        "menu" | "contextmenu" => Key::ContextMenu,
+        "back" | "browserback" => Key::BrowserBack,
+        "forward" | "browserforward" => Key::BrowserForward,
+        "copy" => Key::Copy,
+        "cut" => Key::Cut,
+        "paste" => Key::Paste,
         _ => return None,
     })
 }
@@ -313,5 +349,27 @@ mod tests {
             paste_mode_from_terminal(&terminal).unwrap(),
             PasteMode::Bracketed
         );
+    }
+
+    #[test]
+    fn ghostty_encoder_handles_navigation_and_function_keys_without_fallback() {
+        let terminal = libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
+            cols: 80,
+            rows: 24,
+            max_scrollback: 100,
+        })
+        .unwrap();
+
+        for key in ["home", "end", "insert", "pageup", "pagedown", "f1", "f12"] {
+            let bytes = encode_key_input(
+                &terminal,
+                &TerminalKeyInput::new(key, None, TerminalKeyModifiers::default(), false),
+            )
+            .unwrap();
+            assert!(
+                bytes.is_some_and(|bytes| !bytes.is_empty()),
+                "expected Ghostty to encode {key}"
+            );
+        }
     }
 }
