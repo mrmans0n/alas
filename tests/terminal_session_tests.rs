@@ -6,13 +6,17 @@ use alas::terminal::{
 };
 use std::path::PathBuf;
 
-fn empty_snapshot(size: TerminalSize, status: TerminalStatus) -> TerminalGridSnapshot {
+fn empty_snapshot(
+    size: TerminalSize,
+    status: TerminalStatus,
+    viewport: TerminalViewport,
+) -> TerminalGridSnapshot {
     TerminalGridSnapshot {
         size,
         rows: Vec::new(),
         cursor: None,
         status,
-        viewport: TerminalViewport::visible(size.rows),
+        viewport,
         scrollback_rows: 0,
         screen_mode: TerminalScreenMode::Main,
     }
@@ -50,11 +54,10 @@ impl TerminalBackend for FakeBackend {
     fn snapshot(
         &mut self,
         _session: TerminalBackendSession,
+        viewport: TerminalViewport,
     ) -> anyhow::Result<TerminalGridSnapshot> {
-        Ok(empty_snapshot(
-            TerminalSize { cols: 80, rows: 24 },
-            TerminalStatus::Running,
-        ))
+        let size = TerminalSize { cols: 80, rows: 24 };
+        Ok(empty_snapshot(size, TerminalStatus::Running, viewport))
     }
 
     fn has_exited(&mut self, _session: TerminalBackendSession) -> anyhow::Result<bool> {
@@ -108,6 +111,7 @@ impl TerminalBackend for FakeRuntimeBackend {
     fn snapshot(
         &mut self,
         _session: TerminalBackendSession,
+        viewport: TerminalViewport,
     ) -> anyhow::Result<TerminalGridSnapshot> {
         Ok(empty_snapshot(
             self.size.unwrap_or(TerminalSize { cols: 80, rows: 24 }),
@@ -116,6 +120,7 @@ impl TerminalBackend for FakeRuntimeBackend {
             } else {
                 TerminalStatus::Running
             },
+            viewport,
         ))
     }
 
@@ -171,11 +176,10 @@ impl TerminalBackend for CountingBackend {
     fn snapshot(
         &mut self,
         _session: TerminalBackendSession,
+        viewport: TerminalViewport,
     ) -> anyhow::Result<TerminalGridSnapshot> {
-        Ok(empty_snapshot(
-            TerminalSize { cols: 80, rows: 24 },
-            TerminalStatus::Running,
-        ))
+        let size = TerminalSize { cols: 80, rows: 24 };
+        Ok(empty_snapshot(size, TerminalStatus::Running, viewport))
     }
 
     fn has_exited(&mut self, _session: TerminalBackendSession) -> anyhow::Result<bool> {
@@ -226,11 +230,10 @@ impl TerminalBackend for FailingOnceBackend {
     fn snapshot(
         &mut self,
         _session: TerminalBackendSession,
+        viewport: TerminalViewport,
     ) -> anyhow::Result<TerminalGridSnapshot> {
-        Ok(empty_snapshot(
-            TerminalSize { cols: 80, rows: 24 },
-            TerminalStatus::Running,
-        ))
+        let size = TerminalSize { cols: 80, rows: 24 };
+        Ok(empty_snapshot(size, TerminalStatus::Running, viewport))
     }
 
     fn has_exited(&mut self, _session: TerminalBackendSession) -> anyhow::Result<bool> {
@@ -273,7 +276,9 @@ fn backend_runtime_api_supports_input_resize_snapshot_and_restart() {
         )
         .unwrap();
 
-    let snapshot = backend.snapshot(session).unwrap();
+    let snapshot = backend
+        .snapshot(session, TerminalViewport::visible(30))
+        .unwrap();
 
     assert_eq!(backend.started, vec![command]);
     assert_eq!(backend.input, b"pwd\n");
@@ -289,6 +294,30 @@ fn backend_runtime_api_supports_input_resize_snapshot_and_restart() {
 
     let restarted = backend.restart(session).unwrap();
     assert_eq!(restarted.backend_id, 2);
+}
+
+#[test]
+fn backend_snapshot_accepts_viewport_request() {
+    let mut backend = FakeRuntimeBackend::default();
+    let session = backend
+        .start(CommandSpec::shell_command(
+            "$SHELL",
+            PathBuf::from("/repo/wt"),
+        ))
+        .unwrap();
+    let snapshot = backend
+        .snapshot(
+            session,
+            TerminalViewport {
+                scroll_offset_rows: 10,
+                visible_rows: 24,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(snapshot.viewport.scroll_offset_rows, 10);
+    assert_eq!(snapshot.viewport.visible_rows, 24);
+    assert_eq!(snapshot.screen_mode, TerminalScreenMode::Main);
 }
 
 #[test]
@@ -351,7 +380,9 @@ fn wait_for_snapshot_text(
     let mut last_snapshot = None;
 
     while std::time::Instant::now() < deadline {
-        let snapshot = backend.snapshot(session).unwrap();
+        let snapshot = backend
+            .snapshot(session, TerminalViewport::visible(24))
+            .unwrap();
         if snapshot.plain_lines().join("\n").contains(expected) && snapshot.exited() {
             return snapshot;
         }
@@ -359,7 +390,11 @@ fn wait_for_snapshot_text(
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 
-    last_snapshot.unwrap_or_else(|| backend.snapshot(session).unwrap())
+    last_snapshot.unwrap_or_else(|| {
+        backend
+            .snapshot(session, TerminalViewport::visible(24))
+            .unwrap()
+    })
 }
 
 #[test]

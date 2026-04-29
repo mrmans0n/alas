@@ -13,6 +13,7 @@ use crate::{
     terminal::{
         CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
         TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry, TerminalSize,
+        TerminalViewport,
     },
     ui::{
         dialogs::{
@@ -116,7 +117,11 @@ impl AlasShell {
 
     fn terminal_snapshot(&mut self) -> Option<TerminalGridSnapshot> {
         let session = self.active_terminal.as_ref()?;
-        match self.terminal_backend.snapshot(session.backend_session) {
+        let rows = self.terminal_size.map_or(24, |size| size.rows);
+        match self
+            .terminal_backend
+            .snapshot(session.backend_session, TerminalViewport::visible(rows))
+        {
             Ok(snapshot) => {
                 self.terminal_error = None;
                 Some(snapshot)

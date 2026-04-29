@@ -14,8 +14,9 @@ use anyhow::Context;
 compile_error!("Alas V1 requires the ghostty-vt feature for terminal rendering");
 #[cfg(feature = "ghostty-vt")]
 use libghostty_vt::{
-    RenderState, Terminal, TerminalOptions,
+    RenderState, Terminal, TerminalOptions, ffi,
     render::{CellIterator, RowIterator},
+    terminal::ScrollViewport,
 };
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -25,6 +26,7 @@ use super::{
 };
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
+const MAX_SCROLLBACK_ROWS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalBackendSession {
@@ -42,8 +44,11 @@ pub trait TerminalBackend {
     fn write_input(&mut self, session: TerminalBackendSession, bytes: &[u8]) -> anyhow::Result<()>;
     fn resize(&mut self, session: TerminalBackendSession, size: TerminalSize)
     -> anyhow::Result<()>;
-    fn snapshot(&mut self, session: TerminalBackendSession)
-    -> anyhow::Result<TerminalGridSnapshot>;
+    fn snapshot(
+        &mut self,
+        session: TerminalBackendSession,
+        viewport: TerminalViewport,
+    ) -> anyhow::Result<TerminalGridSnapshot>;
     fn has_exited(&mut self, session: TerminalBackendSession) -> anyhow::Result<bool>;
     fn restart(
         &mut self,
@@ -66,7 +71,7 @@ impl VtState {
             terminal: Terminal::new(TerminalOptions {
                 cols: size.cols,
                 rows: size.rows,
-                max_scrollback: 0,
+                max_scrollback: MAX_SCROLLBACK_ROWS,
             })
             .context("create Ghostty VT terminal")?,
             render_state: RenderState::new().context("create Ghostty VT render state")?,
@@ -85,48 +90,101 @@ impl VtState {
             .context("resize Ghostty VT terminal")
     }
 
-    fn snapshot_lines(&mut self) -> anyhow::Result<Vec<String>> {
+    fn snapshot_rows(&mut self, viewport: TerminalViewport) -> anyhow::Result<VtSnapshotRows> {
+        let screen_mode = self.screen_mode()?;
+        let scrollback_rows = self
+            .terminal
+            .scrollback_rows()
+            .context("read Ghostty VT scrollback row count")?;
+        let bounded_scroll_offset = viewport.scroll_offset_rows.min(scrollback_rows);
+        let bounded_viewport = TerminalViewport {
+            scroll_offset_rows: bounded_scroll_offset,
+            visible_rows: viewport.visible_rows,
+        };
+
+        self.terminal.scroll_viewport(ScrollViewport::Bottom);
+        if bounded_scroll_offset > 0 {
+            let delta = isize::try_from(bounded_scroll_offset)
+                .context("convert Ghostty VT scrollback offset to viewport delta")?;
+            self.terminal.scroll_viewport(ScrollViewport::Delta(-delta));
+        }
+
         let snapshot = self
             .render_state
             .update(&self.terminal)
             .context("update Ghostty VT render state")?;
+        let cursor = snapshot
+            .cursor_viewport()
+            .context("read Ghostty VT cursor viewport")?
+            .map(|cursor| TerminalCursor {
+                col: cursor.x,
+                row: cursor.y,
+                visible: true,
+                shape: TerminalCursorShape::Block,
+            });
         let mut rows = self
             .row_iter
             .update(&snapshot)
             .context("iterate Ghostty VT render rows")?;
-        let mut lines = Vec::new();
+        let mut terminal_rows = Vec::new();
 
         while let Some(row) = rows.next() {
             let mut cells = self
                 .cell_iter
                 .update(row)
                 .context("iterate Ghostty VT render cells")?;
-            let mut line = String::new();
+            let mut row_cells = Vec::new();
             while let Some(cell) = cells.next() {
-                for grapheme in cell
+                let text: String = cell
                     .graphemes()
                     .context("read Ghostty VT render cell graphemes")?
-                {
-                    if grapheme != '\0' {
-                        line.push(grapheme);
-                    }
-                }
+                    .into_iter()
+                    .filter(|grapheme| *grapheme != '\0')
+                    .collect();
+                row_cells.push(TerminalCell::new(text));
             }
-            lines.push(line.trim_end().to_string());
+            while row_cells
+                .last()
+                .is_some_and(|cell| cell.text.trim().is_empty())
+            {
+                row_cells.pop();
+            }
+            terminal_rows.push(TerminalRow { cells: row_cells });
         }
 
-        Ok(lines)
+        Ok(VtSnapshotRows {
+            rows: terminal_rows,
+            cursor,
+            viewport: bounded_viewport,
+            scrollback_rows,
+            screen_mode,
+        })
     }
 
-    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
-        let snapshot = self
-            .render_state
-            .update(&self.terminal)
-            .context("update Ghostty VT render state")?;
-        Ok(snapshot
-            .cursor_viewport()?
-            .map(|cursor| (cursor.x, cursor.y)))
+    fn screen_mode(&self) -> anyhow::Result<TerminalScreenMode> {
+        match self
+            .terminal
+            .active_screen()
+            .context("read Ghostty VT active screen")?
+        {
+            ffi::GhosttyTerminalScreen_GHOSTTY_TERMINAL_SCREEN_PRIMARY => {
+                Ok(TerminalScreenMode::Main)
+            }
+            ffi::GhosttyTerminalScreen_GHOSTTY_TERMINAL_SCREEN_ALTERNATE => {
+                Ok(TerminalScreenMode::Alternate)
+            }
+            screen => anyhow::bail!("unknown Ghostty VT active screen {screen}"),
+        }
     }
+}
+
+#[cfg(feature = "ghostty-vt")]
+struct VtSnapshotRows {
+    rows: Vec<TerminalRow>,
+    cursor: Option<TerminalCursor>,
+    viewport: TerminalViewport,
+    scrollback_rows: usize,
+    screen_mode: TerminalScreenMode,
 }
 
 struct BackendSessionState {
@@ -177,12 +235,8 @@ impl BackendSessionState {
         Ok(())
     }
 
-    fn snapshot_lines(&mut self) -> anyhow::Result<Vec<String>> {
-        self.vt.snapshot_lines()
-    }
-
-    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
-        self.vt.cursor()
+    fn snapshot_rows(&mut self, viewport: TerminalViewport) -> anyhow::Result<VtSnapshotRows> {
+        self.vt.snapshot_rows(viewport)
     }
 }
 
@@ -328,19 +382,14 @@ impl TerminalBackend for GhosttyTerminalBackend {
     fn snapshot(
         &mut self,
         session: TerminalBackendSession,
+        viewport: TerminalViewport,
     ) -> anyhow::Result<TerminalGridSnapshot> {
         let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
         state.poll_exit()?;
         state.drain_output()?;
-        let lines = state.snapshot_lines()?;
-        let cursor = state.cursor()?.map(|(col, row)| TerminalCursor {
-            col,
-            row,
-            visible: true,
-            shape: TerminalCursorShape::Block,
-        });
+        let vt_snapshot = state.snapshot_rows(viewport)?;
         let status = if state.exited {
             TerminalStatus::Exited(state.exit_status)
         } else {
@@ -348,20 +397,12 @@ impl TerminalBackend for GhosttyTerminalBackend {
         };
         Ok(TerminalGridSnapshot {
             size: state.size,
-            rows: lines
-                .into_iter()
-                .map(|line| TerminalRow {
-                    cells: line
-                        .chars()
-                        .map(|character| TerminalCell::new(character.to_string()))
-                        .collect(),
-                })
-                .collect(),
-            cursor,
+            rows: vt_snapshot.rows,
+            cursor: vt_snapshot.cursor,
             status,
-            viewport: TerminalViewport::visible(state.size.rows),
-            scrollback_rows: 0,
-            screen_mode: TerminalScreenMode::Main,
+            viewport: vt_snapshot.viewport,
+            scrollback_rows: vt_snapshot.scrollback_rows,
+            screen_mode: vt_snapshot.screen_mode,
         })
     }
 
