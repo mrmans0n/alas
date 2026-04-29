@@ -13,8 +13,8 @@ use crate::{
     },
     ui::{
         dialogs::{
-            AddRepositoryDialogState, ConfirmRemoveRepositoryDialog, CreateWorktreeDialogState,
-            CreateWorktreeField,
+            AddRepositoryDialogState, CommandSettingsDialogState, ConfirmRemoveRepositoryDialog,
+            CreateWorktreeDialogState, CreateWorktreeField,
         },
         inspector::render_inspector_placeholder,
         sidebar::render_sidebar,
@@ -26,6 +26,13 @@ use gpui::{
     PromptLevel, Render, SharedString, Window, WindowOptions, div, prelude::*, px, rgb,
 };
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CommandSettingsField {
+    DefaultName,
+    EntryName(usize),
+    EntryCommand(usize),
+}
+
 pub struct AlasShell {
     model: AlasModel,
     config: AppConfig,
@@ -33,6 +40,9 @@ pub struct AlasShell {
     add_repository_dialog: Option<AddRepositoryDialogState>,
     create_worktree_dialog: Option<CreateWorktreeDialogState>,
     create_worktree_focus: FocusHandle,
+    command_settings_dialog: Option<CommandSettingsDialogState>,
+    command_settings_focus: FocusHandle,
+    command_settings_active_field: CommandSettingsField,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     terminal_registry: TerminalSessionRegistry,
     terminal_backend: GhosttyTerminalBackend,
@@ -55,6 +65,9 @@ impl AlasShell {
             add_repository_dialog: None,
             create_worktree_dialog: None,
             create_worktree_focus: cx.focus_handle(),
+            command_settings_dialog: None,
+            command_settings_focus: cx.focus_handle(),
+            command_settings_active_field: CommandSettingsField::DefaultName,
             confirm_remove_repository_dialog: None,
             terminal_registry: TerminalSessionRegistry::default(),
             terminal_backend: GhosttyTerminalBackend::new(),
@@ -275,6 +288,183 @@ impl AlasShell {
         self.create_worktree_dialog = None;
     }
 
+    fn open_command_settings_dialog(&mut self, repo_id: String, cx: &mut Context<Self>) {
+        let Some(repo) = self
+            .config
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repo_id)
+        else {
+            self.command_settings_dialog = Some(CommandSettingsDialogState {
+                repo_id,
+                default_name: "shell".to_string(),
+                entries: vec![("shell".to_string(), "$SHELL".to_string())],
+                error: Some("Repository not found".to_string()),
+            });
+            cx.notify();
+            return;
+        };
+
+        let repo_file = RepoConfigStore::for_repo(&repo.path).load().ok().flatten();
+        let resolved = ResolvedRepoConfig::resolve(
+            repo.id.clone(),
+            repo.path.clone(),
+            repo.name.clone(),
+            &self.config,
+            repo_file,
+        );
+        self.command_settings_dialog = Some(CommandSettingsDialogState {
+            repo_id,
+            default_name: resolved.default_command_name().to_string(),
+            entries: resolved
+                .commands()
+                .iter()
+                .map(|(name, entry)| (name.clone(), entry.command.clone()))
+                .collect(),
+            error: None,
+        });
+        self.command_settings_active_field = CommandSettingsField::DefaultName;
+        cx.notify();
+    }
+
+    fn set_command_settings_field(&mut self, field: CommandSettingsField) {
+        self.command_settings_active_field = field;
+        if let Some(dialog) = self.command_settings_dialog.as_mut() {
+            dialog.error = None;
+        }
+    }
+
+    fn edit_command_settings_field(&mut self, event: &KeyDownEvent) -> bool {
+        if self.command_settings_dialog.is_none() {
+            return false;
+        }
+
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.command_settings_dialog = None;
+                return true;
+            }
+            "enter" => {
+                self.save_command_settings_from_dialog();
+                return true;
+            }
+            "tab" => {
+                self.advance_command_settings_field();
+                return true;
+            }
+            "backspace" => {
+                if let Some(text) = self.active_command_settings_text_mut() {
+                    text.pop();
+                }
+                if let Some(dialog) = self.command_settings_dialog.as_mut() {
+                    dialog.error = None;
+                }
+                return true;
+            }
+            _ => {}
+        }
+
+        if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
+            return false;
+        }
+        if let Some(text) = event.keystroke.key_char.as_deref() {
+            if let Some(active_text) = self.active_command_settings_text_mut() {
+                active_text.push_str(text);
+            }
+            if let Some(dialog) = self.command_settings_dialog.as_mut() {
+                dialog.error = None;
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn active_command_settings_text_mut(&mut self) -> Option<&mut String> {
+        let dialog = self.command_settings_dialog.as_mut()?;
+        match self.command_settings_active_field {
+            CommandSettingsField::DefaultName => Some(&mut dialog.default_name),
+            CommandSettingsField::EntryName(index) => {
+                dialog.entries.get_mut(index).map(|entry| &mut entry.0)
+            }
+            CommandSettingsField::EntryCommand(index) => {
+                dialog.entries.get_mut(index).map(|entry| &mut entry.1)
+            }
+        }
+    }
+
+    fn advance_command_settings_field(&mut self) {
+        let entry_count = self
+            .command_settings_dialog
+            .as_ref()
+            .map(|dialog| dialog.entries.len())
+            .unwrap_or_default();
+        self.command_settings_active_field = match self.command_settings_active_field {
+            CommandSettingsField::DefaultName if entry_count > 0 => {
+                CommandSettingsField::EntryName(0)
+            }
+            CommandSettingsField::EntryName(index) => CommandSettingsField::EntryCommand(index),
+            CommandSettingsField::EntryCommand(index) if index + 1 < entry_count => {
+                CommandSettingsField::EntryName(index + 1)
+            }
+            _ => CommandSettingsField::DefaultName,
+        };
+        if let Some(dialog) = self.command_settings_dialog.as_mut() {
+            dialog.error = None;
+        }
+    }
+
+    fn add_command_settings_entry(&mut self) {
+        if let Some(dialog) = self.command_settings_dialog.as_mut() {
+            dialog.entries.push(("new".to_string(), String::new()));
+            self.command_settings_active_field =
+                CommandSettingsField::EntryName(dialog.entries.len() - 1);
+            dialog.error = None;
+        }
+    }
+
+    fn remove_command_settings_entry(&mut self, index: usize) {
+        if let Some(dialog) = self.command_settings_dialog.as_mut() {
+            if dialog.entries.len() > 1 && index < dialog.entries.len() {
+                dialog.entries.remove(index);
+                self.command_settings_active_field = CommandSettingsField::DefaultName;
+                dialog.error = None;
+            }
+        }
+    }
+
+    fn close_command_settings_dialog(&mut self) {
+        self.command_settings_dialog = None;
+    }
+
+    fn save_command_settings_from_dialog(&mut self) {
+        let Some(dialog) = self.command_settings_dialog.clone() else {
+            return;
+        };
+        let Some(repo_path) = self.repository_path(&dialog.repo_id) else {
+            self.set_command_settings_error("Repository not found");
+            return;
+        };
+        let repo_config = match dialog.to_repo_config() {
+            Ok(config) => config,
+            Err(error) => {
+                self.set_command_settings_error(error);
+                return;
+            }
+        };
+        if let Err(error) = RepoConfigStore::for_repo(repo_path).save(&repo_config) {
+            self.set_command_settings_error(error.to_string());
+            return;
+        }
+        self.command_settings_dialog = None;
+    }
+
+    fn set_command_settings_error(&mut self, error: impl Into<String>) {
+        if let Some(dialog) = self.command_settings_dialog.as_mut() {
+            dialog.error = Some(error.into());
+        }
+    }
+
     fn create_worktree_from_dialog(&mut self) {
         let Some(dialog) = self.create_worktree_dialog.clone() else {
             return;
@@ -489,6 +679,54 @@ impl AlasShell {
     }
 }
 
+fn render_command_settings_field(
+    id: String,
+    label: String,
+    value: &str,
+    field: CommandSettingsField,
+    active_field: CommandSettingsField,
+    on_select_field: impl Fn(CommandSettingsField, &gpui::ClickEvent, &mut Window, &mut App)
+    + Clone
+    + 'static,
+) -> impl IntoElement {
+    let is_active = field == active_field;
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(0x374151))
+                .child(label),
+        )
+        .child(
+            div()
+                .id(SharedString::from(id))
+                .px_2()
+                .py_1()
+                .min_h(px(28.0))
+                .rounded_md()
+                .border_1()
+                .border_color(if is_active {
+                    rgb(0x2563eb)
+                } else {
+                    rgb(0xd1d5db)
+                })
+                .bg(rgb(0xffffff))
+                .text_sm()
+                .child(if value.is_empty() {
+                    SharedString::from(" ")
+                } else {
+                    SharedString::from(value.to_string())
+                })
+                .on_click(move |event, window, cx| {
+                    on_select_field(field, event, window, cx);
+                }),
+        )
+}
+
 fn render_create_worktree_field(
     label: &'static str,
     value: &str,
@@ -556,6 +794,16 @@ impl Render for AlasShell {
                                        app: &mut App| {
             view.update(app, |shell, cx| {
                 shell.open_create_worktree_dialog(repo_id, cx);
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_command_settings = move |repo_id: String,
+                                        _event: &gpui::ClickEvent,
+                                        _window: &mut Window,
+                                        app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.open_command_settings_dialog(repo_id, cx);
             })
             .ok();
         };
@@ -639,6 +887,38 @@ impl Render for AlasShell {
                     cx.notify();
                 }
             });
+        let view = cx.entity().downgrade();
+        let on_select_command_settings_field =
+            move |field: CommandSettingsField,
+                  _event: &gpui::ClickEvent,
+                  window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.set_command_settings_field(field);
+                    window.focus(&shell.command_settings_focus);
+                    cx.notify();
+                })
+                .ok();
+            };
+        let on_submit_command_settings = cx.listener(|shell, _event, _window, cx| {
+            shell.save_command_settings_from_dialog();
+            cx.notify();
+        });
+        let on_cancel_command_settings = cx.listener(|shell, _event, _window, cx| {
+            shell.close_command_settings_dialog();
+            cx.notify();
+        });
+        let on_add_command_entry = cx.listener(|shell, _event, _window, cx| {
+            shell.add_command_settings_entry();
+            cx.notify();
+        });
+        let on_command_settings_key_down =
+            cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+                if shell.edit_command_settings_field(event) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
 
         div()
             .flex()
@@ -648,6 +928,7 @@ impl Render for AlasShell {
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
                 on_remove_repository,
                 on_create_worktree,
+                on_command_settings,
                 on_select_worktree,
                 on_toggle_show_archived,
                 on_archive_worktree,
@@ -659,6 +940,157 @@ impl Render for AlasShell {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .when(self.command_settings_dialog.is_some(), |element| {
+                        let dialog = self.command_settings_dialog.as_ref().unwrap();
+                        element.child(
+                            div()
+                                .m_3()
+                                .p_3()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(0xbfdbfe))
+                                .bg(rgb(0xeff6ff))
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .track_focus(&self.command_settings_focus)
+                                .on_key_down(on_command_settings_key_down)
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("Repository Commands"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x4b5563))
+                                        .child(format!("Repository: {}", dialog.repo_id)),
+                                )
+                                .child(render_command_settings_field(
+                                    "command-settings-default".to_string(),
+                                    "Default command name".to_string(),
+                                    &dialog.default_name,
+                                    CommandSettingsField::DefaultName,
+                                    self.command_settings_active_field,
+                                    on_select_command_settings_field.clone(),
+                                ))
+                                .children(dialog.entries.iter().enumerate().map(|(index, entry)| {
+                                    let view = cx.entity().downgrade();
+                                    let on_remove_entry = move |_: &gpui::ClickEvent,
+                                                                _window: &mut Window,
+                                                                app: &mut App| {
+                                        view.update(app, |shell, cx| {
+                                            shell.remove_command_settings_entry(index);
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                    };
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .child(format!("Command {}", index + 1)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id(SharedString::from(format!(
+                                                            "remove-command-entry-{index}"
+                                                        )))
+                                                        .text_xs()
+                                                        .text_color(rgb(0xdc2626))
+                                                        .child("Remove")
+                                                        .on_click(on_remove_entry),
+                                                ),
+                                        )
+                                        .child(render_command_settings_field(
+                                            format!("command-settings-name-{index}"),
+                                            "Name".to_string(),
+                                            &entry.0,
+                                            CommandSettingsField::EntryName(index),
+                                            self.command_settings_active_field,
+                                            on_select_command_settings_field.clone(),
+                                        ))
+                                        .child(render_command_settings_field(
+                                            format!("command-settings-command-{index}"),
+                                            "Command".to_string(),
+                                            &entry.1,
+                                            CommandSettingsField::EntryCommand(index),
+                                            self.command_settings_active_field,
+                                            on_select_command_settings_field.clone(),
+                                        ))
+                                }))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x6b7280))
+                                        .child("Click a field, type to edit, Tab switches fields, Enter saves, Esc cancels."),
+                                )
+                                .when(dialog.error.is_some(), |element| {
+                                    element.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(0xdc2626))
+                                            .child(SharedString::from(
+                                                dialog.error.clone().unwrap_or_default(),
+                                            )),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("add-command-entry")
+                                                .px_3()
+                                                .py_2()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(0x374151))
+                                                .bg(rgb(0xe5e7eb))
+                                                .child("Add Command")
+                                                .on_click(on_add_command_entry),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("submit-command-settings")
+                                                .px_3()
+                                                .py_2()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(0xffffff))
+                                                .bg(rgb(0x2563eb))
+                                                .child("Save")
+                                                .on_click(on_submit_command_settings),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("cancel-command-settings")
+                                                .px_3()
+                                                .py_2()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(0x374151))
+                                                .bg(rgb(0xe5e7eb))
+                                                .child("Cancel")
+                                                .on_click(on_cancel_command_settings),
+                                        ),
+                                ),
+                        )
+                    })
                     .when(self.create_worktree_dialog.is_some(), |element| {
                         let dialog = self.create_worktree_dialog.as_ref().unwrap();
                         element.child(

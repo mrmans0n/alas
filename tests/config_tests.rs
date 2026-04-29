@@ -2,6 +2,7 @@ use alas::config::{
     AppConfig, AppConfigStore, AppRepository, CommandConfig, CommandEntry, RepoConfigFile,
     RepoConfigStore, ResolvedRepoConfig,
 };
+use alas::ui::dialogs::CommandSettingsDialogState;
 use indexmap::IndexMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -107,6 +108,18 @@ fn repo_config_store_writes_to_dot_alas_config() {
 }
 
 #[test]
+fn repo_config_save_preserves_error_context_for_parent_creation() {
+    let parent_file = NamedTempFile::new().unwrap();
+    let store = RepoConfigStore::for_repo(parent_file.path());
+
+    let error = store.save(&RepoConfigFile::default()).unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(message.contains("failed to create repository config directory"));
+    assert!(message.contains(&parent_file.path().join(".alas").display().to_string()));
+}
+
+#[test]
 fn repo_config_supports_named_commands() {
     let toml = r#"
         [commands]
@@ -188,4 +201,74 @@ fn resolved_config_falls_back_to_first_named_command_when_default_is_missing() {
 fn command_config_type_is_exported() {
     let commands = CommandConfig::default();
     assert!(commands.entries.is_empty());
+}
+
+#[test]
+fn command_settings_dialog_builds_repo_config() {
+    let dialog = CommandSettingsDialogState {
+        repo_id: "repo-1".to_string(),
+        default_name: "claude".to_string(),
+        entries: vec![
+            ("claude".to_string(), "claude".to_string()),
+            ("shell".to_string(), "$SHELL".to_string()),
+        ],
+        error: None,
+    };
+
+    let config = dialog.to_repo_config().unwrap();
+    let commands = config.commands.unwrap();
+    assert_eq!(config.default_command, None);
+    assert_eq!(commands.default, "claude");
+    assert_eq!(commands.entries["claude"].command, "claude");
+}
+
+#[test]
+fn command_settings_dialog_rejects_missing_default_entry() {
+    let dialog = CommandSettingsDialogState {
+        repo_id: "repo-1".to_string(),
+        default_name: "missing".to_string(),
+        entries: vec![("claude".to_string(), "claude".to_string())],
+        error: None,
+    };
+
+    assert_eq!(
+        dialog.to_repo_config().unwrap_err(),
+        "Default command must match a named command"
+    );
+}
+
+#[test]
+fn command_settings_dialog_rejects_blank_fields() {
+    let blank_default = CommandSettingsDialogState {
+        repo_id: "repo-1".to_string(),
+        default_name: " ".to_string(),
+        entries: vec![("claude".to_string(), "claude".to_string())],
+        error: None,
+    };
+    assert_eq!(
+        blank_default.to_repo_config().unwrap_err(),
+        "Default command name is required"
+    );
+
+    let blank_name = CommandSettingsDialogState {
+        repo_id: "repo-1".to_string(),
+        default_name: "claude".to_string(),
+        entries: vec![(" ".to_string(), "claude".to_string())],
+        error: None,
+    };
+    assert_eq!(
+        blank_name.to_repo_config().unwrap_err(),
+        "Command names cannot be empty"
+    );
+
+    let blank_command = CommandSettingsDialogState {
+        repo_id: "repo-1".to_string(),
+        default_name: "claude".to_string(),
+        entries: vec![("claude".to_string(), " ".to_string())],
+        error: None,
+    };
+    assert_eq!(
+        blank_command.to_repo_config().unwrap_err(),
+        "Command value for claude cannot be empty"
+    );
 }

@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+use crate::config::{CommandConfig, CommandEntry, RepoConfigFile};
+use indexmap::IndexMap;
+
 #[derive(Debug, Clone, Default)]
 pub struct AddRepositoryDialogState {
     pub path_text: String,
@@ -14,6 +17,50 @@ impl AddRepositoryDialogState {
         } else {
             Some(PathBuf::from(trimmed))
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CommandSettingsDialogState {
+    pub repo_id: String,
+    pub default_name: String,
+    pub entries: Vec<(String, String)>,
+    pub error: Option<String>,
+}
+
+impl CommandSettingsDialogState {
+    pub fn to_repo_config(&self) -> Result<RepoConfigFile, String> {
+        let default = self.default_name.trim().to_string();
+        if default.is_empty() {
+            return Err("Default command name is required".to_string());
+        }
+
+        let mut entries = IndexMap::new();
+        for (name, command) in &self.entries {
+            let name = name.trim();
+            let command = command.trim();
+            if name.is_empty() {
+                return Err("Command names cannot be empty".to_string());
+            }
+            if command.is_empty() {
+                return Err(format!("Command value for {name} cannot be empty"));
+            }
+            entries.insert(
+                name.to_string(),
+                CommandEntry {
+                    command: command.to_string(),
+                },
+            );
+        }
+
+        if !entries.contains_key(&default) {
+            return Err("Default command must match a named command".to_string());
+        }
+
+        Ok(RepoConfigFile {
+            default_command: None,
+            commands: Some(CommandConfig { default, entries }),
+        })
     }
 }
 

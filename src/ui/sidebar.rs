@@ -11,6 +11,7 @@ pub fn render_sidebar(
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_command_settings: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
@@ -41,6 +42,7 @@ pub fn render_sidebar(
                 repository,
                 on_remove_repository.clone(),
                 on_create_worktree.clone(),
+                on_command_settings.clone(),
                 on_select_worktree.clone(),
                 on_toggle_show_archived.clone(),
                 on_archive_worktree.clone(),
@@ -81,6 +83,7 @@ fn render_repository(
     repository: &RepositoryNode,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_command_settings: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
@@ -91,6 +94,7 @@ fn render_repository(
     let repo_id = repository.id.clone();
     let repo_name = repository.name.clone();
     let create_worktree_repo_id = repository.id.clone();
+    let command_settings_repo_id = repository.id.clone();
     let remove_label: SharedString = "Remove from Alas".into();
     let show_archived_label: SharedString = if repository.show_archived {
         "Hide archived".into()
@@ -172,6 +176,23 @@ fn render_repository(
                                             cx,
                                         );
                                     }
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "command-settings-{command_settings_repo_id}"
+                                )))
+                                .text_xs()
+                                .text_color(rgb(0x2563eb))
+                                .child("Commands")
+                                .on_click(move |event, window, cx| {
+                                    on_command_settings(
+                                        command_settings_repo_id.clone(),
+                                        event,
+                                        window,
+                                        cx,
+                                    );
                                 }),
                         )
                         .child(
