@@ -1,19 +1,22 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::app::TerminalTabId;
 use crate::terminal::TerminalBackendSession;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TerminalSessionId {
     pub repo_id: String,
     pub worktree_path: PathBuf,
+    pub tab_id: TerminalTabId,
 }
 
 impl TerminalSessionId {
-    pub fn new(repo_id: impl Into<String>, worktree_path: PathBuf) -> Self {
+    pub fn new(repo_id: impl Into<String>, worktree_path: PathBuf, tab_id: TerminalTabId) -> Self {
         Self {
             repo_id: repo_id.into(),
             worktree_path,
+            tab_id,
         }
     }
 }

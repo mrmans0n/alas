@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    app::{AlasModel, RepositoryNode},
+    app::{AlasModel, RepositoryNode, TerminalTabId},
     config::{
         AppConfig, AppConfigStore, AppRepository, RepoConfigStore, ResolvedRepoConfig,
         repository_id_for_path,
@@ -620,7 +620,7 @@ impl AlasShell {
         self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
 
         let command = self.resolve_default_command(&repo_id, path.clone());
-        let id = TerminalSessionId::new(repo_id, path);
+        let id = TerminalSessionId::new(repo_id, path, TerminalTabId(1));
 
         match self
             .terminal_registry

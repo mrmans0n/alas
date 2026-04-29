@@ -1,3 +1,4 @@
+use alas::app::TerminalTabId;
 use alas::terminal::{
     CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession,
     TerminalGridSnapshot, TerminalScreenMode, TerminalSessionId, TerminalSessionRegistry,
@@ -363,8 +364,8 @@ fn wait_for_snapshot_text(
 
 #[test]
 fn session_id_is_stable_for_repo_and_worktree() {
-    let a = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"));
-    let b = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"));
+    let a = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"), TerminalTabId(1));
+    let b = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"), TerminalTabId(1));
     assert_eq!(a, b);
 }
 
@@ -372,7 +373,7 @@ fn session_id_is_stable_for_repo_and_worktree() {
 fn registry_reuses_existing_session_for_worktree() {
     let mut registry = TerminalSessionRegistry::default();
     let mut backend = FakeBackend::default();
-    let id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"));
+    let id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"), TerminalTabId(1));
     let command = CommandSpec::shell_command("claude", PathBuf::from("/repo/wt"));
 
     let first = registry
@@ -389,7 +390,7 @@ fn registry_reuses_existing_session_for_worktree() {
 fn registry_does_not_store_session_when_backend_start_fails() {
     let mut registry = TerminalSessionRegistry::default();
     let mut backend = FailingOnceBackend::default();
-    let id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"));
+    let id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"), TerminalTabId(1));
     let command = CommandSpec::shell_command("claude", PathBuf::from("/repo/wt"));
 
     let error = registry
@@ -410,8 +411,8 @@ fn registry_does_not_store_session_when_backend_start_fails() {
 fn counting_backend_starts_once_per_terminal_session_id() {
     let mut registry = TerminalSessionRegistry::default();
     let mut backend = CountingBackend::default();
-    let first_id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt-a"));
-    let second_id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt-b"));
+    let first_id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt-a"), TerminalTabId(1));
+    let second_id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt-b"), TerminalTabId(1));
     let first_command = CommandSpec::shell_command("claude", PathBuf::from("/repo/wt-a"));
     let second_command = CommandSpec::shell_command("claude", PathBuf::from("/repo/wt-b"));
 
@@ -441,4 +442,39 @@ fn counting_backend_starts_once_per_terminal_session_id() {
     assert_ne!(first.backend_session, second.backend_session);
     assert_eq!(backend.start_count(), 2);
     assert_eq!(backend.started, vec![first_command, second_command]);
+}
+
+#[test]
+fn registry_starts_one_backend_session_per_terminal_tab() {
+    let mut registry = TerminalSessionRegistry::default();
+    let mut backend = CountingBackend::default();
+    let worktree = PathBuf::from("/repo/wt");
+    let first_id = TerminalSessionId::new("repo-1", worktree.clone(), TerminalTabId(1));
+    let second_id = TerminalSessionId::new("repo-1", worktree.clone(), TerminalTabId(2));
+
+    let first = registry
+        .get_or_start(
+            first_id.clone(),
+            CommandSpec::shell_command("$SHELL", worktree.clone()),
+            &mut backend,
+        )
+        .unwrap();
+    let second = registry
+        .get_or_start(
+            second_id.clone(),
+            CommandSpec::shell_command("cargo test", worktree.clone()),
+            &mut backend,
+        )
+        .unwrap();
+    let first_again = registry
+        .get_or_start(
+            first_id,
+            CommandSpec::shell_command("ignored", worktree),
+            &mut backend,
+        )
+        .unwrap();
+
+    assert_eq!(first.backend_session, first_again.backend_session);
+    assert_ne!(first.backend_session, second.backend_session);
+    assert_eq!(backend.start_count(), 2);
 }
