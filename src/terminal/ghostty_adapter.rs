@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use anyhow::Context;
+#[cfg(not(feature = "ghostty-vt"))]
+compile_error!("Alas V1 requires the ghostty-vt feature for terminal rendering");
 #[cfg(feature = "ghostty-vt")]
 use libghostty_vt::{
     RenderState, Terminal, TerminalOptions,
@@ -20,7 +22,6 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use super::CommandSpec;
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
-const MAX_FALLBACK_OUTPUT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalBackendSession {
@@ -64,9 +65,6 @@ struct VtState {
     cell_iter: CellIterator<'static>,
 }
 
-#[cfg(not(feature = "ghostty-vt"))]
-struct VtState;
-
 #[cfg(feature = "ghostty-vt")]
 impl VtState {
     fn new(size: TerminalSize) -> anyhow::Result<Self> {
@@ -93,7 +91,7 @@ impl VtState {
             .context("resize Ghostty VT terminal")
     }
 
-    fn snapshot_lines(&mut self) -> anyhow::Result<Option<Vec<String>>> {
+    fn snapshot_lines(&mut self) -> anyhow::Result<Vec<String>> {
         let snapshot = self
             .render_state
             .update(&self.terminal)
@@ -123,7 +121,7 @@ impl VtState {
             lines.push(line.trim_end().to_string());
         }
 
-        Ok(Some(lines))
+        Ok(lines)
     }
 
     fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
@@ -137,27 +135,6 @@ impl VtState {
     }
 }
 
-#[cfg(not(feature = "ghostty-vt"))]
-impl VtState {
-    fn new(_size: TerminalSize) -> anyhow::Result<Self> {
-        Ok(Self)
-    }
-
-    fn feed(&mut self, _bytes: &[u8]) {}
-
-    fn resize(&mut self, _size: TerminalSize) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn snapshot_lines(&mut self) -> anyhow::Result<Option<Vec<String>>> {
-        Ok(None)
-    }
-
-    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
-        Ok(None)
-    }
-}
-
 struct BackendSessionState {
     command: CommandSpec,
     size: TerminalSize,
@@ -165,7 +142,6 @@ struct BackendSessionState {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     read_buffer: Arc<Mutex<Vec<u8>>>,
-    output: String,
     vt: VtState,
     _reader_thread: JoinHandle<()>,
     exited: bool,
@@ -203,26 +179,12 @@ impl BackendSessionState {
 
         if !bytes.is_empty() {
             self.vt.feed(&bytes);
-            append_bounded_string(
-                &mut self.output,
-                &String::from_utf8_lossy(&bytes),
-                MAX_FALLBACK_OUTPUT_BYTES,
-            );
         }
         Ok(())
     }
 
     fn snapshot_lines(&mut self) -> anyhow::Result<Vec<String>> {
-        if let Some(lines) = self.vt.snapshot_lines()? {
-            return Ok(lines);
-        }
-
-        Ok(self
-            .output
-            .replace('\r', "")
-            .lines()
-            .map(ToString::to_string)
-            .collect())
+        self.vt.snapshot_lines()
     }
 
     fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
@@ -311,7 +273,6 @@ impl TerminalBackend for GhosttyTerminalBackend {
                 writer,
                 child,
                 read_buffer,
-                output: String::new(),
                 vt: VtState::new(size)?,
                 _reader_thread: reader_thread,
                 exited: false,
@@ -442,17 +403,4 @@ fn append_bounded_bytes(buffer: &mut Vec<u8>, bytes: &[u8], max_len: usize) {
         buffer.drain(..needed);
     }
     buffer.extend_from_slice(bytes);
-}
-
-fn append_bounded_string(buffer: &mut String, text: &str, max_len: usize) {
-    buffer.push_str(text);
-    if buffer.len() <= max_len {
-        return;
-    }
-
-    let mut split_at = buffer.len() - max_len;
-    while split_at < buffer.len() && !buffer.is_char_boundary(split_at) {
-        split_at += 1;
-    }
-    buffer.drain(..split_at);
 }
