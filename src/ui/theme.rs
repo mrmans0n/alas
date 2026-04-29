@@ -16,5 +16,7 @@ pub const PANEL_BORDER: Rgba = rgb_const(0x34363a);
 pub const TEXT: Rgba = rgb_const(0xe8eaed);
 pub const TEXT_MUTED: Rgba = rgb_const(0x9aa0a6);
 pub const ACCENT: Rgba = rgb_const(0x2d9cff);
+pub const ACCENT_TEXT: Rgba = rgb_const(0x0b1220);
+pub const ACTIVE_TAB_BG: Rgba = rgb_const(0x22313b);
 pub const DANGER: Rgba = rgb_const(0xff6b7a);
 pub const SUCCESS: Rgba = rgb_const(0x6ee08d);

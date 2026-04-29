@@ -6,11 +6,13 @@ use crate::{
         RepositoryNode, SelectedWorktree, WorktreeNode,
     },
     git::WorktreeKind,
-    ui::theme::{ACCENT, DANGER, PANEL_BG, PANEL_BORDER, SIDEBAR_BG, TEXT, TEXT_MUTED},
+    ui::theme::{
+        ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, SIDEBAR_BG, TEXT, TEXT_MUTED,
+    },
 };
 use gpui::{
     App, ClickEvent, Div, FontWeight, IntoElement, MouseButton, ParentElement, SharedString,
-    Styled, Window, div, prelude::*, px, rgb,
+    Styled, Window, div, prelude::*, px,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +89,7 @@ pub fn render_sidebar(
                         .rounded_md()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(0xffffff))
+                        .text_color(ACCENT_TEXT)
                         .bg(ACCENT)
                         .child("+ Add Repository")
                         .on_click(on_add_repository),

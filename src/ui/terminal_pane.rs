@@ -3,12 +3,12 @@ use crate::{
     terminal::TerminalGridSnapshot,
     ui::{
         terminal_view::render_terminal_grid,
-        theme::{ACCENT, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+        theme::{ACCENT, ACCENT_TEXT, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
     },
 };
 use gpui::{
     AnyElement, App, ClickEvent, IntoElement, ParentElement, ScrollWheelEvent, Styled, Window, div,
-    prelude::*, rgb,
+    prelude::*,
 };
 
 pub fn render_terminal_pane(
@@ -57,7 +57,7 @@ pub fn render_terminal_pane(
                             .rounded_md()
                             .text_sm()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xffffff))
+                            .text_color(ACCENT_TEXT)
                             .bg(ACCENT)
                             .child("Retry")
                             .on_click(on_retry),
@@ -105,7 +105,7 @@ pub fn render_terminal_pane(
                                                     .py_1()
                                                     .rounded_md()
                                                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    .text_color(rgb(0xffffff))
+                                                    .text_color(ACCENT_TEXT)
                                                     .bg(ACCENT)
                                                     .child("Restart")
                                                     .on_click(on_restart),

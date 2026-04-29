@@ -2,7 +2,7 @@ use crate::{
     app::{InspectorPaneState, InspectorTab, SelectedWorktree},
     git::GitInspectorState,
     project::FileTreeNode,
-    ui::theme::{ACCENT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    ui::theme::{ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
 };
 
 use gpui::{
@@ -108,7 +108,7 @@ fn render_tab_button(
         } else {
             FontWeight::NORMAL
         })
-        .text_color(if is_active { TEXT } else { TEXT_MUTED })
+        .text_color(if is_active { ACCENT_TEXT } else { TEXT_MUTED })
         .bg(if is_active { ACCENT } else { PANEL_BORDER })
         .child(label)
         .on_click(move |event, window, cx| {

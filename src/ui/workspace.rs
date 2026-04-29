@@ -1,9 +1,9 @@
 use crate::{
     app::{TerminalTab, TerminalTabId, TerminalTabKind},
-    ui::theme::{ACCENT, APP_BG, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    ui::theme::{ACCENT, ACTIVE_TAB_BG, APP_BG, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
 };
 use gpui::{
-    App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, rgb,
+    App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*,
 };
 
 pub fn render_workspace(
@@ -66,7 +66,7 @@ fn render_tab_bar(
                 .rounded_md()
                 .border_1()
                 .border_color(if is_active { ACCENT } else { PANEL_BORDER })
-                .bg(if is_active { rgb(0x22313b) } else { PANEL_BG })
+                .bg(if is_active { ACTIVE_TAB_BG } else { PANEL_BG })
                 .text_sm()
                 .text_color(if is_active { TEXT } else { TEXT_MUTED })
                 .font_weight(if is_active {
