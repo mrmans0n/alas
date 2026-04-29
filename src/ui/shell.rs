@@ -17,7 +17,7 @@ use crate::{
     terminal::{
         CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
         TerminalScreenMode, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
-        TerminalSize, TerminalStatus, TerminalViewport,
+        TerminalSize, TerminalStatus, TerminalViewport, terminal_input_bytes,
     },
     ui::{
         command_picker::render_command_picker,
@@ -29,6 +29,7 @@ use crate::{
         inspector::render_project_inspector,
         sidebar::{SidebarMenuState, render_sidebar},
         terminal_pane::render_terminal_pane,
+        terminal_view::terminal_size_from_pixels,
         theme::{APP_BG, DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED},
         workspace::render_workspace,
     },
@@ -80,6 +81,7 @@ pub struct AlasShell {
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
     terminal_size: Option<TerminalSize>,
+    terminal_body_size_px: Option<(f32, f32)>,
     terminal_scroll_offset_rows: usize,
     inspector_state: InspectorPaneState,
     inspector_request_generation: u64,
@@ -114,6 +116,7 @@ impl AlasShell {
             terminal_error: None,
             terminal_focus: cx.focus_handle(),
             terminal_size: None,
+            terminal_body_size_px: None,
             terminal_scroll_offset_rows: 0,
             inspector_state: InspectorPaneState::default(),
             inspector_request_generation: 0,
@@ -196,9 +199,35 @@ impl AlasShell {
         self.terminal_size = Some(size);
         if let Some(session) = self.active_terminal.as_ref() {
             if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Failed,
+                );
                 self.terminal_error = Some(error.to_string());
             }
         }
+    }
+
+    fn update_terminal_body_size(&mut self, width_px: f32, height_px: f32) -> bool {
+        if width_px <= 0.0 || height_px <= 0.0 {
+            return false;
+        }
+
+        let next = (width_px.floor(), height_px.floor());
+        if self.terminal_body_size_px == Some(next) {
+            return false;
+        }
+        self.terminal_body_size_px = Some(next);
+        true
+    }
+
+    fn current_terminal_size(&self) -> TerminalSize {
+        self.terminal_body_size_px
+            .map(|(width, height)| terminal_size_from_pixels(width, height))
+            .or(self.terminal_size)
+            .unwrap_or(TerminalSize { cols: 80, rows: 24 })
     }
 
     fn retry_active_terminal(&mut self, cx: &mut Context<Self>) {
@@ -266,6 +295,12 @@ impl AlasShell {
         {
             Ok(()) => true,
             Err(error) => {
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Failed,
+                );
                 self.terminal_error = Some(error.to_string());
                 true
             }
@@ -1444,43 +1479,6 @@ fn terminal_scroll_rows(event: &ScrollWheelEvent) -> isize {
     }
 }
 
-fn terminal_input_bytes(event: &KeyDownEvent) -> Option<Vec<u8>> {
-    let keystroke = &event.keystroke;
-
-    if keystroke.modifiers.platform || keystroke.modifiers.alt {
-        return None;
-    }
-
-    if keystroke.modifiers.control {
-        let key = keystroke.key.to_ascii_lowercase();
-        if key.len() == 1 {
-            let byte = key.as_bytes()[0];
-            if byte.is_ascii_lowercase() {
-                return Some(vec![byte - b'a' + 1]);
-            }
-        }
-        return None;
-    }
-
-    // GPUI 0.2 only exposes key-down events here. This covers common terminal
-    // input; IME/composition and full function-key handling need a richer input
-    // handler if Alas adopts one later.
-    match keystroke.key.as_str() {
-        "enter" => Some(b"\r".to_vec()),
-        "backspace" => Some(vec![0x7f]),
-        "tab" => Some(b"\t".to_vec()),
-        "escape" => Some(vec![0x1b]),
-        "up" => Some(b"\x1b[A".to_vec()),
-        "down" => Some(b"\x1b[B".to_vec()),
-        "right" => Some(b"\x1b[C".to_vec()),
-        "left" => Some(b"\x1b[D".to_vec()),
-        _ => keystroke
-            .key_char
-            .as_ref()
-            .map(|text| text.as_bytes().to_vec()),
-    }
-}
-
 fn render_command_settings_field(
     id: String,
     label: String,
@@ -1627,14 +1625,8 @@ fn render_status_bar(
 }
 
 impl Render for AlasShell {
-    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let window_bounds = window.bounds();
-        let terminal_width = (f32::from(window_bounds.size.width) - 640.0).max(160.0);
-        let terminal_height = (f32::from(window_bounds.size.height) - 88.0).max(80.0);
-        let terminal_size = TerminalSize {
-            cols: (terminal_width / 8.0).floor().max(20.0) as u16,
-            rows: (terminal_height / 18.0).floor().max(4.0) as u16,
-        };
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let terminal_size = self.current_terminal_size();
         self.resize_active_terminal(terminal_size);
         let terminal_snapshot = self.terminal_snapshot();
 
@@ -1737,6 +1729,12 @@ impl Render for AlasShell {
             shell.retry_active_terminal(cx);
             cx.notify();
         });
+        let on_edit_terminal_command = cx.listener(|shell, _event, _window, cx| {
+            if let Some(selected) = shell.model.selected_worktree().cloned() {
+                shell.open_command_settings_dialog(selected.repo_id, cx);
+            }
+            cx.notify();
+        });
         let on_restart_terminal = cx.listener(|shell, _event, _window, cx| {
             shell.restart_active_terminal();
             cx.notify();
@@ -1759,6 +1757,17 @@ impl Render for AlasShell {
                     cx.notify();
                 }
             });
+        let view = cx.entity().downgrade();
+        let on_terminal_body_bounds = move |bounds: gpui::Bounds<gpui::Pixels>, app: &mut App| {
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            view.update(app, |shell, cx| {
+                if shell.update_terminal_body_size(width, height) {
+                    cx.notify();
+                }
+            })
+            .ok();
+        };
         let view = cx.entity().downgrade();
         let on_select_terminal_tab = move |tab_id: TerminalTabId,
                                            _event: &gpui::ClickEvent,
@@ -2167,12 +2176,15 @@ impl Render for AlasShell {
                                 on_new_terminal_tab,
                                 render_terminal_pane(
                                     self.model.selected_worktree(),
+                                    active_tab,
                                     terminal_snapshot.as_ref(),
                                     self.terminal_error.as_deref(),
                                     on_retry_terminal,
+                                    on_edit_terminal_command,
                                     on_restart_terminal,
                                     on_focus_terminal,
                                     on_terminal_scroll,
+                                    on_terminal_body_bounds,
                                 ),
                             )),
                     ),

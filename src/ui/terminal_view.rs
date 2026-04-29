@@ -1,10 +1,92 @@
-use crate::terminal::{TerminalCell, TerminalColor, TerminalGridSnapshot};
-use gpui::{IntoElement, ParentElement, SharedString, Styled, div, prelude::*, px, rgb};
+use std::rc::Rc;
+
+use crate::terminal::{TerminalCell, TerminalColor, TerminalGridSnapshot, TerminalSize};
+use gpui::{
+    App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
+    ParentElement, Pixels, SharedString, Style, Styled, Window, div, prelude::*, px, relative, rgb,
+};
 
 const TERMINAL_BACKGROUND: u32 = 0x111827;
 const TERMINAL_FOREGROUND: u32 = 0xe5e7eb;
-const CELL_WIDTH_PX: f32 = 8.0;
-const CELL_HEIGHT_PX: f32 = 18.0;
+pub const CELL_WIDTH_PX: f32 = 8.0;
+pub const CELL_HEIGHT_PX: f32 = 18.0;
+
+pub fn terminal_size_from_pixels(width_px: f32, height_px: f32) -> TerminalSize {
+    TerminalSize {
+        cols: (width_px / CELL_WIDTH_PX).floor().max(20.0) as u16,
+        rows: (height_px / CELL_HEIGHT_PX).floor().max(4.0) as u16,
+    }
+}
+
+pub fn render_terminal_bounds_probe(
+    on_bounds: impl Fn(Bounds<Pixels>, &mut App) + 'static,
+) -> impl IntoElement {
+    TerminalBoundsProbe {
+        on_bounds: Rc::new(on_bounds),
+    }
+}
+
+struct TerminalBoundsProbe {
+    on_bounds: Rc<dyn Fn(Bounds<Pixels>, &mut App)>,
+}
+
+impl IntoElement for TerminalBoundsProbe {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for TerminalBoundsProbe {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.0).into();
+        style.size.height = relative(1.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        (self.on_bounds)(bounds, cx);
+    }
+}
 
 pub fn render_terminal_grid(snapshot: &TerminalGridSnapshot) -> impl IntoElement {
     let cursor = snapshot

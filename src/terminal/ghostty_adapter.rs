@@ -482,8 +482,11 @@ impl TerminalBackend for GhosttyTerminalBackend {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
         let command = state.command.clone();
+        let size = state.size;
         drop(state);
-        self.start(command)
+        let restarted = self.start(command)?;
+        self.resize(restarted, size)?;
+        Ok(restarted)
     }
 
     fn stop(&mut self, session: TerminalBackendSession) -> anyhow::Result<()> {

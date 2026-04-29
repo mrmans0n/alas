@@ -1,24 +1,27 @@
 use crate::{
-    app::SelectedWorktree,
+    app::{SelectedWorktree, TerminalTab},
     terminal::TerminalGridSnapshot,
     ui::{
-        terminal_view::render_terminal_grid,
-        theme::{ACCENT, ACCENT_TEXT, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+        terminal_view::{render_terminal_bounds_probe, render_terminal_grid},
+        theme::{ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
     },
 };
 use gpui::{
-    AnyElement, App, ClickEvent, IntoElement, ParentElement, ScrollWheelEvent, Styled, Window, div,
-    prelude::*,
+    AnyElement, App, Bounds, ClickEvent, IntoElement, ParentElement, Pixels, ScrollWheelEvent,
+    SharedString, Styled, Window, div, prelude::*,
 };
 
 pub fn render_terminal_pane(
     selected_worktree: Option<&SelectedWorktree>,
+    active_tab: Option<&TerminalTab>,
     snapshot: Option<&TerminalGridSnapshot>,
     terminal_error: Option<&str>,
     on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_edit_command: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_restart: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_focus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_scroll: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
+    on_body_bounds: impl Fn(Bounds<Pixels>, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
         .id("terminal-pane")
@@ -39,30 +42,16 @@ pub fn render_terminal_pane(
             )
         })
         .when(terminal_error.is_some(), |element| {
-            element.items_center().justify_center().child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .max_w(gpui::px(720.0))
-                    .child(format!(
-                        "Terminal failed: {}",
-                        terminal_error.unwrap_or_default()
-                    ))
-                    .child(
-                        div()
-                            .id("retry-terminal")
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(ACCENT_TEXT)
-                            .bg(ACCENT)
-                            .child("Retry")
-                            .on_click(on_retry),
-                    ),
-            )
+            element
+                .items_center()
+                .justify_center()
+                .child(render_terminal_failure(
+                    selected_worktree,
+                    active_tab,
+                    terminal_error.unwrap_or_default(),
+                    on_retry,
+                    on_edit_command,
+                ))
         })
         .when(
             selected_worktree.is_some() && terminal_error.is_none(),
@@ -114,26 +103,128 @@ pub fn render_terminal_pane(
                                 },
                             ),
                     )
-                    .when(snapshot.is_some_and(|snapshot| snapshot.exited()), |element| {
-                        element.child(
-                            div()
-                                .p_3()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(PANEL_BORDER)
-                                .bg(PANEL_BG)
-                                .text_sm()
-                                .text_color(TEXT_MUTED)
-                                .child("Terminal process exited. Restart to run the configured command again."),
-                        )
-                    })
+                    .when(
+                        snapshot.is_some_and(|snapshot| snapshot.exited()),
+                        |element| {
+                            element.child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(PANEL_BORDER)
+                                    .bg(PANEL_BG)
+                                    .text_xs()
+                                    .text_color(TEXT_MUTED)
+                                    .child("Process exited; final screen is preserved."),
+                            )
+                        },
+                    )
                     .child(
                         div()
                             .flex_1()
                             .overflow_hidden()
-                            .child(render_terminal_body(snapshot)),
+                            .relative()
+                            .child(render_terminal_body(snapshot))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .child(render_terminal_bounds_probe(on_body_bounds)),
+                            ),
                     )
             },
+        )
+}
+
+fn render_terminal_failure(
+    selected_worktree: Option<&SelectedWorktree>,
+    active_tab: Option<&TerminalTab>,
+    terminal_error: &str,
+    on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_edit_command: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let command = active_tab
+        .map(|tab| tab.command.display.clone())
+        .unwrap_or_else(|| "unknown command".to_string());
+    let cwd = active_tab
+        .map(|tab| tab.command.cwd.display().to_string())
+        .or_else(|| selected_worktree.map(|worktree| worktree.path.display().to_string()))
+        .unwrap_or_else(|| "unknown cwd".to_string());
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .max_w(gpui::px(760.0))
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(DANGER)
+                .child("Terminal startup or I/O failed"),
+        )
+        .child(detail_row("Command", command))
+        .child(detail_row("Cwd", cwd))
+        .child(detail_row("Cause", terminal_error.to_string()))
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .id("retry-terminal")
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(ACCENT_TEXT)
+                        .bg(ACCENT)
+                        .child("Retry")
+                        .on_click(on_retry),
+                )
+                .child(
+                    div()
+                        .id("edit-terminal-command")
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(PANEL_BORDER)
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(TEXT)
+                        .bg(PANEL_BG)
+                        .child("Edit Command")
+                        .on_click(on_edit_command),
+                ),
+        )
+}
+
+fn detail_row(label: &'static str, value: String) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(TEXT_MUTED)
+                .child(label),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(TEXT)
+                .font_family("monospace")
+                .child(SharedString::from(value)),
         )
 }
 

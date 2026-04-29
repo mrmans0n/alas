@@ -2,8 +2,9 @@ use alas::app::TerminalTabId;
 use alas::terminal::{
     CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession,
     TerminalGridSnapshot, TerminalScreenMode, TerminalSessionId, TerminalSessionRegistry,
-    TerminalSize, TerminalStatus, TerminalViewport, default_shell_program,
+    TerminalSize, TerminalStatus, TerminalViewport, default_shell_program, terminal_input_bytes,
 };
+use gpui::{KeyDownEvent, Keystroke};
 use std::path::PathBuf;
 
 fn empty_snapshot(
@@ -246,6 +247,47 @@ impl TerminalBackend for FailingOnceBackend {
     ) -> anyhow::Result<TerminalBackendSession> {
         Ok(TerminalBackendSession { backend_id: 1 })
     }
+}
+
+fn key_down(source: &str) -> KeyDownEvent {
+    KeyDownEvent {
+        keystroke: Keystroke::parse(source).unwrap(),
+        is_held: false,
+    }
+}
+
+#[test]
+fn terminal_input_maps_basic_control_keys() {
+    assert_eq!(terminal_input_bytes(&key_down("enter")).unwrap(), b"\r");
+    assert_eq!(
+        terminal_input_bytes(&key_down("backspace")).unwrap(),
+        vec![0x7f]
+    );
+    assert_eq!(
+        terminal_input_bytes(&key_down("escape")).unwrap(),
+        vec![0x1b]
+    );
+    assert_eq!(
+        terminal_input_bytes(&key_down("ctrl-c")).unwrap(),
+        vec![0x03]
+    );
+}
+
+#[test]
+fn terminal_input_maps_arrow_keys_to_csi() {
+    assert_eq!(terminal_input_bytes(&key_down("up")).unwrap(), b"\x1b[A");
+    assert_eq!(terminal_input_bytes(&key_down("down")).unwrap(), b"\x1b[B");
+    assert_eq!(terminal_input_bytes(&key_down("right")).unwrap(), b"\x1b[C");
+    assert_eq!(terminal_input_bytes(&key_down("left")).unwrap(), b"\x1b[D");
+}
+
+#[test]
+fn terminal_input_maps_alt_to_escape_prefix() {
+    assert_eq!(terminal_input_bytes(&key_down("alt-f")).unwrap(), b"\x1bf");
+    assert_eq!(
+        terminal_input_bytes(&key_down("alt-backspace")).unwrap(),
+        b"\x1b\x7f"
+    );
 }
 
 #[test]
