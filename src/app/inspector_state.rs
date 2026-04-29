@@ -28,9 +28,19 @@ impl InspectorPaneState {
         self.changes_error = None;
     }
 
+    pub fn set_files(&mut self, files: FileTreeNode) {
+        self.files = Some(files);
+        self.files_error = None;
+    }
+
     pub fn set_files_error(&mut self, error: impl Into<String>) {
         self.files = None;
         self.files_error = Some(error.into());
+    }
+
+    pub fn set_changes(&mut self, changes: GitInspectorState) {
+        self.changes = Some(changes);
+        self.changes_error = None;
     }
 
     pub fn set_changes_error(&mut self, error: impl Into<String>) {

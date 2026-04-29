@@ -1,4 +1,9 @@
-use alas::app::{InspectorPaneState, InspectorTab};
+use alas::{
+    app::{InspectorPaneState, InspectorTab},
+    git::GitInspectorState,
+    project::FileTreeNode,
+};
+use std::path::PathBuf;
 
 #[test]
 fn files_and_changes_errors_are_independent() {
@@ -16,6 +21,36 @@ fn files_and_changes_errors_are_independent() {
         state.changes_error.as_deref(),
         Some("failed to load changes")
     );
+}
+
+#[test]
+fn successful_loads_clear_matching_errors_without_affecting_other_tab() {
+    let mut state = InspectorPaneState::default();
+    state.set_files_error("failed to load files");
+    state.set_changes_error("failed to load changes");
+
+    state.set_files(FileTreeNode {
+        name: "repo".to_string(),
+        path: PathBuf::from("/repo"),
+        is_dir: true,
+        children: Vec::new(),
+    });
+
+    assert!(state.files.is_some());
+    assert!(state.files_error.is_none());
+    assert_eq!(
+        state.changes_error.as_deref(),
+        Some("failed to load changes")
+    );
+
+    state.set_changes(GitInspectorState {
+        branch: Some("main".to_string()),
+        changed_files: Vec::new(),
+        recent_commits: Vec::new(),
+    });
+
+    assert!(state.changes.is_some());
+    assert!(state.changes_error.is_none());
 }
 
 #[test]
