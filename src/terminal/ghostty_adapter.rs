@@ -92,64 +92,90 @@ impl VtState {
 
     fn snapshot_rows(&mut self, viewport: TerminalViewport) -> anyhow::Result<VtSnapshotRows> {
         let screen_mode = self.screen_mode()?;
-        let scrollback_rows = self
+        let raw_scrollback_rows = self
             .terminal
             .scrollback_rows()
             .context("read Ghostty VT scrollback row count")?;
-        let bounded_scroll_offset = viewport.scroll_offset_rows.min(scrollback_rows);
-        let bounded_viewport = TerminalViewport {
-            scroll_offset_rows: bounded_scroll_offset,
-            visible_rows: viewport.visible_rows,
+        let scrollback_rows = match screen_mode {
+            TerminalScreenMode::Main => raw_scrollback_rows,
+            TerminalScreenMode::Alternate => 0,
         };
+        let terminal_rows = self
+            .terminal
+            .rows()
+            .context("read Ghostty VT terminal row count")?;
+        let bounded_viewport = viewport.clamped(scrollback_rows, terminal_rows);
 
         self.terminal.scroll_viewport(ScrollViewport::Bottom);
-        if bounded_scroll_offset > 0 {
-            let delta = isize::try_from(bounded_scroll_offset)
+        if bounded_viewport.scroll_offset_rows > 0 {
+            let delta = isize::try_from(bounded_viewport.scroll_offset_rows)
                 .context("convert Ghostty VT scrollback offset to viewport delta")?;
             self.terminal.scroll_viewport(ScrollViewport::Delta(-delta));
         }
 
-        let snapshot = self
-            .render_state
-            .update(&self.terminal)
-            .context("update Ghostty VT render state")?;
-        let cursor = snapshot
-            .cursor_viewport()
-            .context("read Ghostty VT cursor viewport")?
-            .map(|cursor| TerminalCursor {
-                col: cursor.x,
-                row: cursor.y,
-                visible: true,
-                shape: TerminalCursorShape::Block,
-            });
-        let mut rows = self
-            .row_iter
-            .update(&snapshot)
-            .context("iterate Ghostty VT render rows")?;
-        let mut terminal_rows = Vec::new();
+        let result = (|| -> anyhow::Result<(Vec<TerminalRow>, Option<TerminalCursor>)> {
+            let snapshot = self
+                .render_state
+                .update(&self.terminal)
+                .context("update Ghostty VT render state")?;
+            let cursor = snapshot
+                .cursor_viewport()
+                .context("read Ghostty VT cursor viewport")?
+                .map(|cursor| TerminalCursor {
+                    col: cursor.x,
+                    row: cursor.y,
+                    visible: true,
+                    shape: TerminalCursorShape::Block,
+                });
+            let mut rows = self
+                .row_iter
+                .update(&snapshot)
+                .context("iterate Ghostty VT render rows")?;
+            let mut terminal_rows = Vec::new();
 
-        while let Some(row) = rows.next() {
-            let mut cells = self
-                .cell_iter
-                .update(row)
-                .context("iterate Ghostty VT render cells")?;
-            let mut row_cells = Vec::new();
-            while let Some(cell) = cells.next() {
-                let text: String = cell
-                    .graphemes()
-                    .context("read Ghostty VT render cell graphemes")?
-                    .into_iter()
-                    .filter(|grapheme| *grapheme != '\0')
-                    .collect();
-                row_cells.push(TerminalCell::new(text));
+            while let Some(row) = rows.next() {
+                let mut cells = self
+                    .cell_iter
+                    .update(row)
+                    .context("iterate Ghostty VT render cells")?;
+                let mut row_cells = Vec::new();
+                while let Some(cell) = cells.next() {
+                    let text: String = cell
+                        .graphemes()
+                        .context("read Ghostty VT render cell graphemes")?
+                        .into_iter()
+                        .filter(|grapheme| *grapheme != '\0')
+                        .collect();
+                    row_cells.push(TerminalCell::new(text));
+                }
+                while row_cells
+                    .last()
+                    .is_some_and(|cell| cell.text.trim().is_empty())
+                {
+                    row_cells.pop();
+                }
+                terminal_rows.push(TerminalRow { cells: row_cells });
             }
-            while row_cells
-                .last()
-                .is_some_and(|cell| cell.text.trim().is_empty())
-            {
-                row_cells.pop();
-            }
-            terminal_rows.push(TerminalRow { cells: row_cells });
+
+            Ok((terminal_rows, cursor))
+        })();
+        self.terminal.scroll_viewport(ScrollViewport::Bottom);
+
+        let (mut terminal_rows, mut cursor) = result?;
+        let visible_rows = usize::from(bounded_viewport.visible_rows);
+        if terminal_rows.len() > visible_rows {
+            let crop_start = terminal_rows.len() - visible_rows;
+            cursor = cursor.and_then(|cursor| {
+                if usize::from(cursor.row) < crop_start {
+                    None
+                } else {
+                    Some(TerminalCursor {
+                        row: cursor.row - u16::try_from(crop_start).ok()?,
+                        ..cursor
+                    })
+                }
+            });
+            terminal_rows = terminal_rows.split_off(crop_start);
         }
 
         Ok(VtSnapshotRows {

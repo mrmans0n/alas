@@ -79,6 +79,13 @@ impl TerminalViewport {
             visible_rows,
         }
     }
+
+    pub fn clamped(self, scrollback_rows: usize, visible_rows: u16) -> Self {
+        Self {
+            scroll_offset_rows: self.scroll_offset_rows.min(scrollback_rows),
+            visible_rows: self.visible_rows.min(visible_rows),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

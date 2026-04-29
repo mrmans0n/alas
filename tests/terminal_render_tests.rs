@@ -35,6 +35,22 @@ fn plain_lines_are_derived_from_cells() {
 }
 
 #[test]
+fn viewport_clamps_to_available_scrollback_and_visible_rows() {
+    let viewport = TerminalViewport {
+        scroll_offset_rows: 50,
+        visible_rows: 80,
+    };
+
+    assert_eq!(
+        viewport.clamped(12, 24),
+        TerminalViewport {
+            scroll_offset_rows: 12,
+            visible_rows: 24,
+        }
+    );
+}
+
+#[test]
 fn snapshot_tracks_viewport_and_screen_mode() {
     let snapshot = TerminalGridSnapshot {
         size: TerminalSize { cols: 80, rows: 24 },

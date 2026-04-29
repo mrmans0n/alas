@@ -371,30 +371,104 @@ fn real_backend_snapshots_command_output_text_grid() {
     assert!(snapshot.exited());
 }
 
+#[test]
+#[ignore = "requires real PTY timing; run manually during terminal integration"]
+fn real_backend_clamps_scrollback_viewport_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut backend = GhosttyTerminalBackend::new();
+    let session = backend
+        .start(CommandSpec::shell_command(
+            "for i in $(seq 1 60); do printf 'line-%02d\\n' \"$i\"; done",
+            dir.path().to_path_buf(),
+        ))
+        .unwrap();
+
+    let bottom = wait_for_snapshot_text(&mut backend, session, "line-60");
+    assert!(bottom.scrollback_rows > 0);
+
+    let scrolled = backend
+        .snapshot(
+            session,
+            TerminalViewport {
+                scroll_offset_rows: usize::MAX,
+                visible_rows: 120,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        scrolled.viewport.scroll_offset_rows,
+        scrolled.scrollback_rows
+    );
+    assert_eq!(scrolled.viewport.visible_rows, scrolled.size.rows);
+    assert!(scrolled.plain_lines().join("\n").contains("line-01"));
+}
+
+#[test]
+#[ignore = "requires real PTY timing; run manually during terminal integration"]
+fn real_backend_hides_main_scrollback_while_alternate_screen_is_active() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut backend = GhosttyTerminalBackend::new();
+    let session = backend
+        .start(CommandSpec::shell_command(
+            "printf 'main-before\\n'; printf '\\033[?1049h'; printf 'alt-active'; sleep 1",
+            dir.path().to_path_buf(),
+        ))
+        .unwrap();
+
+    let snapshot = wait_for_snapshot_matching(
+        &mut backend,
+        session,
+        TerminalViewport {
+            scroll_offset_rows: 10,
+            visible_rows: 24,
+        },
+        |snapshot| {
+            snapshot.screen_mode == TerminalScreenMode::Alternate
+                && snapshot.plain_lines().join("\n").contains("alt-active")
+        },
+    );
+    let output = snapshot.plain_lines().join("\n");
+
+    assert_eq!(snapshot.screen_mode, TerminalScreenMode::Alternate);
+    assert_eq!(snapshot.scrollback_rows, 0);
+    assert_eq!(snapshot.viewport.scroll_offset_rows, 0);
+    assert!(output.contains("alt-active"));
+    assert!(!output.contains("main-before"));
+}
+
 fn wait_for_snapshot_text(
     backend: &mut GhosttyTerminalBackend,
     session: TerminalBackendSession,
     expected: &str,
 ) -> TerminalGridSnapshot {
+    wait_for_snapshot_matching(
+        backend,
+        session,
+        TerminalViewport::visible(24),
+        |snapshot| snapshot.plain_lines().join("\n").contains(expected) && snapshot.exited(),
+    )
+}
+
+fn wait_for_snapshot_matching(
+    backend: &mut GhosttyTerminalBackend,
+    session: TerminalBackendSession,
+    viewport: TerminalViewport,
+    mut predicate: impl FnMut(&TerminalGridSnapshot) -> bool,
+) -> TerminalGridSnapshot {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let mut last_snapshot = None;
 
     while std::time::Instant::now() < deadline {
-        let snapshot = backend
-            .snapshot(session, TerminalViewport::visible(24))
-            .unwrap();
-        if snapshot.plain_lines().join("\n").contains(expected) && snapshot.exited() {
+        let snapshot = backend.snapshot(session, viewport).unwrap();
+        if predicate(&snapshot) {
             return snapshot;
         }
         last_snapshot = Some(snapshot);
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 
-    last_snapshot.unwrap_or_else(|| {
-        backend
-            .snapshot(session, TerminalViewport::visible(24))
-            .unwrap()
-    })
+    last_snapshot.unwrap_or_else(|| backend.snapshot(session, viewport).unwrap())
 }
 
 #[test]
