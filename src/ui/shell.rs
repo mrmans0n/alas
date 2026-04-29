@@ -483,9 +483,9 @@ impl AlasShell {
         };
 
         if screen_mode == TerminalScreenMode::Alternate {
-            // Alternate-screen apps often expect wheel input as terminal mouse
-            // events. Alas does not translate GPUI wheel events into PTY mouse
-            // reports yet, so keep the main-screen scrollback offset pinned.
+            // If Ghostty mouse reporting did not consume the wheel event, keep
+            // alternate-screen scrollback pinned rather than scrolling the main
+            // screen behind the TUI.
             let changed = self.terminal_scroll_offset_rows != 0;
             self.terminal_scroll_offset_rows = 0;
             if changed {
