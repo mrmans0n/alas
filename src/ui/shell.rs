@@ -231,6 +231,11 @@ impl AlasShell {
     }
 
     fn retry_active_terminal(&mut self, cx: &mut Context<Self>) {
+        if self.active_terminal.is_some() {
+            self.restart_active_terminal();
+            return;
+        }
+
         let Some(selected) = self.model.selected_worktree().cloned() else {
             return;
         };

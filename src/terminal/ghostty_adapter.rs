@@ -319,11 +319,12 @@ impl GhosttyTerminalBackend {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-impl TerminalBackend for GhosttyTerminalBackend {
-    fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
-        let size = TerminalSize { cols: 80, rows: 24 };
+    fn start_with_size(
+        &mut self,
+        command: CommandSpec,
+        size: TerminalSize,
+    ) -> anyhow::Result<TerminalBackendSession> {
         let vt = VtState::new(size).with_context(|| {
             format!(
                 "initialize terminal renderer for command '{}' in cwd {}",
@@ -396,6 +397,12 @@ impl TerminalBackend for GhosttyTerminalBackend {
             },
         );
         Ok(session)
+    }
+}
+
+impl TerminalBackend for GhosttyTerminalBackend {
+    fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
+        self.start_with_size(command, TerminalSize { cols: 80, rows: 24 })
     }
 
     fn write_input(&mut self, session: TerminalBackendSession, bytes: &[u8]) -> anyhow::Result<()> {
@@ -485,14 +492,14 @@ impl TerminalBackend for GhosttyTerminalBackend {
         &mut self,
         session: TerminalBackendSession,
     ) -> anyhow::Result<TerminalBackendSession> {
-        let state = self.sessions.remove(&session.backend_id).ok_or_else(|| {
-            anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
-        })?;
-        let command = state.command.clone();
-        let size = state.size;
-        drop(state);
-        let restarted = self.start(command)?;
-        self.resize(restarted, size)?;
+        let (command, size) = {
+            let state = self.sessions.get(&session.backend_id).ok_or_else(|| {
+                anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+            })?;
+            (state.command.clone(), state.size)
+        };
+        let restarted = self.start_with_size(command, size)?;
+        self.sessions.remove(&session.backend_id);
         Ok(restarted)
     }
 
