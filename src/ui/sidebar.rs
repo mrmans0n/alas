@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crate::{app::RepositoryNode, git::WorktreeKind};
 use gpui::{
-    App, ClickEvent, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div,
-    prelude::*, px, rgb,
+    App, ClickEvent, Div, FontWeight, IntoElement, ParentElement, Rgba, SharedString, Styled,
+    Window, div, prelude::*, px, rgb,
 };
 
 pub fn render_sidebar(
@@ -41,6 +41,19 @@ pub fn render_sidebar(
                 .font_weight(FontWeight::BOLD)
                 .child("Repositories"),
         )
+        .when(repositories.is_empty(), |element| {
+            element.child(
+                div()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xd8dee9))
+                    .bg(rgb(0xffffff))
+                    .text_sm()
+                    .text_color(rgb(0x6b7280))
+                    .child("No repositories configured. Add a Git repository to begin."),
+            )
+        })
         .children(repositories.iter().map(|repository| {
             render_repository(
                 repository,
@@ -114,6 +127,10 @@ fn render_repository(
         "Show archived".into()
     };
 
+    // GPUI 0.2 exposes low-level mouse events but no stable built-in context
+    // menu/popover primitive in this app. Keep the full right-click menu action
+    // set visible and grouped so no archive/remove/prune/settings affordance is
+    // lost while native context menus are deferred.
     div()
         .flex()
         .flex_col()
@@ -169,13 +186,12 @@ fn render_repository(
                 .child(
                     div()
                         .flex()
-                        .gap_2()
+                        .flex_wrap()
+                        .justify_end()
+                        .gap_1()
                         .child(
-                            div()
+                            action_chip(show_archived_label, rgb(0x2563eb))
                                 .id(SharedString::from(format!("toggle-archived-{repo_id}")))
-                                .text_xs()
-                                .text_color(rgb(0x2563eb))
-                                .child(show_archived_label)
                                 .on_click({
                                     let repo_id = repo_id.clone();
                                     let show_archived = repository.show_archived;
@@ -191,13 +207,10 @@ fn render_repository(
                                 }),
                         )
                         .child(
-                            div()
+                            action_chip("Commands".into(), rgb(0x2563eb))
                                 .id(SharedString::from(format!(
                                     "command-settings-{command_settings_repo_id}"
                                 )))
-                                .text_xs()
-                                .text_color(rgb(0x2563eb))
-                                .child("Commands")
                                 .on_click(move |event, window, cx| {
                                     on_command_settings(
                                         command_settings_repo_id.clone(),
@@ -208,13 +221,10 @@ fn render_repository(
                                 }),
                         )
                         .child(
-                            div()
+                            action_chip("Prune".into(), rgb(0x2563eb))
                                 .id(SharedString::from(format!(
                                     "prune-worktrees-{prune_worktrees_repo_id}"
                                 )))
-                                .text_xs()
-                                .text_color(rgb(0x2563eb))
-                                .child("Prune")
                                 .on_click(move |event, window, cx| {
                                     on_prune_worktrees(
                                         prune_worktrees_repo_id.clone(),
@@ -226,11 +236,8 @@ fn render_repository(
                                 }),
                         )
                         .child(
-                            div()
+                            action_chip(remove_label, rgb(0xdc2626))
                                 .id(SharedString::from(format!("remove-repository-{repo_id}")))
-                                .text_xs()
-                                .text_color(rgb(0xdc2626))
-                                .child(remove_label)
                                 .on_click(move |event, window, cx| {
                                     on_remove_repository(
                                         repo_id.clone(),
@@ -242,6 +249,35 @@ fn render_repository(
                                 }),
                         ),
                 ),
+        )
+        .when(repository.unavailable, |element| {
+            element.child(
+                div()
+                    .ml_3()
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(0xfef3c7))
+                    .text_sm()
+                    .text_color(rgb(0x92400e))
+                    .child(
+                        "Repository unavailable or moved. Check the path or remove it from Alas.",
+                    ),
+            )
+        })
+        .when(
+            !repository.unavailable && repository.worktrees.is_empty(),
+            |element| {
+                element.child(
+                    div()
+                        .ml_3()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0xffffff))
+                        .text_sm()
+                        .text_color(rgb(0x6b7280))
+                        .child("No worktrees found for this repository."),
+                )
+            },
         )
         .children(
             repository
@@ -264,11 +300,14 @@ fn render_repository(
                     };
                     let select_repo_id = repo_id.clone();
                     let select_worktree_path = worktree_path.clone();
+                    let open_repo_id = repo_id.clone();
+                    let open_worktree_path = worktree_path.clone();
                     let remove_repo_id = repo_id.clone();
                     let remove_worktree_path = worktree_path.clone();
                     let on_archive_worktree = on_archive_worktree.clone();
                     let on_unarchive_worktree = on_unarchive_worktree.clone();
-                    let on_select_worktree = on_select_worktree.clone();
+                    let on_select_row_worktree = on_select_worktree.clone();
+                    let on_select_open_worktree = on_select_worktree.clone();
                     let on_remove_worktree = on_remove_worktree.clone();
 
                     div()
@@ -287,7 +326,7 @@ fn render_repository(
                         .justify_between()
                         .gap_2()
                         .on_click(move |event, window, cx| {
-                            on_select_worktree(
+                            on_select_row_worktree(
                                 select_repo_id.clone(),
                                 select_worktree_path.clone(),
                                 event,
@@ -299,16 +338,32 @@ fn render_repository(
                         .child(
                             div()
                                 .flex()
-                                .gap_2()
+                                .flex_wrap()
+                                .justify_end()
+                                .gap_1()
                                 .child(
-                                    div()
+                                    action_chip("Open".into(), rgb(0x2563eb))
+                                        .id(SharedString::from(format!(
+                                            "open-worktree-{open_repo_id}-{}",
+                                            open_worktree_path.display()
+                                        )))
+                                        .on_click(move |event, window, cx| {
+                                            cx.stop_propagation();
+                                            on_select_open_worktree(
+                                                open_repo_id.clone(),
+                                                open_worktree_path.clone(),
+                                                event,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                )
+                                .child(
+                                    action_chip(action_label, rgb(0x2563eb))
                                         .id(SharedString::from(format!(
                                             "archive-worktree-{repo_id}-{}",
                                             worktree_path.display()
                                         )))
-                                        .text_xs()
-                                        .text_color(rgb(0x2563eb))
-                                        .child(action_label)
                                         .on_click(move |event, window, cx| {
                                             cx.stop_propagation();
                                             if is_archived {
@@ -332,14 +387,11 @@ fn render_repository(
                                 )
                                 .when(!is_main, |element| {
                                     element.child(
-                                        div()
+                                        action_chip("Remove".into(), rgb(0xdc2626))
                                             .id(SharedString::from(format!(
                                                 "remove-worktree-{remove_repo_id}-{}",
                                                 remove_worktree_path.display()
                                             )))
-                                            .text_xs()
-                                            .text_color(rgb(0xdc2626))
-                                            .child("Remove")
                                             .on_click(move |event, window, cx| {
                                                 cx.stop_propagation();
                                                 on_remove_worktree(
@@ -356,4 +408,16 @@ fn render_repository(
                         )
                 }),
         )
+}
+
+fn action_chip(label: SharedString, color: Rgba) -> Div {
+    div()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgb(0xe5e7eb))
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color)
+        .child(label)
 }

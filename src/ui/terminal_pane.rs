@@ -104,6 +104,17 @@ pub fn render_terminal_pane(
                                 },
                             ),
                     )
+                    .when(snapshot.is_some_and(|snapshot| snapshot.exited), |element| {
+                        element.child(
+                            div()
+                                .p_3()
+                                .rounded_md()
+                                .bg(rgb(0x1f2937))
+                                .text_sm()
+                                .text_color(rgb(0xd1d5db))
+                                .child("Terminal process exited. Restart to run the configured command again."),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()
