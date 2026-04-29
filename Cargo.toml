@@ -10,6 +10,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 directories = "6"
 indexmap = { version = "2", features = ["serde"] }
+portable-pty = "0.8"
 
 # GPUI is the Rust UI framework used by Zed. If crates.io does not have the
 # needed version, switch this dependency to Zed's Git repository during this task.

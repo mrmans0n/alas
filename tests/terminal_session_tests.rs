@@ -1,6 +1,7 @@
 use alas::terminal::{
-    CommandSpec, TerminalBackend, TerminalBackendSession, TerminalGridSnapshot, TerminalSessionId,
-    TerminalSessionRegistry, TerminalSize, default_shell_program,
+    CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession,
+    TerminalGridSnapshot, TerminalSessionId, TerminalSessionRegistry, TerminalSize,
+    default_shell_program,
 };
 use std::path::PathBuf;
 
@@ -294,6 +295,24 @@ fn command_spec_runs_through_shell_with_cwd() {
     assert_eq!(command.program, default_shell_program());
     assert_eq!(command.args, vec!["-lc".to_string(), "$SHELL".to_string()]);
     assert_eq!(command.cwd, cwd);
+}
+
+#[test]
+#[ignore = "requires real PTY timing; run manually during terminal integration"]
+fn real_backend_starts_process_in_command_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut backend = GhosttyTerminalBackend::new();
+    let session = backend
+        .start(CommandSpec::shell_command("pwd", dir.path().to_path_buf()))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    let snapshot = backend.snapshot(session).unwrap();
+    assert!(
+        snapshot
+            .lines
+            .join("\n")
+            .contains(&dir.path().display().to_string())
+    );
 }
 
 #[test]
