@@ -52,6 +52,7 @@ pub fn terminal_paint_plan(
         commands.extend(
             background_runs(row, frame.default_background)
                 .into_iter()
+                .filter(|run| run.background != frame.default_background)
                 .map(|run| TerminalPaintCommand::BackgroundRun {
                     row: row_index,
                     col: run.col,
@@ -132,8 +133,63 @@ mod tests {
 
         assert!(matches!(
             plan.commands.first(),
-            Some(TerminalPaintCommand::FillBackground { .. })
+            Some(TerminalPaintCommand::FillBackground {
+                color,
+                cols: 2,
+                rows: 1,
+            }) if *color == TerminalColor::rgb(1, 2, 3)
         ));
+    }
+
+    #[test]
+    fn paint_plan_includes_text_runs() {
+        let mut frame = empty_frame(2, 1);
+        frame.rows_data[0].cells = vec![
+            GhosttyRenderCell::narrow("a", GhosttyCellStyle::default()),
+            GhosttyRenderCell::narrow("b", GhosttyCellStyle::default()),
+        ];
+
+        let plan = terminal_paint_plan(&frame, TerminalMetrics::fallback());
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            TerminalPaintCommand::TextRun {
+                row: 0,
+                col: 0,
+                cell_count: 2,
+                text,
+                ..
+            } if text == "ab"
+        )));
+    }
+
+    #[test]
+    fn paint_plan_includes_non_default_background_runs_only() {
+        let accent = TerminalColor::rgb(9, 8, 7);
+        let mut frame = empty_frame(3, 1);
+        frame.rows_data[0].cells[1] = GhosttyRenderCell::empty(GhosttyCellStyle {
+            background: Some(accent),
+            ..GhosttyCellStyle::default()
+        });
+
+        let plan = terminal_paint_plan(&frame, TerminalMetrics::fallback());
+
+        assert_eq!(
+            plan.commands
+                .iter()
+                .filter(|command| matches!(command, TerminalPaintCommand::BackgroundRun { .. }))
+                .count(),
+            1
+        );
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            TerminalPaintCommand::BackgroundRun {
+                row: 0,
+                col: 1,
+                cell_count: 1,
+                color
+            } if *color == accent
+        )));
     }
 
     #[test]
