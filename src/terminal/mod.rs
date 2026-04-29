@@ -2,6 +2,7 @@ pub mod ghostty_adapter;
 pub mod grid;
 pub mod input;
 pub mod session;
+pub mod terminal_metrics;
 
 pub use ghostty_adapter::{
     GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession, TerminalSize,
@@ -15,3 +16,4 @@ pub use session::{
     CommandSpec, TerminalHandle, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
     default_shell_program,
 };
+pub use terminal_metrics::TerminalMetrics;
