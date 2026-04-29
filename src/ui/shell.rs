@@ -160,7 +160,7 @@ impl AlasShell {
             .snapshot(session.backend_session, viewport)
         {
             Ok(snapshot) => {
-                let preserve_failure = self.terminal_error.is_some();
+                let preserve_failure = self.terminal_tab_has_failure(&session.id);
                 self.terminal_scroll_offset_rows = match snapshot.screen_mode {
                     TerminalScreenMode::Main => snapshot.viewport.scroll_offset_rows,
                     TerminalScreenMode::Alternate => 0,
@@ -182,13 +182,7 @@ impl AlasShell {
                 Some(snapshot)
             }
             Err(error) => {
-                let _ = self.workspace_session.set_tab_status(
-                    &session.id.repo_id,
-                    &session.id.worktree_path,
-                    session.id.tab_id,
-                    TerminalTabStatus::Failed,
-                );
-                self.terminal_error = Some(error.to_string());
+                self.mark_terminal_tab_failed(&session.id, error.to_string());
                 None
             }
         }
@@ -200,13 +194,8 @@ impl AlasShell {
         }
         if let Some(session) = self.active_terminal.as_ref() {
             if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
-                let _ = self.workspace_session.set_tab_status(
-                    &session.id.repo_id,
-                    &session.id.worktree_path,
-                    session.id.tab_id,
-                    TerminalTabStatus::Failed,
-                );
-                self.terminal_error = Some(error.to_string());
+                let id = session.id.clone();
+                self.mark_terminal_tab_failed(&id, error.to_string());
                 return;
             }
         }
@@ -233,7 +222,29 @@ impl AlasShell {
             .unwrap_or(TerminalSize { cols: 80, rows: 24 })
     }
 
-    fn retry_active_terminal(&mut self, cx: &mut Context<Self>) {
+    fn terminal_tab_has_failure(&self, id: &TerminalSessionId) -> bool {
+        self.workspace_session
+            .tab(&id.repo_id, &id.worktree_path, id.tab_id)
+            .is_some_and(|tab| tab.failure_cause.is_some())
+    }
+
+    fn mark_terminal_tab_failed(&mut self, id: &TerminalSessionId, cause: String) {
+        if self
+            .workspace_session
+            .set_tab_failure(&id.repo_id, &id.worktree_path, id.tab_id, cause.clone())
+            .is_err()
+        {
+            self.terminal_error = Some(cause);
+        }
+    }
+
+    fn clear_terminal_tab_failure(&mut self, id: &TerminalSessionId) {
+        let _ = self
+            .workspace_session
+            .clear_tab_failure(&id.repo_id, &id.worktree_path, id.tab_id);
+    }
+
+    fn retry_active_terminal(&mut self) {
         if self.active_terminal.is_some() {
             self.restart_active_terminal();
             return;
@@ -242,17 +253,34 @@ impl AlasShell {
         let Some(selected) = self.model.selected_worktree().cloned() else {
             return;
         };
-        self.select_worktree(selected.repo_id, selected.path, cx);
+        let tab_id = self
+            .workspace_session
+            .active_tab(&selected.repo_id, &selected.path)
+            .map(|tab| tab.id)
+            .unwrap_or_else(|| {
+                let default_command =
+                    self.resolve_default_command(&selected.repo_id, selected.path.clone());
+                self.workspace_session.ensure_default_terminal_tab(
+                    &selected.repo_id,
+                    selected.path.clone(),
+                    default_command,
+                )
+            });
+        self.start_or_reuse_terminal_tab_for_retry(selected.repo_id, selected.path, tab_id);
     }
 
     fn restart_active_terminal(&mut self) {
         self.terminal_scroll_offset_rows = 0;
-        let Some(active) = self.active_terminal.as_mut() else {
+        let Some(active) = self.active_terminal.clone() else {
             return;
         };
         match self.terminal_backend.restart(active.backend_session) {
             Ok(session) => {
-                active.backend_session = session;
+                if let Some(active_terminal) = self.active_terminal.as_mut() {
+                    if active_terminal.id == active.id {
+                        active_terminal.backend_session = session;
+                    }
+                }
                 self.terminal_registry
                     .replace_backend_session(&active.id, session);
                 let _ = self.workspace_session.set_tab_backend_session(
@@ -264,13 +292,7 @@ impl AlasShell {
 
                 if let Some(size) = self.terminal_size {
                     if let Err(error) = self.terminal_backend.resize(session, size) {
-                        let _ = self.workspace_session.set_tab_status(
-                            &active.id.repo_id,
-                            &active.id.worktree_path,
-                            active.id.tab_id,
-                            TerminalTabStatus::Failed,
-                        );
-                        self.terminal_error = Some(error.to_string());
+                        self.mark_terminal_tab_failed(&active.id, error.to_string());
                         return;
                     }
                 }
@@ -281,18 +303,11 @@ impl AlasShell {
                     active.id.tab_id,
                     TerminalTabStatus::Running,
                 );
+                self.clear_terminal_tab_failure(&active.id);
                 self.terminal_error = None;
             }
             Err(error) => {
-                if let Some(active) = self.active_terminal.as_ref() {
-                    let _ = self.workspace_session.set_tab_status(
-                        &active.id.repo_id,
-                        &active.id.worktree_path,
-                        active.id.tab_id,
-                        TerminalTabStatus::Failed,
-                    );
-                }
-                self.terminal_error = Some(error.to_string());
+                self.mark_terminal_tab_failed(&active.id, error.to_string());
             }
         }
     }
@@ -311,13 +326,8 @@ impl AlasShell {
         {
             Ok(()) => true,
             Err(error) => {
-                let _ = self.workspace_session.set_tab_status(
-                    &session.id.repo_id,
-                    &session.id.worktree_path,
-                    session.id.tab_id,
-                    TerminalTabStatus::Failed,
-                );
-                self.terminal_error = Some(error.to_string());
+                let id = session.id.clone();
+                self.mark_terminal_tab_failed(&id, error.to_string());
                 true
             }
         }
@@ -839,6 +849,25 @@ impl AlasShell {
         path: PathBuf,
         tab_id: TerminalTabId,
     ) {
+        self.start_or_reuse_terminal_tab_inner(repo_id, path, tab_id, false);
+    }
+
+    fn start_or_reuse_terminal_tab_for_retry(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        tab_id: TerminalTabId,
+    ) {
+        self.start_or_reuse_terminal_tab_inner(repo_id, path, tab_id, true);
+    }
+
+    fn start_or_reuse_terminal_tab_inner(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        tab_id: TerminalTabId,
+        clear_existing_failure: bool,
+    ) {
         let Some(tab) = self.workspace_session.active_tab(&repo_id, &path).cloned() else {
             self.active_terminal = None;
             self.active_terminal_tab = None;
@@ -847,8 +876,10 @@ impl AlasShell {
         };
 
         let id = TerminalSessionId::new(repo_id, path, tab_id);
+        let preserve_failure = tab.failure_cause.is_some() && !clear_existing_failure;
         self.active_terminal_tab = Some(tab_id);
         self.terminal_scroll_offset_rows = tab.scroll_offset_rows;
+        self.terminal_error = None;
 
         match self.terminal_registry.get_or_start(
             id.clone(),
@@ -856,44 +887,35 @@ impl AlasShell {
             &mut self.terminal_backend,
         ) {
             Ok(session) => {
-                if let Some(size) = self.terminal_size {
-                    if let Err(error) = self.terminal_backend.resize(session.backend_session, size)
-                    {
-                        self.active_terminal = None;
-                        let _ = self.workspace_session.set_tab_status(
-                            &session.id.repo_id,
-                            &session.id.worktree_path,
-                            session.id.tab_id,
-                            TerminalTabStatus::Failed,
-                        );
-                        self.terminal_error = Some(error.to_string());
-                        return;
-                    }
-                }
+                self.active_terminal = Some(session.clone());
                 let _ = self.workspace_session.set_tab_backend_session(
                     &session.id.repo_id,
                     &session.id.worktree_path,
                     session.id.tab_id,
                     Some(session.backend_session),
                 );
-                let _ = self.workspace_session.set_tab_status(
-                    &session.id.repo_id,
-                    &session.id.worktree_path,
-                    session.id.tab_id,
-                    TerminalTabStatus::Running,
-                );
-                self.active_terminal = Some(session);
-                self.terminal_error = None;
+
+                if let Some(size) = self.terminal_size {
+                    if let Err(error) = self.terminal_backend.resize(session.backend_session, size)
+                    {
+                        self.mark_terminal_tab_failed(&session.id, error.to_string());
+                        return;
+                    }
+                }
+
+                if !preserve_failure {
+                    let _ = self.workspace_session.set_tab_status(
+                        &session.id.repo_id,
+                        &session.id.worktree_path,
+                        session.id.tab_id,
+                        TerminalTabStatus::Running,
+                    );
+                    self.clear_terminal_tab_failure(&session.id);
+                }
             }
             Err(error) => {
                 self.active_terminal = None;
-                let _ = self.workspace_session.set_tab_status(
-                    &id.repo_id,
-                    &id.worktree_path,
-                    id.tab_id,
-                    TerminalTabStatus::Failed,
-                );
-                self.terminal_error = Some(error.to_string());
+                self.mark_terminal_tab_failed(&id, error.to_string());
             }
         }
     }
@@ -1742,7 +1764,7 @@ impl Render for AlasShell {
             }
         });
         let on_retry_terminal = cx.listener(|shell, _event, _window, cx| {
-            shell.retry_active_terminal(cx);
+            shell.retry_active_terminal();
             cx.notify();
         });
         let on_edit_terminal_command = cx.listener(|shell, _event, _window, cx| {
@@ -1890,7 +1912,15 @@ impl Render for AlasShell {
         let status_bar_tab = active_tab
             .map(|tab| tab.name.clone())
             .unwrap_or_else(|| "No terminal tab".to_string());
-        let status_bar_terminal_status = if self.terminal_error.is_some() {
+        let active_terminal_error = active_tab
+            .and_then(|tab| tab.failure_cause.as_deref())
+            .or_else(|| {
+                active_tab
+                    .is_none()
+                    .then_some(self.terminal_error.as_deref())
+                    .flatten()
+            });
+        let status_bar_terminal_status = if active_terminal_error.is_some() {
             Some(TerminalTabStatus::Failed)
         } else {
             active_tab.map(|tab| tab.status.clone())
@@ -2194,7 +2224,7 @@ impl Render for AlasShell {
                                     self.model.selected_worktree(),
                                     active_tab,
                                     terminal_snapshot.as_ref(),
-                                    self.terminal_error.as_deref(),
+                                    active_terminal_error,
                                     on_retry_terminal,
                                     on_edit_terminal_command,
                                     on_restart_terminal,

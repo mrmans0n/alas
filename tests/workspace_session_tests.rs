@@ -144,11 +144,70 @@ fn tab_runtime_state_can_be_updated_and_removed() {
         Some(TerminalBackendSession { backend_id: 42 })
     );
     assert_eq!(active.status, TerminalTabStatus::Running);
+    assert_eq!(active.failure_cause, None);
     assert_eq!(active.scroll_offset_rows, 12);
 
     session.remove_worktree("repo", &path);
     assert!(session.tabs_for_worktree("repo", &path).is_empty());
     assert!(session.active_tab("repo", &path).is_none());
+}
+
+#[test]
+fn terminal_failure_cause_is_scoped_per_tab() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let shell = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+    let tests = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Tests".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("cargo test", path.clone()),
+    );
+
+    session
+        .set_tab_failure("repo", &path, shell, "shell write failed")
+        .expect("mark shell failed");
+    session
+        .set_tab_status("repo", &path, shell, TerminalTabStatus::Running)
+        .expect("status update should not clear cause");
+    session
+        .set_active_tab("repo", &path, tests)
+        .expect("set tests active");
+
+    let shell_tab = session
+        .tabs_for_worktree("repo", &path)
+        .iter()
+        .find(|tab| tab.id == shell)
+        .expect("shell tab");
+    let tests_tab = session.active_tab("repo", &path).expect("tests tab");
+    assert_eq!(
+        shell_tab.failure_cause.as_deref(),
+        Some("shell write failed")
+    );
+    assert_eq!(tests_tab.failure_cause, None);
+
+    session
+        .set_tab_failure("repo", &path, tests, "tests resize failed")
+        .expect("mark tests failed");
+    session
+        .clear_tab_failure("repo", &path, tests)
+        .expect("clear tests failure");
+
+    let tabs = session.tabs_for_worktree("repo", &path);
+    let shell_tab = tabs.iter().find(|tab| tab.id == shell).expect("shell tab");
+    let tests_tab = tabs.iter().find(|tab| tab.id == tests).expect("tests tab");
+    assert_eq!(
+        shell_tab.failure_cause.as_deref(),
+        Some("shell write failed")
+    );
+    assert_eq!(tests_tab.failure_cause, None);
 }
 
 #[test]

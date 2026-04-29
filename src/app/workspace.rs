@@ -44,6 +44,7 @@ pub struct TerminalTab {
     pub command: CommandSpec,
     pub backend_session: Option<TerminalBackendSession>,
     pub status: TerminalTabStatus,
+    pub failure_cause: Option<String>,
     pub scroll_offset_rows: usize,
 }
 
@@ -101,6 +102,7 @@ impl WorkspaceSession {
             command,
             backend_session: None,
             status: TerminalTabStatus::NotStarted,
+            failure_cause: None,
             scroll_offset_rows: 0,
         };
 
@@ -118,6 +120,16 @@ impl WorkspaceSession {
         let key = WorktreeKey::new(repo_id, path.to_path_buf());
         let active_id = self.active_tabs.get(&key)?;
         self.tabs.get(&key)?.iter().find(|tab| tab.id == *active_id)
+    }
+
+    pub fn tab(
+        &self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: TerminalTabId,
+    ) -> Option<&TerminalTab> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        self.tabs.get(&key)?.iter().find(|tab| tab.id == tab_id)
     }
 
     pub fn set_active_tab(
@@ -163,6 +175,32 @@ impl WorkspaceSession {
         let key = WorktreeKey::new(repo_id, path.to_path_buf());
         let tab = self.known_tab_mut(&key, tab_id)?;
         tab.status = status;
+        Ok(())
+    }
+
+    pub fn set_tab_failure(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: TerminalTabId,
+        cause: impl Into<String>,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.known_tab_mut(&key, tab_id)?;
+        tab.status = TerminalTabStatus::Failed;
+        tab.failure_cause = Some(cause.into());
+        Ok(())
+    }
+
+    pub fn clear_tab_failure(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: TerminalTabId,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.known_tab_mut(&key, tab_id)?;
+        tab.failure_cause = None;
         Ok(())
     }
 

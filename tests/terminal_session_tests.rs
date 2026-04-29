@@ -256,6 +256,12 @@ fn key_down(source: &str) -> KeyDownEvent {
     }
 }
 
+fn printable_key_down(source: &str, text: &str) -> KeyDownEvent {
+    let mut event = key_down(source);
+    event.keystroke.key_char = Some(text.to_string());
+    event
+}
+
 #[test]
 fn terminal_input_maps_basic_control_keys() {
     assert_eq!(terminal_input_bytes(&key_down("enter")).unwrap(), b"\r");
@@ -287,6 +293,22 @@ fn terminal_input_maps_alt_to_escape_prefix() {
     assert_eq!(
         terminal_input_bytes(&key_down("alt-backspace")).unwrap(),
         b"\x1b\x7f"
+    );
+}
+
+#[test]
+fn terminal_input_maps_printable_characters() {
+    assert_eq!(
+        terminal_input_bytes(&printable_key_down("a", "a")).unwrap(),
+        b"a"
+    );
+    assert_eq!(
+        terminal_input_bytes(&printable_key_down("shift-a", "A")).unwrap(),
+        b"A"
+    );
+    assert_eq!(
+        terminal_input_bytes(&printable_key_down("0", "0")).unwrap(),
+        b"0"
     );
 }
 
