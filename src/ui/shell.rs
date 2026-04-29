@@ -620,6 +620,8 @@ impl AlasShell {
         self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
 
         let command = self.resolve_default_command(&repo_id, path.clone());
+        // Temporary until WorkspaceSession terminal tabs are wired into the shell;
+        // production currently preserves the existing one-session-per-worktree behavior.
         let id = TerminalSessionId::new(repo_id, path, TerminalTabId(1));
 
         match self
