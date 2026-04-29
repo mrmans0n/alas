@@ -1,5 +1,6 @@
 mod arch;
 mod dist;
+mod fs;
 mod metadata;
 mod templates;
 mod version;
