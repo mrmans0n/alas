@@ -180,21 +180,8 @@ impl AlasShell {
             return;
         }
 
-        match self.terminal_backend.has_exited(session.backend_session) {
-            Ok(true) => {
-                let exit_status = self
-                    .workspace_session
-                    .tab(
-                        &session.id.repo_id,
-                        &session.id.worktree_path,
-                        session.id.tab_id,
-                    )
-                    .and_then(|tab| match tab.status {
-                        TerminalTabStatus::Exited(status) => status,
-                        TerminalTabStatus::NotStarted
-                        | TerminalTabStatus::Running
-                        | TerminalTabStatus::Failed => None,
-                    });
+        match self.terminal_backend.status(session.backend_session) {
+            Ok(TerminalStatus::Exited(exit_status)) => {
                 let _ = self.workspace_session.set_tab_status(
                     &session.id.repo_id,
                     &session.id.worktree_path,
@@ -202,7 +189,7 @@ impl AlasShell {
                     TerminalTabStatus::Exited(exit_status),
                 );
             }
-            Ok(false) => {
+            Ok(TerminalStatus::Running) => {
                 let _ = self.workspace_session.set_tab_status(
                     &session.id.repo_id,
                     &session.id.worktree_path,
@@ -210,6 +197,10 @@ impl AlasShell {
                     TerminalTabStatus::Running,
                 );
             }
+            Ok(TerminalStatus::Failed) => self.mark_terminal_tab_failed(
+                &session.id,
+                "terminal backend reported failure".to_string(),
+            ),
             Err(error) => self.mark_terminal_tab_failed(&session.id, error.to_string()),
         }
     }

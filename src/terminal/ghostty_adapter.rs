@@ -517,6 +517,18 @@ impl GhosttyTerminalBackend {
         state.render_frame(viewport)
     }
 
+    pub fn status(&mut self, session: TerminalBackendSession) -> anyhow::Result<TerminalStatus> {
+        let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
+            anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+        })?;
+        state.poll_exit()?;
+        if state.exited {
+            Ok(TerminalStatus::Exited(state.exit_status))
+        } else {
+            Ok(TerminalStatus::Running)
+        }
+    }
+
     fn start_with_size(
         &mut self,
         command: CommandSpec,
