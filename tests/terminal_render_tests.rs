@@ -9,7 +9,11 @@ fn plain_lines_are_derived_from_cells() {
         size: TerminalSize { cols: 4, rows: 2 },
         rows: vec![
             TerminalRow {
-                cells: vec![TerminalCell::new("a"), TerminalCell::new("b")],
+                cells: vec![
+                    TerminalCell::new("a"),
+                    TerminalCell::new("b"),
+                    TerminalCell::new(" "),
+                ],
             },
             TerminalRow {
                 cells: vec![TerminalCell::new("c"), TerminalCell::new("d")],

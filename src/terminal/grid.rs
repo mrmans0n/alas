@@ -102,7 +102,10 @@ impl TerminalGridSnapshot {
     pub fn plain_lines(&self) -> Vec<String> {
         self.rows
             .iter()
-            .map(|row| row.cells.iter().map(|cell| cell.text.as_str()).collect())
+            .map(|row| {
+                let line: String = row.cells.iter().map(|cell| cell.text.as_str()).collect();
+                line.trim_end().to_string()
+            })
             .collect()
     }
 
