@@ -1,6 +1,6 @@
 use alas::terminal::{
-    CommandSpec, TerminalBackend, TerminalBackendSession, TerminalSessionId,
-    TerminalSessionRegistry, default_shell_program,
+    CommandSpec, TerminalBackend, TerminalBackendSession, TerminalGridSnapshot, TerminalSessionId,
+    TerminalSessionRegistry, TerminalSize, default_shell_program,
 };
 use std::path::PathBuf;
 
@@ -14,6 +14,109 @@ impl TerminalBackend for FakeBackend {
         self.started.push(command);
         Ok(TerminalBackendSession {
             backend_id: self.started.len() as u64,
+        })
+    }
+
+    fn write_input(
+        &mut self,
+        _session: TerminalBackendSession,
+        _bytes: &[u8],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn resize(
+        &mut self,
+        _session: TerminalBackendSession,
+        _size: TerminalSize,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn snapshot(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalGridSnapshot> {
+        Ok(TerminalGridSnapshot {
+            size: TerminalSize { cols: 80, rows: 24 },
+            lines: Vec::new(),
+            cursor: None,
+            exited: false,
+            exit_status: None,
+        })
+    }
+
+    fn has_exited(&mut self, _session: TerminalBackendSession) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    fn restart(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalBackendSession> {
+        Ok(TerminalBackendSession {
+            backend_id: self.started.len() as u64 + 1,
+        })
+    }
+}
+
+#[derive(Default)]
+struct FakeRuntimeBackend {
+    started: Vec<CommandSpec>,
+    input: Vec<u8>,
+    size: Option<TerminalSize>,
+    exited: bool,
+}
+
+impl TerminalBackend for FakeRuntimeBackend {
+    fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
+        self.started.push(command);
+        Ok(TerminalBackendSession {
+            backend_id: self.started.len() as u64,
+        })
+    }
+
+    fn write_input(
+        &mut self,
+        _session: TerminalBackendSession,
+        bytes: &[u8],
+    ) -> anyhow::Result<()> {
+        self.input.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn resize(
+        &mut self,
+        _session: TerminalBackendSession,
+        size: TerminalSize,
+    ) -> anyhow::Result<()> {
+        self.size = Some(size);
+        Ok(())
+    }
+
+    fn snapshot(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalGridSnapshot> {
+        Ok(TerminalGridSnapshot {
+            size: self.size.unwrap_or(TerminalSize { cols: 80, rows: 24 }),
+            lines: Vec::new(),
+            cursor: None,
+            exited: self.exited,
+            exit_status: None,
+        })
+    }
+
+    fn has_exited(&mut self, _session: TerminalBackendSession) -> anyhow::Result<bool> {
+        Ok(self.exited)
+    }
+
+    fn restart(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalBackendSession> {
+        Ok(TerminalBackendSession {
+            backend_id: self.started.len() as u64 + 1,
         })
     }
 }
@@ -36,6 +139,48 @@ impl TerminalBackend for CountingBackend {
             backend_id: self.started.len() as u64,
         })
     }
+
+    fn write_input(
+        &mut self,
+        _session: TerminalBackendSession,
+        _bytes: &[u8],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn resize(
+        &mut self,
+        _session: TerminalBackendSession,
+        _size: TerminalSize,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn snapshot(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalGridSnapshot> {
+        Ok(TerminalGridSnapshot {
+            size: TerminalSize { cols: 80, rows: 24 },
+            lines: Vec::new(),
+            cursor: None,
+            exited: false,
+            exit_status: None,
+        })
+    }
+
+    fn has_exited(&mut self, _session: TerminalBackendSession) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    fn restart(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalBackendSession> {
+        Ok(TerminalBackendSession {
+            backend_id: self.started.len() as u64 + 1,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -52,6 +197,46 @@ impl TerminalBackend for FailingOnceBackend {
 
         Ok(TerminalBackendSession { backend_id: 1 })
     }
+
+    fn write_input(
+        &mut self,
+        _session: TerminalBackendSession,
+        _bytes: &[u8],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn resize(
+        &mut self,
+        _session: TerminalBackendSession,
+        _size: TerminalSize,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn snapshot(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalGridSnapshot> {
+        Ok(TerminalGridSnapshot {
+            size: TerminalSize { cols: 80, rows: 24 },
+            lines: Vec::new(),
+            cursor: None,
+            exited: false,
+            exit_status: None,
+        })
+    }
+
+    fn has_exited(&mut self, _session: TerminalBackendSession) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    fn restart(
+        &mut self,
+        _session: TerminalBackendSession,
+    ) -> anyhow::Result<TerminalBackendSession> {
+        Ok(TerminalBackendSession { backend_id: 1 })
+    }
 }
 
 #[test]
@@ -63,6 +248,41 @@ fn backend_starts_command_in_worktree_cwd() {
 
     assert_eq!(session.backend_id, 1);
     assert_eq!(backend.started, vec![command]);
+}
+
+#[test]
+fn backend_runtime_api_supports_input_resize_snapshot_and_restart() {
+    let mut backend = FakeRuntimeBackend::default();
+    let command = CommandSpec::shell_command("sh", PathBuf::from("/repo/wt"));
+
+    let session = backend.start(command.clone()).unwrap();
+    backend.write_input(session, b"pwd\n").unwrap();
+    backend
+        .resize(
+            session,
+            TerminalSize {
+                cols: 100,
+                rows: 30,
+            },
+        )
+        .unwrap();
+
+    let snapshot = backend.snapshot(session).unwrap();
+
+    assert_eq!(backend.started, vec![command]);
+    assert_eq!(backend.input, b"pwd\n");
+    assert_eq!(
+        snapshot.size,
+        TerminalSize {
+            cols: 100,
+            rows: 30
+        }
+    );
+    assert!(!snapshot.exited);
+    assert!(!backend.has_exited(session).unwrap());
+
+    let restarted = backend.restart(session).unwrap();
+    assert_eq!(restarted.backend_id, 2);
 }
 
 #[test]
