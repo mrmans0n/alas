@@ -1,4 +1,7 @@
-use crate::app::{TerminalTab, TerminalTabId, TerminalTabKind};
+use crate::{
+    app::{TerminalTab, TerminalTabId, TerminalTabKind},
+    ui::theme::{ACCENT, APP_BG, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+};
 use gpui::{
     App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, rgb,
 };
@@ -17,17 +20,17 @@ pub fn render_workspace(
         .flex_1()
         .size_full()
         .p_3()
-        .bg(rgb(0xf3f4f6))
+        .bg(APP_BG)
         .child(
             div()
                 .flex()
                 .flex_col()
                 .flex_1()
                 .overflow_hidden()
-                .rounded_md()
+                .rounded_lg()
                 .border_1()
-                .border_color(rgb(0xd1d5db))
-                .bg(rgb(0xffffff))
+                .border_color(PANEL_BORDER)
+                .bg(PANEL_BG)
                 .child(render_tab_bar(tabs, active_tab, on_select_tab, on_new_tab))
                 .child(div().flex().flex_1().overflow_hidden().child(terminal_body)),
         )
@@ -47,8 +50,8 @@ fn render_tab_bar(
         .px_2()
         .py_2()
         .border_b_1()
-        .border_color(rgb(0xe5e7eb))
-        .bg(rgb(0xf9fafb))
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
         .children(tabs.iter().map(move |tab| {
             let tab_id = tab.id;
             let is_active = Some(tab_id) == active_tab;
@@ -62,22 +65,10 @@ fn render_tab_bar(
                 .py_1()
                 .rounded_md()
                 .border_1()
-                .border_color(if is_active {
-                    rgb(0x93c5fd)
-                } else {
-                    rgb(0xe5e7eb)
-                })
-                .bg(if is_active {
-                    rgb(0xdbeafe)
-                } else {
-                    rgb(0xffffff)
-                })
+                .border_color(if is_active { ACCENT } else { PANEL_BORDER })
+                .bg(if is_active { rgb(0x22313b) } else { PANEL_BG })
                 .text_sm()
-                .text_color(if is_active {
-                    rgb(0x1d4ed8)
-                } else {
-                    rgb(0x374151)
-                })
+                .text_color(if is_active { TEXT } else { TEXT_MUTED })
                 .font_weight(if is_active {
                     gpui::FontWeight::SEMIBOLD
                 } else {
@@ -95,11 +86,11 @@ fn render_tab_bar(
                 .py_1()
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(0xd1d5db))
-                .bg(rgb(0xffffff))
+                .border_color(PANEL_BORDER)
+                .bg(PANEL_BG)
                 .text_sm()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(0x2563eb))
+                .text_color(ACCENT)
                 .child("+")
                 .on_click(on_new_tab),
         )

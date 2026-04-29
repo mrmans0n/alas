@@ -1,5 +1,10 @@
 use crate::{
-    app::SelectedWorktree, terminal::TerminalGridSnapshot, ui::terminal_view::render_terminal_grid,
+    app::SelectedWorktree,
+    terminal::TerminalGridSnapshot,
+    ui::{
+        terminal_view::render_terminal_grid,
+        theme::{ACCENT, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    },
 };
 use gpui::{
     AnyElement, App, ClickEvent, IntoElement, ParentElement, ScrollWheelEvent, Styled, Window, div,
@@ -20,8 +25,8 @@ pub fn render_terminal_pane(
         .flex()
         .flex_1()
         .size_full()
-        .bg(rgb(0x111827))
-        .text_color(rgb(0xe5e7eb))
+        .bg(PANEL_BG)
+        .text_color(TEXT)
         .on_click(on_focus)
         .on_scroll_wheel(on_scroll)
         .when(selected_worktree.is_none(), |element| {
@@ -53,7 +58,7 @@ pub fn render_terminal_pane(
                             .text_sm()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(0xffffff))
-                            .bg(rgb(0x2563eb))
+                            .bg(ACCENT)
                             .child("Retry")
                             .on_click(on_retry),
                     ),
@@ -72,7 +77,7 @@ pub fn render_terminal_pane(
                             .items_center()
                             .justify_between()
                             .text_xs()
-                            .text_color(rgb(0x9ca3af))
+                            .text_color(TEXT_MUTED)
                             .child(format!(
                                 "Worktree: {}",
                                 selected_worktree
@@ -101,7 +106,7 @@ pub fn render_terminal_pane(
                                                     .rounded_md()
                                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                                     .text_color(rgb(0xffffff))
-                                                    .bg(rgb(0x2563eb))
+                                                    .bg(ACCENT)
                                                     .child("Restart")
                                                     .on_click(on_restart),
                                             ),
@@ -114,9 +119,11 @@ pub fn render_terminal_pane(
                             div()
                                 .p_3()
                                 .rounded_md()
-                                .bg(rgb(0x1f2937))
+                                .border_1()
+                                .border_color(PANEL_BORDER)
+                                .bg(PANEL_BG)
                                 .text_sm()
-                                .text_color(rgb(0xd1d5db))
+                                .text_color(TEXT_MUTED)
                                 .child("Terminal process exited. Restart to run the configured command again."),
                         )
                     })

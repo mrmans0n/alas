@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use crate::{
     app::{
         ActionAvailability, ActionDefinition, ActionId, ActionRegistry, ActionScope,
-        RepositoryNode, WorktreeNode,
+        RepositoryNode, SelectedWorktree, WorktreeNode,
     },
     git::WorktreeKind,
+    ui::theme::{ACCENT, DANGER, PANEL_BG, PANEL_BORDER, SIDEBAR_BG, TEXT, TEXT_MUTED},
 };
 use gpui::{
     App, ClickEvent, Div, FontWeight, IntoElement, MouseButton, ParentElement, SharedString,
@@ -21,6 +22,7 @@ pub struct SidebarMenuState {
 
 pub fn render_sidebar(
     repositories: &[RepositoryNode],
+    selected_worktree: Option<&SelectedWorktree>,
     sidebar_menu: Option<&SidebarMenuState>,
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
@@ -38,8 +40,9 @@ pub fn render_sidebar(
         .p_4()
         .gap_3()
         .border_r_1()
-        .border_color(rgb(0xd8dee9))
-        .bg(rgb(0xf4f6f8))
+        .border_color(PANEL_BORDER)
+        .bg(SIDEBAR_BG)
+        .text_color(TEXT)
         .child(
             div()
                 .text_lg()
@@ -52,16 +55,17 @@ pub fn render_sidebar(
                     .p_3()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(0xd8dee9))
-                    .bg(rgb(0xffffff))
+                    .border_color(PANEL_BORDER)
+                    .bg(PANEL_BG)
                     .text_sm()
-                    .text_color(rgb(0x6b7280))
+                    .text_color(TEXT_MUTED)
                     .child("No repositories configured. Add a Git repository to begin."),
             )
         })
         .children(repositories.iter().map(|repository| {
             render_repository(
                 repository,
+                selected_worktree,
                 sidebar_menu,
                 on_select_worktree.clone(),
                 on_open_sidebar_menu.clone(),
@@ -84,7 +88,7 @@ pub fn render_sidebar(
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(0xffffff))
-                        .bg(rgb(0x2563eb))
+                        .bg(ACCENT)
                         .child("+ Add Repository")
                         .on_click(on_add_repository),
                 )
@@ -92,7 +96,7 @@ pub fn render_sidebar(
                     element.child(
                         div()
                             .text_sm()
-                            .text_color(rgb(0xdc2626))
+                            .text_color(DANGER)
                             .child(add_repository_error.unwrap_or_default().to_string()),
                     )
                 }),
@@ -101,6 +105,7 @@ pub fn render_sidebar(
 
 fn render_repository(
     repository: &RepositoryNode,
+    selected_worktree: Option<&SelectedWorktree>,
     sidebar_menu: Option<&SidebarMenuState>,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_open_sidebar_menu: impl Fn(SidebarMenuState, &mut Window, &mut App) + Clone + 'static,
@@ -162,7 +167,7 @@ fn render_repository(
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(rgb(0x6b7280))
+                                .text_color(TEXT_MUTED)
                                 .truncate()
                                 .child(repository.path.display().to_string()),
                         ),
@@ -187,9 +192,11 @@ fn render_repository(
                     .ml_3()
                     .p_2()
                     .rounded_md()
-                    .bg(rgb(0xfef3c7))
+                    .border_1()
+                    .border_color(PANEL_BORDER)
+                    .bg(PANEL_BG)
                     .text_sm()
-                    .text_color(rgb(0x92400e))
+                    .text_color(TEXT_MUTED)
                     .child(
                         "Repository unavailable or moved. Check the path or remove it from Alas.",
                     ),
@@ -203,9 +210,9 @@ fn render_repository(
                         .ml_3()
                         .p_2()
                         .rounded_md()
-                        .bg(rgb(0xffffff))
+                        .bg(PANEL_BG)
                         .text_sm()
-                        .text_color(rgb(0x6b7280))
+                        .text_color(TEXT_MUTED)
                         .child("No worktrees found for this repository."),
                 )
             },
@@ -218,9 +225,9 @@ fn render_repository(
                         .ml_3()
                         .p_2()
                         .rounded_md()
-                        .bg(rgb(0xffffff))
+                        .bg(PANEL_BG)
                         .text_sm()
-                        .text_color(rgb(0x6b7280))
+                        .text_color(TEXT_MUTED)
                         .child("No visible worktrees. Show archived worktrees to view archived entries."),
                 )
             },
@@ -234,6 +241,7 @@ fn render_repository(
                     render_worktree_row(
                         repository,
                         worktree,
+                        selected_worktree,
                         sidebar_menu,
                         on_select_worktree.clone(),
                         on_open_sidebar_menu.clone(),
@@ -247,6 +255,7 @@ fn render_repository(
 fn render_worktree_row(
     repository: &RepositoryNode,
     worktree: &WorktreeNode,
+    selected_worktree: Option<&SelectedWorktree>,
     sidebar_menu: Option<&SidebarMenuState>,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_open_sidebar_menu: impl Fn(SidebarMenuState, &mut Window, &mut App) + Clone + 'static,
@@ -270,6 +279,9 @@ fn render_worktree_row(
         scope: ActionScope::Worktree,
     };
     let menu_is_open = sidebar_menu == Some(&menu_state);
+    let is_selected = selected_worktree
+        .is_some_and(|selected| selected.repo_id == repo_id && selected.path == worktree_path);
+    let is_subdued = worktree.archived || repository.unavailable;
     let row_id = SharedString::from(format!(
         "select-worktree-{repo_id}-{}",
         worktree_path.display()
@@ -285,9 +297,12 @@ fn render_worktree_row(
                 .px_2()
                 .py_1()
                 .rounded_md()
+                .border_1()
+                .border_color(if is_selected { ACCENT } else { SIDEBAR_BG })
                 .id(row_id)
                 .text_sm()
-                .bg(rgb(0xffffff))
+                .text_color(if is_subdued { TEXT_MUTED } else { TEXT })
+                .bg(if is_selected { PANEL_BG } else { SIDEBAR_BG })
                 .flex()
                 .items_center()
                 .justify_between()
@@ -341,7 +356,7 @@ fn render_worktree_row(
                             div()
                                 .w(px(44.0))
                                 .text_xs()
-                                .text_color(rgb(0x9ca3af))
+                                .text_color(TEXT_MUTED)
                                 .child(" "),
                         )
                         .child(overflow_button(
@@ -390,8 +405,8 @@ fn render_sidebar_menu(
         .p_1()
         .rounded_md()
         .border_1()
-        .border_color(rgb(0xd1d5db))
-        .bg(rgb(0xffffff))
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
         .flex()
         .flex_col()
         .gap_1()
@@ -406,7 +421,7 @@ fn render_sidebar_menu(
                     div()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(0x6b7280))
+                        .text_color(TEXT_MUTED)
                         .child(if scope == ActionScope::Repository {
                             "Repository actions"
                         } else {
@@ -419,7 +434,7 @@ fn render_sidebar_menu(
                         .px_1()
                         .rounded_md()
                         .text_xs()
-                        .text_color(rgb(0x6b7280))
+                        .text_color(TEXT_MUTED)
                         .child("×")
                         .on_click(move |event, window, cx| {
                             cx.stop_propagation();
@@ -482,8 +497,8 @@ fn overflow_button(
         .rounded_md()
         .text_sm()
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(0x374151))
-        .bg(rgb(0xe5e7eb))
+        .text_color(TEXT_MUTED)
+        .bg(PANEL_BG)
         .child("⋯")
         .on_click(move |_event, window, cx| {
             cx.stop_propagation();
@@ -504,11 +519,7 @@ fn menu_action_row(
         .py_1()
         .rounded_md()
         .text_sm()
-        .text_color(if destructive {
-            rgb(0xdc2626)
-        } else {
-            rgb(0x374151)
-        })
+        .text_color(if destructive { DANGER } else { TEXT })
         .child(label)
         .on_click(move |event, window, cx| {
             cx.stop_propagation();
@@ -521,8 +532,8 @@ fn status_badge(label: &'static str) -> Div {
         .px_1()
         .py_1()
         .rounded_md()
-        .bg(rgb(0xe5e7eb))
+        .bg(PANEL_BORDER)
         .text_xs()
-        .text_color(rgb(0x6b7280))
+        .text_color(TEXT_MUTED)
         .child(label)
 }

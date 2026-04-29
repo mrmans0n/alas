@@ -2,11 +2,12 @@ use crate::{
     app::{InspectorPaneState, InspectorTab, SelectedWorktree},
     git::GitInspectorState,
     project::FileTreeNode,
+    ui::theme::{ACCENT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
 };
 
 use gpui::{
     AnyElement, App, ClickEvent, FontWeight, IntoElement, ParentElement, SharedString, Styled,
-    Window, div, prelude::*, px, rgb,
+    Window, div, prelude::*, px,
 };
 
 pub fn render_project_inspector(
@@ -23,8 +24,9 @@ pub fn render_project_inspector(
         .p_4()
         .gap_3()
         .border_l_1()
-        .border_color(rgb(0xd8dee9))
-        .bg(rgb(0xf9fafb))
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .text_color(TEXT)
         .child(
             div()
                 .text_lg()
@@ -36,7 +38,7 @@ pub fn render_project_inspector(
             element.child(
                 div()
                     .text_sm()
-                    .text_color(rgb(0x6b7280))
+                    .text_color(TEXT_MUTED)
                     .child("Select a worktree to inspect its files and changes."),
             )
         })
@@ -46,7 +48,7 @@ pub fn render_project_inspector(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0x6b7280))
+                        .text_color(TEXT_MUTED)
                         .child(SharedString::from(
                             selected_worktree.path.display().to_string(),
                         )),
@@ -68,7 +70,7 @@ fn render_tab_bar(
         .gap_1()
         .p_1()
         .rounded_md()
-        .bg(rgb(0xe5e7eb))
+        .bg(PANEL_BORDER)
         .child(render_tab_button(
             "inspector-tab-files",
             "Files",
@@ -106,16 +108,8 @@ fn render_tab_button(
         } else {
             FontWeight::NORMAL
         })
-        .text_color(if is_active {
-            rgb(0xe5e7eb)
-        } else {
-            rgb(0x374151)
-        })
-        .bg(if is_active {
-            rgb(0x111827)
-        } else {
-            rgb(0xe5e7eb)
-        })
+        .text_color(if is_active { TEXT } else { TEXT_MUTED })
+        .bg(if is_active { ACCENT } else { PANEL_BORDER })
         .child(label)
         .on_click(move |event, window, cx| {
             on_select_tab(tab, event, window, cx);
@@ -171,7 +165,7 @@ fn render_file_node(node: &FileTreeNode, depth: usize) -> impl IntoElement {
                 div()
                     .pl(px(((depth + 1) * 12) as f32))
                     .text_xs()
-                    .text_color(rgb(0x6b7280))
+                    .text_color(TEXT_MUTED)
                     .child("… additional entries hidden"),
             )
         })
@@ -227,7 +221,7 @@ fn render_changes(state: &GitInspectorState) -> impl IntoElement {
                     div()
                         .w(px(32.0))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(0x4b5563))
+                        .text_color(TEXT_MUTED)
                         .child(SharedString::from(file.status.clone())),
                 )
                 .child(SharedString::from(file.path.clone()))
@@ -243,11 +237,11 @@ fn section_header(title: &'static str) -> impl IntoElement {
 }
 
 fn loading_text(text: &'static str) -> impl IntoElement {
-    div().text_sm().text_color(rgb(0x6b7280)).child(text)
+    div().text_sm().text_color(TEXT_MUTED).child(text)
 }
 
 fn empty_text(text: &'static str) -> impl IntoElement {
-    div().text_sm().text_color(rgb(0x6b7280)).child(text)
+    div().text_sm().text_color(TEXT_MUTED).child(text)
 }
 
 fn warning_text(title: &'static str, error: &str) -> impl IntoElement {
@@ -255,8 +249,10 @@ fn warning_text(title: &'static str, error: &str) -> impl IntoElement {
         .px_2()
         .py_2()
         .rounded_md()
-        .bg(rgb(0xfef3c7))
+        .bg(PANEL_BG)
+        .border_1()
+        .border_color(PANEL_BORDER)
         .text_sm()
-        .text_color(rgb(0x92400e))
+        .text_color(DANGER)
         .child(SharedString::from(format!("{title}: {error}")))
 }

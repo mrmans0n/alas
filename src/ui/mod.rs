@@ -5,6 +5,7 @@ pub mod shell;
 pub mod sidebar;
 pub mod terminal_pane;
 pub mod terminal_view;
+pub mod theme;
 pub mod workspace;
 
 pub use shell::run;

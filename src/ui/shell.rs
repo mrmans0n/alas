@@ -29,6 +29,7 @@ use crate::{
         inspector::render_project_inspector,
         sidebar::{SidebarMenuState, render_sidebar},
         terminal_pane::render_terminal_pane,
+        theme::{APP_BG, DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED},
         workspace::render_workspace,
     },
 };
@@ -1575,11 +1576,61 @@ fn render_create_worktree_field(
         )
 }
 
+fn render_status_bar(
+    repo_summary: String,
+    tab_summary: String,
+    terminal_status: Option<&TerminalTabStatus>,
+) -> impl IntoElement {
+    let (status_label, status_color) = match terminal_status {
+        Some(TerminalTabStatus::Running) => ("running".to_string(), SUCCESS),
+        Some(TerminalTabStatus::Exited(Some(code))) => (
+            format!("exited {code}"),
+            if *code == 0 { SUCCESS } else { DANGER },
+        ),
+        Some(TerminalTabStatus::Exited(None)) => ("exited".to_string(), TEXT_MUTED),
+        Some(TerminalTabStatus::Failed) => ("failed".to_string(), DANGER),
+        Some(TerminalTabStatus::NotStarted) => ("not started".to_string(), TEXT_MUTED),
+        None => ("no terminal".to_string(), TEXT_MUTED),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .px_4()
+        .py_2()
+        .border_t_1()
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .text_xs()
+        .text_color(TEXT_MUTED)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .overflow_hidden()
+                .child(div().text_color(TEXT).child("Workspace"))
+                .child(div().child("•"))
+                .child(div().truncate().child(repo_summary)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_color(TEXT).child(tab_summary))
+                .child(div().child("•"))
+                .child(div().text_color(status_color).child(status_label)),
+        )
+}
+
 impl Render for AlasShell {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let window_bounds = window.bounds();
-        let terminal_width = (f32::from(window_bounds.size.width) - 360.0).max(160.0);
-        let terminal_height = (f32::from(window_bounds.size.height) - 24.0).max(80.0);
+        let terminal_width = (f32::from(window_bounds.size.width) - 640.0).max(160.0);
+        let terminal_height = (f32::from(window_bounds.size.height) - 88.0).max(80.0);
         let terminal_size = TerminalSize {
             cols: (terminal_width / 8.0).floor().max(20.0) as u16,
             rows: (terminal_height / 18.0).floor().max(4.0) as u16,
@@ -1779,20 +1830,69 @@ impl Render for AlasShell {
                 .active_tab(&selected.repo_id, &selected.path)
                 .map(|tab| tab.id)
         });
+        let active_tab = workspace_tabs
+            .iter()
+            .find(|tab| Some(tab.id) == active_workspace_tab);
+        let status_bar_repo = self
+            .model
+            .selected_worktree()
+            .map(|selected| {
+                let repository = self
+                    .model
+                    .repositories()
+                    .iter()
+                    .find(|repository| repository.id == selected.repo_id);
+                let worktree = repository.and_then(|repository| {
+                    repository
+                        .worktrees
+                        .iter()
+                        .find(|worktree| worktree.path == selected.path)
+                });
+                let repo_name = repository
+                    .map(|repository| repository.name.as_str())
+                    .unwrap_or(selected.repo_id.as_str());
+                let branch = worktree
+                    .and_then(|worktree| worktree.branch.as_deref())
+                    .unwrap_or("detached");
+                let path = selected
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_else(|| selected.path.to_str().unwrap_or("worktree"));
+                format!("{repo_name} • {branch} • {path}")
+            })
+            .unwrap_or_else(|| "No worktree selected".to_string());
+        let status_bar_tab = active_tab
+            .map(|tab| tab.name.clone())
+            .unwrap_or_else(|| "No terminal tab".to_string());
+        let status_bar_terminal_status = if self.terminal_error.is_some() {
+            Some(TerminalTabStatus::Failed)
+        } else {
+            active_tab.map(|tab| tab.status.clone())
+        };
 
         div()
             .flex()
+            .flex_col()
             .size_full()
-            .child(render_sidebar(
-                self.model.repositories(),
-                self.sidebar_menu.as_ref(),
-                cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
-                on_select_worktree,
-                on_open_sidebar_menu,
-                on_sidebar_menu_action,
-                on_close_sidebar_menu,
-                self.add_repository_error(),
-            ))
+            .bg(APP_BG)
+            .text_color(TEXT)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(render_sidebar(
+                        self.model.repositories(),
+                        self.model.selected_worktree(),
+                        self.sidebar_menu.as_ref(),
+                        cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
+                        on_select_worktree,
+                        on_open_sidebar_menu,
+                        on_sidebar_menu_action,
+                        on_close_sidebar_menu,
+                        self.add_repository_error(),
+                    ))
             .child(
                 div()
                     .flex()
@@ -2081,6 +2181,12 @@ impl Render for AlasShell {
                 self.model.selected_worktree(),
                 &self.inspector_state,
                 on_select_inspector_tab,
+            )),
+            )
+            .child(render_status_bar(
+                status_bar_repo,
+                status_bar_tab,
+                status_bar_terminal_status.as_ref(),
             ))
     }
 }
