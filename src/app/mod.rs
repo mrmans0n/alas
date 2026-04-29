@@ -1,7 +1,11 @@
+pub mod action_registry;
 pub mod actions;
 pub mod model;
 pub mod workspace;
 
+pub use action_registry::{
+    ActionAvailability, ActionDefinition, ActionHandlerId, ActionId, ActionRegistry, ActionScope,
+};
 pub use actions::AppAction;
 pub use model::{AlasModel, RepositoryNode, SelectedWorktree, WorktreeNode};
 pub use workspace::{
