@@ -10,6 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use anyhow::Context;
+#[cfg(feature = "ghostty-vt")]
+use libghostty_vt::{
+    RenderState, Terminal, TerminalOptions,
+    render::{CellIterator, RowIterator},
+};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use super::CommandSpec;
@@ -48,6 +53,108 @@ pub trait TerminalBackend {
     ) -> anyhow::Result<TerminalBackendSession>;
 }
 
+#[cfg(feature = "ghostty-vt")]
+struct VtState {
+    terminal: Terminal<'static, 'static>,
+    render_state: RenderState<'static>,
+    row_iter: RowIterator<'static>,
+    cell_iter: CellIterator<'static>,
+}
+
+#[cfg(not(feature = "ghostty-vt"))]
+struct VtState;
+
+#[cfg(feature = "ghostty-vt")]
+impl VtState {
+    fn new(size: TerminalSize) -> anyhow::Result<Self> {
+        Ok(Self {
+            terminal: Terminal::new(TerminalOptions {
+                cols: size.cols,
+                rows: size.rows,
+                max_scrollback: 0,
+            })
+            .context("create Ghostty VT terminal")?,
+            render_state: RenderState::new().context("create Ghostty VT render state")?,
+            row_iter: RowIterator::new().context("create Ghostty VT row iterator")?,
+            cell_iter: CellIterator::new().context("create Ghostty VT cell iterator")?,
+        })
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        self.terminal.vt_write(bytes);
+    }
+
+    fn resize(&mut self, size: TerminalSize) -> anyhow::Result<()> {
+        self.terminal
+            .resize(size.cols, size.rows, 0, 0)
+            .context("resize Ghostty VT terminal")
+    }
+
+    fn snapshot_lines(&mut self) -> anyhow::Result<Option<Vec<String>>> {
+        let snapshot = self
+            .render_state
+            .update(&self.terminal)
+            .context("update Ghostty VT render state")?;
+        let mut rows = self
+            .row_iter
+            .update(&snapshot)
+            .context("iterate Ghostty VT render rows")?;
+        let mut lines = Vec::new();
+
+        while let Some(row) = rows.next() {
+            let mut cells = self
+                .cell_iter
+                .update(row)
+                .context("iterate Ghostty VT render cells")?;
+            let mut line = String::new();
+            while let Some(cell) = cells.next() {
+                for grapheme in cell
+                    .graphemes()
+                    .context("read Ghostty VT render cell graphemes")?
+                {
+                    if grapheme != '\0' {
+                        line.push(grapheme);
+                    }
+                }
+            }
+            lines.push(line.trim_end().to_string());
+        }
+
+        Ok(Some(lines))
+    }
+
+    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
+        let snapshot = self
+            .render_state
+            .update(&self.terminal)
+            .context("update Ghostty VT render state")?;
+        Ok(snapshot
+            .cursor_viewport()?
+            .map(|cursor| (cursor.x, cursor.y)))
+    }
+}
+
+#[cfg(not(feature = "ghostty-vt"))]
+impl VtState {
+    fn new(_size: TerminalSize) -> anyhow::Result<Self> {
+        Ok(Self)
+    }
+
+    fn feed(&mut self, _bytes: &[u8]) {}
+
+    fn resize(&mut self, _size: TerminalSize) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn snapshot_lines(&mut self) -> anyhow::Result<Option<Vec<String>>> {
+        Ok(None)
+    }
+
+    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
+        Ok(None)
+    }
+}
+
 struct BackendSessionState {
     command: CommandSpec,
     size: TerminalSize,
@@ -56,6 +163,7 @@ struct BackendSessionState {
     child: Box<dyn Child + Send + Sync>,
     read_buffer: Arc<Mutex<Vec<u8>>>,
     output: String,
+    vt: VtState,
     _reader_thread: JoinHandle<()>,
     exited: bool,
     exit_status: Option<i32>,
@@ -87,18 +195,28 @@ impl BackendSessionState {
             .lock()
             .map_err(|_| anyhow::anyhow!("terminal backend reader buffer lock poisoned"))?;
         if !read_buffer.is_empty() {
+            self.vt.feed(&read_buffer);
             self.output.push_str(&String::from_utf8_lossy(&read_buffer));
             read_buffer.clear();
         }
         Ok(())
     }
 
-    fn snapshot_lines(&self) -> Vec<String> {
-        self.output
+    fn snapshot_lines(&mut self) -> anyhow::Result<Vec<String>> {
+        if let Some(lines) = self.vt.snapshot_lines()? {
+            return Ok(lines);
+        }
+
+        Ok(self
+            .output
             .replace('\r', "")
             .lines()
             .map(ToString::to_string)
-            .collect()
+            .collect())
+    }
+
+    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
+        self.vt.cursor()
     }
 }
 
@@ -184,6 +302,7 @@ impl TerminalBackend for GhosttyTerminalBackend {
                 child,
                 read_buffer,
                 output: String::new(),
+                vt: VtState::new(size)?,
                 _reader_thread: reader_thread,
                 exited: false,
                 exit_status: None,
@@ -237,6 +356,7 @@ impl TerminalBackend for GhosttyTerminalBackend {
                 )
             })?;
         state.size = size;
+        state.vt.resize(size)?;
         Ok(())
     }
 
@@ -249,10 +369,12 @@ impl TerminalBackend for GhosttyTerminalBackend {
         })?;
         state.poll_exit()?;
         state.drain_output()?;
+        let lines = state.snapshot_lines()?;
+        let cursor = state.cursor()?;
         Ok(TerminalGridSnapshot {
             size: state.size,
-            lines: state.snapshot_lines(),
-            cursor: None,
+            lines,
+            cursor,
             exited: state.exited,
             exit_status: state.exit_status,
         })

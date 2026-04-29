@@ -305,14 +305,51 @@ fn real_backend_starts_process_in_command_cwd() {
     let session = backend
         .start(CommandSpec::shell_command("pwd", dir.path().to_path_buf()))
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    let snapshot = backend.snapshot(session).unwrap();
+    let snapshot = wait_for_snapshot_text(&mut backend, session, &dir.path().display().to_string());
     assert!(
         snapshot
             .lines
             .join("\n")
             .contains(&dir.path().display().to_string())
     );
+}
+
+#[test]
+#[ignore = "requires real PTY timing; run manually during terminal integration"]
+fn real_backend_snapshots_command_output_text_grid() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut backend = GhosttyTerminalBackend::new();
+    let session = backend
+        .start(CommandSpec::shell_command(
+            "printf alas-terminal-ok",
+            dir.path().to_path_buf(),
+        ))
+        .unwrap();
+
+    let snapshot = wait_for_snapshot_text(&mut backend, session, "alas-terminal-ok");
+
+    assert!(snapshot.lines.join("\n").contains("alas-terminal-ok"));
+    assert!(snapshot.exited);
+}
+
+fn wait_for_snapshot_text(
+    backend: &mut GhosttyTerminalBackend,
+    session: TerminalBackendSession,
+    expected: &str,
+) -> TerminalGridSnapshot {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut last_snapshot = None;
+
+    while std::time::Instant::now() < deadline {
+        let snapshot = backend.snapshot(session).unwrap();
+        if snapshot.lines.join("\n").contains(expected) && snapshot.exited {
+            return snapshot;
+        }
+        last_snapshot = Some(snapshot);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    last_snapshot.unwrap_or_else(|| backend.snapshot(session).unwrap())
 }
 
 #[test]
