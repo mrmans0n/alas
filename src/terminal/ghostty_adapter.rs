@@ -15,15 +15,17 @@ compile_error!("Alas V1 requires the ghostty-vt feature for terminal rendering")
 #[cfg(feature = "ghostty-vt")]
 use libghostty_vt::{
     RenderState, Terminal, TerminalOptions, ffi,
-    render::{CellIterator, RowIterator},
+    render::{CellIterator, CursorVisualStyle, RowIterator},
+    screen::CellWide,
     terminal::ScrollViewport,
 };
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use super::{
-    CommandSpec, TerminalCell, TerminalCellStyle, TerminalColor, TerminalCursor,
-    TerminalCursorShape, TerminalGridSnapshot, TerminalRow, TerminalScreenMode, TerminalStatus,
-    TerminalViewport,
+    CommandSpec, GhosttyCellStyle, GhosttyCellWidth, GhosttyRenderCell, GhosttyRenderCursor,
+    GhosttyRenderFrame, GhosttyRenderRow, TerminalCell, TerminalCellStyle, TerminalColor,
+    TerminalCursor, TerminalCursorShape, TerminalGridSnapshot, TerminalRow, TerminalScreenMode,
+    TerminalStatus, TerminalViewport,
 };
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
@@ -197,6 +199,127 @@ impl VtState {
         })
     }
 
+    fn render_frame(&mut self, viewport: TerminalViewport) -> anyhow::Result<GhosttyRenderFrame> {
+        let screen_mode = self.screen_mode()?;
+        let raw_scrollback_rows = self
+            .terminal
+            .scrollback_rows()
+            .context("read Ghostty VT scrollback row count")?;
+        let scrollback_rows = match screen_mode {
+            TerminalScreenMode::Main => raw_scrollback_rows,
+            TerminalScreenMode::Alternate => 0,
+        };
+        let terminal_rows = self
+            .terminal
+            .rows()
+            .context("read Ghostty VT terminal row count")?;
+        let bounded_viewport = viewport.clamped(scrollback_rows, terminal_rows);
+
+        self.terminal.scroll_viewport(ScrollViewport::Bottom);
+        if bounded_viewport.scroll_offset_rows > 0 {
+            let delta = isize::try_from(bounded_viewport.scroll_offset_rows)
+                .context("convert Ghostty VT scrollback offset to viewport delta")?;
+            self.terminal.scroll_viewport(ScrollViewport::Delta(-delta));
+        }
+
+        let result = (|| -> anyhow::Result<GhosttyRenderFrame> {
+            let snapshot = self
+                .render_state
+                .update(&self.terminal)
+                .context("update Ghostty VT render state")?;
+            let colors = snapshot.colors().context("read Ghostty VT render colors")?;
+            let default_foreground = convert_rgb(colors.foreground);
+            let default_background = convert_rgb(colors.background);
+            let cursor_visible = snapshot
+                .cursor_visible()
+                .context("read Ghostty VT cursor visibility")?;
+            let cursor_shape = convert_cursor_shape(
+                snapshot
+                    .cursor_visual_style()
+                    .context("read Ghostty VT cursor visual style")?,
+            );
+            let cursor_color = snapshot
+                .cursor_color()
+                .context("read Ghostty VT cursor color")?
+                .map(convert_rgb);
+            let mut cursor = snapshot
+                .cursor_viewport()
+                .context("read Ghostty VT cursor viewport")?
+                .map(|cursor| GhosttyRenderCursor {
+                    col: cursor.x,
+                    row: cursor.y,
+                    visible: cursor_visible,
+                    shape: cursor_shape,
+                    color: cursor_color,
+                });
+            let cols = snapshot.cols().context("read Ghostty VT render cols")?;
+            let mut rows = self
+                .row_iter
+                .update(&snapshot)
+                .context("iterate Ghostty VT render rows")?;
+            let mut rows_data = Vec::new();
+
+            while let Some(row) = rows.next() {
+                let mut cells = self
+                    .cell_iter
+                    .update(row)
+                    .context("iterate Ghostty VT render cells")?;
+                let mut row_cells = Vec::new();
+                while let Some(cell) = cells.next() {
+                    let text: String = cell
+                        .graphemes()
+                        .context("read Ghostty VT render cell graphemes")?
+                        .into_iter()
+                        .filter(|grapheme| *grapheme != '\0')
+                        .collect();
+                    let width = convert_width(
+                        cell.raw_cell()
+                            .context("read Ghostty VT raw render cell")?
+                            .wide()
+                            .context("read Ghostty VT cell width")?,
+                    );
+                    row_cells.push(GhosttyRenderCell {
+                        text,
+                        style: convert_ghostty_cell_style(cell)?,
+                        width,
+                    });
+                }
+                rows_data.push(GhosttyRenderRow { cells: row_cells });
+            }
+
+            let visible_rows = usize::from(bounded_viewport.visible_rows);
+            if rows_data.len() > visible_rows {
+                let crop_start = rows_data.len() - visible_rows;
+                cursor = cursor.and_then(|cursor| {
+                    if usize::from(cursor.row) < crop_start {
+                        None
+                    } else {
+                        Some(GhosttyRenderCursor {
+                            row: cursor.row - u16::try_from(crop_start).ok()?,
+                            ..cursor
+                        })
+                    }
+                });
+                rows_data = rows_data.split_off(crop_start);
+            }
+
+            let rows = u16::try_from(rows_data.len())
+                .context("convert Ghostty render row count to terminal frame rows")?;
+
+            Ok(GhosttyRenderFrame {
+                cols,
+                rows,
+                default_foreground,
+                default_background,
+                cursor,
+                rows_data,
+            })
+        })();
+        self.terminal.scroll_viewport(ScrollViewport::Bottom);
+
+        result
+    }
+
     fn screen_mode(&self) -> anyhow::Result<TerminalScreenMode> {
         match self
             .terminal
@@ -220,6 +343,16 @@ fn convert_rgb(color: libghostty_vt::style::RgbColor) -> TerminalColor {
 }
 
 #[cfg(feature = "ghostty-vt")]
+fn convert_width(width: CellWide) -> GhosttyCellWidth {
+    match width {
+        CellWide::Narrow => GhosttyCellWidth::Narrow,
+        CellWide::Wide => GhosttyCellWidth::Wide,
+        CellWide::SpacerTail => GhosttyCellWidth::SpacerTail,
+        CellWide::SpacerHead => GhosttyCellWidth::SpacerHead,
+    }
+}
+
+#[cfg(feature = "ghostty-vt")]
 fn convert_style(
     cell: &libghostty_vt::render::CellIteration<'_, '_>,
 ) -> anyhow::Result<TerminalCellStyle> {
@@ -239,6 +372,38 @@ fn convert_style(
         inverse: style.inverse,
         strikethrough: style.strikethrough,
     })
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn convert_ghostty_cell_style(
+    cell: &libghostty_vt::render::CellIteration<'_, '_>,
+) -> anyhow::Result<GhosttyCellStyle> {
+    let style = cell.style().context("read Ghostty cell style")?;
+    Ok(GhosttyCellStyle {
+        foreground: cell
+            .fg_color()
+            .context("read Ghostty foreground")?
+            .map(convert_rgb),
+        background: cell
+            .bg_color()
+            .context("read Ghostty background")?
+            .map(convert_rgb),
+        bold: style.bold,
+        italic: style.italic,
+        underline: !matches!(style.underline, libghostty_vt::style::Underline::None),
+        inverse: style.inverse,
+        strikethrough: style.strikethrough,
+    })
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn convert_cursor_shape(style: CursorVisualStyle) -> TerminalCursorShape {
+    match style {
+        CursorVisualStyle::Bar => TerminalCursorShape::Bar,
+        CursorVisualStyle::Underline => TerminalCursorShape::Underline,
+        CursorVisualStyle::Block | CursorVisualStyle::BlockHollow => TerminalCursorShape::Block,
+        _ => TerminalCursorShape::Block,
+    }
 }
 
 #[cfg(feature = "ghostty-vt")]
@@ -313,6 +478,10 @@ impl BackendSessionState {
     fn snapshot_rows(&mut self, viewport: TerminalViewport) -> anyhow::Result<VtSnapshotRows> {
         self.vt.snapshot_rows(viewport)
     }
+
+    fn render_frame(&mut self, viewport: TerminalViewport) -> anyhow::Result<GhosttyRenderFrame> {
+        self.vt.render_frame(viewport)
+    }
 }
 
 impl Drop for BackendSessionState {
@@ -332,6 +501,20 @@ pub struct GhosttyTerminalBackend {
 impl GhosttyTerminalBackend {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn render_frame(
+        &mut self,
+        session: TerminalBackendSession,
+        viewport: TerminalViewport,
+    ) -> anyhow::Result<GhosttyRenderFrame> {
+        let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
+            anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+        })?;
+        state.poll_exit()?;
+        state.drain_output()?;
+        state.fail_on_read_error()?;
+        state.render_frame(viewport)
     }
 
     fn start_with_size(

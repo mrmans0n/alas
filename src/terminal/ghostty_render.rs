@@ -247,6 +247,27 @@ mod tests {
     }
 
     #[test]
+    fn frame_rows_preserve_trailing_empty_styled_cells() {
+        let row = GhosttyRenderRow {
+            cells: vec![
+                GhosttyRenderCell::narrow("x", GhosttyCellStyle::default()),
+                GhosttyRenderCell::empty(GhosttyCellStyle {
+                    background: Some(TerminalColor::rgb(9, 9, 9)),
+                    ..Default::default()
+                }),
+            ],
+        };
+        assert_eq!(row.cells.len(), 2);
+        assert_eq!(
+            background_runs(&row, TerminalColor::rgb(0, 0, 0))
+                .last()
+                .unwrap()
+                .col,
+            1
+        );
+    }
+
+    #[test]
     fn background_runs_cover_trailing_empty_cells() {
         let highlighted = TerminalColor::rgb(1, 2, 3);
         let row = GhosttyRenderRow {
