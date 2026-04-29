@@ -6,13 +6,16 @@ use crate::{
         RepositoryNode, SelectedWorktree, WorktreeNode,
     },
     git::WorktreeKind,
-    ui::theme::{
-        ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, SIDEBAR_BG, TEXT, TEXT_MUTED,
-    },
+    ui::theme::{ACCENT, DANGER, PANEL_BG, PANEL_BORDER, SIDEBAR_BG, TEXT, TEXT_MUTED},
 };
 use gpui::{
-    App, ClickEvent, Div, FontWeight, IntoElement, MouseButton, ParentElement, SharedString,
-    Styled, Window, div, prelude::*, px,
+    App, ClickEvent, FontWeight, IntoElement, MouseButton, ParentElement, SharedString, Styled,
+    Window, div, prelude::*, px,
+};
+use gpui_component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+    tag::Tag,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,16 +86,9 @@ pub fn render_sidebar(
                 .flex_col()
                 .gap_2()
                 .child(
-                    div()
-                        .id("add-repository")
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(ACCENT_TEXT)
-                        .bg(ACCENT)
-                        .child("+ Add Repository")
+                    Button::new("add-repository")
+                        .primary()
+                        .label("+ Add Repository")
                         .on_click(on_add_repository),
                 )
                 .when(add_repository_error.is_some(), |element| {
@@ -433,13 +429,11 @@ fn render_sidebar_menu(
                         }),
                 )
                 .child(
-                    div()
-                        .id("close-sidebar-menu")
-                        .px_1()
-                        .rounded_md()
-                        .text_xs()
+                    Button::new("close-sidebar-menu")
+                        .xsmall()
+                        .ghost()
+                        .label("×")
                         .text_color(TEXT_MUTED)
-                        .child("×")
                         .on_click(move |event, window, cx| {
                             cx.stop_propagation();
                             on_close_sidebar_menu(event, window, cx);
@@ -494,16 +488,12 @@ fn overflow_button(
     menu_state: SidebarMenuState,
     on_open_sidebar_menu: impl Fn(SidebarMenuState, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
-    div()
-        .id(id)
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .text_sm()
-        .font_weight(FontWeight::SEMIBOLD)
+    Button::new(id)
+        .xsmall()
+        .ghost()
+        .compact()
+        .label("⋯")
         .text_color(TEXT_MUTED)
-        .bg(PANEL_BG)
-        .child("⋯")
         .on_click(move |_event, window, cx| {
             cx.stop_propagation();
             on_open_sidebar_menu(menu_state.clone(), window, cx);
@@ -517,27 +507,17 @@ fn menu_action_row(
     action_id: ActionId,
     on_sidebar_menu_action: impl Fn(ActionId, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
-    div()
-        .id(id)
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .text_sm()
+    Button::new(id)
+        .small()
+        .ghost()
+        .label(label)
         .text_color(if destructive { DANGER } else { TEXT })
-        .child(label)
         .on_click(move |event, window, cx| {
             cx.stop_propagation();
             on_sidebar_menu_action(action_id, event, window, cx);
         })
 }
 
-fn status_badge(label: &'static str) -> Div {
-    div()
-        .px_1()
-        .py_1()
-        .rounded_md()
-        .bg(PANEL_BORDER)
-        .text_xs()
-        .text_color(TEXT_MUTED)
-        .child(label)
+fn status_badge(label: &'static str) -> impl IntoElement {
+    Tag::secondary().small().child(label)
 }
