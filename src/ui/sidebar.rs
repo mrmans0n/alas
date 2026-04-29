@@ -11,6 +11,7 @@ pub fn render_sidebar(
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
@@ -40,6 +41,7 @@ pub fn render_sidebar(
                 repository,
                 on_remove_repository.clone(),
                 on_create_worktree.clone(),
+                on_select_worktree.clone(),
                 on_toggle_show_archived.clone(),
                 on_archive_worktree.clone(),
                 on_unarchive_worktree.clone(),
@@ -79,6 +81,7 @@ fn render_repository(
     repository: &RepositoryNode,
     on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
@@ -207,20 +210,36 @@ fn render_repository(
                     } else {
                         "Archive".into()
                     };
+                    let select_repo_id = repo_id.clone();
+                    let select_worktree_path = worktree_path.clone();
                     let on_archive_worktree = on_archive_worktree.clone();
                     let on_unarchive_worktree = on_unarchive_worktree.clone();
+                    let on_select_worktree = on_select_worktree.clone();
 
                     div()
                         .ml_3()
                         .px_2()
                         .py_1()
                         .rounded_md()
+                        .id(SharedString::from(format!(
+                            "select-worktree-{select_repo_id}-{}",
+                            select_worktree_path.display()
+                        )))
                         .text_sm()
                         .bg(rgb(0xffffff))
                         .flex()
                         .items_center()
                         .justify_between()
                         .gap_2()
+                        .on_click(move |event, window, cx| {
+                            on_select_worktree(
+                                select_repo_id.clone(),
+                                select_worktree_path.clone(),
+                                event,
+                                window,
+                                cx,
+                            );
+                        })
                         .child(div().truncate().child(label))
                         .child(
                             div()
@@ -232,6 +251,7 @@ fn render_repository(
                                 .text_color(rgb(0x2563eb))
                                 .child(action_label)
                                 .on_click(move |event, window, cx| {
+                                    cx.stop_propagation();
                                     if is_archived {
                                         on_unarchive_worktree(
                                             repo_id.clone(),

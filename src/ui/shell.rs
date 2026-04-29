@@ -2,8 +2,15 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     app::{AlasModel, RepositoryNode},
-    config::{AppConfig, AppConfigStore, AppRepository, repository_id_for_path},
+    config::{
+        AppConfig, AppConfigStore, AppRepository, RepoConfigStore, ResolvedRepoConfig,
+        repository_id_for_path,
+    },
     git::{GitRunner, GitWorktreeService},
+    terminal::{
+        CommandSpec, GhosttyTerminalBackend, TerminalSessionId, TerminalSessionRef,
+        TerminalSessionRegistry,
+    },
     ui::{
         dialogs::{
             AddRepositoryDialogState, ConfirmRemoveRepositoryDialog, CreateWorktreeDialogState,
@@ -27,7 +34,10 @@ pub struct AlasShell {
     create_worktree_dialog: Option<CreateWorktreeDialogState>,
     create_worktree_focus: FocusHandle,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
-    active_terminal: Option<()>,
+    terminal_registry: TerminalSessionRegistry,
+    terminal_backend: GhosttyTerminalBackend,
+    active_terminal: Option<TerminalSessionRef>,
+    terminal_error: Option<String>,
     git_inspector: Option<()>,
     git_inspector_error: Option<String>,
 }
@@ -46,7 +56,10 @@ impl AlasShell {
             create_worktree_dialog: None,
             create_worktree_focus: cx.focus_handle(),
             confirm_remove_repository_dialog: None,
+            terminal_registry: TerminalSessionRegistry::default(),
+            terminal_backend: GhosttyTerminalBackend::new(),
             active_terminal: None,
+            terminal_error: None,
             git_inspector: None,
             git_inspector_error: None,
         };
@@ -290,10 +303,50 @@ impl AlasShell {
         }
 
         self.refresh_repositories();
-        self.model
-            .select_worktree(dialog.repo_id.clone(), target_path.clone());
         self.create_worktree_dialog = None;
-        self.active_terminal = None;
+        self.select_worktree(dialog.repo_id.clone(), target_path);
+    }
+
+    fn select_worktree(&mut self, repo_id: String, path: PathBuf) {
+        self.model.select_worktree(repo_id.clone(), path.clone());
+        let command = self.resolve_default_command(&repo_id, path.clone());
+        let id = TerminalSessionId::new(repo_id, path);
+
+        match self
+            .terminal_registry
+            .get_or_start(id, command, &mut self.terminal_backend)
+        {
+            Ok(session) => {
+                self.active_terminal = Some(session);
+                self.terminal_error = None;
+            }
+            Err(error) => {
+                self.active_terminal = None;
+                self.terminal_error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn resolve_default_command(&self, repo_id: &str, worktree_path: PathBuf) -> CommandSpec {
+        let Some(repo) = self
+            .config
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repo_id)
+        else {
+            return CommandSpec::shell_command("$SHELL", worktree_path);
+        };
+
+        let repo_file = RepoConfigStore::for_repo(&repo.path).load().ok().flatten();
+        let resolved = ResolvedRepoConfig::resolve(
+            repo.id.clone(),
+            repo.path.clone(),
+            repo.name.clone(),
+            &self.config,
+            repo_file,
+        );
+
+        CommandSpec::shell_command(resolved.default_command().command.clone(), worktree_path)
     }
 
     fn set_create_worktree_error(&mut self, error: impl Into<String>) {
@@ -395,6 +448,7 @@ impl AlasShell {
     fn clear_selection_and_active_terminal(&mut self) {
         self.model.clear_selection();
         self.active_terminal = None;
+        self.terminal_error = None;
         self.git_inspector = None;
         self.git_inspector_error = None;
     }
@@ -506,6 +560,18 @@ impl Render for AlasShell {
             .ok();
         };
         let view = cx.entity().downgrade();
+        let on_select_worktree = move |repo_id: String,
+                                       path: PathBuf,
+                                       _event: &gpui::ClickEvent,
+                                       _window: &mut Window,
+                                       app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.select_worktree(repo_id, path);
+                cx.notify();
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
         let on_toggle_show_archived = move |repo_id: String,
                                             show: bool,
                                             _event: &gpui::ClickEvent,
@@ -582,6 +648,7 @@ impl Render for AlasShell {
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
                 on_remove_repository,
                 on_create_worktree,
+                on_select_worktree,
                 on_toggle_show_archived,
                 on_archive_worktree,
                 on_unarchive_worktree,
@@ -689,7 +756,11 @@ impl Render for AlasShell {
                                 ),
                         )
                     })
-                    .child(render_terminal_placeholder()),
+                    .child(render_terminal_placeholder(
+                        self.model.selected_worktree(),
+                        self.active_terminal.as_ref(),
+                        self.terminal_error.as_deref(),
+                    )),
             )
             .child(render_inspector_placeholder())
     }
