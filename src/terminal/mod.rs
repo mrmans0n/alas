@@ -1,4 +1,5 @@
 pub mod ghostty_adapter;
+pub mod ghostty_render;
 pub mod grid;
 pub mod input;
 pub mod session;
@@ -7,6 +8,7 @@ pub mod terminal_metrics;
 pub use ghostty_adapter::{
     GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession, TerminalSize,
 };
+pub use ghostty_render::*;
 pub use grid::{
     TerminalCell, TerminalCellStyle, TerminalColor, TerminalCursor, TerminalCursorShape,
     TerminalGridSnapshot, TerminalRow, TerminalScreenMode, TerminalStatus, TerminalViewport,
