@@ -1,4 +1,6 @@
+mod arch;
 mod dist;
+mod version;
 
 use anyhow::{Result, bail};
 
