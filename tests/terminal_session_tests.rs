@@ -560,6 +560,32 @@ fn registry_reuses_existing_session_for_worktree() {
 }
 
 #[test]
+fn registry_lookup_for_missing_session_does_not_start_backend() {
+    let registry = TerminalSessionRegistry::default();
+    let id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"), TerminalTabId(1));
+
+    assert!(registry.get(&id).is_none());
+}
+
+#[test]
+fn registry_attaches_existing_backend_session_without_starting() {
+    let mut registry = TerminalSessionRegistry::default();
+    let mut backend = CountingBackend::default();
+    let id = TerminalSessionId::new("repo-1", PathBuf::from("/repo/wt"), TerminalTabId(1));
+    let command = CommandSpec::shell_command("claude", PathBuf::from("/repo/wt"));
+    let backend_session = TerminalBackendSession { backend_id: 42 };
+
+    let attached = registry.attach_existing(id.clone(), command.clone(), backend_session);
+    let reused = registry
+        .get_or_start(id, command, &mut backend)
+        .expect("attached session should be reused without backend start");
+
+    assert_eq!(attached.handle, reused.handle);
+    assert_eq!(reused.backend_session, backend_session);
+    assert_eq!(backend.start_count(), 0);
+}
+
+#[test]
 fn registry_removes_sessions_by_worktree_and_repository() {
     let mut registry = TerminalSessionRegistry::default();
     let mut backend = CountingBackend::default();

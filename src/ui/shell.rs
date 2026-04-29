@@ -881,6 +881,35 @@ impl AlasShell {
         self.terminal_scroll_offset_rows = tab.scroll_offset_rows;
         self.terminal_error = None;
 
+        if preserve_failure {
+            // Selecting a failed startup tab must not call get_or_start: missing registry entries
+            // would start the command again without an explicit Retry. Runtime failures can still
+            // have a live backend session, so deliberately reuse only sessions we already know
+            // about and leave the failure/status untouched until retry or restart clears it.
+            let session = self.terminal_registry.get(&id).or_else(|| {
+                tab.backend_session.map(|backend_session| {
+                    self.terminal_registry.attach_existing(
+                        id.clone(),
+                        tab.command.clone(),
+                        backend_session,
+                    )
+                })
+            });
+
+            let Some(session) = session else {
+                self.active_terminal = None;
+                return;
+            };
+
+            self.active_terminal = Some(session.clone());
+            if let Some(size) = self.terminal_size {
+                if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
+                    self.mark_terminal_tab_failed(&session.id, error.to_string());
+                }
+            }
+            return;
+        }
+
         match self.terminal_registry.get_or_start(
             id.clone(),
             tab.command.clone(),
@@ -903,15 +932,13 @@ impl AlasShell {
                     }
                 }
 
-                if !preserve_failure {
-                    let _ = self.workspace_session.set_tab_status(
-                        &session.id.repo_id,
-                        &session.id.worktree_path,
-                        session.id.tab_id,
-                        TerminalTabStatus::Running,
-                    );
-                    self.clear_terminal_tab_failure(&session.id);
-                }
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Running,
+                );
+                self.clear_terminal_tab_failure(&session.id);
             }
             Err(error) => {
                 self.active_terminal = None;

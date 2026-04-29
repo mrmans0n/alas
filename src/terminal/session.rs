@@ -64,17 +64,20 @@ pub struct TerminalSessionRegistry {
 }
 
 impl TerminalSessionRegistry {
-    pub fn get_or_start<B: crate::terminal::TerminalBackend>(
+    pub fn get(&self, id: &TerminalSessionId) -> Option<TerminalSessionRef> {
+        self.sessions.get(id).cloned()
+    }
+
+    pub fn attach_existing(
         &mut self,
         id: TerminalSessionId,
         command: CommandSpec,
-        backend: &mut B,
-    ) -> anyhow::Result<TerminalSessionRef> {
+        backend_session: TerminalBackendSession,
+    ) -> TerminalSessionRef {
         if let Some(session) = self.sessions.get(&id) {
-            return Ok(session.clone());
+            return session.clone();
         }
 
-        let backend_session = backend.start(command.clone())?;
         self.next_handle += 1;
         let session = TerminalSessionRef {
             id: id.clone(),
@@ -83,7 +86,21 @@ impl TerminalSessionRegistry {
             backend_session,
         };
         self.sessions.insert(id, session.clone());
-        Ok(session)
+        session
+    }
+
+    pub fn get_or_start<B: crate::terminal::TerminalBackend>(
+        &mut self,
+        id: TerminalSessionId,
+        command: CommandSpec,
+        backend: &mut B,
+    ) -> anyhow::Result<TerminalSessionRef> {
+        if let Some(session) = self.get(&id) {
+            return Ok(session);
+        }
+
+        let backend_session = backend.start(command.clone())?;
+        Ok(self.attach_existing(id, command, backend_session))
     }
 
     pub fn replace_backend_session(

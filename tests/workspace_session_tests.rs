@@ -153,6 +153,45 @@ fn tab_runtime_state_can_be_updated_and_removed() {
 }
 
 #[test]
+fn failed_startup_tab_preserves_failure_without_backend_session() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let shell = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+    let tests = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Tests".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("cargo test", path.clone()),
+    );
+
+    session
+        .set_tab_failure("repo", &path, shell, "backend failed to start")
+        .expect("mark shell failed");
+    session
+        .set_active_tab("repo", &path, tests)
+        .expect("select tests");
+    session
+        .set_active_tab("repo", &path, shell)
+        .expect("select failed shell");
+
+    let active = session.active_tab("repo", &path).expect("active tab");
+    assert_eq!(active.id, shell);
+    assert_eq!(active.status, TerminalTabStatus::Failed);
+    assert_eq!(
+        active.failure_cause.as_deref(),
+        Some("backend failed to start")
+    );
+    assert_eq!(active.backend_session, None);
+}
+
+#[test]
 fn terminal_failure_cause_is_scoped_per_tab() {
     let mut session = WorkspaceSession::default();
     let path = PathBuf::from("/repo/a");
