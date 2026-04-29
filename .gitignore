@@ -15,6 +15,9 @@ debug
 /.superpowers/
 /.worktrees/
 
+# Let's ignore superpower docs
+docs/superpowers
+
 # macOS
 .DS_Store
 
