@@ -1,6 +1,7 @@
 use alas::terminal::{
-    TerminalCell, TerminalCellStyle, TerminalColor, TerminalGridSnapshot, TerminalRow,
-    TerminalScreenMode, TerminalSize, TerminalStatus, TerminalViewport,
+    CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession, TerminalCell,
+    TerminalCellStyle, TerminalColor, TerminalGridSnapshot, TerminalRow, TerminalScreenMode,
+    TerminalSize, TerminalStatus, TerminalViewport,
 };
 
 #[test]
@@ -108,4 +109,55 @@ fn cell_style_tracks_color_and_attributes() {
     assert!(cell.style.underline);
     assert!(cell.style.inverse);
     assert!(cell.style.strikethrough);
+}
+
+#[test]
+#[ignore = "requires libghostty-vt native build and PTY timing"]
+fn real_backend_extracts_styled_ansi_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut backend = GhosttyTerminalBackend::new();
+    let session = backend
+        .start(CommandSpec::shell_command(
+            "printf '\\033[31mred\\033[0m'",
+            dir.path().to_path_buf(),
+        ))
+        .unwrap();
+
+    let snapshot = wait_for_snapshot_text(&mut backend, session, "red");
+    let red_cell = snapshot
+        .rows
+        .iter()
+        .flat_map(|row| &row.cells)
+        .find(|cell| cell.text == "r")
+        .expect("red cell");
+
+    // Ghostty resolves ANSI palette red through its active theme, so the exact
+    // RGB value may differ from pure red while still proving style extraction.
+    assert!(red_cell.style.foreground.is_some());
+}
+
+fn wait_for_snapshot_text(
+    backend: &mut GhosttyTerminalBackend,
+    session: TerminalBackendSession,
+    expected: &str,
+) -> TerminalGridSnapshot {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut last_snapshot = None;
+
+    while std::time::Instant::now() < deadline {
+        let snapshot = backend
+            .snapshot(session, TerminalViewport::visible(24))
+            .unwrap();
+        if snapshot.plain_lines().join("\n").contains(expected) && snapshot.exited() {
+            return snapshot;
+        }
+        last_snapshot = Some(snapshot);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    last_snapshot.unwrap_or_else(|| {
+        backend
+            .snapshot(session, TerminalViewport::visible(24))
+            .unwrap()
+    })
 }

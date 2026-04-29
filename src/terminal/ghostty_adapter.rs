@@ -21,8 +21,9 @@ use libghostty_vt::{
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use super::{
-    CommandSpec, TerminalCell, TerminalCursor, TerminalCursorShape, TerminalGridSnapshot,
-    TerminalRow, TerminalScreenMode, TerminalStatus, TerminalViewport,
+    CommandSpec, TerminalCell, TerminalCellStyle, TerminalColor, TerminalCursor,
+    TerminalCursorShape, TerminalGridSnapshot, TerminalRow, TerminalScreenMode, TerminalStatus,
+    TerminalViewport,
 };
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
@@ -146,7 +147,10 @@ impl VtState {
                         .into_iter()
                         .filter(|grapheme| *grapheme != '\0')
                         .collect();
-                    row_cells.push(TerminalCell::new(text));
+                    row_cells.push(TerminalCell {
+                        text,
+                        style: convert_style(cell)?,
+                    });
                 }
                 while row_cells
                     .last()
@@ -202,6 +206,33 @@ impl VtState {
             screen => anyhow::bail!("unknown Ghostty VT active screen {screen}"),
         }
     }
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn convert_rgb(color: libghostty_vt::style::RgbColor) -> TerminalColor {
+    TerminalColor::rgb(color.r, color.g, color.b)
+}
+
+#[cfg(feature = "ghostty-vt")]
+fn convert_style(
+    cell: &libghostty_vt::render::CellIteration<'_, '_>,
+) -> anyhow::Result<TerminalCellStyle> {
+    let style = cell.style().context("read Ghostty cell style")?;
+    Ok(TerminalCellStyle {
+        foreground: cell
+            .fg_color()
+            .context("read Ghostty foreground")?
+            .map(convert_rgb),
+        background: cell
+            .bg_color()
+            .context("read Ghostty background")?
+            .map(convert_rgb),
+        bold: style.bold,
+        italic: style.italic,
+        underline: !matches!(style.underline, libghostty_vt::style::Underline::None),
+        inverse: style.inverse,
+        strikethrough: style.strikethrough,
+    })
 }
 
 #[cfg(feature = "ghostty-vt")]
