@@ -32,7 +32,9 @@ use crate::{
         },
         inspector::render_project_inspector,
         sidebar::{SidebarMenuState, render_sidebar},
+        terminal_canvas::measure_terminal_metrics,
         terminal_pane::render_terminal_pane,
+        terminal_view::{TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX},
         theme::{APP_BG, DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED},
         workspace::render_workspace,
     },
@@ -1869,7 +1871,13 @@ fn render_status_bar(
 }
 
 impl Render for AlasShell {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let measured_metrics =
+            measure_terminal_metrics(window, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX);
+        if self.terminal_metrics != measured_metrics {
+            self.terminal_metrics = measured_metrics;
+        }
+
         let terminal_size = self.current_terminal_size();
         self.resize_active_terminal(terminal_size);
         let terminal_frame = self.terminal_render_frame();

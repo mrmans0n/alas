@@ -1,6 +1,9 @@
-use crate::terminal::{
-    GhosttyCellStyle, GhosttyRenderFrame, TerminalColor, TerminalCursorShape, TerminalMetrics,
-    background_runs, text_runs,
+use crate::{
+    terminal::{
+        GhosttyCellStyle, GhosttyRenderFrame, TerminalColor, TerminalCursorShape, TerminalMetrics,
+        background_runs, text_runs,
+    },
+    ui::terminal_view::TERMINAL_FONT_FAMILY,
 };
 use gpui::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
@@ -8,7 +11,33 @@ use gpui::{
     point, px, relative, rgb, size,
 };
 
-const TERMINAL_CANVAS_FONT_FAMILY: &str = "Hack Nerd Font";
+const TERMINAL_METRICS_SAMPLE: &str = "MMMMMMMMMM";
+
+pub fn measure_terminal_metrics(
+    window: &mut gpui::Window,
+    font_family: &str,
+    font_size_px: f32,
+) -> TerminalMetrics {
+    let text_run = TextRun {
+        len: TERMINAL_METRICS_SAMPLE.len(),
+        font: font(font_family.to_owned()),
+        color: gpui::Hsla::from(rgb(0xffffff)),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let layout = window.text_system().layout_line(
+        TERMINAL_METRICS_SAMPLE,
+        px(font_size_px),
+        &[text_run],
+        None,
+    );
+    TerminalMetrics::measured_or_fallback(TerminalMetrics::from_measured(
+        f32::from(layout.width) / TERMINAL_METRICS_SAMPLE.chars().count() as f32,
+        f32::from(layout.ascent + layout.descent),
+        font_size_px,
+    ))
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalPaintPlan {
@@ -285,7 +314,7 @@ fn paint_terminal_text_run(
     );
     let foreground = effective_foreground(&style, default_foreground, default_background);
     let color = gpui::Hsla::from(render_color(foreground));
-    let mut text_font = font(TERMINAL_CANVAS_FONT_FAMILY);
+    let mut text_font = font(TERMINAL_FONT_FAMILY);
     if style.bold {
         text_font = text_font.bold();
     }
