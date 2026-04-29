@@ -11,6 +11,38 @@
 7. Prune stale worktrees and confirm the destructive prompt.
 8. Open command settings and configure at least two commands.
 
+## Desktop Packaging and Lifecycle
+
+### macOS `.app`
+
+1. On macOS, build the app bundle with `cargo xtask dist macos`.
+2. Confirm `dist/macos/Alas.app` exists.
+3. Launch `Alas.app` by double-clicking it in Finder.
+4. Add/open a repository and start a terminal session.
+5. Press `Cmd+Q`; confirm the app exits.
+6. Relaunch, then close the window with the traffic-light close button; confirm the process exits.
+7. Confirm `dist/macos/Alas-<version>-<arch>.zip` exists.
+
+### Linux AppImage
+
+1. On Linux, ensure `appimagetool` is on `PATH`.
+2. Build with `cargo xtask dist linux-appimage`.
+3. Confirm `dist/linux/appimage/*.AppImage` exists and is executable.
+4. Run the AppImage.
+5. Add/open a repository and start a terminal session.
+6. Press `Ctrl+Q`; confirm the app exits.
+7. Relaunch and close the window; confirm the process exits.
+
+### Linux Debian package
+
+1. On Linux, build with `cargo xtask dist linux-deb`.
+2. Confirm `dist/linux/deb/*.deb` exists.
+3. Install with `sudo apt install ./dist/linux/deb/<package>.deb`.
+4. Launch `alas` from a terminal and, if available, from the desktop app launcher.
+5. Add/open a repository and start a terminal session.
+6. Confirm Quit shortcut and window close exit the app.
+7. Remove the package after testing if desired.
+
 ## Terminal Tabs
 
 1. Select a worktree.
