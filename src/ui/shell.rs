@@ -160,6 +160,7 @@ impl AlasShell {
             .snapshot(session.backend_session, viewport)
         {
             Ok(snapshot) => {
+                let preserve_failure = self.terminal_error.is_some();
                 self.terminal_scroll_offset_rows = match snapshot.screen_mode {
                     TerminalScreenMode::Main => snapshot.viewport.scroll_offset_rows,
                     TerminalScreenMode::Alternate => 0,
@@ -170,13 +171,14 @@ impl AlasShell {
                     session.id.tab_id,
                     self.terminal_scroll_offset_rows,
                 );
-                let _ = self.workspace_session.set_tab_status(
-                    &session.id.repo_id,
-                    &session.id.worktree_path,
-                    session.id.tab_id,
-                    terminal_tab_status(snapshot.status),
-                );
-                self.terminal_error = None;
+                if !preserve_failure {
+                    let _ = self.workspace_session.set_tab_status(
+                        &session.id.repo_id,
+                        &session.id.worktree_path,
+                        session.id.tab_id,
+                        terminal_tab_status(snapshot.status),
+                    );
+                }
                 Some(snapshot)
             }
             Err(error) => {
@@ -196,7 +198,6 @@ impl AlasShell {
         if self.terminal_size == Some(size) {
             return;
         }
-        self.terminal_size = Some(size);
         if let Some(session) = self.active_terminal.as_ref() {
             if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
                 let _ = self.workspace_session.set_tab_status(
@@ -206,8 +207,10 @@ impl AlasShell {
                     TerminalTabStatus::Failed,
                 );
                 self.terminal_error = Some(error.to_string());
+                return;
             }
         }
+        self.terminal_size = Some(size);
     }
 
     fn update_terminal_body_size(&mut self, width_px: f32, height_px: f32) -> bool {
