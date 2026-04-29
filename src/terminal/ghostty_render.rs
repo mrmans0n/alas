@@ -118,11 +118,11 @@ pub fn background_runs_with_defaults(
 
     for (col, cell) in row.cells.iter().enumerate() {
         let background = effective_background(&cell.style, default_foreground, default_background);
-        if let Some(last) = runs.last_mut() {
-            if last.background == background {
-                last.cell_count += 1;
-                continue;
-            }
+        if let Some(last) = runs.last_mut()
+            && last.background == background
+        {
+            last.cell_count += 1;
+            continue;
         }
 
         runs.push(BackgroundRun {
@@ -142,14 +142,14 @@ pub fn text_runs(row: &GhosttyRenderRow) -> Vec<TextRun> {
     for (col, cell) in row.cells.iter().enumerate() {
         match cell.width {
             GhosttyCellWidth::Narrow if !cell.text.is_empty() => {
-                if last_run_mergeable {
-                    if let Some(last) = runs.last_mut() {
-                        if last.style == cell.style && last.col + last.cell_count == col {
-                            last.cell_count += 1;
-                            last.text.push_str(&cell.text);
-                            continue;
-                        }
-                    }
+                if last_run_mergeable
+                    && let Some(last) = runs.last_mut()
+                    && last.style == cell.style
+                    && last.col + last.cell_count == col
+                {
+                    last.cell_count += 1;
+                    last.text.push_str(&cell.text);
+                    continue;
                 }
 
                 runs.push(TextRun {

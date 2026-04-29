@@ -245,12 +245,12 @@ impl AlasShell {
         if self.terminal_size == Some(size) {
             return;
         }
-        if let Some(session) = self.active_terminal.as_ref() {
-            if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
-                let id = session.id.clone();
-                self.mark_terminal_tab_failed(&id, error.to_string());
-                return;
-            }
+        if let Some(session) = self.active_terminal.as_ref()
+            && let Err(error) = self.terminal_backend.resize(session.backend_session, size)
+        {
+            let id = session.id.clone();
+            self.mark_terminal_tab_failed(&id, error.to_string());
+            return;
         }
         self.terminal_size = Some(size);
     }
@@ -334,10 +334,10 @@ impl AlasShell {
         };
         match self.terminal_backend.restart(active.backend_session) {
             Ok(session) => {
-                if let Some(active_terminal) = self.active_terminal.as_mut() {
-                    if active_terminal.id == active.id {
-                        active_terminal.backend_session = session;
-                    }
+                if let Some(active_terminal) = self.active_terminal.as_mut()
+                    && active_terminal.id == active.id
+                {
+                    active_terminal.backend_session = session;
                 }
                 self.terminal_registry
                     .replace_backend_session(&active.id, session);
@@ -348,11 +348,11 @@ impl AlasShell {
                     Some(session),
                 );
 
-                if let Some(size) = self.terminal_size {
-                    if let Err(error) = self.terminal_backend.resize(session, size) {
-                        self.mark_terminal_tab_failed(&active.id, error.to_string());
-                        return;
-                    }
+                if let Some(size) = self.terminal_size
+                    && let Err(error) = self.terminal_backend.resize(session, size)
+                {
+                    self.mark_terminal_tab_failed(&active.id, error.to_string());
+                    return;
                 }
 
                 let _ = self.workspace_session.set_tab_status(
@@ -879,12 +879,13 @@ impl AlasShell {
     }
 
     fn remove_command_settings_entry(&mut self, index: usize) {
-        if let Some(dialog) = self.command_settings_dialog.as_mut() {
-            if dialog.entries.len() > 1 && index < dialog.entries.len() {
-                dialog.entries.remove(index);
-                self.command_settings_active_field = CommandSettingsField::DefaultName;
-                dialog.error = None;
-            }
+        if let Some(dialog) = self.command_settings_dialog.as_mut()
+            && dialog.entries.len() > 1
+            && index < dialog.entries.len()
+        {
+            dialog.entries.remove(index);
+            self.command_settings_active_field = CommandSettingsField::DefaultName;
+            dialog.error = None;
         }
     }
 
@@ -1063,10 +1064,10 @@ impl AlasShell {
             };
 
             self.active_terminal = Some(session.clone());
-            if let Some(size) = self.terminal_size {
-                if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
-                    self.mark_terminal_tab_failed(&session.id, error.to_string());
-                }
+            if let Some(size) = self.terminal_size
+                && let Err(error) = self.terminal_backend.resize(session.backend_session, size)
+            {
+                self.mark_terminal_tab_failed(&session.id, error.to_string());
             }
             return;
         }
@@ -1085,12 +1086,11 @@ impl AlasShell {
                     Some(session.backend_session),
                 );
 
-                if let Some(size) = self.terminal_size {
-                    if let Err(error) = self.terminal_backend.resize(session.backend_session, size)
-                    {
-                        self.mark_terminal_tab_failed(&session.id, error.to_string());
-                        return;
-                    }
+                if let Some(size) = self.terminal_size
+                    && let Err(error) = self.terminal_backend.resize(session.backend_session, size)
+                {
+                    self.mark_terminal_tab_failed(&session.id, error.to_string());
+                    return;
                 }
 
                 let _ = self.workspace_session.set_tab_status(
@@ -1167,17 +1167,17 @@ impl AlasShell {
                 self.set_show_archived(&menu.repo_id, show_archived);
             }
             ActionId::ArchiveWorktree => {
-                if let Some(path) = menu.worktree_path {
-                    if let Err(error) = self.archive_worktree(&menu.repo_id, path) {
-                        self.set_add_repository_error(error.to_string());
-                    }
+                if let Some(path) = menu.worktree_path
+                    && let Err(error) = self.archive_worktree(&menu.repo_id, path)
+                {
+                    self.set_add_repository_error(error.to_string());
                 }
             }
             ActionId::UnarchiveWorktree => {
-                if let Some(path) = menu.worktree_path {
-                    if let Err(error) = self.unarchive_worktree(&menu.repo_id, &path) {
-                        self.set_add_repository_error(error.to_string());
-                    }
+                if let Some(path) = menu.worktree_path
+                    && let Err(error) = self.unarchive_worktree(&menu.repo_id, &path)
+                {
+                    self.set_add_repository_error(error.to_string());
                 }
             }
             ActionId::RemoveWorktree => {
@@ -1413,10 +1413,8 @@ impl AlasShell {
         cx.spawn(async move |this, cx| {
             let should_remove = answer.await.unwrap_or(1) == 0;
             this.update(cx, |shell, cx| {
-                if should_remove {
-                    if let Err(error) = shell.remove_repository_from_alas(&repo_id) {
-                        shell.set_add_repository_error(error.to_string());
-                    }
+                if should_remove && let Err(error) = shell.remove_repository_from_alas(&repo_id) {
+                    shell.set_add_repository_error(error.to_string());
                 }
                 shell.confirm_remove_repository_dialog = None;
                 cx.notify();
@@ -1490,10 +1488,8 @@ impl AlasShell {
         cx.spawn(async move |this, cx| {
             let should_remove = answer.await.unwrap_or(1) == 0;
             this.update(cx, |shell, cx| {
-                if should_remove {
-                    if let Err(error) = shell.remove_worktree(&repo_id, &path) {
-                        shell.set_add_repository_error(error.to_string());
-                    }
+                if should_remove && let Err(error) = shell.remove_worktree(&repo_id, &path) {
+                    shell.set_add_repository_error(error.to_string());
                 }
                 shell.confirm_remove_worktree_dialog = None;
                 cx.notify();
@@ -1549,10 +1545,8 @@ impl AlasShell {
         cx.spawn(async move |this, cx| {
             let should_prune = answer.await.unwrap_or(1) == 0;
             this.update(cx, |shell, cx| {
-                if should_prune {
-                    if let Err(error) = shell.prune_worktrees(&repo_id) {
-                        shell.set_add_repository_error(error.to_string());
-                    }
+                if should_prune && let Err(error) = shell.prune_worktrees(&repo_id) {
+                    shell.set_add_repository_error(error.to_string());
                 }
                 shell.confirm_prune_worktrees_dialog = None;
                 cx.notify();
@@ -2529,10 +2523,8 @@ impl Render for AlasShell {
 
 pub fn run() -> anyhow::Result<()> {
     Application::new().run(|cx: &mut App| {
-        cx.open_window(WindowOptions::default(), |_, cx| {
-            cx.new(|cx| AlasShell::new(cx))
-        })
-        .expect("failed to open Alas window");
+        cx.open_window(WindowOptions::default(), |_, cx| cx.new(AlasShell::new))
+            .expect("failed to open Alas window");
     });
 
     Ok(())

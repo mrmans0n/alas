@@ -22,6 +22,7 @@ pub struct SidebarMenuState {
     pub scope: ActionScope,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_sidebar(
     repositories: &[RepositoryNode],
     selected_worktree: Option<&SelectedWorktree>,
@@ -254,6 +255,7 @@ fn render_repository(
         )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_worktree_row(
     repository: &RepositoryNode,
     worktree: &WorktreeNode,

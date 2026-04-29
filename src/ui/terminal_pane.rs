@@ -15,6 +15,7 @@ use gpui::{
     ParentElement, Pixels, ScrollWheelEvent, SharedString, Styled, Window, div, prelude::*,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_terminal_pane(
     selected_worktree: Option<&SelectedWorktree>,
     active_tab: Option<&TerminalTab>,

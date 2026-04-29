@@ -13,6 +13,8 @@ pub const TERMINAL_FONT_SIZE_PX: f32 = 14.0;
 pub const CELL_WIDTH_PX: f32 = 9.0;
 pub const CELL_HEIGHT_PX: f32 = 19.0;
 
+type BoundsCallback = dyn Fn(Bounds<Pixels>, &mut App);
+
 pub fn terminal_size_from_pixels(width_px: f32, height_px: f32) -> TerminalSize {
     TerminalSize {
         cols: (width_px / CELL_WIDTH_PX).floor().max(20.0) as u16,
@@ -29,7 +31,7 @@ pub fn render_terminal_bounds_probe(
 }
 
 struct TerminalBoundsProbe {
-    on_bounds: Rc<dyn Fn(Bounds<Pixels>, &mut App)>,
+    on_bounds: Rc<BoundsCallback>,
 }
 
 impl IntoElement for TerminalBoundsProbe {

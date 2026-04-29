@@ -260,6 +260,7 @@ impl Element for TerminalCanvas {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_terminal_rect(
     window: &mut Window,
     bounds: Bounds<Pixels>,
@@ -285,6 +286,7 @@ fn paint_terminal_rect(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_terminal_text_run(
     window: &mut Window,
     cx: &mut App,
@@ -339,6 +341,7 @@ fn paint_terminal_text_run(
     let _ = shaped_line.paint(text_origin, px(metrics.cell_height_px), window, cx);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_terminal_cursor(
     window: &mut Window,
     cx: &mut App,

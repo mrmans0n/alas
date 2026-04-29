@@ -958,15 +958,15 @@ fn record_pty_read_error(
     context: &PtyReadContext,
     error: impl AsRef<str>,
 ) {
-    if let Ok(mut read_error) = read_error.lock() {
-        if read_error.is_none() {
-            *read_error = Some(format!(
-                "read PTY output for command '{}' in cwd {}: {}",
-                context.command_display,
-                context.cwd_display,
-                error.as_ref()
-            ));
-        }
+    if let Ok(mut read_error) = read_error.lock()
+        && read_error.is_none()
+    {
+        *read_error = Some(format!(
+            "read PTY output for command '{}' in cwd {}: {}",
+            context.command_display,
+            context.cwd_display,
+            error.as_ref()
+        ));
     }
 }
 
@@ -999,7 +999,7 @@ mod tests {
     impl Read for ReadThenFail {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             if self.returned_bytes {
-                return Err(io::Error::new(io::ErrorKind::Other, "PTY reader failed"));
+                return Err(io::Error::other("PTY reader failed"));
             }
 
             self.returned_bytes = true;
