@@ -32,10 +32,9 @@ impl AlasShell {
         let app_config_store =
             AppConfigStore::default_store().expect("failed to resolve app config store");
         let config = app_config_store.load().unwrap_or_default();
-        let model = configured_model(&config);
 
-        Self {
-            model,
+        let mut shell = Self {
+            model: AlasModel::default(),
             config,
             app_config_store,
             add_repository_dialog: None,
@@ -43,7 +42,9 @@ impl AlasShell {
             active_terminal: None,
             git_inspector: None,
             git_inspector_error: None,
-        }
+        };
+        shell.refresh_repositories();
+        shell
     }
 
     fn open_add_repository_dialog(&mut self, cx: &mut Context<Self>) {
@@ -118,13 +119,13 @@ impl AlasShell {
         }
 
         let id = repository_id_for_path(&path);
-        if !self
-            .config
+        let mut next_config = self.config.clone();
+        if !next_config
             .repositories
             .iter()
             .any(|repository| repository.id == id)
         {
-            self.config.repositories.push(AppRepository {
+            next_config.repositories.push(AppRepository {
                 id,
                 path: path.clone(),
                 name: path
@@ -134,11 +135,12 @@ impl AlasShell {
             });
         }
 
-        if let Err(error) = self.app_config_store.save(&self.config) {
+        if let Err(error) = self.app_config_store.save(&next_config) {
             self.set_add_repository_error(error.to_string());
             return;
         }
 
+        self.config = next_config;
         self.add_repository_dialog = None;
         self.refresh_repositories();
     }
@@ -189,10 +191,14 @@ impl AlasShell {
     }
 
     fn remove_repository_from_alas(&mut self, repo_id: &str) -> anyhow::Result<()> {
-        self.config
+        let mut next_config = self.config.clone();
+        next_config
             .repositories
             .retain(|repository| repository.id != repo_id);
-        self.config.archived_worktrees.shift_remove(repo_id);
+        next_config.archived_worktrees.shift_remove(repo_id);
+
+        self.app_config_store.save(&next_config)?;
+        self.config = next_config;
 
         if self
             .model
@@ -202,7 +208,6 @@ impl AlasShell {
             self.clear_selection_and_active_terminal();
         }
 
-        self.app_config_store.save(&self.config)?;
         self.refresh_repositories();
         Ok(())
     }
@@ -215,7 +220,32 @@ impl AlasShell {
     }
 
     fn refresh_repositories(&mut self) {
-        self.model = configured_model(&self.config);
+        let runner = GitRunner::new();
+        let service = GitWorktreeService::new(runner);
+        let mut nodes = Vec::new();
+
+        for repository in &self.config.repositories {
+            match service.list_worktrees(&repository.path) {
+                Ok(worktrees) => nodes.extend(AlasModel::repository_nodes_from_discovery(
+                    &self.config,
+                    &repository.id,
+                    worktrees,
+                )),
+                Err(_) => nodes.push(RepositoryNode {
+                    id: repository.id.clone(),
+                    name: repository
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| infer_repository_name(&repository.path)),
+                    path: repository.path.clone(),
+                    worktrees: Vec::new(),
+                    show_archived: false,
+                    unavailable: true,
+                }),
+            }
+        }
+
+        self.model.set_repositories(nodes);
     }
 
     fn add_repository_error(&self) -> Option<&str> {
@@ -262,29 +292,6 @@ pub fn run() -> anyhow::Result<()> {
     });
 
     Ok(())
-}
-
-fn configured_model(config: &AppConfig) -> AlasModel {
-    let mut model = AlasModel::default();
-    model.set_repositories(
-        config
-            .repositories
-            .iter()
-            .cloned()
-            .map(|repository| RepositoryNode {
-                id: repository.id,
-                name: repository
-                    .name
-                    .unwrap_or_else(|| infer_repository_name(&repository.path)),
-                path: repository.path,
-                show_archived: false,
-                unavailable: false,
-                worktrees: Vec::new(),
-            })
-            .collect(),
-    );
-
-    model
 }
 
 fn infer_repository_name(path: &Path) -> String {

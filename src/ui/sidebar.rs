@@ -88,8 +88,12 @@ fn render_repository(
                 .child(
                     div()
                         .text_sm()
-                        .text_color(rgb(0x2563eb))
-                        .child("+ Worktree"),
+                        .when(repository.unavailable, |element| {
+                            element.text_color(rgb(0xdc2626)).child("Unavailable")
+                        })
+                        .when(!repository.unavailable, |element| {
+                            element.text_color(rgb(0x2563eb)).child("+ Worktree")
+                        }),
                 ),
         )
         .child(
