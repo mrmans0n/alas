@@ -1,8 +1,7 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::{
-    app::{AlasModel, RepositoryNode, WorktreeNode},
-    git::WorktreeKind,
+    app::{AlasModel, RepositoryNode},
     ui::{
         inspector::render_inspector_placeholder, sidebar::render_sidebar,
         terminal_pane::render_terminal_placeholder,
@@ -17,7 +16,7 @@ pub struct AlasShell {
 impl AlasShell {
     fn new() -> Self {
         Self {
-            model: static_model(),
+            model: configured_model(),
         }
     }
 }
@@ -44,40 +43,36 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn static_model() -> AlasModel {
-    let mut model = AlasModel::default();
-    let repo_path = PathBuf::from("/tmp/alas-demo");
+fn configured_model() -> AlasModel {
+    let config = crate::config::AppConfigStore::default_store()
+        .and_then(|store| store.load())
+        .unwrap_or_default();
 
-    model.set_repositories(vec![RepositoryNode {
-        id: "alas-demo".to_string(),
-        name: "alas-demo".to_string(),
-        path: repo_path.clone(),
-        show_archived: false,
-        unavailable: false,
-        worktrees: vec![
-            WorktreeNode {
-                path: repo_path.clone(),
-                branch: Some("main".to_string()),
-                head: Some("abc1234".to_string()),
-                kind: WorktreeKind::Main,
-                archived: false,
-            },
-            WorktreeNode {
-                path: PathBuf::from("/tmp/alas-demo-feature"),
-                branch: Some("feature/three-pane-shell".to_string()),
-                head: Some("def5678".to_string()),
-                kind: WorktreeKind::Linked,
-                archived: false,
-            },
-            WorktreeNode {
-                path: PathBuf::from("/tmp/alas-demo-archived"),
-                branch: None,
-                head: Some("987abcd".to_string()),
-                kind: WorktreeKind::Linked,
-                archived: true,
-            },
-        ],
-    }]);
+    let mut model = AlasModel::default();
+    model.set_repositories(
+        config
+            .repositories
+            .into_iter()
+            .map(|repository| RepositoryNode {
+                id: repository.id,
+                name: repository
+                    .name
+                    .unwrap_or_else(|| infer_repository_name(&repository.path)),
+                path: repository.path,
+                show_archived: false,
+                unavailable: false,
+                worktrees: Vec::new(),
+            })
+            .collect(),
+    );
 
     model
+}
+
+fn infer_repository_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| path.display().to_string())
 }

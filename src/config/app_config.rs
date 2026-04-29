@@ -8,6 +8,16 @@ pub struct AppConfigStore {
 }
 
 impl AppConfigStore {
+    pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
+        let dirs = directories::ProjectDirs::from("dev", "alas", "Alas")
+            .ok_or_else(|| anyhow::anyhow!("failed to resolve app config directory"))?;
+        Ok(dirs.config_dir().join("config.toml"))
+    }
+
+    pub fn default_store() -> anyhow::Result<Self> {
+        Ok(Self::new(Self::default_path()?))
+    }
+
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
