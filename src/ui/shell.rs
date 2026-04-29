@@ -13,8 +13,9 @@ use crate::{
     },
     ui::{
         dialogs::{
-            AddRepositoryDialogState, CommandSettingsDialogState, ConfirmRemoveRepositoryDialog,
-            CreateWorktreeDialogState, CreateWorktreeField,
+            AddRepositoryDialogState, CommandSettingsDialogState, ConfirmPruneWorktreesDialog,
+            ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
+            CreateWorktreeField,
         },
         inspector::render_git_inspector,
         sidebar::render_sidebar,
@@ -44,6 +45,8 @@ pub struct AlasShell {
     command_settings_focus: FocusHandle,
     command_settings_active_field: CommandSettingsField,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
+    confirm_remove_worktree_dialog: Option<ConfirmRemoveWorktreeDialog>,
+    confirm_prune_worktrees_dialog: Option<ConfirmPruneWorktreesDialog>,
     terminal_registry: TerminalSessionRegistry,
     terminal_backend: GhosttyTerminalBackend,
     active_terminal: Option<TerminalSessionRef>,
@@ -69,6 +72,8 @@ impl AlasShell {
             command_settings_focus: cx.focus_handle(),
             command_settings_active_field: CommandSettingsField::DefaultName,
             confirm_remove_repository_dialog: None,
+            confirm_remove_worktree_dialog: None,
+            confirm_prune_worktrees_dialog: None,
             terminal_registry: TerminalSessionRegistry::default(),
             terminal_backend: GhosttyTerminalBackend::new(),
             active_terminal: None,
@@ -654,6 +659,126 @@ impl AlasShell {
         Ok(())
     }
 
+    fn confirm_remove_worktree(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        is_main: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_remove_worktree_dialog = Some(ConfirmRemoveWorktreeDialog {
+            repo_id: repo_id.clone(),
+            path: path.clone(),
+            is_main,
+        });
+
+        if is_main {
+            self.set_add_repository_error(format!(
+                "Cannot remove main worktree: {}",
+                path.display()
+            ));
+            self.confirm_remove_worktree_dialog = None;
+            cx.notify();
+            return;
+        }
+
+        let path_label = path.display().to_string();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Remove Git worktree?",
+            Some(&format!(
+                "This will run git worktree remove for the exact path:\n{path_label}"
+            )),
+            &["Remove", "Cancel"],
+            cx,
+        );
+
+        cx.spawn(async move |this, cx| {
+            let should_remove = answer.await.unwrap_or(1) == 0;
+            this.update(cx, |shell, cx| {
+                if should_remove {
+                    if let Err(error) = shell.remove_worktree(&repo_id, &path) {
+                        shell.set_add_repository_error(error.to_string());
+                    }
+                }
+                shell.confirm_remove_worktree_dialog = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+
+        cx.notify();
+    }
+
+    fn remove_worktree(&mut self, repo_id: &str, path: &Path) -> anyhow::Result<()> {
+        let repo_path = self
+            .repository_path(repo_id)
+            .ok_or_else(|| anyhow::anyhow!("Repository not found"))?;
+
+        GitWorktreeService::new(GitRunner::new()).remove_worktree(&repo_path, path)?;
+
+        if self
+            .model
+            .selected_worktree()
+            .is_some_and(|selected| selected.repo_id == repo_id && selected.path == path)
+        {
+            self.clear_selection_and_active_terminal();
+        }
+
+        self.refresh_repositories();
+        Ok(())
+    }
+
+    fn confirm_prune_worktrees(
+        &mut self,
+        repo_id: String,
+        repo_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_prune_worktrees_dialog = Some(ConfirmPruneWorktreesDialog {
+            repo_id: repo_id.clone(),
+            repo_name: repo_name.clone(),
+        });
+
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Prune stale worktree metadata for {repo_name}?"),
+            Some("This runs git worktree prune. It only prunes stale worktree metadata for worktrees that no longer exist."),
+            &["Prune", "Cancel"],
+            cx,
+        );
+
+        cx.spawn(async move |this, cx| {
+            let should_prune = answer.await.unwrap_or(1) == 0;
+            this.update(cx, |shell, cx| {
+                if should_prune {
+                    if let Err(error) = shell.prune_worktrees(&repo_id) {
+                        shell.set_add_repository_error(error.to_string());
+                    }
+                }
+                shell.confirm_prune_worktrees_dialog = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+
+        cx.notify();
+    }
+
+    fn prune_worktrees(&mut self, repo_id: &str) -> anyhow::Result<()> {
+        let repo_path = self
+            .repository_path(repo_id)
+            .ok_or_else(|| anyhow::anyhow!("Repository not found"))?;
+
+        GitWorktreeService::new(GitRunner::new()).prune_worktrees(&repo_path)?;
+        self.refresh_repositories();
+        Ok(())
+    }
+
     fn set_show_archived(&mut self, repo_id: &str, show: bool) {
         self.model.set_show_archived(repo_id, show);
     }
@@ -829,6 +954,17 @@ impl Render for AlasShell {
             .ok();
         };
         let view = cx.entity().downgrade();
+        let on_prune_worktrees = move |repo_id: String,
+                                       repo_name: String,
+                                       _event: &gpui::ClickEvent,
+                                       window: &mut Window,
+                                       app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.confirm_prune_worktrees(repo_id, repo_name, window, cx);
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
         let on_create_worktree = move |repo_id: String,
                                        _event: &gpui::ClickEvent,
                                        _window: &mut Window,
@@ -901,6 +1037,18 @@ impl Render for AlasShell {
             .ok();
         };
         let view = cx.entity().downgrade();
+        let on_remove_worktree = move |repo_id: String,
+                                       path: PathBuf,
+                                       is_main: bool,
+                                       _event: &gpui::ClickEvent,
+                                       window: &mut Window,
+                                       app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.confirm_remove_worktree(repo_id, path, is_main, window, cx);
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
         let on_select_create_worktree_field =
             move |field: CreateWorktreeField,
                   _event: &gpui::ClickEvent,
@@ -968,12 +1116,14 @@ impl Render for AlasShell {
                 self.model.repositories(),
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
                 on_remove_repository,
+                on_prune_worktrees,
                 on_create_worktree,
                 on_command_settings,
                 on_select_worktree,
                 on_toggle_show_archived,
                 on_archive_worktree,
                 on_unarchive_worktree,
+                on_remove_worktree,
                 self.add_repository_error(),
             ))
             .child(

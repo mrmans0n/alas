@@ -110,3 +110,16 @@ pub struct ConfirmRemoveRepositoryDialog {
     pub repo_id: String,
     pub repo_name: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct ConfirmRemoveWorktreeDialog {
+    pub repo_id: String,
+    pub path: PathBuf,
+    pub is_main: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfirmPruneWorktreesDialog {
+    pub repo_id: String,
+    pub repo_name: String,
+}
