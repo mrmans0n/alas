@@ -118,10 +118,13 @@ fn render_tab_button(
 
 fn render_files_tab(state: &InspectorPaneState) -> AnyElement {
     div()
+        .id("inspector-files-scroll")
         .flex()
         .flex_col()
+        .flex_1()
+        .min_h(px(0.0))
         .gap_2()
-        .overflow_hidden()
+        .overflow_scroll()
         .when(state.files_error.is_some(), |element| {
             element.child(warning_text(
                 "Files tree load failed",
@@ -173,9 +176,13 @@ fn render_file_node(node: &FileTreeNode, depth: usize) -> impl IntoElement {
 
 fn render_changes_tab(state: &InspectorPaneState) -> AnyElement {
     div()
+        .id("inspector-changes-scroll")
         .flex()
         .flex_col()
+        .flex_1()
+        .min_h(px(0.0))
         .gap_2()
+        .overflow_scroll()
         .when(state.changes_error.is_some(), |element| {
             element.child(warning_text(
                 "Git changes refresh failed",

@@ -32,6 +32,7 @@
 7. Resize: run `stty size`, resize the Alas window, then run `stty size` again and confirm rows/columns changed.
 8. AI agent: run `claude` or `codex` if installed; confirm long output survives tab/worktree switches.
 9. Known limitation: Option/Alt behavior may depend on terminal/input settings; verify common Meta movement only if configured for the test environment.
+10. Known limitation: alternate-screen mouse/wheel events are not translated into terminal mouse reports yet.
 
 ## Files and Changes Inspector
 

@@ -274,6 +274,10 @@ fn terminal_input_maps_basic_control_keys() {
         vec![0x1b]
     );
     assert_eq!(
+        terminal_input_bytes(&key_down("delete")).unwrap(),
+        b"\x1b[3~"
+    );
+    assert_eq!(
         terminal_input_bytes(&key_down("ctrl-c")).unwrap(),
         vec![0x03]
     );

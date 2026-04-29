@@ -53,6 +53,7 @@ fn unmodified_or_control_input_bytes(keystroke: &Keystroke) -> Option<Vec<u8>> {
     match keystroke.key.as_str() {
         "enter" => Some(b"\r".to_vec()),
         "backspace" => Some(vec![0x7f]),
+        "delete" => Some(b"\x1b[3~".to_vec()),
         "tab" => Some(b"\t".to_vec()),
         "escape" => Some(vec![0x1b]),
         "up" => Some(b"\x1b[A".to_vec()),
