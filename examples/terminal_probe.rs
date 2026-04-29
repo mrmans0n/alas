@@ -1,7 +1,7 @@
 use gpui::{
     App, Application, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Render, ScrollDelta, Window, WindowOptions,
-    canvas, div, fill, point, prelude::*, px, rgb, size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Render, ScrollDelta, Window,
+    WindowOptions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use std::time::Duration;
 
@@ -12,7 +12,9 @@ struct TerminalProbe {
     last_scroll: String,
     right_clicks: usize,
     mouse_downs: usize,
+    mouse_ups: usize,
     mouse_moves: usize,
+    captured_drag_moves: usize,
     last_mouse: String,
     copied: usize,
     ticks: usize,
@@ -27,7 +29,9 @@ impl TerminalProbe {
             last_scroll: "none".to_string(),
             right_clicks: 0,
             mouse_downs: 0,
+            mouse_ups: 0,
             mouse_moves: 0,
+            captured_drag_moves: 0,
             last_mouse: "none".to_string(),
             copied: 0,
             ticks: 0,
@@ -143,6 +147,22 @@ impl Render for TerminalProbe {
             },
         );
 
+        let on_mouse_up = cx.listener(
+            |probe, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>| {
+                probe.mouse_ups += 1;
+                probe.last_mouse = format!(
+                    "up={:?} at=({:.1},{:.1}) mods={:?}",
+                    event.button,
+                    event.position.x.to_f64(),
+                    event.position.y.to_f64(),
+                    event.modifiers
+                );
+                cx.notify();
+            },
+        );
+
+        let drag_capture_entity = cx.entity();
+
         div()
             .size_full()
             .bg(rgb(0x101216))
@@ -152,26 +172,49 @@ impl Render for TerminalProbe {
             .on_key_down(on_key)
             .on_scroll_wheel(on_scroll)
             .on_any_mouse_down(on_mouse_down)
+            .capture_any_mouse_up(on_mouse_up)
             .on_mouse_move(on_mouse_move)
             .child(
                 div()
                     .p_4()
                     .child(format!(
-                        "ticks={} last_key={} scrolls={} last_scroll={} right_clicks={} mouse_downs={} mouse_moves={} last_mouse={} clipboard_copies={} focus=click surface then type/scroll/drag/right-click; secondary+C copies probe text",
+                        "ticks={} last_key={} scrolls={} last_scroll={} right_clicks={} mouse_downs={} mouse_ups={} mouse_moves={} captured_drag_moves={} last_mouse={} clipboard_copies={} focus=click surface then type/scroll/drag/right-click; secondary+C copies probe text",
                         self.ticks,
                         self.last_key,
                         self.scroll_events,
                         self.last_scroll,
                         self.right_clicks,
                         self.mouse_downs,
+                        self.mouse_ups,
                         self.mouse_moves,
+                        self.captured_drag_moves,
                         self.last_mouse,
                         self.copied,
                     )),
             )
             .child(
                 canvas(
-                    |_bounds, _window, _cx: &mut App| (),
+                    move |_bounds, window, _cx: &mut App| {
+                        window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
+                            if !event.dragging() {
+                                return;
+                            }
+
+                            let last_mouse = format!(
+                                "captured_drag at=({:.1},{:.1}) pressed={:?} mods={:?}",
+                                event.position.x.to_f64(),
+                                event.position.y.to_f64(),
+                                event.pressed_button,
+                                event.modifiers
+                            );
+
+                            drag_capture_entity.update(cx, |probe, cx| {
+                                probe.captured_drag_moves += 1;
+                                probe.last_mouse = last_mouse;
+                                cx.notify();
+                            });
+                        });
+                    },
                     |bounds: Bounds<gpui::Pixels>, (), window: &mut Window, _cx: &mut App| {
                         let cell_w = px(12.0);
                         let cell_h = px(20.0);
