@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppConfig {
@@ -103,6 +103,13 @@ impl ResolvedRepoConfig {
             .get(&self.default_command_name)
             .expect("default command name must reference an available command")
     }
+}
+
+pub fn repository_id_for_path(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .replace(['/', '\\', ':'], "_")
 }
 
 fn ensure_fallback_command(commands: &mut IndexMap<String, CommandEntry>) {

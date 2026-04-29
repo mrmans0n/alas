@@ -109,6 +109,10 @@ impl AlasModel {
         self.selected.as_ref()
     }
 
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+    }
+
     pub fn set_show_archived(&mut self, repo_id: &str, show: bool) {
         if let Some(repository) = self
             .repositories
