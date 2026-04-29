@@ -34,6 +34,17 @@
 9. Known limitation: Option/Alt behavior may depend on terminal/input settings; verify common Meta movement only if configured for the test environment.
 10. Known limitation: alternate-screen mouse/wheel events are not translated into terminal mouse reports yet.
 
+### Ghostty-first Canvas Renderer
+
+1. Claude Code: run `claude`; prompt area, status bars, input field, and backgrounds render without chopped bars or mismatched trailing backgrounds.
+2. Vim/nvim: open editor, enter insert mode, type, move cursor, quit without saving.
+3. Less alternate screen: run `less README.md`, scroll, quit, and confirm shell screen returns.
+4. htop/top: run a live TUI, verify repaint stability, quit.
+5. Colors: run 16/256/truecolor scripts and verify backgrounds extend through padded regions.
+6. Wide text: print CJK text, emoji, and box drawing; verify columns remain aligned.
+7. Mouse: verify shell scrollback still works; in mouse-aware TUIs, verify clicks/wheel are sent when supported.
+8. Resize: run `stty size`, resize the window, run `stty size` again, confirm cell size changed correctly.
+
 ## Files and Changes Inspector
 
 1. Files tab shows worktree files.
