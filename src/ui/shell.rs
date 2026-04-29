@@ -6,7 +6,7 @@ use crate::{
         AppConfig, AppConfigStore, AppRepository, RepoConfigStore, ResolvedRepoConfig,
         repository_id_for_path,
     },
-    git::{GitRunner, GitWorktreeService},
+    git::{GitInspectorService, GitInspectorState, GitRunner, GitWorktreeService},
     terminal::{
         CommandSpec, GhosttyTerminalBackend, TerminalSessionId, TerminalSessionRef,
         TerminalSessionRegistry,
@@ -16,7 +16,7 @@ use crate::{
             AddRepositoryDialogState, CommandSettingsDialogState, ConfirmRemoveRepositoryDialog,
             CreateWorktreeDialogState, CreateWorktreeField,
         },
-        inspector::render_inspector_placeholder,
+        inspector::render_git_inspector,
         sidebar::render_sidebar,
         terminal_pane::render_terminal_placeholder,
     },
@@ -48,7 +48,7 @@ pub struct AlasShell {
     terminal_backend: GhosttyTerminalBackend,
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
-    git_inspector: Option<()>,
+    git_inspector: Option<GitInspectorState>,
     git_inspector_error: Option<String>,
 }
 
@@ -222,7 +222,7 @@ impl AlasShell {
         }
     }
 
-    fn edit_create_worktree_field(&mut self, event: &KeyDownEvent) -> bool {
+    fn edit_create_worktree_field(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         if self.create_worktree_dialog.is_none() {
             return false;
         }
@@ -233,7 +233,7 @@ impl AlasShell {
                 return true;
             }
             "enter" => {
-                self.create_worktree_from_dialog();
+                self.create_worktree_from_dialog(cx);
                 return true;
             }
             "tab" => {
@@ -465,7 +465,7 @@ impl AlasShell {
         }
     }
 
-    fn create_worktree_from_dialog(&mut self) {
+    fn create_worktree_from_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.create_worktree_dialog.clone() else {
             return;
         };
@@ -494,11 +494,15 @@ impl AlasShell {
 
         self.refresh_repositories();
         self.create_worktree_dialog = None;
-        self.select_worktree(dialog.repo_id.clone(), target_path);
+        self.select_worktree(dialog.repo_id.clone(), target_path, cx);
     }
 
-    fn select_worktree(&mut self, repo_id: String, path: PathBuf) {
+    fn select_worktree(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
         self.model.select_worktree(repo_id.clone(), path.clone());
+        self.git_inspector = None;
+        self.git_inspector_error = None;
+        self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
+
         let command = self.resolve_default_command(&repo_id, path.clone());
         let id = TerminalSessionId::new(repo_id, path);
 
@@ -515,6 +519,43 @@ impl AlasShell {
                 self.terminal_error = Some(error.to_string());
             }
         }
+    }
+
+    fn refresh_git_inspector(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
+        let selected_repo_id = repo_id;
+        let selected_path = path.clone();
+        let task = cx.background_executor().spawn(async move {
+            GitInspectorService::new(GitRunner::new())
+                .inspect(&path, 8)
+                .map_err(|error| error.to_string())
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |shell, cx| {
+                let is_current_selection =
+                    shell.model.selected_worktree().is_some_and(|selected| {
+                        selected.repo_id == selected_repo_id && selected.path == selected_path
+                    });
+                if !is_current_selection {
+                    return;
+                }
+
+                match result {
+                    Ok(state) => {
+                        shell.git_inspector = Some(state);
+                        shell.git_inspector_error = None;
+                    }
+                    Err(error) => {
+                        shell.git_inspector = None;
+                        shell.git_inspector_error = Some(error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn resolve_default_command(&self, repo_id: &str, worktree_path: PathBuf) -> CommandSpec {
@@ -814,7 +855,7 @@ impl Render for AlasShell {
                                        _window: &mut Window,
                                        app: &mut App| {
             view.update(app, |shell, cx| {
-                shell.select_worktree(repo_id, path);
+                shell.select_worktree(repo_id, path, cx);
                 cx.notify();
             })
             .ok();
@@ -873,7 +914,7 @@ impl Render for AlasShell {
                 .ok();
             };
         let on_submit_create_worktree = cx.listener(|shell, _event, _window, cx| {
-            shell.create_worktree_from_dialog();
+            shell.create_worktree_from_dialog(cx);
             cx.notify();
         });
         let on_cancel_create_worktree = cx.listener(|shell, _event, _window, cx| {
@@ -882,7 +923,7 @@ impl Render for AlasShell {
         });
         let on_create_worktree_key_down =
             cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
-                if shell.edit_create_worktree_field(event) {
+                if shell.edit_create_worktree_field(event, cx) {
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -1194,7 +1235,11 @@ impl Render for AlasShell {
                         self.terminal_error.as_deref(),
                     )),
             )
-            .child(render_inspector_placeholder())
+            .child(render_git_inspector(
+                self.model.selected_worktree(),
+                self.git_inspector.as_ref(),
+                self.git_inspector_error.as_deref(),
+            ))
     }
 }
 
