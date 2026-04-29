@@ -591,6 +591,12 @@ impl AlasShell {
             return;
         };
 
+        let target_path = if target_path.is_absolute() {
+            target_path
+        } else {
+            repo_path.join(target_path)
+        };
+
         let service = GitWorktreeService::new(GitRunner::new());
         if let Err(error) = service.create_worktree(
             &repo_path,
