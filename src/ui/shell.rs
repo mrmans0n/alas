@@ -191,7 +191,14 @@ impl AlasShell {
             .terminal_backend
             .render_frame(session.backend_session, viewport)
         {
-            Ok(frame) => Some(frame),
+            Ok(frame) => {
+                self.terminal_scroll_offset_rows = match frame.screen_mode {
+                    TerminalScreenMode::Main => frame.viewport.scroll_offset_rows,
+                    TerminalScreenMode::Alternate => 0,
+                };
+                self.persist_terminal_scroll_offset(&session.id);
+                Some(frame)
+            }
             Err(error) => {
                 self.mark_terminal_tab_failed(&session.id, error.to_string());
                 None
@@ -2034,8 +2041,13 @@ impl Render for AlasShell {
                 cx.notify();
             }
         });
-        let terminal_screen_mode = TerminalScreenMode::Main;
-        let terminal_scrollback_rows = usize::MAX;
+        let terminal_screen_mode = terminal_frame
+            .as_ref()
+            .map(|frame| frame.screen_mode)
+            .unwrap_or(TerminalScreenMode::Main);
+        let terminal_scrollback_rows = terminal_frame
+            .as_ref()
+            .map_or(0, |frame| frame.scrollback_rows);
         let on_terminal_scroll =
             cx.listener(move |shell, event: &ScrollWheelEvent, _window, cx| {
                 if shell.write_terminal_wheel_input(event)

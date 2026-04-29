@@ -314,6 +314,9 @@ impl VtState {
                 default_background,
                 cursor,
                 rows_data,
+                viewport: bounded_viewport,
+                scrollback_rows,
+                screen_mode,
             })
         })();
         self.terminal.scroll_viewport(ScrollViewport::Bottom);

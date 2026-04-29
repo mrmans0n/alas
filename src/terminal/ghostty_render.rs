@@ -1,4 +1,4 @@
-use super::grid::{TerminalColor, TerminalCursorShape};
+use super::grid::{TerminalColor, TerminalCursorShape, TerminalScreenMode, TerminalViewport};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GhosttyCellStyle {
@@ -73,6 +73,9 @@ pub struct GhosttyRenderFrame {
     pub default_background: TerminalColor,
     pub cursor: Option<GhosttyRenderCursor>,
     pub rows_data: Vec<GhosttyRenderRow>,
+    pub viewport: TerminalViewport,
+    pub scrollback_rows: usize,
+    pub screen_mode: TerminalScreenMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,6 +238,9 @@ mod tests {
             default_foreground: TerminalColor::rgb(255, 255, 255),
             default_background: TerminalColor::rgb(0, 0, 0),
             cursor: None,
+            viewport: TerminalViewport::visible(1),
+            scrollback_rows: 0,
+            screen_mode: TerminalScreenMode::Main,
             rows_data: vec![GhosttyRenderRow {
                 cells: vec![
                     GhosttyRenderCell::narrow("a", GhosttyCellStyle::default()),

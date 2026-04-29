@@ -365,7 +365,8 @@ fn render_color(color: TerminalColor) -> gpui::Rgba {
 mod tests {
     use crate::terminal::{
         GhosttyCellStyle, GhosttyRenderCell, GhosttyRenderCursor, GhosttyRenderFrame,
-        GhosttyRenderRow, TerminalColor, TerminalCursorShape, TerminalMetrics,
+        GhosttyRenderRow, TerminalColor, TerminalCursorShape, TerminalMetrics, TerminalScreenMode,
+        TerminalViewport,
     };
 
     use super::*;
@@ -378,6 +379,9 @@ mod tests {
             default_foreground: TerminalColor::rgb(255, 255, 255),
             default_background: TerminalColor::rgb(0, 0, 0),
             cursor: None,
+            viewport: TerminalViewport::visible(rows),
+            scrollback_rows: 0,
+            screen_mode: TerminalScreenMode::Main,
             rows_data: (0..rows)
                 .map(|_| GhosttyRenderRow {
                     cells: (0..cols)
@@ -402,6 +406,9 @@ mod tests {
             default_foreground: TerminalColor::rgb(255, 255, 255),
             default_background: TerminalColor::rgb(1, 2, 3),
             cursor: None,
+            viewport: TerminalViewport::visible(1),
+            scrollback_rows: 0,
+            screen_mode: TerminalScreenMode::Main,
             rows_data: vec![GhosttyRenderRow {
                 cells: vec![
                     GhosttyRenderCell::narrow("a", GhosttyCellStyle::default()),
