@@ -140,4 +140,8 @@ impl TerminalSessionRegistry {
             .filter_map(|id| self.sessions.remove(&id))
             .collect()
     }
+
+    pub fn remove_all_sessions(&mut self) -> Vec<TerminalSessionRef> {
+        self.sessions.drain().map(|(_, session)| session).collect()
+    }
 }

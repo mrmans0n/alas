@@ -728,3 +728,34 @@ fn registry_starts_one_backend_session_per_terminal_tab() {
     assert_ne!(first.backend_session, second.backend_session);
     assert_eq!(backend.start_count(), 2);
 }
+
+#[test]
+fn remove_all_sessions_drains_registry() {
+    use alas::app::TerminalTabId;
+    use alas::terminal::{
+        CommandSpec, TerminalBackendSession, TerminalSessionId, TerminalSessionRegistry,
+    };
+    use std::path::PathBuf;
+
+    let mut registry = TerminalSessionRegistry::default();
+    let id_one = TerminalSessionId::new("repo", PathBuf::from("/tmp/one"), TerminalTabId(1));
+    let id_two = TerminalSessionId::new("repo", PathBuf::from("/tmp/two"), TerminalTabId(2));
+    let command = CommandSpec::shell_command("echo ok", PathBuf::from("/tmp"));
+
+    registry.attach_existing(
+        id_one.clone(),
+        command.clone(),
+        TerminalBackendSession { backend_id: 1 },
+    );
+    registry.attach_existing(
+        id_two.clone(),
+        command,
+        TerminalBackendSession { backend_id: 2 },
+    );
+
+    let removed = registry.remove_all_sessions();
+
+    assert_eq!(removed.len(), 2);
+    assert!(registry.get(&id_one).is_none());
+    assert!(registry.get(&id_two).is_none());
+}
