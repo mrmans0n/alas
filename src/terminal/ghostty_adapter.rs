@@ -19,7 +19,10 @@ use libghostty_vt::{
 };
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use super::CommandSpec;
+use super::{
+    CommandSpec, TerminalCell, TerminalCursor, TerminalCursorShape, TerminalGridSnapshot,
+    TerminalRow, TerminalScreenMode, TerminalStatus, TerminalViewport,
+};
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
 
@@ -32,15 +35,6 @@ pub struct TerminalBackendSession {
 pub struct TerminalSize {
     pub cols: u16,
     pub rows: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalGridSnapshot {
-    pub size: TerminalSize,
-    pub lines: Vec<String>,
-    pub cursor: Option<(u16, u16)>,
-    pub exited: bool,
-    pub exit_status: Option<i32>,
 }
 
 pub trait TerminalBackend {
@@ -341,13 +335,33 @@ impl TerminalBackend for GhosttyTerminalBackend {
         state.poll_exit()?;
         state.drain_output()?;
         let lines = state.snapshot_lines()?;
-        let cursor = state.cursor()?;
+        let cursor = state.cursor()?.map(|(col, row)| TerminalCursor {
+            col,
+            row,
+            visible: true,
+            shape: TerminalCursorShape::Block,
+        });
+        let status = if state.exited {
+            TerminalStatus::Exited(state.exit_status)
+        } else {
+            TerminalStatus::Running
+        };
         Ok(TerminalGridSnapshot {
             size: state.size,
-            lines,
+            rows: lines
+                .into_iter()
+                .map(|line| TerminalRow {
+                    cells: line
+                        .chars()
+                        .map(|character| TerminalCell::new(character.to_string()))
+                        .collect(),
+                })
+                .collect(),
             cursor,
-            exited: state.exited,
-            exit_status: state.exit_status,
+            status,
+            viewport: TerminalViewport::visible(state.size.rows),
+            scrollback_rows: 0,
+            screen_mode: TerminalScreenMode::Main,
         })
     }
 

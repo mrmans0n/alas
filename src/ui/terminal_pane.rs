@@ -76,10 +76,10 @@ pub fn render_terminal_pane(
                                     .display()
                             ))
                             .when(
-                                snapshot.is_some_and(|snapshot| snapshot.exited),
+                                snapshot.is_some_and(|snapshot| snapshot.exited()),
                                 |element| {
                                     let status = snapshot
-                                        .and_then(|snapshot| snapshot.exit_status)
+                                        .and_then(|snapshot| snapshot.exit_status())
                                         .map(|status| status.to_string())
                                         .unwrap_or_else(|| "unknown".to_string());
                                     element.child(
@@ -104,7 +104,7 @@ pub fn render_terminal_pane(
                                 },
                             ),
                     )
-                    .when(snapshot.is_some_and(|snapshot| snapshot.exited), |element| {
+                    .when(snapshot.is_some_and(|snapshot| snapshot.exited()), |element| {
                         element.child(
                             div()
                                 .p_3()
@@ -124,7 +124,7 @@ pub fn render_terminal_pane(
                             .line_height(gpui::px(18.0))
                             .child(
                                 snapshot
-                                    .map(|snapshot| snapshot.lines.join("\n"))
+                                    .map(|snapshot| snapshot.plain_lines().join("\n"))
                                     .filter(|output| !output.is_empty())
                                     .map(SharedString::from)
                                     .unwrap_or_else(|| SharedString::from(" ")),

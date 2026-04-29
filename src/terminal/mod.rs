@@ -1,9 +1,13 @@
 pub mod ghostty_adapter;
+pub mod grid;
 pub mod session;
 
 pub use ghostty_adapter::{
-    GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession, TerminalGridSnapshot,
-    TerminalSize,
+    GhosttyTerminalBackend, TerminalBackend, TerminalBackendSession, TerminalSize,
+};
+pub use grid::{
+    TerminalCell, TerminalCellStyle, TerminalColor, TerminalCursor, TerminalCursorShape,
+    TerminalGridSnapshot, TerminalRow, TerminalScreenMode, TerminalStatus, TerminalViewport,
 };
 pub use session::{
     CommandSpec, TerminalHandle, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
