@@ -1,6 +1,7 @@
 mod support;
 
 use alas::git::{GitInspectorService, GitRunner, GitWorktreeService, WorktreeKind};
+use tempfile::tempdir;
 
 #[test]
 fn test_repo_helper_creates_valid_repo() {
@@ -47,6 +48,22 @@ fn inspector_reports_changed_files_and_recent_commits() {
             .iter()
             .any(|c| c.summary.contains("initial"))
     );
+}
+
+#[test]
+fn inspector_changes_succeeds_when_git_log_would_fail() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("repo");
+    std::fs::create_dir(&path).unwrap();
+    support::git_repo::run(&path, &["init", "--initial-branch", "main"]);
+    std::fs::write(path.join("README.md"), "uncommitted\n").unwrap();
+
+    let inspector = GitInspectorService::new(GitRunner::new());
+    let state = inspector.inspect_changes(&path).unwrap();
+
+    assert_eq!(state.branch.as_deref(), Some("main"));
+    assert!(state.changed_files.iter().any(|f| f.path == "README.md"));
+    assert!(state.recent_commits.is_empty());
 }
 
 #[test]

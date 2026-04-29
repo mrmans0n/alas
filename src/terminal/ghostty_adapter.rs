@@ -5,22 +5,31 @@
 //! libghostty-rs integration belongs behind this module boundary.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use anyhow::Context;
+#[cfg(not(feature = "ghostty-vt"))]
+compile_error!("Alas V1 requires the ghostty-vt feature for terminal rendering");
 #[cfg(feature = "ghostty-vt")]
 use libghostty_vt::{
-    RenderState, Terminal, TerminalOptions,
+    RenderState, Terminal, TerminalOptions, ffi,
     render::{CellIterator, RowIterator},
+    terminal::ScrollViewport,
 };
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use super::CommandSpec;
+use super::{
+    CommandSpec, TerminalCell, TerminalCellStyle, TerminalColor, TerminalCursor,
+    TerminalCursorShape, TerminalGridSnapshot, TerminalRow, TerminalScreenMode, TerminalStatus,
+    TerminalViewport,
+};
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
-const MAX_FALLBACK_OUTPUT_BYTES: usize = 1024 * 1024;
+const MAX_SCROLLBACK_ROWS: usize = 10_000;
+
+type PtyReadErrorState = Arc<Mutex<Option<String>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalBackendSession {
@@ -33,27 +42,25 @@ pub struct TerminalSize {
     pub rows: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalGridSnapshot {
-    pub size: TerminalSize,
-    pub lines: Vec<String>,
-    pub cursor: Option<(u16, u16)>,
-    pub exited: bool,
-    pub exit_status: Option<i32>,
-}
-
 pub trait TerminalBackend {
     fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession>;
     fn write_input(&mut self, session: TerminalBackendSession, bytes: &[u8]) -> anyhow::Result<()>;
     fn resize(&mut self, session: TerminalBackendSession, size: TerminalSize)
     -> anyhow::Result<()>;
-    fn snapshot(&mut self, session: TerminalBackendSession)
-    -> anyhow::Result<TerminalGridSnapshot>;
+    fn snapshot(
+        &mut self,
+        session: TerminalBackendSession,
+        viewport: TerminalViewport,
+    ) -> anyhow::Result<TerminalGridSnapshot>;
     fn has_exited(&mut self, session: TerminalBackendSession) -> anyhow::Result<bool>;
     fn restart(
         &mut self,
         session: TerminalBackendSession,
     ) -> anyhow::Result<TerminalBackendSession>;
+
+    fn stop(&mut self, _session: TerminalBackendSession) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(feature = "ghostty-vt")]
@@ -64,9 +71,6 @@ struct VtState {
     cell_iter: CellIterator<'static>,
 }
 
-#[cfg(not(feature = "ghostty-vt"))]
-struct VtState;
-
 #[cfg(feature = "ghostty-vt")]
 impl VtState {
     fn new(size: TerminalSize) -> anyhow::Result<Self> {
@@ -74,7 +78,7 @@ impl VtState {
             terminal: Terminal::new(TerminalOptions {
                 cols: size.cols,
                 rows: size.rows,
-                max_scrollback: 0,
+                max_scrollback: MAX_SCROLLBACK_ROWS,
             })
             .context("create Ghostty VT terminal")?,
             render_state: RenderState::new().context("create Ghostty VT render state")?,
@@ -93,69 +97,157 @@ impl VtState {
             .context("resize Ghostty VT terminal")
     }
 
-    fn snapshot_lines(&mut self) -> anyhow::Result<Option<Vec<String>>> {
-        let snapshot = self
-            .render_state
-            .update(&self.terminal)
-            .context("update Ghostty VT render state")?;
-        let mut rows = self
-            .row_iter
-            .update(&snapshot)
-            .context("iterate Ghostty VT render rows")?;
-        let mut lines = Vec::new();
+    fn snapshot_rows(&mut self, viewport: TerminalViewport) -> anyhow::Result<VtSnapshotRows> {
+        let screen_mode = self.screen_mode()?;
+        let raw_scrollback_rows = self
+            .terminal
+            .scrollback_rows()
+            .context("read Ghostty VT scrollback row count")?;
+        let scrollback_rows = match screen_mode {
+            TerminalScreenMode::Main => raw_scrollback_rows,
+            TerminalScreenMode::Alternate => 0,
+        };
+        let terminal_rows = self
+            .terminal
+            .rows()
+            .context("read Ghostty VT terminal row count")?;
+        let bounded_viewport = viewport.clamped(scrollback_rows, terminal_rows);
 
-        while let Some(row) = rows.next() {
-            let mut cells = self
-                .cell_iter
-                .update(row)
-                .context("iterate Ghostty VT render cells")?;
-            let mut line = String::new();
-            while let Some(cell) = cells.next() {
-                for grapheme in cell
-                    .graphemes()
-                    .context("read Ghostty VT render cell graphemes")?
-                {
-                    if grapheme != '\0' {
-                        line.push(grapheme);
-                    }
-                }
-            }
-            lines.push(line.trim_end().to_string());
+        self.terminal.scroll_viewport(ScrollViewport::Bottom);
+        if bounded_viewport.scroll_offset_rows > 0 {
+            let delta = isize::try_from(bounded_viewport.scroll_offset_rows)
+                .context("convert Ghostty VT scrollback offset to viewport delta")?;
+            self.terminal.scroll_viewport(ScrollViewport::Delta(-delta));
         }
 
-        Ok(Some(lines))
+        let result = (|| -> anyhow::Result<(Vec<TerminalRow>, Option<TerminalCursor>)> {
+            let snapshot = self
+                .render_state
+                .update(&self.terminal)
+                .context("update Ghostty VT render state")?;
+            let cursor = snapshot
+                .cursor_viewport()
+                .context("read Ghostty VT cursor viewport")?
+                .map(|cursor| TerminalCursor {
+                    col: cursor.x,
+                    row: cursor.y,
+                    visible: true,
+                    shape: TerminalCursorShape::Block,
+                });
+            let mut rows = self
+                .row_iter
+                .update(&snapshot)
+                .context("iterate Ghostty VT render rows")?;
+            let mut terminal_rows = Vec::new();
+
+            while let Some(row) = rows.next() {
+                let mut cells = self
+                    .cell_iter
+                    .update(row)
+                    .context("iterate Ghostty VT render cells")?;
+                let mut row_cells = Vec::new();
+                while let Some(cell) = cells.next() {
+                    let text: String = cell
+                        .graphemes()
+                        .context("read Ghostty VT render cell graphemes")?
+                        .into_iter()
+                        .filter(|grapheme| *grapheme != '\0')
+                        .collect();
+                    row_cells.push(TerminalCell {
+                        text,
+                        style: convert_style(cell)?,
+                    });
+                }
+                while row_cells
+                    .last()
+                    .is_some_and(|cell| cell.text.trim().is_empty())
+                {
+                    row_cells.pop();
+                }
+                terminal_rows.push(TerminalRow { cells: row_cells });
+            }
+
+            Ok((terminal_rows, cursor))
+        })();
+        self.terminal.scroll_viewport(ScrollViewport::Bottom);
+
+        let (mut terminal_rows, mut cursor) = result?;
+        let visible_rows = usize::from(bounded_viewport.visible_rows);
+        if terminal_rows.len() > visible_rows {
+            let crop_start = terminal_rows.len() - visible_rows;
+            cursor = cursor.and_then(|cursor| {
+                if usize::from(cursor.row) < crop_start {
+                    None
+                } else {
+                    Some(TerminalCursor {
+                        row: cursor.row - u16::try_from(crop_start).ok()?,
+                        ..cursor
+                    })
+                }
+            });
+            terminal_rows = terminal_rows.split_off(crop_start);
+        }
+
+        Ok(VtSnapshotRows {
+            rows: terminal_rows,
+            cursor,
+            viewport: bounded_viewport,
+            scrollback_rows,
+            screen_mode,
+        })
     }
 
-    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
-        let snapshot = self
-            .render_state
-            .update(&self.terminal)
-            .context("update Ghostty VT render state")?;
-        Ok(snapshot
-            .cursor_viewport()?
-            .map(|cursor| (cursor.x, cursor.y)))
+    fn screen_mode(&self) -> anyhow::Result<TerminalScreenMode> {
+        match self
+            .terminal
+            .active_screen()
+            .context("read Ghostty VT active screen")?
+        {
+            ffi::GhosttyTerminalScreen_GHOSTTY_TERMINAL_SCREEN_PRIMARY => {
+                Ok(TerminalScreenMode::Main)
+            }
+            ffi::GhosttyTerminalScreen_GHOSTTY_TERMINAL_SCREEN_ALTERNATE => {
+                Ok(TerminalScreenMode::Alternate)
+            }
+            screen => anyhow::bail!("unknown Ghostty VT active screen {screen}"),
+        }
     }
 }
 
-#[cfg(not(feature = "ghostty-vt"))]
-impl VtState {
-    fn new(_size: TerminalSize) -> anyhow::Result<Self> {
-        Ok(Self)
-    }
+#[cfg(feature = "ghostty-vt")]
+fn convert_rgb(color: libghostty_vt::style::RgbColor) -> TerminalColor {
+    TerminalColor::rgb(color.r, color.g, color.b)
+}
 
-    fn feed(&mut self, _bytes: &[u8]) {}
+#[cfg(feature = "ghostty-vt")]
+fn convert_style(
+    cell: &libghostty_vt::render::CellIteration<'_, '_>,
+) -> anyhow::Result<TerminalCellStyle> {
+    let style = cell.style().context("read Ghostty cell style")?;
+    Ok(TerminalCellStyle {
+        foreground: cell
+            .fg_color()
+            .context("read Ghostty foreground")?
+            .map(convert_rgb),
+        background: cell
+            .bg_color()
+            .context("read Ghostty background")?
+            .map(convert_rgb),
+        bold: style.bold,
+        italic: style.italic,
+        underline: !matches!(style.underline, libghostty_vt::style::Underline::None),
+        inverse: style.inverse,
+        strikethrough: style.strikethrough,
+    })
+}
 
-    fn resize(&mut self, _size: TerminalSize) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn snapshot_lines(&mut self) -> anyhow::Result<Option<Vec<String>>> {
-        Ok(None)
-    }
-
-    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
-        Ok(None)
-    }
+#[cfg(feature = "ghostty-vt")]
+struct VtSnapshotRows {
+    rows: Vec<TerminalRow>,
+    cursor: Option<TerminalCursor>,
+    viewport: TerminalViewport,
+    scrollback_rows: usize,
+    screen_mode: TerminalScreenMode,
 }
 
 struct BackendSessionState {
@@ -165,7 +257,7 @@ struct BackendSessionState {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     read_buffer: Arc<Mutex<Vec<u8>>>,
-    output: String,
+    read_error: PtyReadErrorState,
     vt: VtState,
     _reader_thread: JoinHandle<()>,
     exited: bool,
@@ -203,30 +295,23 @@ impl BackendSessionState {
 
         if !bytes.is_empty() {
             self.vt.feed(&bytes);
-            append_bounded_string(
-                &mut self.output,
-                &String::from_utf8_lossy(&bytes),
-                MAX_FALLBACK_OUTPUT_BYTES,
-            );
         }
         Ok(())
     }
 
-    fn snapshot_lines(&mut self) -> anyhow::Result<Vec<String>> {
-        if let Some(lines) = self.vt.snapshot_lines()? {
-            return Ok(lines);
+    fn fail_on_read_error(&self) -> anyhow::Result<()> {
+        let read_error = self
+            .read_error
+            .lock()
+            .map_err(|_| anyhow::anyhow!("terminal backend reader error lock poisoned"))?;
+        if let Some(read_error) = read_error.as_deref() {
+            anyhow::bail!("{read_error}");
         }
-
-        Ok(self
-            .output
-            .replace('\r', "")
-            .lines()
-            .map(ToString::to_string)
-            .collect())
+        Ok(())
     }
 
-    fn cursor(&mut self) -> anyhow::Result<Option<(u16, u16)>> {
-        self.vt.cursor()
+    fn snapshot_rows(&mut self, viewport: TerminalViewport) -> anyhow::Result<VtSnapshotRows> {
+        self.vt.snapshot_rows(viewport)
     }
 }
 
@@ -248,11 +333,19 @@ impl GhosttyTerminalBackend {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-impl TerminalBackend for GhosttyTerminalBackend {
-    fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
-        let size = TerminalSize { cols: 80, rows: 24 };
+    fn start_with_size(
+        &mut self,
+        command: CommandSpec,
+        size: TerminalSize,
+    ) -> anyhow::Result<TerminalBackendSession> {
+        let vt = VtState::new(size).with_context(|| {
+            format!(
+                "initialize terminal renderer for command '{}' in cwd {}",
+                command.display,
+                command.cwd.display()
+            )
+        })?;
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -295,8 +388,16 @@ impl TerminalBackend for GhosttyTerminalBackend {
             )
         })?;
         let read_buffer = Arc::new(Mutex::new(Vec::new()));
+        let read_error = Arc::new(Mutex::new(None));
         let reader_buffer = Arc::clone(&read_buffer);
-        let reader_thread = std::thread::spawn(move || read_pty_output(reader, reader_buffer));
+        let reader_error = Arc::clone(&read_error);
+        let reader_context = PtyReadContext {
+            command_display: command.display.clone(),
+            cwd_display: command.cwd.display().to_string(),
+        };
+        let reader_thread = std::thread::spawn(move || {
+            read_pty_output(reader, reader_buffer, reader_error, reader_context)
+        });
 
         self.next_id += 1;
         let session = TerminalBackendSession {
@@ -311,14 +412,20 @@ impl TerminalBackend for GhosttyTerminalBackend {
                 writer,
                 child,
                 read_buffer,
-                output: String::new(),
-                vt: VtState::new(size)?,
+                read_error,
+                vt,
                 _reader_thread: reader_thread,
                 exited: false,
                 exit_status: None,
             },
         );
         Ok(session)
+    }
+}
+
+impl TerminalBackend for GhosttyTerminalBackend {
+    fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
+        self.start_with_size(command, TerminalSize { cols: 80, rows: 24 })
     }
 
     fn write_input(&mut self, session: TerminalBackendSession, bytes: &[u8]) -> anyhow::Result<()> {
@@ -373,20 +480,28 @@ impl TerminalBackend for GhosttyTerminalBackend {
     fn snapshot(
         &mut self,
         session: TerminalBackendSession,
+        viewport: TerminalViewport,
     ) -> anyhow::Result<TerminalGridSnapshot> {
         let state = self.sessions.get_mut(&session.backend_id).ok_or_else(|| {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
         state.poll_exit()?;
         state.drain_output()?;
-        let lines = state.snapshot_lines()?;
-        let cursor = state.cursor()?;
+        state.fail_on_read_error()?;
+        let vt_snapshot = state.snapshot_rows(viewport)?;
+        let status = if state.exited {
+            TerminalStatus::Exited(state.exit_status)
+        } else {
+            TerminalStatus::Running
+        };
         Ok(TerminalGridSnapshot {
             size: state.size,
-            lines,
-            cursor,
-            exited: state.exited,
-            exit_status: state.exit_status,
+            rows: vt_snapshot.rows,
+            cursor: vt_snapshot.cursor,
+            status,
+            viewport: vt_snapshot.viewport,
+            scrollback_rows: vt_snapshot.scrollback_rows,
+            screen_mode: vt_snapshot.screen_mode,
         })
     }
 
@@ -401,16 +516,36 @@ impl TerminalBackend for GhosttyTerminalBackend {
         &mut self,
         session: TerminalBackendSession,
     ) -> anyhow::Result<TerminalBackendSession> {
-        let state = self.sessions.remove(&session.backend_id).ok_or_else(|| {
+        let (command, size) = {
+            let state = self.sessions.get(&session.backend_id).ok_or_else(|| {
+                anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+            })?;
+            (state.command.clone(), state.size)
+        };
+        let restarted = self.start_with_size(command, size)?;
+        self.sessions.remove(&session.backend_id);
+        Ok(restarted)
+    }
+
+    fn stop(&mut self, session: TerminalBackendSession) -> anyhow::Result<()> {
+        self.sessions.remove(&session.backend_id).ok_or_else(|| {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
-        let command = state.command.clone();
-        drop(state);
-        self.start(command)
+        Ok(())
     }
 }
 
-fn read_pty_output(mut reader: Box<dyn Read + Send>, read_buffer: Arc<Mutex<Vec<u8>>>) {
+struct PtyReadContext {
+    command_display: String,
+    cwd_display: String,
+}
+
+fn read_pty_output(
+    mut reader: Box<dyn Read + Send>,
+    read_buffer: Arc<Mutex<Vec<u8>>>,
+    read_error: PtyReadErrorState,
+    context: PtyReadContext,
+) {
     let mut buffer = [0; 8192];
     loop {
         match reader.read(&mut buffer) {
@@ -419,10 +554,32 @@ fn read_pty_output(mut reader: Box<dyn Read + Send>, read_buffer: Arc<Mutex<Vec<
                 if let Ok(mut output) = read_buffer.lock() {
                     append_bounded_bytes(&mut output, &buffer[..bytes_read], MAX_PENDING_PTY_BYTES);
                 } else {
+                    record_pty_read_error(&read_error, &context, "reader buffer lock poisoned");
                     break;
                 }
             }
-            Err(_) => break,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => {
+                record_pty_read_error(&read_error, &context, error.to_string());
+                break;
+            }
+        }
+    }
+}
+
+fn record_pty_read_error(
+    read_error: &PtyReadErrorState,
+    context: &PtyReadContext,
+    error: impl AsRef<str>,
+) {
+    if let Ok(mut read_error) = read_error.lock() {
+        if read_error.is_none() {
+            *read_error = Some(format!(
+                "read PTY output for command '{}' in cwd {}: {}",
+                context.command_display,
+                context.cwd_display,
+                error.as_ref()
+            ));
         }
     }
 }
@@ -444,15 +601,49 @@ fn append_bounded_bytes(buffer: &mut Vec<u8>, bytes: &[u8], max_len: usize) {
     buffer.extend_from_slice(bytes);
 }
 
-fn append_bounded_string(buffer: &mut String, text: &str, max_len: usize) {
-    buffer.push_str(text);
-    if buffer.len() <= max_len {
-        return;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    struct ReadThenFail {
+        returned_bytes: bool,
     }
 
-    let mut split_at = buffer.len() - max_len;
-    while split_at < buffer.len() && !buffer.is_char_boundary(split_at) {
-        split_at += 1;
+    impl Read for ReadThenFail {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.returned_bytes {
+                return Err(io::Error::new(io::ErrorKind::Other, "PTY reader failed"));
+            }
+
+            self.returned_bytes = true;
+            buffer[..2].copy_from_slice(b"ok");
+            Ok(2)
+        }
     }
-    buffer.drain(..split_at);
+
+    #[test]
+    fn read_pty_output_records_read_errors_with_context() {
+        let read_buffer = Arc::new(Mutex::new(Vec::new()));
+        let read_error = Arc::new(Mutex::new(None));
+        let context = PtyReadContext {
+            command_display: "shell".to_string(),
+            cwd_display: "/repo/worktree".to_string(),
+        };
+
+        read_pty_output(
+            Box::new(ReadThenFail {
+                returned_bytes: false,
+            }),
+            Arc::clone(&read_buffer),
+            Arc::clone(&read_error),
+            context,
+        );
+
+        assert_eq!(read_buffer.lock().unwrap().as_slice(), b"ok");
+        assert_eq!(
+            read_error.lock().unwrap().as_deref(),
+            Some("read PTY output for command 'shell' in cwd /repo/worktree: PTY reader failed")
+        );
+    }
 }

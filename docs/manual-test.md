@@ -1,15 +1,41 @@
 # Alas Manual Test Script
 
-1. Start Alas with `cargo run`.
+## Repository and Worktree Management
+
+1. Start Alas with `PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH" cargo run` if Zig 0.15 is not already on `PATH`; otherwise `cargo run` is sufficient.
 2. Add an existing Git repository.
-3. Confirm its main worktree appears in the sidebar.
-4. Create a new worktree from `HEAD` with branch `alas-manual-test`.
-5. Confirm the new worktree is selected automatically.
-6. Confirm the terminal command starts in the new worktree directory.
-7. Switch back to the main worktree, then back to the new worktree.
-8. Confirm terminal session output is preserved.
-9. Modify a file and confirm the right Git inspector shows it.
-10. Archive the linked worktree and confirm it disappears.
-11. Enable show archived for the repository and unarchive it.
-12. Remove the linked worktree with confirmation.
-13. Prune stale worktrees with confirmation.
+3. Confirm the main worktree and linked worktrees appear in the left navigator.
+4. Create a worktree from the row overflow menu.
+5. Archive and unarchive it from the row overflow menu.
+6. Remove a linked worktree and confirm the destructive prompt.
+7. Prune stale worktrees and confirm the destructive prompt.
+8. Open command settings and configure at least two commands.
+
+## Terminal Tabs
+
+1. Select a worktree.
+2. Confirm the default terminal tab starts in that worktree.
+3. Create a second terminal tab from the configured-command picker.
+4. Switch tabs and confirm output/process state is preserved.
+5. Switch worktrees and return; confirm tabs still exist for the original worktree.
+6. For a short-lived or failed command tab, confirm the final screen remains visible with exited/failed status plus Restart or Retry controls.
+7. For startup failure, temporarily make a disposable worktree path unavailable; confirm the failed tab shows command, cwd, cause, Retry, and Edit Command, then restore the path and retry.
+
+## Terminal Emulator Behavior
+
+1. Shell basics: type, edit prompt, arrows/history, backspace/delete, Tab, Escape, and Ctrl-C.
+2. ANSI colors: run a 16/256/truecolor color script and confirm no raw escape sequences.
+3. Scrollback: run `yes | head -1000`, then scroll with trackpad/mouse.
+4. Alternate screen: run `less README.md` and quit.
+5. Editor: run `vim` or `nvim`, type text, then quit without saving.
+6. Live TUI: run `top` or `htop`, then quit.
+7. Resize: run `stty size`, resize the Alas window, then run `stty size` again and confirm rows/columns changed.
+8. AI agent: run `claude` or `codex` if installed; confirm long output survives tab/worktree switches.
+9. Known limitation: Option/Alt behavior may depend on terminal/input settings; verify common Meta movement only if configured for the test environment.
+10. Known limitation: alternate-screen mouse/wheel events are not translated into terminal mouse reports yet.
+
+## Files and Changes Inspector
+
+1. Files tab shows worktree files.
+2. Changes tab shows modified/untracked files.
+3. File loading errors do not break terminal input.

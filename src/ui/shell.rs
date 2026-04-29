@@ -4,31 +4,43 @@ use std::{
 };
 
 use crate::{
-    app::{AlasModel, RepositoryNode},
-    config::{
-        AppConfig, AppConfigStore, AppRepository, RepoConfigStore, ResolvedRepoConfig,
-        repository_id_for_path,
+    app::{
+        ActionId, AlasModel, InspectorPaneState, InspectorTab, RepositoryNode, TerminalTabId,
+        TerminalTabKind, TerminalTabStatus, WorkspaceSession,
     },
-    git::{GitInspectorService, GitInspectorState, GitRunner, GitWorktreeService},
+    config::{
+        AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
+        ResolvedRepoConfig, repository_id_for_path,
+    },
+    git::{GitInspectorService, GitRunner, GitWorktreeService},
+    project::FileTreeService,
     terminal::{
         CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
-        TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry, TerminalSize,
+        TerminalScreenMode, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
+        TerminalSize, TerminalStatus, TerminalViewport, terminal_input_bytes,
     },
     ui::{
+        command_picker::render_command_picker,
         dialogs::{
             AddRepositoryDialogState, CommandSettingsDialogState, ConfirmPruneWorktreesDialog,
             ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
             CreateWorktreeField,
         },
-        inspector::render_git_inspector,
-        sidebar::render_sidebar,
+        inspector::render_project_inspector,
+        sidebar::{SidebarMenuState, render_sidebar},
         terminal_pane::render_terminal_pane,
+        terminal_view::terminal_size_from_pixels,
+        theme::{APP_BG, DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED},
+        workspace::render_workspace,
     },
 };
 use gpui::{
-    App, Application, Context, FocusHandle, IntoElement, KeyDownEvent, PathPromptOptions,
-    PromptLevel, Render, SharedString, Window, WindowOptions, div, prelude::*, px, rgb,
+    App, Application, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
+    PathPromptOptions, PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window,
+    WindowOptions, div, prelude::*, px, rgb,
 };
+use indexmap::IndexMap;
+use std::borrow::BorrowMut;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum CommandSettingsField {
@@ -36,6 +48,15 @@ enum CommandSettingsField {
     EntryName(usize),
     EntryCommand(usize),
 }
+
+#[derive(Debug, Clone)]
+struct CommandPickerState {
+    repo_id: String,
+    worktree_path: PathBuf,
+    commands: IndexMap<String, CommandEntry>,
+}
+
+const INSPECTOR_FILE_TREE_MAX_DEPTH: usize = 3;
 
 pub struct AlasShell {
     model: AlasModel,
@@ -47,17 +68,23 @@ pub struct AlasShell {
     command_settings_dialog: Option<CommandSettingsDialogState>,
     command_settings_focus: FocusHandle,
     command_settings_active_field: CommandSettingsField,
+    command_picker: Option<CommandPickerState>,
+    sidebar_menu: Option<SidebarMenuState>,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     confirm_remove_worktree_dialog: Option<ConfirmRemoveWorktreeDialog>,
     confirm_prune_worktrees_dialog: Option<ConfirmPruneWorktreesDialog>,
     terminal_registry: TerminalSessionRegistry,
     terminal_backend: GhosttyTerminalBackend,
+    workspace_session: WorkspaceSession,
+    active_terminal_tab: Option<TerminalTabId>,
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
     terminal_size: Option<TerminalSize>,
-    git_inspector: Option<GitInspectorState>,
-    git_inspector_error: Option<String>,
+    terminal_body_size_px: Option<(f32, f32)>,
+    terminal_scroll_offset_rows: usize,
+    inspector_state: InspectorPaneState,
+    inspector_request_generation: u64,
 }
 
 impl AlasShell {
@@ -76,17 +103,23 @@ impl AlasShell {
             command_settings_dialog: None,
             command_settings_focus: cx.focus_handle(),
             command_settings_active_field: CommandSettingsField::DefaultName,
+            command_picker: None,
+            sidebar_menu: None,
             confirm_remove_repository_dialog: None,
             confirm_remove_worktree_dialog: None,
             confirm_prune_worktrees_dialog: None,
             terminal_registry: TerminalSessionRegistry::default(),
             terminal_backend: GhosttyTerminalBackend::new(),
+            workspace_session: WorkspaceSession::default(),
+            active_terminal_tab: None,
             active_terminal: None,
             terminal_error: None,
             terminal_focus: cx.focus_handle(),
             terminal_size: None,
-            git_inspector: None,
-            git_inspector_error: None,
+            terminal_body_size_px: None,
+            terminal_scroll_offset_rows: 0,
+            inspector_state: InspectorPaneState::default(),
+            inspector_request_generation: 0,
         };
         shell.refresh_repositories();
         shell.start_terminal_refresh(cx);
@@ -115,14 +148,41 @@ impl AlasShell {
     }
 
     fn terminal_snapshot(&mut self) -> Option<TerminalGridSnapshot> {
-        let session = self.active_terminal.as_ref()?;
-        match self.terminal_backend.snapshot(session.backend_session) {
+        let session = self.active_terminal.as_ref()?.clone();
+        let rows = self.terminal_size.map_or(24, |size| size.rows);
+        let viewport = TerminalViewport {
+            scroll_offset_rows: self.terminal_scroll_offset_rows,
+            visible_rows: rows,
+        };
+
+        match self
+            .terminal_backend
+            .snapshot(session.backend_session, viewport)
+        {
             Ok(snapshot) => {
-                self.terminal_error = None;
+                let preserve_failure = self.terminal_tab_has_failure(&session.id);
+                self.terminal_scroll_offset_rows = match snapshot.screen_mode {
+                    TerminalScreenMode::Main => snapshot.viewport.scroll_offset_rows,
+                    TerminalScreenMode::Alternate => 0,
+                };
+                let _ = self.workspace_session.set_tab_scroll_offset(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    self.terminal_scroll_offset_rows,
+                );
+                if !preserve_failure {
+                    let _ = self.workspace_session.set_tab_status(
+                        &session.id.repo_id,
+                        &session.id.worktree_path,
+                        session.id.tab_id,
+                        terminal_tab_status(snapshot.status),
+                    );
+                }
                 Some(snapshot)
             }
             Err(error) => {
-                self.terminal_error = Some(error.to_string());
+                self.mark_terminal_tab_failed(&session.id, error.to_string());
                 None
             }
         }
@@ -132,40 +192,122 @@ impl AlasShell {
         if self.terminal_size == Some(size) {
             return;
         }
-        self.terminal_size = Some(size);
         if let Some(session) = self.active_terminal.as_ref() {
             if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
-                self.terminal_error = Some(error.to_string());
+                let id = session.id.clone();
+                self.mark_terminal_tab_failed(&id, error.to_string());
+                return;
             }
+        }
+        self.terminal_size = Some(size);
+    }
+
+    fn update_terminal_body_size(&mut self, width_px: f32, height_px: f32) -> bool {
+        if width_px <= 0.0 || height_px <= 0.0 {
+            return false;
+        }
+
+        let next = (width_px.floor(), height_px.floor());
+        if self.terminal_body_size_px == Some(next) {
+            return false;
+        }
+        self.terminal_body_size_px = Some(next);
+        true
+    }
+
+    fn current_terminal_size(&self) -> TerminalSize {
+        self.terminal_body_size_px
+            .map(|(width, height)| terminal_size_from_pixels(width, height))
+            .or(self.terminal_size)
+            .unwrap_or(TerminalSize { cols: 80, rows: 24 })
+    }
+
+    fn terminal_tab_has_failure(&self, id: &TerminalSessionId) -> bool {
+        self.workspace_session
+            .tab(&id.repo_id, &id.worktree_path, id.tab_id)
+            .is_some_and(|tab| tab.failure_cause.is_some())
+    }
+
+    fn mark_terminal_tab_failed(&mut self, id: &TerminalSessionId, cause: String) {
+        if self
+            .workspace_session
+            .set_tab_failure(&id.repo_id, &id.worktree_path, id.tab_id, cause.clone())
+            .is_err()
+        {
+            self.terminal_error = Some(cause);
         }
     }
 
-    fn retry_active_terminal(&mut self, cx: &mut Context<Self>) {
+    fn clear_terminal_tab_failure(&mut self, id: &TerminalSessionId) {
+        let _ = self
+            .workspace_session
+            .clear_tab_failure(&id.repo_id, &id.worktree_path, id.tab_id);
+    }
+
+    fn retry_active_terminal(&mut self) {
+        if self.active_terminal.is_some() {
+            self.restart_active_terminal();
+            return;
+        }
+
         let Some(selected) = self.model.selected_worktree().cloned() else {
             return;
         };
-        self.select_worktree(selected.repo_id, selected.path, cx);
+        let tab_id = self
+            .workspace_session
+            .active_tab(&selected.repo_id, &selected.path)
+            .map(|tab| tab.id)
+            .unwrap_or_else(|| {
+                let default_command =
+                    self.resolve_default_command(&selected.repo_id, selected.path.clone());
+                self.workspace_session.ensure_default_terminal_tab(
+                    &selected.repo_id,
+                    selected.path.clone(),
+                    default_command,
+                )
+            });
+        self.start_or_reuse_terminal_tab_for_retry(selected.repo_id, selected.path, tab_id);
     }
 
     fn restart_active_terminal(&mut self) {
-        let Some(active) = self.active_terminal.as_mut() else {
+        self.terminal_scroll_offset_rows = 0;
+        let Some(active) = self.active_terminal.clone() else {
             return;
         };
         match self.terminal_backend.restart(active.backend_session) {
             Ok(session) => {
+                if let Some(active_terminal) = self.active_terminal.as_mut() {
+                    if active_terminal.id == active.id {
+                        active_terminal.backend_session = session;
+                    }
+                }
+                self.terminal_registry
+                    .replace_backend_session(&active.id, session);
+                let _ = self.workspace_session.set_tab_backend_session(
+                    &active.id.repo_id,
+                    &active.id.worktree_path,
+                    active.id.tab_id,
+                    Some(session),
+                );
+
                 if let Some(size) = self.terminal_size {
                     if let Err(error) = self.terminal_backend.resize(session, size) {
-                        self.terminal_error = Some(error.to_string());
+                        self.mark_terminal_tab_failed(&active.id, error.to_string());
                         return;
                     }
                 }
-                active.backend_session = session;
-                self.terminal_registry
-                    .replace_backend_session(&active.id, session);
+
+                let _ = self.workspace_session.set_tab_status(
+                    &active.id.repo_id,
+                    &active.id.worktree_path,
+                    active.id.tab_id,
+                    TerminalTabStatus::Running,
+                );
+                self.clear_terminal_tab_failure(&active.id);
                 self.terminal_error = None;
             }
             Err(error) => {
-                self.terminal_error = Some(error.to_string());
+                self.mark_terminal_tab_failed(&active.id, error.to_string());
             }
         }
     }
@@ -184,10 +326,52 @@ impl AlasShell {
         {
             Ok(()) => true,
             Err(error) => {
-                self.terminal_error = Some(error.to_string());
+                let id = session.id.clone();
+                self.mark_terminal_tab_failed(&id, error.to_string());
                 true
             }
         }
+    }
+
+    fn scroll_terminal(
+        &mut self,
+        event: &ScrollWheelEvent,
+        screen_mode: TerminalScreenMode,
+        scrollback_rows: usize,
+    ) -> bool {
+        if self.active_terminal.is_none() {
+            return false;
+        }
+
+        if screen_mode == TerminalScreenMode::Alternate {
+            // Alternate-screen apps often expect wheel input as terminal mouse
+            // events. Alas does not translate GPUI wheel events into PTY mouse
+            // reports yet, so keep the main-screen scrollback offset pinned.
+            let changed = self.terminal_scroll_offset_rows != 0;
+            self.terminal_scroll_offset_rows = 0;
+            return changed;
+        }
+
+        let rows = terminal_scroll_rows(event);
+        if rows == 0 {
+            return false;
+        }
+
+        let next_offset = if rows > 0 {
+            self.terminal_scroll_offset_rows
+                .saturating_add(rows.unsigned_abs())
+        } else {
+            self.terminal_scroll_offset_rows
+                .saturating_sub(rows.unsigned_abs())
+        }
+        .min(scrollback_rows);
+
+        if next_offset == self.terminal_scroll_offset_rows {
+            return false;
+        }
+
+        self.terminal_scroll_offset_rows = next_offset;
+        true
     }
 
     fn open_add_repository_dialog(&mut self, cx: &mut Context<Self>) {
@@ -615,42 +799,294 @@ impl AlasShell {
 
     fn select_worktree(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
         self.model.select_worktree(repo_id.clone(), path.clone());
-        self.git_inspector = None;
-        self.git_inspector_error = None;
-        self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
+        self.command_picker = None;
+        self.sidebar_menu = None;
+        self.terminal_scroll_offset_rows = 0;
+        self.inspector_state.clear_for_new_worktree();
+        self.inspector_request_generation = self.inspector_request_generation.wrapping_add(1);
+        let inspector_request_generation = self.inspector_request_generation;
+        self.refresh_git_inspector(
+            repo_id.clone(),
+            path.clone(),
+            inspector_request_generation,
+            cx,
+        );
+        self.refresh_file_tree(
+            repo_id.clone(),
+            path.clone(),
+            inspector_request_generation,
+            cx,
+        );
 
-        let command = self.resolve_default_command(&repo_id, path.clone());
-        let id = TerminalSessionId::new(repo_id, path);
+        let default_command = self.resolve_default_command(&repo_id, path.clone());
+        let tab_id = self.workspace_session.ensure_default_terminal_tab(
+            &repo_id,
+            path.clone(),
+            default_command,
+        );
+        self.start_or_reuse_terminal_tab(repo_id, path, tab_id);
+    }
 
-        match self
-            .terminal_registry
-            .get_or_start(id, command, &mut self.terminal_backend)
+    fn select_terminal_tab(&mut self, tab_id: TerminalTabId) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+
+        if let Err(error) =
+            self.workspace_session
+                .set_active_tab(&selected.repo_id, &selected.path, tab_id)
         {
+            self.terminal_error = Some(error.to_string());
+            return;
+        }
+
+        self.start_or_reuse_terminal_tab(selected.repo_id, selected.path, tab_id);
+    }
+
+    fn start_or_reuse_terminal_tab(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        tab_id: TerminalTabId,
+    ) {
+        self.start_or_reuse_terminal_tab_inner(repo_id, path, tab_id, false);
+    }
+
+    fn start_or_reuse_terminal_tab_for_retry(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        tab_id: TerminalTabId,
+    ) {
+        self.start_or_reuse_terminal_tab_inner(repo_id, path, tab_id, true);
+    }
+
+    fn start_or_reuse_terminal_tab_inner(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        tab_id: TerminalTabId,
+        clear_existing_failure: bool,
+    ) {
+        let Some(tab) = self.workspace_session.active_tab(&repo_id, &path).cloned() else {
+            self.active_terminal = None;
+            self.active_terminal_tab = None;
+            self.terminal_error = Some("No active terminal tab for selected worktree".to_string());
+            return;
+        };
+
+        let id = TerminalSessionId::new(repo_id, path, tab_id);
+        let preserve_failure = tab.failure_cause.is_some() && !clear_existing_failure;
+        self.active_terminal_tab = Some(tab_id);
+        self.terminal_scroll_offset_rows = tab.scroll_offset_rows;
+        self.terminal_error = None;
+
+        if preserve_failure {
+            // Selecting a failed startup tab must not call get_or_start: missing registry entries
+            // would start the command again without an explicit Retry. Runtime failures can still
+            // have a live backend session, so deliberately reuse only sessions we already know
+            // about and leave the failure/status untouched until retry or restart clears it.
+            let session = self.terminal_registry.get(&id).or_else(|| {
+                tab.backend_session.map(|backend_session| {
+                    self.terminal_registry.attach_existing(
+                        id.clone(),
+                        tab.command.clone(),
+                        backend_session,
+                    )
+                })
+            });
+
+            let Some(session) = session else {
+                self.active_terminal = None;
+                return;
+            };
+
+            self.active_terminal = Some(session.clone());
+            if let Some(size) = self.terminal_size {
+                if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
+                    self.mark_terminal_tab_failed(&session.id, error.to_string());
+                }
+            }
+            return;
+        }
+
+        match self.terminal_registry.get_or_start(
+            id.clone(),
+            tab.command.clone(),
+            &mut self.terminal_backend,
+        ) {
             Ok(session) => {
+                self.active_terminal = Some(session.clone());
+                let _ = self.workspace_session.set_tab_backend_session(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    Some(session.backend_session),
+                );
+
                 if let Some(size) = self.terminal_size {
                     if let Err(error) = self.terminal_backend.resize(session.backend_session, size)
                     {
-                        self.active_terminal = None;
-                        self.terminal_error = Some(error.to_string());
+                        self.mark_terminal_tab_failed(&session.id, error.to_string());
                         return;
                     }
                 }
-                self.active_terminal = Some(session);
-                self.terminal_error = None;
+
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Running,
+                );
+                self.clear_terminal_tab_failure(&session.id);
             }
             Err(error) => {
                 self.active_terminal = None;
-                self.terminal_error = Some(error.to_string());
+                self.mark_terminal_tab_failed(&id, error.to_string());
             }
         }
     }
 
-    fn refresh_git_inspector(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
+    fn open_command_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let Some(resolved) = self.resolved_repo_config(&selected.repo_id) else {
+            self.terminal_error = Some("Repository not found".to_string());
+            return;
+        };
+
+        self.command_picker = Some(CommandPickerState {
+            repo_id: selected.repo_id,
+            worktree_path: selected.path,
+            commands: resolved.commands().clone(),
+        });
+        cx.notify();
+    }
+
+    fn close_command_picker(&mut self) {
+        self.command_picker = None;
+    }
+
+    fn open_sidebar_menu(&mut self, menu: SidebarMenuState) {
+        if self.sidebar_menu.as_ref() == Some(&menu) {
+            self.sidebar_menu = None;
+        } else {
+            self.sidebar_menu = Some(menu);
+        }
+    }
+
+    fn close_sidebar_menu(&mut self) {
+        self.sidebar_menu = None;
+    }
+
+    fn handle_sidebar_menu_action(
+        &mut self,
+        action_id: ActionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.sidebar_menu.take() else {
+            return;
+        };
+
+        match action_id {
+            ActionId::RemoveRepository => {
+                let repo_name = self.repository_name(&menu.repo_id);
+                self.confirm_remove_repository(menu.repo_id, repo_name, window, cx);
+            }
+            ActionId::CreateWorktree => self.open_create_worktree_dialog(menu.repo_id, cx),
+            ActionId::CommandSettings => self.open_command_settings_dialog(menu.repo_id, cx),
+            ActionId::PruneWorktrees => {
+                let repo_name = self.repository_name(&menu.repo_id);
+                self.confirm_prune_worktrees(menu.repo_id, repo_name, window, cx);
+            }
+            ActionId::ToggleArchivedWorktrees => {
+                let show_archived = !self.repository_show_archived(&menu.repo_id);
+                self.set_show_archived(&menu.repo_id, show_archived);
+            }
+            ActionId::ArchiveWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    if let Err(error) = self.archive_worktree(&menu.repo_id, path) {
+                        self.set_add_repository_error(error.to_string());
+                    }
+                }
+            }
+            ActionId::UnarchiveWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    if let Err(error) = self.unarchive_worktree(&menu.repo_id, &path) {
+                        self.set_add_repository_error(error.to_string());
+                    }
+                }
+            }
+            ActionId::RemoveWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    let is_main = self.worktree_is_main(&menu.repo_id, &path);
+                    self.confirm_remove_worktree(menu.repo_id, path, is_main, window, cx);
+                }
+            }
+            ActionId::SelectWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    self.select_worktree(menu.repo_id, path, cx);
+                }
+            }
+            ActionId::OpenPath => {
+                if let Some(path) = menu.worktree_path {
+                    let app: &mut App = BorrowMut::borrow_mut(cx);
+                    app.open_with_system(&path);
+                }
+            }
+            ActionId::CopyPath => {
+                if let Some(path) = menu.worktree_path {
+                    let app: &mut App = BorrowMut::borrow_mut(cx);
+                    app.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+                }
+            }
+            ActionId::AddRepository => self.open_add_repository_dialog(cx),
+        }
+
+        cx.notify();
+    }
+
+    fn handle_command_picker_key_down(&mut self, event: &KeyDownEvent) -> bool {
+        if self.command_picker.is_none() {
+            return false;
+        }
+
+        if event.keystroke.key == "escape" {
+            self.close_command_picker();
+        }
+        true
+    }
+
+    fn create_command_tab_from_picker(&mut self, name: String, command: String) {
+        let Some(picker) = self.command_picker.take() else {
+            return;
+        };
+
+        let command = CommandSpec::shell_command(command, picker.worktree_path.clone());
+        let tab_id = self.workspace_session.create_terminal_tab(
+            &picker.repo_id,
+            picker.worktree_path.clone(),
+            name,
+            TerminalTabKind::Command,
+            command,
+        );
+        self.start_or_reuse_terminal_tab(picker.repo_id, picker.worktree_path, tab_id);
+    }
+
+    fn refresh_git_inspector(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        request_generation: u64,
+        cx: &mut Context<Self>,
+    ) {
         let selected_repo_id = repo_id;
         let selected_path = path.clone();
         let task = cx.background_executor().spawn(async move {
             GitInspectorService::new(GitRunner::new())
-                .inspect(&path, 8)
+                .inspect_changes(&path)
                 .map_err(|error| error.to_string())
         });
 
@@ -661,18 +1097,59 @@ impl AlasShell {
                     shell.model.selected_worktree().is_some_and(|selected| {
                         selected.repo_id == selected_repo_id && selected.path == selected_path
                     });
-                if !is_current_selection {
+                if !is_current_selection || shell.inspector_request_generation != request_generation
+                {
                     return;
                 }
 
                 match result {
                     Ok(state) => {
-                        shell.git_inspector = Some(state);
-                        shell.git_inspector_error = None;
+                        shell.inspector_state.set_changes(state);
                     }
                     Err(error) => {
-                        shell.git_inspector = None;
-                        shell.git_inspector_error = Some(error);
+                        shell.inspector_state.set_changes_error(error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn refresh_file_tree(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        request_generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_repo_id = repo_id;
+        let selected_path = path.clone();
+        let task = cx.background_executor().spawn(async move {
+            FileTreeService::new()
+                .load(&path, INSPECTOR_FILE_TREE_MAX_DEPTH)
+                .map_err(|error| error.to_string())
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |shell, cx| {
+                let is_current_selection =
+                    shell.model.selected_worktree().is_some_and(|selected| {
+                        selected.repo_id == selected_repo_id && selected.path == selected_path
+                    });
+                if !is_current_selection || shell.inspector_request_generation != request_generation
+                {
+                    return;
+                }
+
+                match result {
+                    Ok(files) => {
+                        shell.inspector_state.set_files(files);
+                    }
+                    Err(error) => {
+                        shell.inspector_state.set_files_error(error);
                     }
                 }
                 cx.notify();
@@ -683,25 +1160,28 @@ impl AlasShell {
     }
 
     fn resolve_default_command(&self, repo_id: &str, worktree_path: PathBuf) -> CommandSpec {
-        let Some(repo) = self
-            .config
-            .repositories
-            .iter()
-            .find(|repository| repository.id == repo_id)
-        else {
+        let Some(resolved) = self.resolved_repo_config(repo_id) else {
             return CommandSpec::shell_command("$SHELL", worktree_path);
         };
 
+        CommandSpec::shell_command(resolved.default_command().command.clone(), worktree_path)
+    }
+
+    fn resolved_repo_config(&self, repo_id: &str) -> Option<ResolvedRepoConfig> {
+        let repo = self
+            .config
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repo_id)?;
+
         let repo_file = RepoConfigStore::for_repo(&repo.path).load().ok().flatten();
-        let resolved = ResolvedRepoConfig::resolve(
+        Some(ResolvedRepoConfig::resolve(
             repo.id.clone(),
             repo.path.clone(),
             repo.name.clone(),
             &self.config,
             repo_file,
-        );
-
-        CommandSpec::shell_command(resolved.default_command().command.clone(), worktree_path)
+        ))
     }
 
     fn set_create_worktree_error(&mut self, error: impl Into<String>) {
@@ -716,6 +1196,37 @@ impl AlasShell {
             .iter()
             .find(|repository| repository.id == repo_id)
             .map(|repository| repository.path.clone())
+    }
+
+    fn repository_name(&self, repo_id: &str) -> String {
+        self.model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .map(|repository| repository.name.clone())
+            .unwrap_or_else(|| repo_id.to_string())
+    }
+
+    fn repository_show_archived(&self, repo_id: &str) -> bool {
+        self.model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .is_some_and(|repository| repository.show_archived)
+    }
+
+    fn worktree_is_main(&self, repo_id: &str, path: &Path) -> bool {
+        self.model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .and_then(|repository| {
+                repository
+                    .worktrees
+                    .iter()
+                    .find(|worktree| worktree.path == path)
+            })
+            .is_some_and(|worktree| worktree.kind == crate::git::WorktreeKind::Main)
     }
 
     fn confirm_remove_repository(
@@ -765,6 +1276,8 @@ impl AlasShell {
 
         self.app_config_store.save(&next_config)?;
         self.config = next_config;
+        self.cleanup_repository_sessions(repo_id);
+        self.workspace_session.remove_repository(repo_id);
 
         if self
             .model
@@ -837,6 +1350,8 @@ impl AlasShell {
             .ok_or_else(|| anyhow::anyhow!("Repository not found"))?;
 
         GitWorktreeService::new(GitRunner::new()).remove_worktree(&repo_path, path)?;
+        self.cleanup_worktree_sessions(repo_id, path);
+        self.workspace_session.remove_worktree(repo_id, path);
 
         if self
             .model
@@ -920,12 +1435,51 @@ impl AlasShell {
         Ok(())
     }
 
+    fn cleanup_repository_sessions(&mut self, repo_id: &str) {
+        let sessions = self
+            .terminal_registry
+            .remove_sessions_for_repository(repo_id);
+        self.stop_terminal_sessions(sessions);
+    }
+
+    fn cleanup_worktree_sessions(&mut self, repo_id: &str, path: &Path) {
+        let sessions = self
+            .terminal_registry
+            .remove_sessions_for_worktree(repo_id, path);
+        self.stop_terminal_sessions(sessions);
+    }
+
+    fn stop_terminal_sessions(&mut self, sessions: Vec<TerminalSessionRef>) {
+        let active_backend_session = self
+            .active_terminal
+            .as_ref()
+            .map(|session| session.backend_session);
+        let removed_active_session = sessions
+            .iter()
+            .any(|session| Some(session.backend_session) == active_backend_session);
+
+        for session in sessions {
+            if let Err(error) = self.terminal_backend.stop(session.backend_session) {
+                self.terminal_error = Some(error.to_string());
+            }
+        }
+
+        if removed_active_session {
+            self.active_terminal = None;
+            self.active_terminal_tab = None;
+            self.terminal_scroll_offset_rows = 0;
+        }
+    }
+
     fn clear_selection_and_active_terminal(&mut self) {
         self.model.clear_selection();
+        self.command_picker = None;
+        self.sidebar_menu = None;
+        self.active_terminal_tab = None;
         self.active_terminal = None;
         self.terminal_error = None;
-        self.git_inspector = None;
-        self.git_inspector_error = None;
+        self.terminal_scroll_offset_rows = 0;
+        self.inspector_state.clear_for_new_worktree();
     }
 
     fn refresh_repositories(&mut self) {
@@ -964,40 +1518,29 @@ impl AlasShell {
     }
 }
 
-fn terminal_input_bytes(event: &KeyDownEvent) -> Option<Vec<u8>> {
-    let keystroke = &event.keystroke;
+fn terminal_tab_status(status: TerminalStatus) -> TerminalTabStatus {
+    match status {
+        TerminalStatus::Running => TerminalTabStatus::Running,
+        TerminalStatus::Exited(status) => TerminalTabStatus::Exited(status),
+        TerminalStatus::Failed => TerminalTabStatus::Failed,
+    }
+}
 
-    if keystroke.modifiers.platform || keystroke.modifiers.alt {
-        return None;
+fn terminal_scroll_rows(event: &ScrollWheelEvent) -> isize {
+    let rows = match &event.delta {
+        ScrollDelta::Lines(delta) => f64::from(delta.y),
+        ScrollDelta::Pixels(delta) => delta.y.to_f64() / 18.0,
+    };
+
+    if rows == 0.0 {
+        return 0;
     }
 
-    if keystroke.modifiers.control {
-        let key = keystroke.key.to_ascii_lowercase();
-        if key.len() == 1 {
-            let byte = key.as_bytes()[0];
-            if byte.is_ascii_lowercase() {
-                return Some(vec![byte - b'a' + 1]);
-            }
-        }
-        return None;
-    }
-
-    // GPUI 0.2 only exposes key-down events here. This covers common terminal
-    // input; IME/composition and full function-key handling need a richer input
-    // handler if Alas adopts one later.
-    match keystroke.key.as_str() {
-        "enter" => Some(b"\r".to_vec()),
-        "backspace" => Some(vec![0x7f]),
-        "tab" => Some(b"\t".to_vec()),
-        "escape" => Some(vec![0x1b]),
-        "up" => Some(b"\x1b[A".to_vec()),
-        "down" => Some(b"\x1b[B".to_vec()),
-        "right" => Some(b"\x1b[C".to_vec()),
-        "left" => Some(b"\x1b[D".to_vec()),
-        _ => keystroke
-            .key_char
-            .as_ref()
-            .map(|text| text.as_bytes().to_vec()),
+    let rounded = rows.round() as isize;
+    if rounded == 0 {
+        rows.signum() as isize
+    } else {
+        rounded
     }
 }
 
@@ -1096,60 +1639,62 @@ fn render_create_worktree_field(
         )
 }
 
+fn render_status_bar(
+    repo_summary: String,
+    tab_summary: String,
+    terminal_status: Option<&TerminalTabStatus>,
+) -> impl IntoElement {
+    let (status_label, status_color) = match terminal_status {
+        Some(TerminalTabStatus::Running) => ("running".to_string(), SUCCESS),
+        Some(TerminalTabStatus::Exited(Some(code))) => (
+            format!("exited {code}"),
+            if *code == 0 { SUCCESS } else { DANGER },
+        ),
+        Some(TerminalTabStatus::Exited(None)) => ("exited".to_string(), TEXT_MUTED),
+        Some(TerminalTabStatus::Failed) => ("failed".to_string(), DANGER),
+        Some(TerminalTabStatus::NotStarted) => ("not started".to_string(), TEXT_MUTED),
+        None => ("no terminal".to_string(), TEXT_MUTED),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .px_4()
+        .py_2()
+        .border_t_1()
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .text_xs()
+        .text_color(TEXT_MUTED)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .overflow_hidden()
+                .child(div().text_color(TEXT).child("Workspace"))
+                .child(div().child("•"))
+                .child(div().truncate().child(repo_summary)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_color(TEXT).child(tab_summary))
+                .child(div().child("•"))
+                .child(div().text_color(status_color).child(status_label)),
+        )
+}
+
 impl Render for AlasShell {
-    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let window_bounds = window.bounds();
-        let terminal_width = (f32::from(window_bounds.size.width) - 360.0).max(160.0);
-        let terminal_height = (f32::from(window_bounds.size.height) - 24.0).max(80.0);
-        let terminal_size = TerminalSize {
-            cols: (terminal_width / 8.0).floor().max(20.0) as u16,
-            rows: (terminal_height / 18.0).floor().max(4.0) as u16,
-        };
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let terminal_size = self.current_terminal_size();
         self.resize_active_terminal(terminal_size);
         let terminal_snapshot = self.terminal_snapshot();
 
-        let view = cx.entity().downgrade();
-        let on_remove_repository = move |repo_id: String,
-                                         repo_name: String,
-                                         _event: &gpui::ClickEvent,
-                                         window: &mut Window,
-                                         app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.confirm_remove_repository(repo_id, repo_name, window, cx);
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_prune_worktrees = move |repo_id: String,
-                                       repo_name: String,
-                                       _event: &gpui::ClickEvent,
-                                       window: &mut Window,
-                                       app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.confirm_prune_worktrees(repo_id, repo_name, window, cx);
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_create_worktree = move |repo_id: String,
-                                       _event: &gpui::ClickEvent,
-                                       _window: &mut Window,
-                                       app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.open_create_worktree_dialog(repo_id, cx);
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_command_settings = move |repo_id: String,
-                                        _event: &gpui::ClickEvent,
-                                        _window: &mut Window,
-                                        app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.open_command_settings_dialog(repo_id, cx);
-            })
-            .ok();
-        };
         let view = cx.entity().downgrade();
         let on_select_worktree = move |repo_id: String,
                                        path: PathBuf,
@@ -1159,58 +1704,6 @@ impl Render for AlasShell {
             view.update(app, |shell, cx| {
                 shell.select_worktree(repo_id, path, cx);
                 cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_toggle_show_archived = move |repo_id: String,
-                                            show: bool,
-                                            _event: &gpui::ClickEvent,
-                                            _window: &mut Window,
-                                            app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.set_show_archived(&repo_id, show);
-                cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_archive_worktree = move |repo_id: String,
-                                        path: PathBuf,
-                                        _event: &gpui::ClickEvent,
-                                        _window: &mut Window,
-                                        app: &mut App| {
-            view.update(app, |shell, cx| {
-                if let Err(error) = shell.archive_worktree(&repo_id, path) {
-                    shell.set_add_repository_error(error.to_string());
-                }
-                cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_unarchive_worktree = move |repo_id: String,
-                                          path: PathBuf,
-                                          _event: &gpui::ClickEvent,
-                                          _window: &mut Window,
-                                          app: &mut App| {
-            view.update(app, |shell, cx| {
-                if let Err(error) = shell.unarchive_worktree(&repo_id, &path) {
-                    shell.set_add_repository_error(error.to_string());
-                }
-                cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_remove_worktree = move |repo_id: String,
-                                       path: PathBuf,
-                                       is_main: bool,
-                                       _event: &gpui::ClickEvent,
-                                       window: &mut Window,
-                                       app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.confirm_remove_worktree(repo_id, path, is_main, window, cx);
             })
             .ok();
         };
@@ -1227,6 +1720,17 @@ impl Render for AlasShell {
                 })
                 .ok();
             };
+        let view = cx.entity().downgrade();
+        let on_select_inspector_tab = move |tab: InspectorTab,
+                                            _event: &gpui::ClickEvent,
+                                            _window: &mut Window,
+                                            app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.inspector_state.select_tab(tab);
+                cx.notify();
+            })
+            .ok();
+        };
         let on_submit_create_worktree = cx.listener(|shell, _event, _window, cx| {
             shell.create_worktree_from_dialog(cx);
             cx.notify();
@@ -1275,13 +1779,25 @@ impl Render for AlasShell {
                 }
             });
         let on_terminal_key_down = cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+            if shell.handle_command_picker_key_down(event) {
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+
             if shell.write_terminal_input(event) {
                 cx.stop_propagation();
                 cx.notify();
             }
         });
         let on_retry_terminal = cx.listener(|shell, _event, _window, cx| {
-            shell.retry_active_terminal(cx);
+            shell.retry_active_terminal();
+            cx.notify();
+        });
+        let on_edit_terminal_command = cx.listener(|shell, _event, _window, cx| {
+            if let Some(selected) = shell.model.selected_worktree().cloned() {
+                shell.open_command_settings_dialog(selected.repo_id, cx);
+            }
             cx.notify();
         });
         let on_restart_terminal = cx.listener(|shell, _event, _window, cx| {
@@ -1292,29 +1808,186 @@ impl Render for AlasShell {
             window.focus(&shell.terminal_focus);
             cx.notify();
         });
+        let terminal_screen_mode = terminal_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.screen_mode)
+            .unwrap_or(TerminalScreenMode::Main);
+        let terminal_scrollback_rows = terminal_snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.scrollback_rows);
+        let on_terminal_scroll =
+            cx.listener(move |shell, event: &ScrollWheelEvent, _window, cx| {
+                if shell.scroll_terminal(event, terminal_screen_mode, terminal_scrollback_rows) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
+        let view = cx.entity().downgrade();
+        let on_terminal_body_bounds = move |bounds: gpui::Bounds<gpui::Pixels>, app: &mut App| {
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            view.update(app, |shell, cx| {
+                if shell.update_terminal_body_size(width, height) {
+                    cx.notify();
+                }
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_select_terminal_tab = move |tab_id: TerminalTabId,
+                                           _event: &gpui::ClickEvent,
+                                           _window: &mut Window,
+                                           app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.select_terminal_tab(tab_id);
+                cx.notify();
+            })
+            .ok();
+        };
+        let on_new_terminal_tab = cx.listener(|shell, _event, _window, cx| {
+            shell.open_command_picker(cx);
+        });
+        let view = cx.entity().downgrade();
+        let on_select_command = move |name: String,
+                                      command: String,
+                                      _event: &gpui::ClickEvent,
+                                      _window: &mut Window,
+                                      app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.create_command_tab_from_picker(name, command);
+                cx.notify();
+            })
+            .ok();
+        };
+        let on_cancel_command_picker = cx.listener(|shell, _event, _window, cx| {
+            shell.close_command_picker();
+            cx.notify();
+        });
+        let view = cx.entity().downgrade();
+        let on_open_sidebar_menu =
+            move |menu: SidebarMenuState, _window: &mut Window, app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.open_sidebar_menu(menu);
+                    cx.notify();
+                })
+                .ok();
+            };
+        let view = cx.entity().downgrade();
+        let on_sidebar_menu_action = move |action_id: ActionId,
+                                           _event: &gpui::ClickEvent,
+                                           window: &mut Window,
+                                           app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.handle_sidebar_menu_action(action_id, window, cx);
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_close_sidebar_menu =
+            move |_event: &gpui::ClickEvent, _window: &mut Window, app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.close_sidebar_menu();
+                    cx.notify();
+                })
+                .ok();
+            };
+        let workspace_tabs = self
+            .model
+            .selected_worktree()
+            .map(|selected| {
+                self.workspace_session
+                    .tabs_for_worktree(&selected.repo_id, &selected.path)
+            })
+            .unwrap_or(&[]);
+        let active_workspace_tab = self.model.selected_worktree().and_then(|selected| {
+            self.workspace_session
+                .active_tab(&selected.repo_id, &selected.path)
+                .map(|tab| tab.id)
+        });
+        let active_tab = workspace_tabs
+            .iter()
+            .find(|tab| Some(tab.id) == active_workspace_tab);
+        let status_bar_repo = self
+            .model
+            .selected_worktree()
+            .map(|selected| {
+                let repository = self
+                    .model
+                    .repositories()
+                    .iter()
+                    .find(|repository| repository.id == selected.repo_id);
+                let worktree = repository.and_then(|repository| {
+                    repository
+                        .worktrees
+                        .iter()
+                        .find(|worktree| worktree.path == selected.path)
+                });
+                let repo_name = repository
+                    .map(|repository| repository.name.as_str())
+                    .unwrap_or(selected.repo_id.as_str());
+                let branch = worktree
+                    .and_then(|worktree| worktree.branch.as_deref())
+                    .unwrap_or("detached");
+                let path = selected
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_else(|| selected.path.to_str().unwrap_or("worktree"));
+                format!("{repo_name} • {branch} • {path}")
+            })
+            .unwrap_or_else(|| "No worktree selected".to_string());
+        let status_bar_tab = active_tab
+            .map(|tab| tab.name.clone())
+            .unwrap_or_else(|| "No terminal tab".to_string());
+        let active_terminal_error = active_tab
+            .and_then(|tab| tab.failure_cause.as_deref())
+            .or_else(|| {
+                active_tab
+                    .is_none()
+                    .then_some(self.terminal_error.as_deref())
+                    .flatten()
+            });
+        let status_bar_terminal_status = if active_terminal_error.is_some() {
+            Some(TerminalTabStatus::Failed)
+        } else {
+            active_tab.map(|tab| tab.status.clone())
+        };
 
         div()
             .flex()
+            .flex_col()
             .size_full()
-            .child(render_sidebar(
-                self.model.repositories(),
-                cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
-                on_remove_repository,
-                on_prune_worktrees,
-                on_create_worktree,
-                on_command_settings,
-                on_select_worktree,
-                on_toggle_show_archived,
-                on_archive_worktree,
-                on_unarchive_worktree,
-                on_remove_worktree,
-                self.add_repository_error(),
-            ))
+            .bg(APP_BG)
+            .text_color(TEXT)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(render_sidebar(
+                        self.model.repositories(),
+                        self.model.selected_worktree(),
+                        self.sidebar_menu.as_ref(),
+                        cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
+                        on_select_worktree,
+                        on_open_sidebar_menu,
+                        on_sidebar_menu_action,
+                        on_close_sidebar_menu,
+                        self.add_repository_error(),
+                    ))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .when(self.command_picker.is_some(), |element| {
+                        let picker = self.command_picker.as_ref().unwrap();
+                        element.child(render_command_picker(
+                            &picker.commands,
+                            on_select_command,
+                            on_cancel_command_picker,
+                        ))
+                    })
                     .when(self.command_settings_dialog.is_some(), |element| {
                         let dialog = self.command_settings_dialog.as_ref().unwrap();
                         element.child(
@@ -1569,20 +2242,36 @@ impl Render for AlasShell {
                             .flex_1()
                             .track_focus(&self.terminal_focus)
                             .on_key_down(on_terminal_key_down)
-                            .child(render_terminal_pane(
-                                self.model.selected_worktree(),
-                                terminal_snapshot.as_ref(),
-                                self.terminal_error.as_deref(),
-                                on_retry_terminal,
-                                on_restart_terminal,
-                                on_focus_terminal,
+                            .child(render_workspace(
+                                workspace_tabs,
+                                active_workspace_tab,
+                                on_select_terminal_tab,
+                                on_new_terminal_tab,
+                                render_terminal_pane(
+                                    self.model.selected_worktree(),
+                                    active_tab,
+                                    terminal_snapshot.as_ref(),
+                                    active_terminal_error,
+                                    on_retry_terminal,
+                                    on_edit_terminal_command,
+                                    on_restart_terminal,
+                                    on_focus_terminal,
+                                    on_terminal_scroll,
+                                    on_terminal_body_bounds,
+                                ),
                             )),
                     ),
             )
-            .child(render_git_inspector(
+            .child(render_project_inspector(
                 self.model.selected_worktree(),
-                self.git_inspector.as_ref(),
-                self.git_inspector_error.as_deref(),
+                &self.inspector_state,
+                on_select_inspector_tab,
+            )),
+            )
+            .child(render_status_bar(
+                status_bar_repo,
+                status_bar_tab,
+                status_bar_terminal_status.as_ref(),
             ))
     }
 }

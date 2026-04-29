@@ -1,24 +1,37 @@
-use crate::{app::SelectedWorktree, terminal::TerminalGridSnapshot};
+use crate::{
+    app::{SelectedWorktree, TerminalTab},
+    terminal::TerminalGridSnapshot,
+    ui::{
+        terminal_view::{render_terminal_bounds_probe, render_terminal_grid},
+        theme::{ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    },
+};
 use gpui::{
-    App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, rgb,
+    AnyElement, App, Bounds, ClickEvent, IntoElement, ParentElement, Pixels, ScrollWheelEvent,
+    SharedString, Styled, Window, div, prelude::*,
 };
 
 pub fn render_terminal_pane(
     selected_worktree: Option<&SelectedWorktree>,
+    active_tab: Option<&TerminalTab>,
     snapshot: Option<&TerminalGridSnapshot>,
     terminal_error: Option<&str>,
     on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_edit_command: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_restart: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_focus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_scroll: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
+    on_body_bounds: impl Fn(Bounds<Pixels>, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
         .id("terminal-pane")
         .flex()
         .flex_1()
         .size_full()
-        .bg(rgb(0x111827))
-        .text_color(rgb(0xe5e7eb))
+        .bg(PANEL_BG)
+        .text_color(TEXT)
         .on_click(on_focus)
+        .on_scroll_wheel(on_scroll)
         .when(selected_worktree.is_none(), |element| {
             element.items_center().justify_center().child(
                 div()
@@ -29,30 +42,16 @@ pub fn render_terminal_pane(
             )
         })
         .when(terminal_error.is_some(), |element| {
-            element.items_center().justify_center().child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .max_w(gpui::px(720.0))
-                    .child(format!(
-                        "Terminal failed: {}",
-                        terminal_error.unwrap_or_default()
-                    ))
-                    .child(
-                        div()
-                            .id("retry-terminal")
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xffffff))
-                            .bg(rgb(0x2563eb))
-                            .child("Retry")
-                            .on_click(on_retry),
-                    ),
-            )
+            element
+                .items_center()
+                .justify_center()
+                .child(render_terminal_failure(
+                    selected_worktree,
+                    active_tab,
+                    terminal_error.unwrap_or_default(),
+                    on_retry,
+                    on_edit_command,
+                ))
         })
         .when(
             selected_worktree.is_some() && terminal_error.is_none(),
@@ -67,7 +66,7 @@ pub fn render_terminal_pane(
                             .items_center()
                             .justify_between()
                             .text_xs()
-                            .text_color(rgb(0x9ca3af))
+                            .text_color(TEXT_MUTED)
                             .child(format!(
                                 "Worktree: {}",
                                 selected_worktree
@@ -76,10 +75,10 @@ pub fn render_terminal_pane(
                                     .display()
                             ))
                             .when(
-                                snapshot.is_some_and(|snapshot| snapshot.exited),
+                                snapshot.is_some_and(|snapshot| snapshot.exited()),
                                 |element| {
                                     let status = snapshot
-                                        .and_then(|snapshot| snapshot.exit_status)
+                                        .and_then(|snapshot| snapshot.exit_status())
                                         .map(|status| status.to_string())
                                         .unwrap_or_else(|| "unknown".to_string());
                                     element.child(
@@ -95,8 +94,8 @@ pub fn render_terminal_pane(
                                                     .py_1()
                                                     .rounded_md()
                                                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    .text_color(rgb(0xffffff))
-                                                    .bg(rgb(0x2563eb))
+                                                    .text_color(ACCENT_TEXT)
+                                                    .bg(ACCENT)
                                                     .child("Restart")
                                                     .on_click(on_restart),
                                             ),
@@ -104,32 +103,139 @@ pub fn render_terminal_pane(
                                 },
                             ),
                     )
-                    .when(snapshot.is_some_and(|snapshot| snapshot.exited), |element| {
-                        element.child(
-                            div()
-                                .p_3()
-                                .rounded_md()
-                                .bg(rgb(0x1f2937))
-                                .text_sm()
-                                .text_color(rgb(0xd1d5db))
-                                .child("Terminal process exited. Restart to run the configured command again."),
-                        )
-                    })
+                    .when(
+                        snapshot.is_some_and(|snapshot| snapshot.exited()),
+                        |element| {
+                            element.child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(PANEL_BORDER)
+                                    .bg(PANEL_BG)
+                                    .text_xs()
+                                    .text_color(TEXT_MUTED)
+                                    .child("Process exited; final screen is preserved."),
+                            )
+                        },
+                    )
                     .child(
                         div()
                             .flex_1()
                             .overflow_hidden()
-                            .font_family("monospace")
-                            .text_sm()
-                            .line_height(gpui::px(18.0))
+                            .relative()
+                            .child(render_terminal_body(snapshot))
                             .child(
-                                snapshot
-                                    .map(|snapshot| snapshot.lines.join("\n"))
-                                    .filter(|output| !output.is_empty())
-                                    .map(SharedString::from)
-                                    .unwrap_or_else(|| SharedString::from(" ")),
+                                div()
+                                    .absolute()
+                                    .size_full()
+                                    .child(render_terminal_bounds_probe(on_body_bounds)),
                             ),
                     )
             },
         )
+}
+
+fn render_terminal_failure(
+    selected_worktree: Option<&SelectedWorktree>,
+    active_tab: Option<&TerminalTab>,
+    terminal_error: &str,
+    on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_edit_command: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let command = active_tab
+        .map(|tab| tab.command.display.clone())
+        .unwrap_or_else(|| "unknown command".to_string());
+    let cwd = active_tab
+        .map(|tab| tab.command.cwd.display().to_string())
+        .or_else(|| selected_worktree.map(|worktree| worktree.path.display().to_string()))
+        .unwrap_or_else(|| "unknown cwd".to_string());
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .max_w(gpui::px(760.0))
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(DANGER)
+                .child("Terminal startup or I/O failed"),
+        )
+        .child(detail_row("Command", command))
+        .child(detail_row("Cwd", cwd))
+        .child(detail_row("Cause", terminal_error.to_string()))
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .id("retry-terminal")
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(ACCENT_TEXT)
+                        .bg(ACCENT)
+                        .child("Retry")
+                        .on_click(on_retry),
+                )
+                .child(
+                    div()
+                        .id("edit-terminal-command")
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(PANEL_BORDER)
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(TEXT)
+                        .bg(PANEL_BG)
+                        .child("Edit Command")
+                        .on_click(on_edit_command),
+                ),
+        )
+}
+
+fn detail_row(label: &'static str, value: String) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(TEXT_MUTED)
+                .child(label),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(TEXT)
+                .font_family("monospace")
+                .child(SharedString::from(value)),
+        )
+}
+
+fn render_terminal_body(snapshot: Option<&TerminalGridSnapshot>) -> AnyElement {
+    match snapshot {
+        Some(snapshot) => render_terminal_grid(snapshot).into_any_element(),
+        None => div()
+            .font_family("monospace")
+            .text_sm()
+            .line_height(gpui::px(18.0))
+            .child(" ")
+            .into_any_element(),
+    }
 }

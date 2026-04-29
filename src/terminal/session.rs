@@ -1,19 +1,22 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::app::TerminalTabId;
 use crate::terminal::TerminalBackendSession;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TerminalSessionId {
     pub repo_id: String,
     pub worktree_path: PathBuf,
+    pub tab_id: TerminalTabId,
 }
 
 impl TerminalSessionId {
-    pub fn new(repo_id: impl Into<String>, worktree_path: PathBuf) -> Self {
+    pub fn new(repo_id: impl Into<String>, worktree_path: PathBuf, tab_id: TerminalTabId) -> Self {
         Self {
             repo_id: repo_id.into(),
             worktree_path,
+            tab_id,
         }
     }
 }
@@ -61,17 +64,20 @@ pub struct TerminalSessionRegistry {
 }
 
 impl TerminalSessionRegistry {
-    pub fn get_or_start<B: crate::terminal::TerminalBackend>(
+    pub fn get(&self, id: &TerminalSessionId) -> Option<TerminalSessionRef> {
+        self.sessions.get(id).cloned()
+    }
+
+    pub fn attach_existing(
         &mut self,
         id: TerminalSessionId,
         command: CommandSpec,
-        backend: &mut B,
-    ) -> anyhow::Result<TerminalSessionRef> {
+        backend_session: TerminalBackendSession,
+    ) -> TerminalSessionRef {
         if let Some(session) = self.sessions.get(&id) {
-            return Ok(session.clone());
+            return session.clone();
         }
 
-        let backend_session = backend.start(command.clone())?;
         self.next_handle += 1;
         let session = TerminalSessionRef {
             id: id.clone(),
@@ -80,7 +86,21 @@ impl TerminalSessionRegistry {
             backend_session,
         };
         self.sessions.insert(id, session.clone());
-        Ok(session)
+        session
+    }
+
+    pub fn get_or_start<B: crate::terminal::TerminalBackend>(
+        &mut self,
+        id: TerminalSessionId,
+        command: CommandSpec,
+        backend: &mut B,
+    ) -> anyhow::Result<TerminalSessionRef> {
+        if let Some(session) = self.get(&id) {
+            return Ok(session);
+        }
+
+        let backend_session = backend.start(command.clone())?;
+        Ok(self.attach_existing(id, command, backend_session))
     }
 
     pub fn replace_backend_session(
@@ -91,5 +111,33 @@ impl TerminalSessionRegistry {
         if let Some(session) = self.sessions.get_mut(id) {
             session.backend_session = backend_session;
         }
+    }
+
+    pub fn remove_sessions_for_worktree(
+        &mut self,
+        repo_id: &str,
+        worktree_path: &Path,
+    ) -> Vec<TerminalSessionRef> {
+        let ids: Vec<_> = self
+            .sessions
+            .keys()
+            .filter(|id| id.repo_id == repo_id && id.worktree_path == worktree_path)
+            .cloned()
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| self.sessions.remove(&id))
+            .collect()
+    }
+
+    pub fn remove_sessions_for_repository(&mut self, repo_id: &str) -> Vec<TerminalSessionRef> {
+        let ids: Vec<_> = self
+            .sessions
+            .keys()
+            .filter(|id| id.repo_id == repo_id)
+            .cloned()
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| self.sessions.remove(&id))
+            .collect()
     }
 }
