@@ -194,7 +194,11 @@ impl Render for TerminalProbe {
             )
             .child(
                 canvas(
-                    move |_bounds, window, _cx: &mut App| {
+                    move |_bounds, _window, _cx: &mut App| drag_capture_entity,
+                    |bounds: Bounds<gpui::Pixels>,
+                     drag_capture_entity,
+                     window: &mut Window,
+                     _cx: &mut App| {
                         window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
                             if !event.dragging() {
                                 return;
@@ -214,8 +218,7 @@ impl Render for TerminalProbe {
                                 cx.notify();
                             });
                         });
-                    },
-                    |bounds: Bounds<gpui::Pixels>, (), window: &mut Window, _cx: &mut App| {
+
                         let cell_w = px(12.0);
                         let cell_h = px(20.0);
                         let origin = point(bounds.origin.x + px(24.0), bounds.origin.y + px(96.0));
