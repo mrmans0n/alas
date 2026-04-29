@@ -41,6 +41,8 @@ The shell coordinates selection, layout, focus, and pane visibility:
 - app-level action dispatch
 - terminal focus and keyboard routing
 
+Start from the existing GPUI app because the codebase already uses it. Before investing deeply in terminal rendering UI, run a feasibility gate for terminal-grade capabilities: custom cell rendering, high-frequency repaint, keyboard/text input fidelity, trackpad/mouse scroll, context/overflow menus, focus handling, and selection/copy. If GPUI cannot satisfy those requirements without fighting the framework, V1 may switch to another Rust UI stack that can, while preserving the app/domain/terminal backend boundaries in this spec.
+
 ### Terminal Engine Layer
 
 Make Ghostty VT/rendering a required V1 path. The current `TerminalBackend` boundary should remain, but the model it returns must evolve from plain text lines to a real terminal render model.
