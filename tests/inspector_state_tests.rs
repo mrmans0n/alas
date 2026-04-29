@@ -34,6 +34,7 @@ fn successful_loads_clear_matching_errors_without_affecting_other_tab() {
         path: PathBuf::from("/repo"),
         is_dir: true,
         children: Vec::new(),
+        truncated: false,
     });
 
     assert!(state.files.is_some());

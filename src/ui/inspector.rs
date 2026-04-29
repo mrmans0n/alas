@@ -166,6 +166,15 @@ fn render_file_node(node: &FileTreeNode, depth: usize) -> impl IntoElement {
                 .iter()
                 .map(move |child| render_file_node(child, depth + 1)),
         )
+        .when(node.truncated, |element| {
+            element.child(
+                div()
+                    .pl(px(((depth + 1) * 12) as f32))
+                    .text_xs()
+                    .text_color(rgb(0x6b7280))
+                    .child("… additional entries hidden"),
+            )
+        })
 }
 
 fn render_changes_tab(state: &InspectorPaneState) -> AnyElement {

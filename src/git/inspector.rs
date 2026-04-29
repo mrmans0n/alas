@@ -37,6 +37,21 @@ impl GitInspectorService {
         worktree_path: &Path,
         commit_limit: usize,
     ) -> anyhow::Result<GitInspectorState> {
+        let mut state = self.inspect_changes(worktree_path)?;
+
+        let limit_arg = format!("-n{commit_limit}");
+        let log_output = self
+            .runner
+            .run(worktree_path, &["log", "--oneline", &limit_arg])
+            .with_context(|| {
+                format!("failed to inspect Git log for {}", worktree_path.display())
+            })?;
+        state.recent_commits = parse_recent_commits(&log_output.stdout);
+
+        Ok(state)
+    }
+
+    pub fn inspect_changes(&self, worktree_path: &Path) -> anyhow::Result<GitInspectorState> {
         let branch_output = self
             .runner
             .run(worktree_path, &["branch", "--show-current"])
@@ -62,19 +77,10 @@ impl GitInspectorService {
             })?;
         let changed_files = parse_changed_files(&status_output.stdout);
 
-        let limit_arg = format!("-n{commit_limit}");
-        let log_output = self
-            .runner
-            .run(worktree_path, &["log", "--oneline", &limit_arg])
-            .with_context(|| {
-                format!("failed to inspect Git log for {}", worktree_path.display())
-            })?;
-        let recent_commits = parse_recent_commits(&log_output.stdout);
-
         Ok(GitInspectorState {
             branch,
             changed_files,
-            recent_commits,
+            recent_commits: Vec::new(),
         })
     }
 }

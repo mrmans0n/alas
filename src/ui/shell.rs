@@ -81,6 +81,7 @@ pub struct AlasShell {
     terminal_size: Option<TerminalSize>,
     terminal_scroll_offset_rows: usize,
     inspector_state: InspectorPaneState,
+    inspector_request_generation: u64,
 }
 
 impl AlasShell {
@@ -114,6 +115,7 @@ impl AlasShell {
             terminal_size: None,
             terminal_scroll_offset_rows: 0,
             inspector_state: InspectorPaneState::default(),
+            inspector_request_generation: 0,
         };
         shell.refresh_repositories();
         shell.start_terminal_refresh(cx);
@@ -739,8 +741,20 @@ impl AlasShell {
         self.sidebar_menu = None;
         self.terminal_scroll_offset_rows = 0;
         self.inspector_state.clear_for_new_worktree();
-        self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
-        self.refresh_file_tree(repo_id.clone(), path.clone(), cx);
+        self.inspector_request_generation = self.inspector_request_generation.wrapping_add(1);
+        let inspector_request_generation = self.inspector_request_generation;
+        self.refresh_git_inspector(
+            repo_id.clone(),
+            path.clone(),
+            inspector_request_generation,
+            cx,
+        );
+        self.refresh_file_tree(
+            repo_id.clone(),
+            path.clone(),
+            inspector_request_generation,
+            cx,
+        );
 
         let default_command = self.resolve_default_command(&repo_id, path.clone());
         let tab_id = self.workspace_session.ensure_default_terminal_tab(
@@ -960,12 +974,18 @@ impl AlasShell {
         self.start_or_reuse_terminal_tab(picker.repo_id, picker.worktree_path, tab_id);
     }
 
-    fn refresh_git_inspector(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
+    fn refresh_git_inspector(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        request_generation: u64,
+        cx: &mut Context<Self>,
+    ) {
         let selected_repo_id = repo_id;
         let selected_path = path.clone();
         let task = cx.background_executor().spawn(async move {
             GitInspectorService::new(GitRunner::new())
-                .inspect(&path, 8)
+                .inspect_changes(&path)
                 .map_err(|error| error.to_string())
         });
 
@@ -976,7 +996,8 @@ impl AlasShell {
                     shell.model.selected_worktree().is_some_and(|selected| {
                         selected.repo_id == selected_repo_id && selected.path == selected_path
                     });
-                if !is_current_selection {
+                if !is_current_selection || shell.inspector_request_generation != request_generation
+                {
                     return;
                 }
 
@@ -995,7 +1016,13 @@ impl AlasShell {
         .detach();
     }
 
-    fn refresh_file_tree(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
+    fn refresh_file_tree(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        request_generation: u64,
+        cx: &mut Context<Self>,
+    ) {
         let selected_repo_id = repo_id;
         let selected_path = path.clone();
         let task = cx.background_executor().spawn(async move {
@@ -1011,7 +1038,8 @@ impl AlasShell {
                     shell.model.selected_worktree().is_some_and(|selected| {
                         selected.repo_id == selected_repo_id && selected.path == selected_path
                     });
-                if !is_current_selection {
+                if !is_current_selection || shell.inspector_request_generation != request_generation
+                {
                     return;
                 }
 
