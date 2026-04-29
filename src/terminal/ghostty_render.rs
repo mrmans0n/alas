@@ -27,34 +27,34 @@ pub struct GhosttyRenderCell {
 }
 
 impl GhosttyRenderCell {
-    pub fn narrow(text: impl Into<String>) -> Self {
+    pub fn narrow(text: impl Into<String>, style: GhosttyCellStyle) -> Self {
         Self {
             text: text.into(),
-            style: GhosttyCellStyle::default(),
+            style,
             width: GhosttyCellWidth::Narrow,
         }
     }
 
-    pub fn wide(text: impl Into<String>) -> Self {
+    pub fn wide(text: impl Into<String>, style: GhosttyCellStyle) -> Self {
         Self {
             text: text.into(),
-            style: GhosttyCellStyle::default(),
+            style,
             width: GhosttyCellWidth::Wide,
         }
     }
 
-    pub fn spacer_tail() -> Self {
+    pub fn spacer_tail(style: GhosttyCellStyle) -> Self {
         Self {
             text: String::new(),
-            style: GhosttyCellStyle::default(),
+            style,
             width: GhosttyCellWidth::SpacerTail,
         }
     }
 
-    pub fn empty() -> Self {
+    pub fn empty(style: GhosttyCellStyle) -> Self {
         Self {
             text: String::new(),
-            style: GhosttyCellStyle::default(),
+            style,
             width: GhosttyCellWidth::Narrow,
         }
     }
@@ -71,7 +71,7 @@ pub struct GhosttyRenderFrame {
     pub rows: u16,
     pub default_foreground: TerminalColor,
     pub default_background: TerminalColor,
-    pub cursor: GhosttyRenderCursor,
+    pub cursor: Option<GhosttyRenderCursor>,
     pub rows_data: Vec<GhosttyRenderRow>,
 }
 
@@ -190,19 +190,70 @@ mod tests {
     }
 
     #[test]
+    fn cell_constructors_preserve_styles() {
+        let styled = style_with_background(TerminalColor::rgb(1, 2, 3));
+
+        assert_eq!(
+            GhosttyRenderCell::narrow("a", styled.clone()),
+            GhosttyRenderCell {
+                text: "a".to_string(),
+                style: styled.clone(),
+                width: GhosttyCellWidth::Narrow,
+            }
+        );
+        assert_eq!(
+            GhosttyRenderCell::wide("表", styled.clone()),
+            GhosttyRenderCell {
+                text: "表".to_string(),
+                style: styled.clone(),
+                width: GhosttyCellWidth::Wide,
+            }
+        );
+        assert_eq!(
+            GhosttyRenderCell::spacer_tail(styled.clone()),
+            GhosttyRenderCell {
+                text: String::new(),
+                style: styled.clone(),
+                width: GhosttyCellWidth::SpacerTail,
+            }
+        );
+        assert_eq!(
+            GhosttyRenderCell::empty(styled.clone()),
+            GhosttyRenderCell {
+                text: String::new(),
+                style: styled,
+                width: GhosttyCellWidth::Narrow,
+            }
+        );
+    }
+
+    #[test]
+    fn render_frame_cursor_is_optional() {
+        let frame = GhosttyRenderFrame {
+            cols: 2,
+            rows: 1,
+            default_foreground: TerminalColor::rgb(255, 255, 255),
+            default_background: TerminalColor::rgb(0, 0, 0),
+            cursor: None,
+            rows_data: vec![GhosttyRenderRow {
+                cells: vec![
+                    GhosttyRenderCell::narrow("a", GhosttyCellStyle::default()),
+                    GhosttyRenderCell::empty(GhosttyCellStyle::default()),
+                ],
+            }],
+        };
+
+        assert_eq!(frame.cursor, None);
+    }
+
+    #[test]
     fn background_runs_cover_trailing_empty_cells() {
         let highlighted = TerminalColor::rgb(1, 2, 3);
         let row = GhosttyRenderRow {
             cells: vec![
-                GhosttyRenderCell::narrow("a"),
-                GhosttyRenderCell {
-                    style: style_with_background(highlighted),
-                    ..GhosttyRenderCell::empty()
-                },
-                GhosttyRenderCell {
-                    style: style_with_background(highlighted),
-                    ..GhosttyRenderCell::empty()
-                },
+                GhosttyRenderCell::narrow("a", GhosttyCellStyle::default()),
+                GhosttyRenderCell::empty(style_with_background(highlighted)),
+                GhosttyRenderCell::empty(style_with_background(highlighted)),
             ],
         };
 
@@ -227,9 +278,9 @@ mod tests {
     fn text_runs_skip_wide_spacer_tail_cells() {
         let row = GhosttyRenderRow {
             cells: vec![
-                GhosttyRenderCell::wide("表"),
-                GhosttyRenderCell::spacer_tail(),
-                GhosttyRenderCell::narrow("x"),
+                GhosttyRenderCell::wide("表", GhosttyCellStyle::default()),
+                GhosttyRenderCell::spacer_tail(GhosttyCellStyle::default()),
+                GhosttyRenderCell::narrow("x", GhosttyCellStyle::default()),
             ],
         };
 
