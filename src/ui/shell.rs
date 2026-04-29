@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     app::{
-        AlasModel, RepositoryNode, TerminalTabId, TerminalTabKind, TerminalTabStatus,
+        ActionId, AlasModel, RepositoryNode, TerminalTabId, TerminalTabKind, TerminalTabStatus,
         WorkspaceSession,
     },
     config::{
@@ -26,17 +26,18 @@ use crate::{
             CreateWorktreeField,
         },
         inspector::render_git_inspector,
-        sidebar::render_sidebar,
+        sidebar::{SidebarMenuState, render_sidebar},
         terminal_pane::render_terminal_pane,
         workspace::render_workspace,
     },
 };
 use gpui::{
-    App, Application, Context, FocusHandle, IntoElement, KeyDownEvent, PathPromptOptions,
-    PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window, WindowOptions, div,
-    prelude::*, px, rgb,
+    App, Application, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
+    PathPromptOptions, PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window,
+    WindowOptions, div, prelude::*, px, rgb,
 };
 use indexmap::IndexMap;
+use std::borrow::BorrowMut;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum CommandSettingsField {
@@ -63,6 +64,7 @@ pub struct AlasShell {
     command_settings_focus: FocusHandle,
     command_settings_active_field: CommandSettingsField,
     command_picker: Option<CommandPickerState>,
+    sidebar_menu: Option<SidebarMenuState>,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     confirm_remove_worktree_dialog: Option<ConfirmRemoveWorktreeDialog>,
     confirm_prune_worktrees_dialog: Option<ConfirmPruneWorktreesDialog>,
@@ -96,6 +98,7 @@ impl AlasShell {
             command_settings_focus: cx.focus_handle(),
             command_settings_active_field: CommandSettingsField::DefaultName,
             command_picker: None,
+            sidebar_menu: None,
             confirm_remove_repository_dialog: None,
             confirm_remove_worktree_dialog: None,
             confirm_prune_worktrees_dialog: None,
@@ -732,6 +735,7 @@ impl AlasShell {
     fn select_worktree(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
         self.model.select_worktree(repo_id.clone(), path.clone());
         self.command_picker = None;
+        self.sidebar_menu = None;
         self.terminal_scroll_offset_rows = 0;
         self.git_inspector = None;
         self.git_inspector_error = None;
@@ -848,6 +852,86 @@ impl AlasShell {
         self.command_picker = None;
     }
 
+    fn open_sidebar_menu(&mut self, menu: SidebarMenuState) {
+        if self.sidebar_menu.as_ref() == Some(&menu) {
+            self.sidebar_menu = None;
+        } else {
+            self.sidebar_menu = Some(menu);
+        }
+    }
+
+    fn close_sidebar_menu(&mut self) {
+        self.sidebar_menu = None;
+    }
+
+    fn handle_sidebar_menu_action(
+        &mut self,
+        action_id: ActionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.sidebar_menu.take() else {
+            return;
+        };
+
+        match action_id {
+            ActionId::RemoveRepository => {
+                let repo_name = self.repository_name(&menu.repo_id);
+                self.confirm_remove_repository(menu.repo_id, repo_name, window, cx);
+            }
+            ActionId::CreateWorktree => self.open_create_worktree_dialog(menu.repo_id, cx),
+            ActionId::CommandSettings => self.open_command_settings_dialog(menu.repo_id, cx),
+            ActionId::PruneWorktrees => {
+                let repo_name = self.repository_name(&menu.repo_id);
+                self.confirm_prune_worktrees(menu.repo_id, repo_name, window, cx);
+            }
+            ActionId::ToggleArchivedWorktrees => {
+                let show_archived = !self.repository_show_archived(&menu.repo_id);
+                self.set_show_archived(&menu.repo_id, show_archived);
+            }
+            ActionId::ArchiveWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    if let Err(error) = self.archive_worktree(&menu.repo_id, path) {
+                        self.set_add_repository_error(error.to_string());
+                    }
+                }
+            }
+            ActionId::UnarchiveWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    if let Err(error) = self.unarchive_worktree(&menu.repo_id, &path) {
+                        self.set_add_repository_error(error.to_string());
+                    }
+                }
+            }
+            ActionId::RemoveWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    let is_main = self.worktree_is_main(&menu.repo_id, &path);
+                    self.confirm_remove_worktree(menu.repo_id, path, is_main, window, cx);
+                }
+            }
+            ActionId::SelectWorktree => {
+                if let Some(path) = menu.worktree_path {
+                    self.select_worktree(menu.repo_id, path, cx);
+                }
+            }
+            ActionId::OpenPath => {
+                if let Some(path) = menu.worktree_path {
+                    let app: &mut App = BorrowMut::borrow_mut(cx);
+                    app.open_with_system(&path);
+                }
+            }
+            ActionId::CopyPath => {
+                if let Some(path) = menu.worktree_path {
+                    let app: &mut App = BorrowMut::borrow_mut(cx);
+                    app.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+                }
+            }
+            ActionId::AddRepository => self.open_add_repository_dialog(cx),
+        }
+
+        cx.notify();
+    }
+
     fn handle_command_picker_key_down(&mut self, event: &KeyDownEvent) -> bool {
         if self.command_picker.is_none() {
             return false;
@@ -949,6 +1033,37 @@ impl AlasShell {
             .iter()
             .find(|repository| repository.id == repo_id)
             .map(|repository| repository.path.clone())
+    }
+
+    fn repository_name(&self, repo_id: &str) -> String {
+        self.model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .map(|repository| repository.name.clone())
+            .unwrap_or_else(|| repo_id.to_string())
+    }
+
+    fn repository_show_archived(&self, repo_id: &str) -> bool {
+        self.model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .is_some_and(|repository| repository.show_archived)
+    }
+
+    fn worktree_is_main(&self, repo_id: &str, path: &Path) -> bool {
+        self.model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .and_then(|repository| {
+                repository
+                    .worktrees
+                    .iter()
+                    .find(|worktree| worktree.path == path)
+            })
+            .is_some_and(|worktree| worktree.kind == crate::git::WorktreeKind::Main)
     }
 
     fn confirm_remove_repository(
@@ -1196,6 +1311,7 @@ impl AlasShell {
     fn clear_selection_and_active_terminal(&mut self) {
         self.model.clear_selection();
         self.command_picker = None;
+        self.sidebar_menu = None;
         self.active_terminal_tab = None;
         self.active_terminal = None;
         self.terminal_error = None;
@@ -1411,48 +1527,6 @@ impl Render for AlasShell {
         let terminal_snapshot = self.terminal_snapshot();
 
         let view = cx.entity().downgrade();
-        let on_remove_repository = move |repo_id: String,
-                                         repo_name: String,
-                                         _event: &gpui::ClickEvent,
-                                         window: &mut Window,
-                                         app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.confirm_remove_repository(repo_id, repo_name, window, cx);
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_prune_worktrees = move |repo_id: String,
-                                       repo_name: String,
-                                       _event: &gpui::ClickEvent,
-                                       window: &mut Window,
-                                       app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.confirm_prune_worktrees(repo_id, repo_name, window, cx);
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_create_worktree = move |repo_id: String,
-                                       _event: &gpui::ClickEvent,
-                                       _window: &mut Window,
-                                       app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.open_create_worktree_dialog(repo_id, cx);
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_command_settings = move |repo_id: String,
-                                        _event: &gpui::ClickEvent,
-                                        _window: &mut Window,
-                                        app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.open_command_settings_dialog(repo_id, cx);
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
         let on_select_worktree = move |repo_id: String,
                                        path: PathBuf,
                                        _event: &gpui::ClickEvent,
@@ -1461,58 +1535,6 @@ impl Render for AlasShell {
             view.update(app, |shell, cx| {
                 shell.select_worktree(repo_id, path, cx);
                 cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_toggle_show_archived = move |repo_id: String,
-                                            show: bool,
-                                            _event: &gpui::ClickEvent,
-                                            _window: &mut Window,
-                                            app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.set_show_archived(&repo_id, show);
-                cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_archive_worktree = move |repo_id: String,
-                                        path: PathBuf,
-                                        _event: &gpui::ClickEvent,
-                                        _window: &mut Window,
-                                        app: &mut App| {
-            view.update(app, |shell, cx| {
-                if let Err(error) = shell.archive_worktree(&repo_id, path) {
-                    shell.set_add_repository_error(error.to_string());
-                }
-                cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_unarchive_worktree = move |repo_id: String,
-                                          path: PathBuf,
-                                          _event: &gpui::ClickEvent,
-                                          _window: &mut Window,
-                                          app: &mut App| {
-            view.update(app, |shell, cx| {
-                if let Err(error) = shell.unarchive_worktree(&repo_id, &path) {
-                    shell.set_add_repository_error(error.to_string());
-                }
-                cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
-        let on_remove_worktree = move |repo_id: String,
-                                       path: PathBuf,
-                                       is_main: bool,
-                                       _event: &gpui::ClickEvent,
-                                       window: &mut Window,
-                                       app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.confirm_remove_worktree(repo_id, path, is_main, window, cx);
             })
             .ok();
         };
@@ -1644,6 +1666,34 @@ impl Render for AlasShell {
             shell.close_command_picker();
             cx.notify();
         });
+        let view = cx.entity().downgrade();
+        let on_open_sidebar_menu =
+            move |menu: SidebarMenuState, _window: &mut Window, app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.open_sidebar_menu(menu);
+                    cx.notify();
+                })
+                .ok();
+            };
+        let view = cx.entity().downgrade();
+        let on_sidebar_menu_action = move |action_id: ActionId,
+                                           _event: &gpui::ClickEvent,
+                                           window: &mut Window,
+                                           app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.handle_sidebar_menu_action(action_id, window, cx);
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_close_sidebar_menu =
+            move |_event: &gpui::ClickEvent, _window: &mut Window, app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.close_sidebar_menu();
+                    cx.notify();
+                })
+                .ok();
+            };
         let workspace_tabs = self
             .model
             .selected_worktree()
@@ -1663,16 +1713,12 @@ impl Render for AlasShell {
             .size_full()
             .child(render_sidebar(
                 self.model.repositories(),
+                self.sidebar_menu.as_ref(),
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
-                on_remove_repository,
-                on_prune_worktrees,
-                on_create_worktree,
-                on_command_settings,
                 on_select_worktree,
-                on_toggle_show_archived,
-                on_archive_worktree,
-                on_unarchive_worktree,
-                on_remove_worktree,
+                on_open_sidebar_menu,
+                on_sidebar_menu_action,
+                on_close_sidebar_menu,
                 self.add_repository_error(),
             ))
             .child(

@@ -1,27 +1,32 @@
 use std::path::PathBuf;
 
-use crate::{app::RepositoryNode, git::WorktreeKind};
-use gpui::{
-    App, ClickEvent, Div, FontWeight, IntoElement, ParentElement, Rgba, SharedString, Styled,
-    Window, div, prelude::*, px, rgb,
+use crate::{
+    app::{
+        ActionAvailability, ActionDefinition, ActionId, ActionRegistry, ActionScope,
+        RepositoryNode, WorktreeNode,
+    },
+    git::WorktreeKind,
 };
+use gpui::{
+    App, ClickEvent, Div, FontWeight, IntoElement, MouseButton, ParentElement, SharedString,
+    Styled, Window, div, prelude::*, px, rgb,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarMenuState {
+    pub repo_id: String,
+    pub worktree_path: Option<PathBuf>,
+    pub scope: ActionScope,
+}
 
 pub fn render_sidebar(
     repositories: &[RepositoryNode],
+    sidebar_menu: Option<&SidebarMenuState>,
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_prune_worktrees: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_command_settings: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
-    + Clone
-    + 'static,
-    on_remove_worktree: impl Fn(String, PathBuf, bool, &ClickEvent, &mut Window, &mut App)
-    + Clone
-    + 'static,
+    on_open_sidebar_menu: impl Fn(SidebarMenuState, &mut Window, &mut App) + Clone + 'static,
+    on_sidebar_menu_action: impl Fn(ActionId, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_close_sidebar_menu: impl Fn(&ClickEvent, &mut Window, &mut App) + Clone + 'static,
     add_repository_error: Option<&str>,
 ) -> impl IntoElement {
     div()
@@ -57,15 +62,11 @@ pub fn render_sidebar(
         .children(repositories.iter().map(|repository| {
             render_repository(
                 repository,
-                on_remove_repository.clone(),
-                on_prune_worktrees.clone(),
-                on_create_worktree.clone(),
-                on_command_settings.clone(),
+                sidebar_menu,
                 on_select_worktree.clone(),
-                on_toggle_show_archived.clone(),
-                on_archive_worktree.clone(),
-                on_unarchive_worktree.clone(),
-                on_remove_worktree.clone(),
+                on_open_sidebar_menu.clone(),
+                on_sidebar_menu_action.clone(),
+                on_close_sidebar_menu.clone(),
             )
         }))
         .child(
@@ -100,41 +101,23 @@ pub fn render_sidebar(
 
 fn render_repository(
     repository: &RepositoryNode,
-    on_remove_repository: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_prune_worktrees: impl Fn(String, String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_create_worktree: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_command_settings: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    sidebar_menu: Option<&SidebarMenuState>,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_toggle_show_archived: impl Fn(String, bool, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_archive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-    on_unarchive_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App)
-    + Clone
-    + 'static,
-    on_remove_worktree: impl Fn(String, PathBuf, bool, &ClickEvent, &mut Window, &mut App)
-    + Clone
-    + 'static,
+    on_open_sidebar_menu: impl Fn(SidebarMenuState, &mut Window, &mut App) + Clone + 'static,
+    on_sidebar_menu_action: impl Fn(ActionId, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_close_sidebar_menu: impl Fn(&ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
-    let repo_id = repository.id.clone();
-    let repo_name = repository.name.clone();
-    let create_worktree_repo_id = repository.id.clone();
-    let command_settings_repo_id = repository.id.clone();
-    let prune_worktrees_repo_id = repository.id.clone();
-    let prune_worktrees_repo_name = repository.name.clone();
-    let remove_label: SharedString = "Remove from Alas".into();
-    let show_archived_label: SharedString = if repository.show_archived {
-        "Hide archived".into()
-    } else {
-        "Show archived".into()
+    let repository_menu = SidebarMenuState {
+        repo_id: repository.id.clone(),
+        worktree_path: None,
+        scope: ActionScope::Repository,
     };
+    let repository_menu_is_open = sidebar_menu == Some(&repository_menu);
     let has_visible_worktrees = repository
         .worktrees
         .iter()
         .any(|worktree| repository.show_archived || !worktree.archived);
 
-    // GPUI 0.2 exposes low-level mouse events but no stable built-in context
-    // menu/popover primitive in this app. Keep the full right-click menu action
-    // set visible and grouped so no archive/remove/prune/settings affordance is
-    // lost while native context menus are deferred.
     div()
         .flex()
         .flex_col()
@@ -142,118 +125,62 @@ fn render_repository(
         .child(
             div()
                 .flex()
-                .items_center()
+                .items_start()
                 .justify_between()
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(repository.name.clone()),
-                )
-                .child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "create-worktree-{create_worktree_repo_id}"
-                        )))
-                        .text_sm()
-                        .when(repository.unavailable, |element| {
-                            element.text_color(rgb(0xdc2626)).child("Unavailable")
-                        })
-                        .when(!repository.unavailable, |element| {
-                            element
-                                .text_color(rgb(0x2563eb))
-                                .child("+ Worktree")
-                                .on_click(move |event, window, cx| {
-                                    on_create_worktree(
-                                        create_worktree_repo_id.clone(),
-                                        event,
-                                        window,
-                                        cx,
-                                    );
-                                })
-                        }),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .justify_between()
-                .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(0x6b7280))
-                        .truncate()
-                        .child(repository.path.display().to_string()),
-                )
+                .on_mouse_down(MouseButton::Right, {
+                    let on_open_sidebar_menu = on_open_sidebar_menu.clone();
+                    let repository_menu = repository_menu.clone();
+                    move |event, window, cx| {
+                        cx.stop_propagation();
+                        if event.button == MouseButton::Right {
+                            on_open_sidebar_menu(repository_menu.clone(), window, cx);
+                        }
+                    }
+                })
                 .child(
                     div()
                         .flex()
-                        .flex_wrap()
-                        .justify_end()
+                        .flex_col()
                         .gap_1()
+                        .overflow_hidden()
                         .child(
-                            action_chip(show_archived_label, rgb(0x2563eb))
-                                .id(SharedString::from(format!("toggle-archived-{repo_id}")))
-                                .on_click({
-                                    let repo_id = repo_id.clone();
-                                    let show_archived = repository.show_archived;
-                                    move |event, window, cx| {
-                                        on_toggle_show_archived(
-                                            repo_id.clone(),
-                                            !show_archived,
-                                            event,
-                                            window,
-                                            cx,
-                                        );
-                                    }
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .truncate()
+                                        .child(repository.name.clone()),
+                                )
+                                .when(repository.unavailable, |element| {
+                                    element.child(status_badge("Unavailable"))
                                 }),
                         )
                         .child(
-                            action_chip("Commands".into(), rgb(0x2563eb))
-                                .id(SharedString::from(format!(
-                                    "command-settings-{command_settings_repo_id}"
-                                )))
-                                .on_click(move |event, window, cx| {
-                                    on_command_settings(
-                                        command_settings_repo_id.clone(),
-                                        event,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                        )
-                        .child(
-                            action_chip("Prune".into(), rgb(0x2563eb))
-                                .id(SharedString::from(format!(
-                                    "prune-worktrees-{prune_worktrees_repo_id}"
-                                )))
-                                .on_click(move |event, window, cx| {
-                                    on_prune_worktrees(
-                                        prune_worktrees_repo_id.clone(),
-                                        prune_worktrees_repo_name.clone(),
-                                        event,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                        )
-                        .child(
-                            action_chip(remove_label, rgb(0xdc2626))
-                                .id(SharedString::from(format!("remove-repository-{repo_id}")))
-                                .on_click(move |event, window, cx| {
-                                    on_remove_repository(
-                                        repo_id.clone(),
-                                        repo_name.clone(),
-                                        event,
-                                        window,
-                                        cx,
-                                    );
-                                }),
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0x6b7280))
+                                .truncate()
+                                .child(repository.path.display().to_string()),
                         ),
-                ),
+                )
+                .child(overflow_button(
+                    SharedString::from(format!("repository-actions-{}", repository.id)),
+                    repository_menu,
+                    on_open_sidebar_menu.clone(),
+                )),
         )
+        .when(repository_menu_is_open, |element| {
+            element.child(render_sidebar_menu(
+                repository,
+                None,
+                on_sidebar_menu_action.clone(),
+                on_close_sidebar_menu.clone(),
+            ))
+        })
         .when(repository.unavailable, |element| {
             element.child(
                 div()
@@ -304,139 +231,298 @@ fn render_repository(
                 .iter()
                 .filter(|worktree| repository.show_archived || !worktree.archived)
                 .map(|worktree| {
-                    let label = worktree
-                        .branch
-                        .clone()
-                        .unwrap_or_else(|| worktree.path.display().to_string());
-                    let repo_id = repository.id.clone();
-                    let worktree_path = worktree.path.clone();
-                    let is_archived = worktree.archived;
-                    let is_main = worktree.kind == WorktreeKind::Main;
-                    let action_label: SharedString = if is_archived {
-                        "Unarchive".into()
-                    } else {
-                        "Archive".into()
-                    };
-                    let select_repo_id = repo_id.clone();
-                    let select_worktree_path = worktree_path.clone();
-                    let open_repo_id = repo_id.clone();
-                    let open_worktree_path = worktree_path.clone();
-                    let remove_repo_id = repo_id.clone();
-                    let remove_worktree_path = worktree_path.clone();
-                    let on_archive_worktree = on_archive_worktree.clone();
-                    let on_unarchive_worktree = on_unarchive_worktree.clone();
-                    let on_select_row_worktree = on_select_worktree.clone();
-                    let on_select_open_worktree = on_select_worktree.clone();
-                    let on_remove_worktree = on_remove_worktree.clone();
-
-                    div()
-                        .ml_3()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .id(SharedString::from(format!(
-                            "select-worktree-{select_repo_id}-{}",
-                            select_worktree_path.display()
-                        )))
-                        .text_sm()
-                        .bg(rgb(0xffffff))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .on_click(move |event, window, cx| {
-                            on_select_row_worktree(
-                                select_repo_id.clone(),
-                                select_worktree_path.clone(),
-                                event,
-                                window,
-                                cx,
-                            );
-                        })
-                        .child(div().truncate().child(label))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .justify_end()
-                                .gap_1()
-                                .child(
-                                    action_chip("Open".into(), rgb(0x2563eb))
-                                        .id(SharedString::from(format!(
-                                            "open-worktree-{open_repo_id}-{}",
-                                            open_worktree_path.display()
-                                        )))
-                                        .on_click(move |event, window, cx| {
-                                            cx.stop_propagation();
-                                            on_select_open_worktree(
-                                                open_repo_id.clone(),
-                                                open_worktree_path.clone(),
-                                                event,
-                                                window,
-                                                cx,
-                                            );
-                                        }),
-                                )
-                                .child(
-                                    action_chip(action_label, rgb(0x2563eb))
-                                        .id(SharedString::from(format!(
-                                            "archive-worktree-{repo_id}-{}",
-                                            worktree_path.display()
-                                        )))
-                                        .on_click(move |event, window, cx| {
-                                            cx.stop_propagation();
-                                            if is_archived {
-                                                on_unarchive_worktree(
-                                                    repo_id.clone(),
-                                                    worktree_path.clone(),
-                                                    event,
-                                                    window,
-                                                    cx,
-                                                );
-                                            } else {
-                                                on_archive_worktree(
-                                                    repo_id.clone(),
-                                                    worktree_path.clone(),
-                                                    event,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        }),
-                                )
-                                .when(!is_main, |element| {
-                                    element.child(
-                                        action_chip("Remove".into(), rgb(0xdc2626))
-                                            .id(SharedString::from(format!(
-                                                "remove-worktree-{remove_repo_id}-{}",
-                                                remove_worktree_path.display()
-                                            )))
-                                            .on_click(move |event, window, cx| {
-                                                cx.stop_propagation();
-                                                on_remove_worktree(
-                                                    remove_repo_id.clone(),
-                                                    remove_worktree_path.clone(),
-                                                    is_main,
-                                                    event,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }),
-                                    )
-                                }),
-                        )
+                    render_worktree_row(
+                        repository,
+                        worktree,
+                        sidebar_menu,
+                        on_select_worktree.clone(),
+                        on_open_sidebar_menu.clone(),
+                        on_sidebar_menu_action.clone(),
+                        on_close_sidebar_menu.clone(),
+                    )
                 }),
         )
 }
 
-fn action_chip(label: SharedString, color: Rgba) -> Div {
+fn render_worktree_row(
+    repository: &RepositoryNode,
+    worktree: &WorktreeNode,
+    sidebar_menu: Option<&SidebarMenuState>,
+    on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_open_sidebar_menu: impl Fn(SidebarMenuState, &mut Window, &mut App) + Clone + 'static,
+    on_sidebar_menu_action: impl Fn(ActionId, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_close_sidebar_menu: impl Fn(&ClickEvent, &mut Window, &mut App) + Clone + 'static,
+) -> impl IntoElement {
+    let label = worktree.branch.clone().unwrap_or_else(|| {
+        worktree
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| worktree.path.display().to_string())
+    });
+    let is_main = worktree.kind == WorktreeKind::Main;
+    let repo_id = repository.id.clone();
+    let worktree_path = worktree.path.clone();
+    let menu_state = SidebarMenuState {
+        repo_id: repo_id.clone(),
+        worktree_path: Some(worktree_path.clone()),
+        scope: ActionScope::Worktree,
+    };
+    let menu_is_open = sidebar_menu == Some(&menu_state);
+    let row_id = SharedString::from(format!(
+        "select-worktree-{repo_id}-{}",
+        worktree_path.display()
+    ));
+
     div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .ml_3()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .id(row_id)
+                .text_sm()
+                .bg(rgb(0xffffff))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .on_mouse_down(MouseButton::Right, {
+                    let on_open_sidebar_menu = on_open_sidebar_menu.clone();
+                    let menu_state = menu_state.clone();
+                    move |event, window, cx| {
+                        cx.stop_propagation();
+                        if event.button == MouseButton::Right {
+                            on_open_sidebar_menu(menu_state.clone(), window, cx);
+                        }
+                    }
+                })
+                .on_click({
+                    let on_select_worktree = on_select_worktree.clone();
+                    let repo_id = repo_id.clone();
+                    let worktree_path = worktree_path.clone();
+                    move |event, window, cx| {
+                        if event.is_right_click() {
+                            return;
+                        }
+                        on_select_worktree(
+                            repo_id.clone(),
+                            worktree_path.clone(),
+                            event,
+                            window,
+                            cx,
+                        );
+                    }
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .overflow_hidden()
+                        .child(div().truncate().child(label))
+                        .when(worktree.archived, |element| {
+                            element.child(status_badge("Archived"))
+                        })
+                        .child(status_badge(if is_main { "Main" } else { "Linked" })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(44.0))
+                                .text_xs()
+                                .text_color(rgb(0x9ca3af))
+                                .child(" "),
+                        )
+                        .child(overflow_button(
+                            SharedString::from(format!(
+                                "worktree-actions-{repo_id}-{}",
+                                worktree_path.display()
+                            )),
+                            menu_state.clone(),
+                            on_open_sidebar_menu.clone(),
+                        )),
+                ),
+        )
+        .when(menu_is_open, |element| {
+            element.child(render_sidebar_menu(
+                repository,
+                Some(worktree),
+                on_sidebar_menu_action.clone(),
+                on_close_sidebar_menu.clone(),
+            ))
+        })
+}
+
+fn render_sidebar_menu(
+    repository: &RepositoryNode,
+    worktree: Option<&WorktreeNode>,
+    on_sidebar_menu_action: impl Fn(ActionId, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_close_sidebar_menu: impl Fn(&ClickEvent, &mut Window, &mut App) + Clone + 'static,
+) -> impl IntoElement {
+    let registry = ActionRegistry::default();
+    let scope = if worktree.is_some() {
+        ActionScope::Worktree
+    } else {
+        ActionScope::Repository
+    };
+    let actions = registry
+        .actions()
+        .iter()
+        .filter(|action| action.scope == scope)
+        .filter(|action| action_is_available(action, repository, worktree))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    div()
+        .ml_3()
+        .mr_1()
+        .p_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0xd1d5db))
+        .bg(rgb(0xffffff))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .py_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0x6b7280))
+                        .child(if scope == ActionScope::Repository {
+                            "Repository actions"
+                        } else {
+                            "Worktree actions"
+                        }),
+                )
+                .child(
+                    div()
+                        .id("close-sidebar-menu")
+                        .px_1()
+                        .rounded_md()
+                        .text_xs()
+                        .text_color(rgb(0x6b7280))
+                        .child("×")
+                        .on_click(move |event, window, cx| {
+                            cx.stop_propagation();
+                            on_close_sidebar_menu(event, window, cx);
+                        }),
+                ),
+        )
+        .children(actions.into_iter().map(move |action| {
+            let on_sidebar_menu_action = on_sidebar_menu_action.clone();
+            let action_id = action.id;
+            menu_action_row(
+                SharedString::from(format!("sidebar-action-{action_id:?}")),
+                sidebar_action_label(&action, repository),
+                action.destructive,
+                action_id,
+                on_sidebar_menu_action,
+            )
+        }))
+}
+
+fn action_is_available(
+    action: &ActionDefinition,
+    repository: &RepositoryNode,
+    worktree: Option<&WorktreeNode>,
+) -> bool {
+    match action.availability {
+        ActionAvailability::Always => true,
+        ActionAvailability::WhenRepositoryAvailable => !repository.unavailable,
+        ActionAvailability::WhenWorktreeAvailable => worktree.is_some() && !repository.unavailable,
+        ActionAvailability::WhenWorktreeIsArchived => {
+            worktree.is_some_and(|worktree| worktree.archived) && !repository.unavailable
+        }
+        ActionAvailability::WhenWorktreeIsNotArchived => {
+            worktree.is_some_and(|worktree| !worktree.archived) && !repository.unavailable
+        }
+        ActionAvailability::WhenWorktreeIsLinked => {
+            worktree.is_some_and(|worktree| worktree.kind != WorktreeKind::Main)
+                && !repository.unavailable
+        }
+    }
+}
+
+fn sidebar_action_label(action: &ActionDefinition, repository: &RepositoryNode) -> SharedString {
+    match action.id {
+        ActionId::ToggleArchivedWorktrees if repository.show_archived => "Hide archived".into(),
+        ActionId::ToggleArchivedWorktrees => "Show archived".into(),
+        _ => action.label.into(),
+    }
+}
+
+fn overflow_button(
+    id: SharedString,
+    menu_state: SidebarMenuState,
+    on_open_sidebar_menu: impl Fn(SidebarMenuState, &mut Window, &mut App) + Clone + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
         .px_2()
+        .py_1()
+        .rounded_md()
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(0x374151))
+        .bg(rgb(0xe5e7eb))
+        .child("⋯")
+        .on_click(move |_event, window, cx| {
+            cx.stop_propagation();
+            on_open_sidebar_menu(menu_state.clone(), window, cx);
+        })
+}
+
+fn menu_action_row(
+    id: SharedString,
+    label: SharedString,
+    destructive: bool,
+    action_id: ActionId,
+    on_sidebar_menu_action: impl Fn(ActionId, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .text_sm()
+        .text_color(if destructive {
+            rgb(0xdc2626)
+        } else {
+            rgb(0x374151)
+        })
+        .child(label)
+        .on_click(move |event, window, cx| {
+            cx.stop_propagation();
+            on_sidebar_menu_action(action_id, event, window, cx);
+        })
+}
+
+fn status_badge(label: &'static str) -> Div {
+    div()
+        .px_1()
         .py_1()
         .rounded_md()
         .bg(rgb(0xe5e7eb))
         .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(color)
+        .text_color(rgb(0x6b7280))
         .child(label)
 }
