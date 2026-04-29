@@ -157,6 +157,7 @@ impl AlasShell {
         };
         shell.refresh_repositories();
         shell.start_terminal_refresh(cx);
+        shell.register_app_quit_cleanup(cx);
         shell
     }
 
@@ -1604,6 +1605,22 @@ impl AlasShell {
         self.stop_terminal_sessions(sessions);
     }
 
+    fn shutdown(&mut self) {
+        let sessions = self.terminal_registry.remove_all_sessions();
+        self.stop_terminal_sessions(sessions);
+        self.active_terminal = None;
+        self.active_terminal_tab = None;
+        self.terminal_scroll_offset_rows = 0;
+    }
+
+    fn register_app_quit_cleanup(&self, cx: &mut Context<Self>) {
+        cx.on_app_quit(|shell, _cx| {
+            shell.shutdown();
+            async {}
+        })
+        .detach();
+    }
+
     fn stop_terminal_sessions(&mut self, sessions: Vec<TerminalSessionRef>) {
         let active_backend_session = self
             .active_terminal
@@ -2194,6 +2211,9 @@ impl Render for AlasShell {
         };
 
         div()
+            .on_action(cx.listener(|_shell, _: &crate::ui::lifecycle::Quit, _window, cx| {
+                cx.quit();
+            }))
             .flex()
             .flex_col()
             .size_full()
@@ -2523,8 +2543,17 @@ impl Render for AlasShell {
 
 pub fn run() -> anyhow::Result<()> {
     Application::new().run(|cx: &mut App| {
-        cx.open_window(WindowOptions::default(), |_, cx| cx.new(AlasShell::new))
-            .expect("failed to open Alas window");
+        crate::ui::lifecycle::setup_lifecycle(cx);
+        cx.open_window(WindowOptions::default(), |window, cx| {
+            let shell = cx.new(AlasShell::new);
+            let weak_shell = shell.downgrade();
+            window.on_window_should_close(cx, move |_window, cx| {
+                weak_shell.update(cx, |shell, _cx| shell.shutdown()).ok();
+                true
+            });
+            shell
+        })
+        .expect("failed to open Alas window");
     });
 
     Ok(())

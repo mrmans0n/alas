@@ -1,6 +1,7 @@
 pub mod command_picker;
 pub mod dialogs;
 pub mod inspector;
+pub mod lifecycle;
 pub mod shell;
 pub mod sidebar;
 pub mod terminal_canvas;
