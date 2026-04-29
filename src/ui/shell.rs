@@ -4,10 +4,10 @@ use std::{
 };
 
 use crate::{
-    app::{AlasModel, RepositoryNode, TerminalTabId, WorkspaceSession},
+    app::{AlasModel, RepositoryNode, TerminalTabId, TerminalTabKind, WorkspaceSession},
     config::{
-        AppConfig, AppConfigStore, AppRepository, RepoConfigStore, ResolvedRepoConfig,
-        repository_id_for_path,
+        AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
+        ResolvedRepoConfig, repository_id_for_path,
     },
     git::{GitInspectorService, GitInspectorState, GitRunner, GitWorktreeService},
     terminal::{
@@ -16,6 +16,7 @@ use crate::{
         TerminalSize, TerminalViewport,
     },
     ui::{
+        command_picker::render_command_picker,
         dialogs::{
             AddRepositoryDialogState, CommandSettingsDialogState, ConfirmPruneWorktreesDialog,
             ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
@@ -24,6 +25,7 @@ use crate::{
         inspector::render_git_inspector,
         sidebar::render_sidebar,
         terminal_pane::render_terminal_pane,
+        workspace::render_workspace,
     },
 };
 use gpui::{
@@ -31,12 +33,20 @@ use gpui::{
     PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window, WindowOptions, div,
     prelude::*, px, rgb,
 };
+use indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum CommandSettingsField {
     DefaultName,
     EntryName(usize),
     EntryCommand(usize),
+}
+
+#[derive(Debug, Clone)]
+struct CommandPickerState {
+    repo_id: String,
+    worktree_path: PathBuf,
+    commands: IndexMap<String, CommandEntry>,
 }
 
 pub struct AlasShell {
@@ -49,6 +59,7 @@ pub struct AlasShell {
     command_settings_dialog: Option<CommandSettingsDialogState>,
     command_settings_focus: FocusHandle,
     command_settings_active_field: CommandSettingsField,
+    command_picker: Option<CommandPickerState>,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     confirm_remove_worktree_dialog: Option<ConfirmRemoveWorktreeDialog>,
     confirm_prune_worktrees_dialog: Option<ConfirmPruneWorktreesDialog>,
@@ -81,6 +92,7 @@ impl AlasShell {
             command_settings_dialog: None,
             command_settings_focus: cx.focus_handle(),
             command_settings_active_field: CommandSettingsField::DefaultName,
+            command_picker: None,
             confirm_remove_repository_dialog: None,
             confirm_remove_worktree_dialog: None,
             confirm_prune_worktrees_dialog: None,
@@ -678,24 +690,59 @@ impl AlasShell {
 
     fn select_worktree(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
         self.model.select_worktree(repo_id.clone(), path.clone());
+        self.command_picker = None;
         self.terminal_scroll_offset_rows = 0;
         self.git_inspector = None;
         self.git_inspector_error = None;
         self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
 
-        let command = self.resolve_default_command(&repo_id, path.clone());
+        let default_command = self.resolve_default_command(&repo_id, path.clone());
         let tab_id = self.workspace_session.ensure_default_terminal_tab(
             &repo_id,
             path.clone(),
-            command.clone(),
+            default_command,
         );
+        self.start_or_reuse_terminal_tab(repo_id, path, tab_id);
+    }
+
+    fn select_terminal_tab(&mut self, tab_id: TerminalTabId) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+
+        if let Err(error) =
+            self.workspace_session
+                .set_active_tab(&selected.repo_id, &selected.path, tab_id)
+        {
+            self.terminal_error = Some(error.to_string());
+            return;
+        }
+
+        self.start_or_reuse_terminal_tab(selected.repo_id, selected.path, tab_id);
+    }
+
+    fn start_or_reuse_terminal_tab(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        tab_id: TerminalTabId,
+    ) {
+        let Some(tab) = self.workspace_session.active_tab(&repo_id, &path).cloned() else {
+            self.active_terminal = None;
+            self.active_terminal_tab = None;
+            self.terminal_error = Some("No active terminal tab for selected worktree".to_string());
+            return;
+        };
+
         let id = TerminalSessionId::new(repo_id, path, tab_id);
         self.active_terminal_tab = Some(tab_id);
+        self.terminal_scroll_offset_rows = tab.scroll_offset_rows;
 
-        match self
-            .terminal_registry
-            .get_or_start(id, command, &mut self.terminal_backend)
-        {
+        match self.terminal_registry.get_or_start(
+            id,
+            tab.command.clone(),
+            &mut self.terminal_backend,
+        ) {
             Ok(session) => {
                 if let Some(size) = self.terminal_size {
                     if let Err(error) = self.terminal_backend.resize(session.backend_session, size)
@@ -713,6 +760,43 @@ impl AlasShell {
                 self.terminal_error = Some(error.to_string());
             }
         }
+    }
+
+    fn open_command_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let Some(resolved) = self.resolved_repo_config(&selected.repo_id) else {
+            self.terminal_error = Some("Repository not found".to_string());
+            return;
+        };
+
+        self.command_picker = Some(CommandPickerState {
+            repo_id: selected.repo_id,
+            worktree_path: selected.path,
+            commands: resolved.commands().clone(),
+        });
+        cx.notify();
+    }
+
+    fn close_command_picker(&mut self) {
+        self.command_picker = None;
+    }
+
+    fn create_command_tab_from_picker(&mut self, name: String, command: String) {
+        let Some(picker) = self.command_picker.take() else {
+            return;
+        };
+
+        let command = CommandSpec::shell_command(command, picker.worktree_path.clone());
+        let tab_id = self.workspace_session.create_terminal_tab(
+            &picker.repo_id,
+            picker.worktree_path.clone(),
+            name,
+            TerminalTabKind::Command,
+            command,
+        );
+        self.start_or_reuse_terminal_tab(picker.repo_id, picker.worktree_path, tab_id);
     }
 
     fn refresh_git_inspector(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
@@ -753,25 +837,28 @@ impl AlasShell {
     }
 
     fn resolve_default_command(&self, repo_id: &str, worktree_path: PathBuf) -> CommandSpec {
-        let Some(repo) = self
-            .config
-            .repositories
-            .iter()
-            .find(|repository| repository.id == repo_id)
-        else {
+        let Some(resolved) = self.resolved_repo_config(repo_id) else {
             return CommandSpec::shell_command("$SHELL", worktree_path);
         };
 
+        CommandSpec::shell_command(resolved.default_command().command.clone(), worktree_path)
+    }
+
+    fn resolved_repo_config(&self, repo_id: &str) -> Option<ResolvedRepoConfig> {
+        let repo = self
+            .config
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repo_id)?;
+
         let repo_file = RepoConfigStore::for_repo(&repo.path).load().ok().flatten();
-        let resolved = ResolvedRepoConfig::resolve(
+        Some(ResolvedRepoConfig::resolve(
             repo.id.clone(),
             repo.path.clone(),
             repo.name.clone(),
             &self.config,
             repo_file,
-        );
-
-        CommandSpec::shell_command(resolved.default_command().command.clone(), worktree_path)
+        ))
     }
 
     fn set_create_worktree_error(&mut self, error: impl Into<String>) {
@@ -992,6 +1079,7 @@ impl AlasShell {
 
     fn clear_selection_and_active_terminal(&mut self) {
         self.model.clear_selection();
+        self.command_picker = None;
         self.active_terminal_tab = None;
         self.active_terminal = None;
         self.terminal_error = None;
@@ -1396,6 +1484,49 @@ impl Render for AlasShell {
                     cx.notify();
                 }
             });
+        let view = cx.entity().downgrade();
+        let on_select_terminal_tab = move |tab_id: TerminalTabId,
+                                           _event: &gpui::ClickEvent,
+                                           _window: &mut Window,
+                                           app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.select_terminal_tab(tab_id);
+                cx.notify();
+            })
+            .ok();
+        };
+        let on_new_terminal_tab = cx.listener(|shell, _event, _window, cx| {
+            shell.open_command_picker(cx);
+        });
+        let view = cx.entity().downgrade();
+        let on_select_command = move |name: String,
+                                      command: String,
+                                      _event: &gpui::ClickEvent,
+                                      _window: &mut Window,
+                                      app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.create_command_tab_from_picker(name, command);
+                cx.notify();
+            })
+            .ok();
+        };
+        let on_cancel_command_picker = cx.listener(|shell, _event, _window, cx| {
+            shell.close_command_picker();
+            cx.notify();
+        });
+        let workspace_tabs = self
+            .model
+            .selected_worktree()
+            .map(|selected| {
+                self.workspace_session
+                    .tabs_for_worktree(&selected.repo_id, &selected.path)
+            })
+            .unwrap_or(&[]);
+        let active_workspace_tab = self.model.selected_worktree().and_then(|selected| {
+            self.workspace_session
+                .active_tab(&selected.repo_id, &selected.path)
+                .map(|tab| tab.id)
+        });
 
         div()
             .flex()
@@ -1419,6 +1550,14 @@ impl Render for AlasShell {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .when(self.command_picker.is_some(), |element| {
+                        let picker = self.command_picker.as_ref().unwrap();
+                        element.child(render_command_picker(
+                            &picker.commands,
+                            on_select_command,
+                            on_cancel_command_picker,
+                        ))
+                    })
                     .when(self.command_settings_dialog.is_some(), |element| {
                         let dialog = self.command_settings_dialog.as_ref().unwrap();
                         element.child(
@@ -1673,14 +1812,20 @@ impl Render for AlasShell {
                             .flex_1()
                             .track_focus(&self.terminal_focus)
                             .on_key_down(on_terminal_key_down)
-                            .child(render_terminal_pane(
-                                self.model.selected_worktree(),
-                                terminal_snapshot.as_ref(),
-                                self.terminal_error.as_deref(),
-                                on_retry_terminal,
-                                on_restart_terminal,
-                                on_focus_terminal,
-                                on_terminal_scroll,
+                            .child(render_workspace(
+                                workspace_tabs,
+                                active_workspace_tab,
+                                on_select_terminal_tab,
+                                on_new_terminal_tab,
+                                render_terminal_pane(
+                                    self.model.selected_worktree(),
+                                    terminal_snapshot.as_ref(),
+                                    self.terminal_error.as_deref(),
+                                    on_retry_terminal,
+                                    on_restart_terminal,
+                                    on_focus_terminal,
+                                    on_terminal_scroll,
+                                ),
                             )),
                     ),
             )
