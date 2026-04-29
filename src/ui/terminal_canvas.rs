@@ -2,6 +2,13 @@ use crate::terminal::{
     GhosttyCellStyle, GhosttyRenderFrame, TerminalColor, TerminalCursorShape, TerminalMetrics,
     background_runs, text_runs,
 };
+use gpui::{
+    App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
+    Pixels, SharedString, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, fill, font,
+    point, px, relative, rgb, size,
+};
+
+const TERMINAL_CANVAS_FONT_FAMILY: &str = "Hack Nerd Font";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalPaintPlan {
@@ -86,6 +93,274 @@ pub fn terminal_paint_plan(
     TerminalPaintPlan { commands }
 }
 
+pub fn render_terminal_canvas(
+    frame: GhosttyRenderFrame,
+    metrics: TerminalMetrics,
+) -> impl IntoElement {
+    TerminalCanvas { frame, metrics }
+}
+
+struct TerminalCanvas {
+    frame: GhosttyRenderFrame,
+    metrics: TerminalMetrics,
+}
+
+impl IntoElement for TerminalCanvas {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for TerminalCanvas {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.0).into();
+        style.size.height = relative(1.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let plan = terminal_paint_plan(&self.frame, self.metrics);
+        let metrics = self.metrics;
+        let default_foreground = self.frame.default_foreground;
+        let default_background = self.frame.default_background;
+
+        window.paint_layer(bounds, |window| {
+            for command in plan.commands {
+                match command {
+                    TerminalPaintCommand::FillBackground { color, cols, rows } => {
+                        paint_terminal_rect(
+                            window,
+                            bounds,
+                            metrics,
+                            0,
+                            0,
+                            usize::from(cols),
+                            usize::from(rows),
+                            render_color(color),
+                        );
+                    }
+                    TerminalPaintCommand::BackgroundRun {
+                        row,
+                        col,
+                        cell_count,
+                        color,
+                    } => {
+                        paint_terminal_rect(
+                            window,
+                            bounds,
+                            metrics,
+                            row,
+                            col,
+                            cell_count,
+                            1,
+                            render_color(color),
+                        );
+                    }
+                    TerminalPaintCommand::TextRun {
+                        row,
+                        col,
+                        text,
+                        style,
+                        ..
+                    } => {
+                        paint_terminal_text_run(
+                            window,
+                            cx,
+                            bounds,
+                            metrics,
+                            row,
+                            col,
+                            text,
+                            style,
+                            default_foreground,
+                            default_background,
+                        );
+                    }
+                    TerminalPaintCommand::Cursor {
+                        row,
+                        col,
+                        shape,
+                        color,
+                    } => {
+                        paint_terminal_cursor(
+                            window,
+                            bounds,
+                            metrics,
+                            usize::from(row),
+                            usize::from(col),
+                            shape,
+                            render_color(color.unwrap_or(default_foreground)),
+                        );
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn paint_terminal_rect(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    metrics: TerminalMetrics,
+    row: usize,
+    col: usize,
+    cell_count: usize,
+    row_count: usize,
+    color: gpui::Rgba,
+) {
+    window.paint_quad(fill(
+        Bounds::new(
+            point(
+                bounds.origin.x + px(col as f32 * metrics.cell_width_px),
+                bounds.origin.y + px(row as f32 * metrics.cell_height_px),
+            ),
+            size(
+                px(cell_count as f32 * metrics.cell_width_px),
+                px(row_count as f32 * metrics.cell_height_px),
+            ),
+        ),
+        color,
+    ));
+}
+
+fn paint_terminal_text_run(
+    window: &mut Window,
+    cx: &mut App,
+    bounds: Bounds<Pixels>,
+    metrics: TerminalMetrics,
+    row: usize,
+    col: usize,
+    text: String,
+    style: GhosttyCellStyle,
+    default_foreground: TerminalColor,
+    default_background: TerminalColor,
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    let text_origin = point(
+        bounds.origin.x + px(col as f32 * metrics.cell_width_px),
+        bounds.origin.y + px(row as f32 * metrics.cell_height_px),
+    );
+    let foreground = effective_foreground(&style, default_foreground, default_background);
+    let color = gpui::Hsla::from(render_color(foreground));
+    let mut text_font = font(TERMINAL_CANVAS_FONT_FAMILY);
+    if style.bold {
+        text_font = text_font.bold();
+    }
+    if style.italic {
+        text_font = text_font.italic();
+    }
+
+    let text_run = TextRun {
+        len: text.len(),
+        font: text_font,
+        color,
+        background_color: None,
+        underline: style.underline.then_some(UnderlineStyle {
+            color: Some(color),
+            thickness: px(1.0),
+            wavy: false,
+        }),
+        strikethrough: style.strikethrough.then_some(StrikethroughStyle {
+            color: Some(color),
+            thickness: px(1.0),
+        }),
+    };
+    let shaped_line = window.text_system().shape_line(
+        SharedString::from(text),
+        px(metrics.font_size_px),
+        &[text_run],
+        None,
+    );
+    let _ = shaped_line.paint(text_origin, px(metrics.cell_height_px), window, cx);
+}
+
+fn paint_terminal_cursor(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    metrics: TerminalMetrics,
+    row: usize,
+    col: usize,
+    shape: TerminalCursorShape,
+    color: gpui::Rgba,
+) {
+    let origin = point(
+        bounds.origin.x + px(col as f32 * metrics.cell_width_px),
+        bounds.origin.y + px(row as f32 * metrics.cell_height_px),
+    );
+    let cell_width = px(metrics.cell_width_px);
+    let cell_height = px(metrics.cell_height_px);
+    let thickness = px(2.0).min(cell_width).min(cell_height);
+    let (origin, rect_size) = match shape {
+        TerminalCursorShape::Block => (origin, size(cell_width, cell_height)),
+        TerminalCursorShape::Bar => (origin, size(thickness, cell_height)),
+        TerminalCursorShape::Underline => (
+            point(origin.x, origin.y + cell_height - thickness),
+            size(cell_width, thickness),
+        ),
+    };
+
+    window.paint_quad(fill(Bounds::new(origin, rect_size), color));
+}
+
+fn effective_foreground(
+    style: &GhosttyCellStyle,
+    default_foreground: TerminalColor,
+    default_background: TerminalColor,
+) -> TerminalColor {
+    if style.inverse {
+        style.background.unwrap_or(default_background)
+    } else {
+        style.foreground.unwrap_or(default_foreground)
+    }
+}
+
+fn render_color(color: TerminalColor) -> gpui::Rgba {
+    rgb((u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::terminal::{
@@ -111,6 +386,12 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn render_terminal_canvas_accepts_frame_and_metrics() {
+        let frame = empty_frame(2, 1);
+        let _element = render_terminal_canvas(frame, TerminalMetrics::fallback());
     }
 
     #[test]
