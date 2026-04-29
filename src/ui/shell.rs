@@ -937,6 +937,7 @@ impl AlasShell {
 
     fn clear_selection_and_active_terminal(&mut self) {
         self.model.clear_selection();
+        self.active_terminal_tab = None;
         self.active_terminal = None;
         self.terminal_error = None;
         self.git_inspector = None;
