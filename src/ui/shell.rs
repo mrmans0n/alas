@@ -244,12 +244,6 @@ impl AlasShell {
         };
         match self.terminal_backend.restart(active.backend_session) {
             Ok(session) => {
-                if let Some(size) = self.terminal_size {
-                    if let Err(error) = self.terminal_backend.resize(session, size) {
-                        self.terminal_error = Some(error.to_string());
-                        return;
-                    }
-                }
                 active.backend_session = session;
                 self.terminal_registry
                     .replace_backend_session(&active.id, session);
@@ -259,6 +253,20 @@ impl AlasShell {
                     active.id.tab_id,
                     Some(session),
                 );
+
+                if let Some(size) = self.terminal_size {
+                    if let Err(error) = self.terminal_backend.resize(session, size) {
+                        let _ = self.workspace_session.set_tab_status(
+                            &active.id.repo_id,
+                            &active.id.worktree_path,
+                            active.id.tab_id,
+                            TerminalTabStatus::Failed,
+                        );
+                        self.terminal_error = Some(error.to_string());
+                        return;
+                    }
+                }
+
                 let _ = self.workspace_session.set_tab_status(
                     &active.id.repo_id,
                     &active.id.worktree_path,

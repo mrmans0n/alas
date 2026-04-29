@@ -324,6 +324,13 @@ impl GhosttyTerminalBackend {
 impl TerminalBackend for GhosttyTerminalBackend {
     fn start(&mut self, command: CommandSpec) -> anyhow::Result<TerminalBackendSession> {
         let size = TerminalSize { cols: 80, rows: 24 };
+        let vt = VtState::new(size).with_context(|| {
+            format!(
+                "initialize terminal renderer for command '{}' in cwd {}",
+                command.display,
+                command.cwd.display()
+            )
+        })?;
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -382,7 +389,7 @@ impl TerminalBackend for GhosttyTerminalBackend {
                 writer,
                 child,
                 read_buffer,
-                vt: VtState::new(size)?,
+                vt,
                 _reader_thread: reader_thread,
                 exited: false,
                 exit_status: None,
