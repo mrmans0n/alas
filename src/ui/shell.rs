@@ -15,7 +15,7 @@ use crate::{
     git::{GitInspectorService, GitRunner, GitWorktreeService},
     project::FileTreeService,
     terminal::{
-        CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
+        CommandSpec, GhosttyRenderFrame, GhosttyTerminalBackend, TerminalBackend, TerminalMetrics,
         TerminalScreenMode, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
         TerminalSize, TerminalStatus, TerminalViewport, terminal_input_bytes,
     },
@@ -29,7 +29,6 @@ use crate::{
         inspector::render_project_inspector,
         sidebar::{SidebarMenuState, render_sidebar},
         terminal_pane::render_terminal_pane,
-        terminal_view::terminal_size_from_pixels,
         theme::{APP_BG, DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED},
         workspace::render_workspace,
     },
@@ -84,6 +83,7 @@ pub struct AlasShell {
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
+    terminal_metrics: TerminalMetrics,
     terminal_size: Option<TerminalSize>,
     terminal_body_size_px: Option<(f32, f32)>,
     terminal_scroll_offset_rows: usize,
@@ -119,6 +119,7 @@ impl AlasShell {
             active_terminal: None,
             terminal_error: None,
             terminal_focus: cx.focus_handle(),
+            terminal_metrics: TerminalMetrics::fallback(),
             terminal_size: None,
             terminal_body_size_px: None,
             terminal_scroll_offset_rows: 0,
@@ -151,7 +152,7 @@ impl AlasShell {
         .detach();
     }
 
-    fn terminal_snapshot(&mut self) -> Option<TerminalGridSnapshot> {
+    fn terminal_render_frame(&mut self) -> Option<GhosttyRenderFrame> {
         let session = self.active_terminal.as_ref()?.clone();
         let rows = self.terminal_size.map_or(24, |size| size.rows);
         let viewport = TerminalViewport {
@@ -161,34 +162,55 @@ impl AlasShell {
 
         match self
             .terminal_backend
-            .snapshot(session.backend_session, viewport)
+            .render_frame(session.backend_session, viewport)
         {
-            Ok(snapshot) => {
-                let preserve_failure = self.terminal_tab_has_failure(&session.id);
-                self.terminal_scroll_offset_rows = match snapshot.screen_mode {
-                    TerminalScreenMode::Main => snapshot.viewport.scroll_offset_rows,
-                    TerminalScreenMode::Alternate => 0,
-                };
-                let _ = self.workspace_session.set_tab_scroll_offset(
-                    &session.id.repo_id,
-                    &session.id.worktree_path,
-                    session.id.tab_id,
-                    self.terminal_scroll_offset_rows,
-                );
-                if !preserve_failure {
-                    let _ = self.workspace_session.set_tab_status(
-                        &session.id.repo_id,
-                        &session.id.worktree_path,
-                        session.id.tab_id,
-                        terminal_tab_status(snapshot.status),
-                    );
-                }
-                Some(snapshot)
-            }
+            Ok(frame) => Some(frame),
             Err(error) => {
                 self.mark_terminal_tab_failed(&session.id, error.to_string());
                 None
             }
+        }
+    }
+
+    fn refresh_active_terminal_status(&mut self) {
+        let Some(session) = self.active_terminal.as_ref().cloned() else {
+            return;
+        };
+        if self.terminal_tab_has_failure(&session.id) {
+            return;
+        }
+
+        match self.terminal_backend.has_exited(session.backend_session) {
+            Ok(true) => {
+                let exit_status = self
+                    .workspace_session
+                    .tab(
+                        &session.id.repo_id,
+                        &session.id.worktree_path,
+                        session.id.tab_id,
+                    )
+                    .and_then(|tab| match tab.status {
+                        TerminalTabStatus::Exited(status) => status,
+                        TerminalTabStatus::NotStarted
+                        | TerminalTabStatus::Running
+                        | TerminalTabStatus::Failed => None,
+                    });
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Exited(exit_status),
+                );
+            }
+            Ok(false) => {
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Running,
+                );
+            }
+            Err(error) => self.mark_terminal_tab_failed(&session.id, error.to_string()),
         }
     }
 
@@ -221,7 +243,7 @@ impl AlasShell {
 
     fn current_terminal_size(&self) -> TerminalSize {
         self.terminal_body_size_px
-            .map(|(width, height)| terminal_size_from_pixels(width, height))
+            .map(|(width, height)| self.terminal_metrics.size_from_pixels(width, height))
             .or(self.terminal_size)
             .unwrap_or(TerminalSize { cols: 80, rows: 24 })
     }
@@ -343,9 +365,9 @@ impl AlasShell {
         screen_mode: TerminalScreenMode,
         scrollback_rows: usize,
     ) -> bool {
-        if self.active_terminal.is_none() {
+        let Some(session) = self.active_terminal.as_ref().cloned() else {
             return false;
-        }
+        };
 
         if screen_mode == TerminalScreenMode::Alternate {
             // Alternate-screen apps often expect wheel input as terminal mouse
@@ -353,6 +375,9 @@ impl AlasShell {
             // reports yet, so keep the main-screen scrollback offset pinned.
             let changed = self.terminal_scroll_offset_rows != 0;
             self.terminal_scroll_offset_rows = 0;
+            if changed {
+                self.persist_terminal_scroll_offset(&session.id);
+            }
             return changed;
         }
 
@@ -375,7 +400,17 @@ impl AlasShell {
         }
 
         self.terminal_scroll_offset_rows = next_offset;
+        self.persist_terminal_scroll_offset(&session.id);
         true
+    }
+
+    fn persist_terminal_scroll_offset(&mut self, id: &TerminalSessionId) {
+        let _ = self.workspace_session.set_tab_scroll_offset(
+            &id.repo_id,
+            &id.worktree_path,
+            id.tab_id,
+            self.terminal_scroll_offset_rows,
+        );
     }
 
     fn open_add_repository_dialog(&mut self, cx: &mut Context<Self>) {
@@ -1522,11 +1557,12 @@ impl AlasShell {
     }
 }
 
-fn terminal_tab_status(status: TerminalStatus) -> TerminalTabStatus {
+fn terminal_status_from_tab_status(status: &TerminalTabStatus) -> Option<TerminalStatus> {
     match status {
-        TerminalStatus::Running => TerminalTabStatus::Running,
-        TerminalStatus::Exited(status) => TerminalTabStatus::Exited(status),
-        TerminalStatus::Failed => TerminalTabStatus::Failed,
+        TerminalTabStatus::NotStarted => None,
+        TerminalTabStatus::Running => Some(TerminalStatus::Running),
+        TerminalTabStatus::Exited(status) => Some(TerminalStatus::Exited(*status)),
+        TerminalTabStatus::Failed => Some(TerminalStatus::Failed),
     }
 }
 
@@ -1697,7 +1733,8 @@ impl Render for AlasShell {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let terminal_size = self.current_terminal_size();
         self.resize_active_terminal(terminal_size);
-        let terminal_snapshot = self.terminal_snapshot();
+        let terminal_frame = self.terminal_render_frame();
+        self.refresh_active_terminal_status();
 
         let view = cx.entity().downgrade();
         let on_select_worktree = move |repo_id: String,
@@ -1812,13 +1849,8 @@ impl Render for AlasShell {
             window.focus(&shell.terminal_focus);
             cx.notify();
         });
-        let terminal_screen_mode = terminal_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.screen_mode)
-            .unwrap_or(TerminalScreenMode::Main);
-        let terminal_scrollback_rows = terminal_snapshot
-            .as_ref()
-            .map_or(0, |snapshot| snapshot.scrollback_rows);
+        let terminal_screen_mode = TerminalScreenMode::Main;
+        let terminal_scrollback_rows = usize::MAX;
         let on_terminal_scroll =
             cx.listener(move |shell, event: &ScrollWheelEvent, _window, cx| {
                 if shell.scroll_terminal(event, terminal_screen_mode, terminal_scrollback_rows) {
@@ -1951,6 +1983,11 @@ impl Render for AlasShell {
                     .then_some(self.terminal_error.as_deref())
                     .flatten()
             });
+        let active_terminal_status = if active_terminal_error.is_some() {
+            Some(TerminalStatus::Failed)
+        } else {
+            active_tab.and_then(|tab| terminal_status_from_tab_status(&tab.status))
+        };
         let status_bar_terminal_status = if active_terminal_error.is_some() {
             Some(TerminalTabStatus::Failed)
         } else {
@@ -2254,7 +2291,9 @@ impl Render for AlasShell {
                                 render_terminal_pane(
                                     self.model.selected_worktree(),
                                     active_tab,
-                                    terminal_snapshot.as_ref(),
+                                    terminal_frame,
+                                    active_terminal_status,
+                                    self.terminal_metrics,
                                     active_terminal_error,
                                     on_retry_terminal,
                                     on_edit_terminal_command,

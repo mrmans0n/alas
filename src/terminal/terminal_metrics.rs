@@ -41,10 +41,17 @@ mod tests {
     #[test]
     fn fallback_metrics_compute_terminal_size_from_pixels() {
         let metrics = TerminalMetrics::fallback();
-        assert_eq!(metrics.size_from_pixels(180.0, 76.0).cols, 20);
-        assert_eq!(metrics.size_from_pixels(180.0, 76.0).rows, 4);
-        assert_eq!(metrics.size_from_pixels(900.0, 380.0).cols, 100);
-        assert_eq!(metrics.size_from_pixels(900.0, 380.0).rows, 20);
+        assert_eq!(
+            metrics.size_from_pixels(180.0, 76.0),
+            TerminalSize { cols: 20, rows: 4 }
+        );
+        assert_eq!(
+            metrics.size_from_pixels(900.0, 380.0),
+            TerminalSize {
+                cols: 100,
+                rows: 20
+            }
+        );
     }
 
     #[test]

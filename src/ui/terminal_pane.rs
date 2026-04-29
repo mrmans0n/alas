@@ -1,10 +1,11 @@
 use crate::{
     app::{SelectedWorktree, TerminalTab},
-    terminal::TerminalGridSnapshot,
+    terminal::{GhosttyRenderFrame, TerminalMetrics, TerminalStatus},
     ui::{
+        terminal_canvas::render_terminal_canvas,
         terminal_view::{
             CELL_HEIGHT_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX,
-            render_terminal_bounds_probe, render_terminal_grid,
+            render_terminal_bounds_probe,
         },
         theme::{ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
     },
@@ -17,7 +18,9 @@ use gpui::{
 pub fn render_terminal_pane(
     selected_worktree: Option<&SelectedWorktree>,
     active_tab: Option<&TerminalTab>,
-    snapshot: Option<&TerminalGridSnapshot>,
+    terminal_frame: Option<GhosttyRenderFrame>,
+    terminal_status: Option<TerminalStatus>,
+    terminal_metrics: TerminalMetrics,
     terminal_error: Option<&str>,
     on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_edit_command: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -77,58 +80,51 @@ pub fn render_terminal_pane(
                                     .path
                                     .display()
                             ))
-                            .when(
-                                snapshot.is_some_and(|snapshot| snapshot.exited()),
-                                |element| {
-                                    let status = snapshot
-                                        .and_then(|snapshot| snapshot.exit_status())
-                                        .map(|status| status.to_string())
-                                        .unwrap_or_else(|| "unknown".to_string());
-                                    element.child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(format!("Exited: {status}"))
-                                            .child(
-                                                div()
-                                                    .id("restart-terminal")
-                                                    .px_2()
-                                                    .py_1()
-                                                    .rounded_md()
-                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    .text_color(ACCENT_TEXT)
-                                                    .bg(ACCENT)
-                                                    .child("Restart")
-                                                    .on_click(on_restart),
-                                            ),
-                                    )
-                                },
-                            ),
+                            .when(terminal_exited(terminal_status), |element| {
+                                let status = terminal_exit_status(terminal_status)
+                                    .map(|status| status.to_string())
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                element.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(format!("Exited: {status}"))
+                                        .child(
+                                            div()
+                                                .id("restart-terminal")
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_md()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(ACCENT_TEXT)
+                                                .bg(ACCENT)
+                                                .child("Restart")
+                                                .on_click(on_restart),
+                                        ),
+                                )
+                            }),
                     )
-                    .when(
-                        snapshot.is_some_and(|snapshot| snapshot.exited()),
-                        |element| {
-                            element.child(
-                                div()
-                                    .px_3()
-                                    .py_2()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(PANEL_BORDER)
-                                    .bg(PANEL_BG)
-                                    .text_xs()
-                                    .text_color(TEXT_MUTED)
-                                    .child("Process exited; final screen is preserved."),
-                            )
-                        },
-                    )
+                    .when(terminal_exited(terminal_status), |element| {
+                        element.child(
+                            div()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(PANEL_BORDER)
+                                .bg(PANEL_BG)
+                                .text_xs()
+                                .text_color(TEXT_MUTED)
+                                .child("Process exited; final screen is preserved."),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()
                             .overflow_hidden()
                             .relative()
-                            .child(render_terminal_body(snapshot))
+                            .child(render_terminal_body(terminal_frame, terminal_metrics))
                             .child(
                                 div()
                                     .absolute()
@@ -231,9 +227,23 @@ fn detail_row(label: &'static str, value: String) -> impl IntoElement {
         )
 }
 
-fn render_terminal_body(snapshot: Option<&TerminalGridSnapshot>) -> AnyElement {
-    match snapshot {
-        Some(snapshot) => render_terminal_grid(snapshot).into_any_element(),
+fn terminal_exited(status: Option<TerminalStatus>) -> bool {
+    matches!(status, Some(TerminalStatus::Exited(_)))
+}
+
+fn terminal_exit_status(status: Option<TerminalStatus>) -> Option<i32> {
+    match status {
+        Some(TerminalStatus::Exited(status)) => status,
+        Some(TerminalStatus::Running | TerminalStatus::Failed) | None => None,
+    }
+}
+
+fn render_terminal_body(
+    terminal_frame: Option<GhosttyRenderFrame>,
+    terminal_metrics: TerminalMetrics,
+) -> AnyElement {
+    match terminal_frame {
+        Some(frame) => render_terminal_canvas(frame, terminal_metrics).into_any_element(),
         None => div()
             .font_family(TERMINAL_FONT_FAMILY)
             .text_size(gpui::px(TERMINAL_FONT_SIZE_PX))
