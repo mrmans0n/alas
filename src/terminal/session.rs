@@ -82,4 +82,14 @@ impl TerminalSessionRegistry {
         self.sessions.insert(id, session.clone());
         Ok(session)
     }
+
+    pub fn replace_backend_session(
+        &mut self,
+        id: &TerminalSessionId,
+        backend_session: TerminalBackendSession,
+    ) {
+        if let Some(session) = self.sessions.get_mut(id) {
+            session.backend_session = backend_session;
+        }
+    }
 }

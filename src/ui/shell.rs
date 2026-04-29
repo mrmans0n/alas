@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crate::{
     app::{AlasModel, RepositoryNode},
@@ -8,8 +11,8 @@ use crate::{
     },
     git::{GitInspectorService, GitInspectorState, GitRunner, GitWorktreeService},
     terminal::{
-        CommandSpec, GhosttyTerminalBackend, TerminalSessionId, TerminalSessionRef,
-        TerminalSessionRegistry,
+        CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
+        TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry, TerminalSize,
     },
     ui::{
         dialogs::{
@@ -19,7 +22,7 @@ use crate::{
         },
         inspector::render_git_inspector,
         sidebar::render_sidebar,
-        terminal_pane::render_terminal_placeholder,
+        terminal_pane::render_terminal_pane,
     },
 };
 use gpui::{
@@ -51,6 +54,8 @@ pub struct AlasShell {
     terminal_backend: GhosttyTerminalBackend,
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
+    terminal_focus: FocusHandle,
+    terminal_size: Option<TerminalSize>,
     git_inspector: Option<GitInspectorState>,
     git_inspector_error: Option<String>,
 }
@@ -78,11 +83,111 @@ impl AlasShell {
             terminal_backend: GhosttyTerminalBackend::new(),
             active_terminal: None,
             terminal_error: None,
+            terminal_focus: cx.focus_handle(),
+            terminal_size: None,
             git_inspector: None,
             git_inspector_error: None,
         };
         shell.refresh_repositories();
+        shell.start_terminal_refresh(cx);
         shell
+    }
+
+    fn start_terminal_refresh(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                if this
+                    .update(cx, |shell, cx| {
+                        if shell.active_terminal.is_some() {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn terminal_snapshot(&mut self) -> Option<TerminalGridSnapshot> {
+        let session = self.active_terminal.as_ref()?;
+        match self.terminal_backend.snapshot(session.backend_session) {
+            Ok(snapshot) => {
+                self.terminal_error = None;
+                Some(snapshot)
+            }
+            Err(error) => {
+                self.terminal_error = Some(error.to_string());
+                None
+            }
+        }
+    }
+
+    fn resize_active_terminal(&mut self, size: TerminalSize) {
+        if self.terminal_size == Some(size) {
+            return;
+        }
+        self.terminal_size = Some(size);
+        if let Some(session) = self.active_terminal.as_ref() {
+            if let Err(error) = self.terminal_backend.resize(session.backend_session, size) {
+                self.terminal_error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn retry_active_terminal(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        self.select_worktree(selected.repo_id, selected.path, cx);
+    }
+
+    fn restart_active_terminal(&mut self) {
+        let Some(active) = self.active_terminal.as_mut() else {
+            return;
+        };
+        match self.terminal_backend.restart(active.backend_session) {
+            Ok(session) => {
+                if let Some(size) = self.terminal_size {
+                    if let Err(error) = self.terminal_backend.resize(session, size) {
+                        self.terminal_error = Some(error.to_string());
+                        return;
+                    }
+                }
+                active.backend_session = session;
+                self.terminal_registry
+                    .replace_backend_session(&active.id, session);
+                self.terminal_error = None;
+            }
+            Err(error) => {
+                self.terminal_error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn write_terminal_input(&mut self, event: &KeyDownEvent) -> bool {
+        let Some(session) = self.active_terminal.as_ref() else {
+            return false;
+        };
+        let Some(bytes) = terminal_input_bytes(event) else {
+            return false;
+        };
+
+        match self
+            .terminal_backend
+            .write_input(session.backend_session, &bytes)
+        {
+            Ok(()) => true,
+            Err(error) => {
+                self.terminal_error = Some(error.to_string());
+                true
+            }
+        }
     }
 
     fn open_add_repository_dialog(&mut self, cx: &mut Context<Self>) {
@@ -516,6 +621,14 @@ impl AlasShell {
             .get_or_start(id, command, &mut self.terminal_backend)
         {
             Ok(session) => {
+                if let Some(size) = self.terminal_size {
+                    if let Err(error) = self.terminal_backend.resize(session.backend_session, size)
+                    {
+                        self.active_terminal = None;
+                        self.terminal_error = Some(error.to_string());
+                        return;
+                    }
+                }
                 self.active_terminal = Some(session);
                 self.terminal_error = None;
             }
@@ -845,6 +958,43 @@ impl AlasShell {
     }
 }
 
+fn terminal_input_bytes(event: &KeyDownEvent) -> Option<Vec<u8>> {
+    let keystroke = &event.keystroke;
+
+    if keystroke.modifiers.platform || keystroke.modifiers.alt {
+        return None;
+    }
+
+    if keystroke.modifiers.control {
+        let key = keystroke.key.to_ascii_lowercase();
+        if key.len() == 1 {
+            let byte = key.as_bytes()[0];
+            if byte.is_ascii_lowercase() {
+                return Some(vec![byte - b'a' + 1]);
+            }
+        }
+        return None;
+    }
+
+    // GPUI 0.2 only exposes key-down events here. This covers common terminal
+    // input; IME/composition and full function-key handling need a richer input
+    // handler if Alas adopts one later.
+    match keystroke.key.as_str() {
+        "enter" => Some(b"\r".to_vec()),
+        "backspace" => Some(vec![0x7f]),
+        "tab" => Some(b"\t".to_vec()),
+        "escape" => Some(vec![0x1b]),
+        "up" => Some(b"\x1b[A".to_vec()),
+        "down" => Some(b"\x1b[B".to_vec()),
+        "right" => Some(b"\x1b[C".to_vec()),
+        "left" => Some(b"\x1b[D".to_vec()),
+        _ => keystroke
+            .key_char
+            .as_ref()
+            .map(|text| text.as_bytes().to_vec()),
+    }
+}
+
 fn render_command_settings_field(
     id: String,
     label: String,
@@ -941,7 +1091,17 @@ fn render_create_worktree_field(
 }
 
 impl Render for AlasShell {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let window_bounds = window.bounds();
+        let terminal_width = (f32::from(window_bounds.size.width) - 360.0).max(160.0);
+        let terminal_height = (f32::from(window_bounds.size.height) - 24.0).max(80.0);
+        let terminal_size = TerminalSize {
+            cols: (terminal_width / 8.0).floor().max(20.0) as u16,
+            rows: (terminal_height / 18.0).floor().max(4.0) as u16,
+        };
+        self.resize_active_terminal(terminal_size);
+        let terminal_snapshot = self.terminal_snapshot();
+
         let view = cx.entity().downgrade();
         let on_remove_repository = move |repo_id: String,
                                          repo_name: String,
@@ -1108,6 +1268,24 @@ impl Render for AlasShell {
                     cx.notify();
                 }
             });
+        let on_terminal_key_down = cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+            if shell.write_terminal_input(event) {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
+        let on_retry_terminal = cx.listener(|shell, _event, _window, cx| {
+            shell.retry_active_terminal(cx);
+            cx.notify();
+        });
+        let on_restart_terminal = cx.listener(|shell, _event, _window, cx| {
+            shell.restart_active_terminal();
+            cx.notify();
+        });
+        let on_focus_terminal = cx.listener(|shell, _event, window, cx| {
+            window.focus(&shell.terminal_focus);
+            cx.notify();
+        });
 
         div()
             .flex()
@@ -1379,11 +1557,21 @@ impl Render for AlasShell {
                                 ),
                         )
                     })
-                    .child(render_terminal_placeholder(
-                        self.model.selected_worktree(),
-                        self.active_terminal.as_ref(),
-                        self.terminal_error.as_deref(),
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .track_focus(&self.terminal_focus)
+                            .on_key_down(on_terminal_key_down)
+                            .child(render_terminal_pane(
+                                self.model.selected_worktree(),
+                                terminal_snapshot.as_ref(),
+                                self.terminal_error.as_deref(),
+                                on_retry_terminal,
+                                on_restart_terminal,
+                                on_focus_terminal,
+                            )),
+                    ),
             )
             .child(render_git_inspector(
                 self.model.selected_worktree(),

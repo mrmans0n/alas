@@ -19,6 +19,9 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 
 use super::CommandSpec;
 
+const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
+const MAX_FALLBACK_OUTPUT_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalBackendSession {
     pub backend_id: u64,
@@ -190,14 +193,21 @@ impl BackendSessionState {
     }
 
     fn drain_output(&mut self) -> anyhow::Result<()> {
-        let mut read_buffer = self
-            .read_buffer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("terminal backend reader buffer lock poisoned"))?;
-        if !read_buffer.is_empty() {
-            self.vt.feed(&read_buffer);
-            self.output.push_str(&String::from_utf8_lossy(&read_buffer));
-            read_buffer.clear();
+        let bytes = {
+            let mut read_buffer = self
+                .read_buffer
+                .lock()
+                .map_err(|_| anyhow::anyhow!("terminal backend reader buffer lock poisoned"))?;
+            std::mem::take(&mut *read_buffer)
+        };
+
+        if !bytes.is_empty() {
+            self.vt.feed(&bytes);
+            append_bounded_string(
+                &mut self.output,
+                &String::from_utf8_lossy(&bytes),
+                MAX_FALLBACK_OUTPUT_BYTES,
+            );
         }
         Ok(())
     }
@@ -407,7 +417,7 @@ fn read_pty_output(mut reader: Box<dyn Read + Send>, read_buffer: Arc<Mutex<Vec<
             Ok(0) => break,
             Ok(bytes_read) => {
                 if let Ok(mut output) = read_buffer.lock() {
-                    output.extend_from_slice(&buffer[..bytes_read]);
+                    append_bounded_bytes(&mut output, &buffer[..bytes_read], MAX_PENDING_PTY_BYTES);
                 } else {
                     break;
                 }
@@ -415,4 +425,34 @@ fn read_pty_output(mut reader: Box<dyn Read + Send>, read_buffer: Arc<Mutex<Vec<
             Err(_) => break,
         }
     }
+}
+
+fn append_bounded_bytes(buffer: &mut Vec<u8>, bytes: &[u8], max_len: usize) {
+    if bytes.len() >= max_len {
+        buffer.clear();
+        buffer.extend_from_slice(&bytes[bytes.len() - max_len..]);
+        return;
+    }
+
+    let needed = buffer
+        .len()
+        .saturating_add(bytes.len())
+        .saturating_sub(max_len);
+    if needed > 0 {
+        buffer.drain(..needed);
+    }
+    buffer.extend_from_slice(bytes);
+}
+
+fn append_bounded_string(buffer: &mut String, text: &str, max_len: usize) {
+    buffer.push_str(text);
+    if buffer.len() <= max_len {
+        return;
+    }
+
+    let mut split_at = buffer.len() - max_len;
+    while split_at < buffer.len() && !buffer.is_char_boundary(split_at) {
+        split_at += 1;
+    }
+    buffer.drain(..split_at);
 }
