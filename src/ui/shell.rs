@@ -5,14 +5,15 @@ use std::{
 
 use crate::{
     app::{
-        ActionId, AlasModel, RepositoryNode, TerminalTabId, TerminalTabKind, TerminalTabStatus,
-        WorkspaceSession,
+        ActionId, AlasModel, InspectorPaneState, InspectorTab, RepositoryNode, TerminalTabId,
+        TerminalTabKind, TerminalTabStatus, WorkspaceSession,
     },
     config::{
         AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
         ResolvedRepoConfig, repository_id_for_path,
     },
-    git::{GitInspectorService, GitInspectorState, GitRunner, GitWorktreeService},
+    git::{GitInspectorService, GitRunner, GitWorktreeService},
+    project::FileTreeService,
     terminal::{
         CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
         TerminalScreenMode, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
@@ -25,7 +26,7 @@ use crate::{
             ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
             CreateWorktreeField,
         },
-        inspector::render_git_inspector,
+        inspector::render_project_inspector,
         sidebar::{SidebarMenuState, render_sidebar},
         terminal_pane::render_terminal_pane,
         workspace::render_workspace,
@@ -53,6 +54,8 @@ struct CommandPickerState {
     commands: IndexMap<String, CommandEntry>,
 }
 
+const INSPECTOR_FILE_TREE_MAX_DEPTH: usize = 3;
+
 pub struct AlasShell {
     model: AlasModel,
     config: AppConfig,
@@ -77,8 +80,7 @@ pub struct AlasShell {
     terminal_focus: FocusHandle,
     terminal_size: Option<TerminalSize>,
     terminal_scroll_offset_rows: usize,
-    git_inspector: Option<GitInspectorState>,
-    git_inspector_error: Option<String>,
+    inspector_state: InspectorPaneState,
 }
 
 impl AlasShell {
@@ -111,8 +113,7 @@ impl AlasShell {
             terminal_focus: cx.focus_handle(),
             terminal_size: None,
             terminal_scroll_offset_rows: 0,
-            git_inspector: None,
-            git_inspector_error: None,
+            inspector_state: InspectorPaneState::default(),
         };
         shell.refresh_repositories();
         shell.start_terminal_refresh(cx);
@@ -737,9 +738,9 @@ impl AlasShell {
         self.command_picker = None;
         self.sidebar_menu = None;
         self.terminal_scroll_offset_rows = 0;
-        self.git_inspector = None;
-        self.git_inspector_error = None;
+        self.inspector_state.clear_for_new_worktree();
         self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
+        self.refresh_file_tree(repo_id.clone(), path.clone(), cx);
 
         let default_command = self.resolve_default_command(&repo_id, path.clone());
         let tab_id = self.workspace_session.ensure_default_terminal_tab(
@@ -981,12 +982,45 @@ impl AlasShell {
 
                 match result {
                     Ok(state) => {
-                        shell.git_inspector = Some(state);
-                        shell.git_inspector_error = None;
+                        shell.inspector_state.set_changes(state);
                     }
                     Err(error) => {
-                        shell.git_inspector = None;
-                        shell.git_inspector_error = Some(error);
+                        shell.inspector_state.set_changes_error(error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn refresh_file_tree(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
+        let selected_repo_id = repo_id;
+        let selected_path = path.clone();
+        let task = cx.background_executor().spawn(async move {
+            FileTreeService::new()
+                .load(&path, INSPECTOR_FILE_TREE_MAX_DEPTH)
+                .map_err(|error| error.to_string())
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |shell, cx| {
+                let is_current_selection =
+                    shell.model.selected_worktree().is_some_and(|selected| {
+                        selected.repo_id == selected_repo_id && selected.path == selected_path
+                    });
+                if !is_current_selection {
+                    return;
+                }
+
+                match result {
+                    Ok(files) => {
+                        shell.inspector_state.set_files(files);
+                    }
+                    Err(error) => {
+                        shell.inspector_state.set_files_error(error);
                     }
                 }
                 cx.notify();
@@ -1316,8 +1350,7 @@ impl AlasShell {
         self.active_terminal = None;
         self.terminal_error = None;
         self.terminal_scroll_offset_rows = 0;
-        self.git_inspector = None;
-        self.git_inspector_error = None;
+        self.inspector_state.clear_for_new_worktree();
     }
 
     fn refresh_repositories(&mut self) {
@@ -1551,6 +1584,17 @@ impl Render for AlasShell {
                 })
                 .ok();
             };
+        let view = cx.entity().downgrade();
+        let on_select_inspector_tab = move |tab: InspectorTab,
+                                            _event: &gpui::ClickEvent,
+                                            _window: &mut Window,
+                                            app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.inspector_state.select_tab(tab);
+                cx.notify();
+            })
+            .ok();
+        };
         let on_submit_create_worktree = cx.listener(|shell, _event, _window, cx| {
             shell.create_worktree_from_dialog(cx);
             cx.notify();
@@ -2005,10 +2049,10 @@ impl Render for AlasShell {
                             )),
                     ),
             )
-            .child(render_git_inspector(
+            .child(render_project_inspector(
                 self.model.selected_worktree(),
-                self.git_inspector.as_ref(),
-                self.git_inspector_error.as_deref(),
+                &self.inspector_state,
+                on_select_inspector_tab,
             ))
     }
 }
