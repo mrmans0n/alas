@@ -58,6 +58,10 @@ struct CommandPickerState {
 
 const INSPECTOR_FILE_TREE_MAX_DEPTH: usize = 3;
 
+fn terminal_refresh_interval() -> Duration {
+    Duration::from_millis(16)
+}
+
 pub struct AlasShell {
     model: AlasModel,
     config: AppConfig,
@@ -130,7 +134,7 @@ impl AlasShell {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
-                    .timer(Duration::from_millis(100))
+                    .timer(terminal_refresh_interval())
                     .await;
                 if this
                     .update(cx, |shell, cx| {
@@ -2293,4 +2297,14 @@ fn infer_repository_name(path: &Path) -> String {
         .filter(|name| !name.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_refresh_interval_targets_sixty_fps_input_echo() {
+        assert!(terminal_refresh_interval() <= Duration::from_millis(16));
+    }
 }

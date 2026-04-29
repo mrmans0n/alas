@@ -2,7 +2,10 @@ use crate::{
     app::{SelectedWorktree, TerminalTab},
     terminal::TerminalGridSnapshot,
     ui::{
-        terminal_view::{render_terminal_bounds_probe, render_terminal_grid},
+        terminal_view::{
+            CELL_HEIGHT_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX,
+            render_terminal_bounds_probe, render_terminal_grid,
+        },
         theme::{ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
     },
 };
@@ -232,9 +235,9 @@ fn render_terminal_body(snapshot: Option<&TerminalGridSnapshot>) -> AnyElement {
     match snapshot {
         Some(snapshot) => render_terminal_grid(snapshot).into_any_element(),
         None => div()
-            .font_family("monospace")
-            .text_sm()
-            .line_height(gpui::px(18.0))
+            .font_family(TERMINAL_FONT_FAMILY)
+            .text_size(gpui::px(TERMINAL_FONT_SIZE_PX))
+            .line_height(gpui::px(CELL_HEIGHT_PX))
             .child(" ")
             .into_any_element(),
     }
