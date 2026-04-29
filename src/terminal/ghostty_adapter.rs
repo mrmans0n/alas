@@ -5,7 +5,7 @@
 //! libghostty-rs integration belongs behind this module boundary.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -28,6 +28,8 @@ use super::{
 
 const MAX_PENDING_PTY_BYTES: usize = 1024 * 1024;
 const MAX_SCROLLBACK_ROWS: usize = 10_000;
+
+type PtyReadErrorState = Arc<Mutex<Option<String>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalBackendSession {
@@ -255,6 +257,7 @@ struct BackendSessionState {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     read_buffer: Arc<Mutex<Vec<u8>>>,
+    read_error: PtyReadErrorState,
     vt: VtState,
     _reader_thread: JoinHandle<()>,
     exited: bool,
@@ -292,6 +295,17 @@ impl BackendSessionState {
 
         if !bytes.is_empty() {
             self.vt.feed(&bytes);
+        }
+        Ok(())
+    }
+
+    fn fail_on_read_error(&self) -> anyhow::Result<()> {
+        let read_error = self
+            .read_error
+            .lock()
+            .map_err(|_| anyhow::anyhow!("terminal backend reader error lock poisoned"))?;
+        if let Some(read_error) = read_error.as_deref() {
+            anyhow::bail!("{read_error}");
         }
         Ok(())
     }
@@ -374,8 +388,16 @@ impl GhosttyTerminalBackend {
             )
         })?;
         let read_buffer = Arc::new(Mutex::new(Vec::new()));
+        let read_error = Arc::new(Mutex::new(None));
         let reader_buffer = Arc::clone(&read_buffer);
-        let reader_thread = std::thread::spawn(move || read_pty_output(reader, reader_buffer));
+        let reader_error = Arc::clone(&read_error);
+        let reader_context = PtyReadContext {
+            command_display: command.display.clone(),
+            cwd_display: command.cwd.display().to_string(),
+        };
+        let reader_thread = std::thread::spawn(move || {
+            read_pty_output(reader, reader_buffer, reader_error, reader_context)
+        });
 
         self.next_id += 1;
         let session = TerminalBackendSession {
@@ -390,6 +412,7 @@ impl GhosttyTerminalBackend {
                 writer,
                 child,
                 read_buffer,
+                read_error,
                 vt,
                 _reader_thread: reader_thread,
                 exited: false,
@@ -464,6 +487,7 @@ impl TerminalBackend for GhosttyTerminalBackend {
         })?;
         state.poll_exit()?;
         state.drain_output()?;
+        state.fail_on_read_error()?;
         let vt_snapshot = state.snapshot_rows(viewport)?;
         let status = if state.exited {
             TerminalStatus::Exited(state.exit_status)
@@ -511,7 +535,17 @@ impl TerminalBackend for GhosttyTerminalBackend {
     }
 }
 
-fn read_pty_output(mut reader: Box<dyn Read + Send>, read_buffer: Arc<Mutex<Vec<u8>>>) {
+struct PtyReadContext {
+    command_display: String,
+    cwd_display: String,
+}
+
+fn read_pty_output(
+    mut reader: Box<dyn Read + Send>,
+    read_buffer: Arc<Mutex<Vec<u8>>>,
+    read_error: PtyReadErrorState,
+    context: PtyReadContext,
+) {
     let mut buffer = [0; 8192];
     loop {
         match reader.read(&mut buffer) {
@@ -520,10 +554,32 @@ fn read_pty_output(mut reader: Box<dyn Read + Send>, read_buffer: Arc<Mutex<Vec<
                 if let Ok(mut output) = read_buffer.lock() {
                     append_bounded_bytes(&mut output, &buffer[..bytes_read], MAX_PENDING_PTY_BYTES);
                 } else {
+                    record_pty_read_error(&read_error, &context, "reader buffer lock poisoned");
                     break;
                 }
             }
-            Err(_) => break,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => {
+                record_pty_read_error(&read_error, &context, error.to_string());
+                break;
+            }
+        }
+    }
+}
+
+fn record_pty_read_error(
+    read_error: &PtyReadErrorState,
+    context: &PtyReadContext,
+    error: impl AsRef<str>,
+) {
+    if let Ok(mut read_error) = read_error.lock() {
+        if read_error.is_none() {
+            *read_error = Some(format!(
+                "read PTY output for command '{}' in cwd {}: {}",
+                context.command_display,
+                context.cwd_display,
+                error.as_ref()
+            ));
         }
     }
 }
@@ -543,4 +599,51 @@ fn append_bounded_bytes(buffer: &mut Vec<u8>, bytes: &[u8], max_len: usize) {
         buffer.drain(..needed);
     }
     buffer.extend_from_slice(bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    struct ReadThenFail {
+        returned_bytes: bool,
+    }
+
+    impl Read for ReadThenFail {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.returned_bytes {
+                return Err(io::Error::new(io::ErrorKind::Other, "PTY reader failed"));
+            }
+
+            self.returned_bytes = true;
+            buffer[..2].copy_from_slice(b"ok");
+            Ok(2)
+        }
+    }
+
+    #[test]
+    fn read_pty_output_records_read_errors_with_context() {
+        let read_buffer = Arc::new(Mutex::new(Vec::new()));
+        let read_error = Arc::new(Mutex::new(None));
+        let context = PtyReadContext {
+            command_display: "shell".to_string(),
+            cwd_display: "/repo/worktree".to_string(),
+        };
+
+        read_pty_output(
+            Box::new(ReadThenFail {
+                returned_bytes: false,
+            }),
+            Arc::clone(&read_buffer),
+            Arc::clone(&read_error),
+            context,
+        );
+
+        assert_eq!(read_buffer.lock().unwrap().as_slice(), b"ok");
+        assert_eq!(
+            read_error.lock().unwrap().as_deref(),
+            Some("read PTY output for command 'shell' in cwd /repo/worktree: PTY reader failed")
+        );
+    }
 }
