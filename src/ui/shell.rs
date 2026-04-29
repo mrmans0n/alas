@@ -4,7 +4,10 @@ use std::{
 };
 
 use crate::{
-    app::{AlasModel, RepositoryNode, TerminalTabId, TerminalTabKind, WorkspaceSession},
+    app::{
+        AlasModel, RepositoryNode, TerminalTabId, TerminalTabKind, TerminalTabStatus,
+        WorkspaceSession,
+    },
     config::{
         AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
         ResolvedRepoConfig, repository_id_for_path,
@@ -13,7 +16,7 @@ use crate::{
     terminal::{
         CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
         TerminalScreenMode, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
-        TerminalSize, TerminalViewport,
+        TerminalSize, TerminalStatus, TerminalViewport,
     },
     ui::{
         command_picker::render_command_picker,
@@ -135,7 +138,7 @@ impl AlasShell {
     }
 
     fn terminal_snapshot(&mut self) -> Option<TerminalGridSnapshot> {
-        let session = self.active_terminal.as_ref()?;
+        let session = self.active_terminal.as_ref()?.clone();
         let rows = self.terminal_size.map_or(24, |size| size.rows);
         let viewport = TerminalViewport {
             scroll_offset_rows: self.terminal_scroll_offset_rows,
@@ -151,10 +154,28 @@ impl AlasShell {
                     TerminalScreenMode::Main => snapshot.viewport.scroll_offset_rows,
                     TerminalScreenMode::Alternate => 0,
                 };
+                let _ = self.workspace_session.set_tab_scroll_offset(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    self.terminal_scroll_offset_rows,
+                );
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    terminal_tab_status(snapshot.status),
+                );
                 self.terminal_error = None;
                 Some(snapshot)
             }
             Err(error) => {
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Failed,
+                );
                 self.terminal_error = Some(error.to_string());
                 None
             }
@@ -196,9 +217,29 @@ impl AlasShell {
                 active.backend_session = session;
                 self.terminal_registry
                     .replace_backend_session(&active.id, session);
+                let _ = self.workspace_session.set_tab_backend_session(
+                    &active.id.repo_id,
+                    &active.id.worktree_path,
+                    active.id.tab_id,
+                    Some(session),
+                );
+                let _ = self.workspace_session.set_tab_status(
+                    &active.id.repo_id,
+                    &active.id.worktree_path,
+                    active.id.tab_id,
+                    TerminalTabStatus::Running,
+                );
                 self.terminal_error = None;
             }
             Err(error) => {
+                if let Some(active) = self.active_terminal.as_ref() {
+                    let _ = self.workspace_session.set_tab_status(
+                        &active.id.repo_id,
+                        &active.id.worktree_path,
+                        active.id.tab_id,
+                        TerminalTabStatus::Failed,
+                    );
+                }
                 self.terminal_error = Some(error.to_string());
             }
         }
@@ -739,7 +780,7 @@ impl AlasShell {
         self.terminal_scroll_offset_rows = tab.scroll_offset_rows;
 
         match self.terminal_registry.get_or_start(
-            id,
+            id.clone(),
             tab.command.clone(),
             &mut self.terminal_backend,
         ) {
@@ -748,15 +789,39 @@ impl AlasShell {
                     if let Err(error) = self.terminal_backend.resize(session.backend_session, size)
                     {
                         self.active_terminal = None;
+                        let _ = self.workspace_session.set_tab_status(
+                            &session.id.repo_id,
+                            &session.id.worktree_path,
+                            session.id.tab_id,
+                            TerminalTabStatus::Failed,
+                        );
                         self.terminal_error = Some(error.to_string());
                         return;
                     }
                 }
+                let _ = self.workspace_session.set_tab_backend_session(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    Some(session.backend_session),
+                );
+                let _ = self.workspace_session.set_tab_status(
+                    &session.id.repo_id,
+                    &session.id.worktree_path,
+                    session.id.tab_id,
+                    TerminalTabStatus::Running,
+                );
                 self.active_terminal = Some(session);
                 self.terminal_error = None;
             }
             Err(error) => {
                 self.active_terminal = None;
+                let _ = self.workspace_session.set_tab_status(
+                    &id.repo_id,
+                    &id.worktree_path,
+                    id.tab_id,
+                    TerminalTabStatus::Failed,
+                );
                 self.terminal_error = Some(error.to_string());
             }
         }
@@ -781,6 +846,17 @@ impl AlasShell {
 
     fn close_command_picker(&mut self) {
         self.command_picker = None;
+    }
+
+    fn handle_command_picker_key_down(&mut self, event: &KeyDownEvent) -> bool {
+        if self.command_picker.is_none() {
+            return false;
+        }
+
+        if event.keystroke.key == "escape" {
+            self.close_command_picker();
+        }
+        true
     }
 
     fn create_command_tab_from_picker(&mut self, name: String, command: String) {
@@ -922,6 +998,8 @@ impl AlasShell {
 
         self.app_config_store.save(&next_config)?;
         self.config = next_config;
+        self.cleanup_repository_sessions(repo_id);
+        self.workspace_session.remove_repository(repo_id);
 
         if self
             .model
@@ -994,6 +1072,8 @@ impl AlasShell {
             .ok_or_else(|| anyhow::anyhow!("Repository not found"))?;
 
         GitWorktreeService::new(GitRunner::new()).remove_worktree(&repo_path, path)?;
+        self.cleanup_worktree_sessions(repo_id, path);
+        self.workspace_session.remove_worktree(repo_id, path);
 
         if self
             .model
@@ -1077,6 +1157,42 @@ impl AlasShell {
         Ok(())
     }
 
+    fn cleanup_repository_sessions(&mut self, repo_id: &str) {
+        let sessions = self
+            .terminal_registry
+            .remove_sessions_for_repository(repo_id);
+        self.stop_terminal_sessions(sessions);
+    }
+
+    fn cleanup_worktree_sessions(&mut self, repo_id: &str, path: &Path) {
+        let sessions = self
+            .terminal_registry
+            .remove_sessions_for_worktree(repo_id, path);
+        self.stop_terminal_sessions(sessions);
+    }
+
+    fn stop_terminal_sessions(&mut self, sessions: Vec<TerminalSessionRef>) {
+        let active_backend_session = self
+            .active_terminal
+            .as_ref()
+            .map(|session| session.backend_session);
+        let removed_active_session = sessions
+            .iter()
+            .any(|session| Some(session.backend_session) == active_backend_session);
+
+        for session in sessions {
+            if let Err(error) = self.terminal_backend.stop(session.backend_session) {
+                self.terminal_error = Some(error.to_string());
+            }
+        }
+
+        if removed_active_session {
+            self.active_terminal = None;
+            self.active_terminal_tab = None;
+            self.terminal_scroll_offset_rows = 0;
+        }
+    }
+
     fn clear_selection_and_active_terminal(&mut self) {
         self.model.clear_selection();
         self.command_picker = None;
@@ -1121,6 +1237,14 @@ impl AlasShell {
         self.add_repository_dialog
             .as_ref()
             .and_then(|dialog| dialog.error.as_deref())
+    }
+}
+
+fn terminal_tab_status(status: TerminalStatus) -> TerminalTabStatus {
+    match status {
+        TerminalStatus::Running => TerminalTabStatus::Running,
+        TerminalStatus::Exited(status) => TerminalTabStatus::Exited(status),
+        TerminalStatus::Failed => TerminalTabStatus::Failed,
     }
 }
 
@@ -1453,6 +1577,12 @@ impl Render for AlasShell {
                 }
             });
         let on_terminal_key_down = cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+            if shell.handle_command_picker_key_down(event) {
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+
             if shell.write_terminal_input(event) {
                 cx.stop_propagation();
                 cx.notify();

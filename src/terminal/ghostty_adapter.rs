@@ -55,6 +55,10 @@ pub trait TerminalBackend {
         &mut self,
         session: TerminalBackendSession,
     ) -> anyhow::Result<TerminalBackendSession>;
+
+    fn stop(&mut self, _session: TerminalBackendSession) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(feature = "ghostty-vt")]
@@ -480,6 +484,13 @@ impl TerminalBackend for GhosttyTerminalBackend {
         let command = state.command.clone();
         drop(state);
         self.start(command)
+    }
+
+    fn stop(&mut self, session: TerminalBackendSession) -> anyhow::Result<()> {
+        self.sessions.remove(&session.backend_id).ok_or_else(|| {
+            anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
+        })?;
+        Ok(())
     }
 }
 

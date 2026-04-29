@@ -127,12 +127,7 @@ impl WorkspaceSession {
         tab_id: TerminalTabId,
     ) -> anyhow::Result<()> {
         let key = WorktreeKey::new(repo_id, path.to_path_buf());
-        let has_tab = self
-            .tabs
-            .get(&key)
-            .is_some_and(|tabs| tabs.iter().any(|tab| tab.id == tab_id));
-
-        if !has_tab {
+        if self.tab_mut_for_key(&key, tab_id).is_none() {
             anyhow::bail!(
                 "unknown terminal tab {:?} for repo '{}' worktree {}",
                 tab_id,
@@ -143,5 +138,81 @@ impl WorkspaceSession {
 
         self.active_tabs.insert(key, tab_id);
         Ok(())
+    }
+
+    pub fn set_tab_backend_session(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: TerminalTabId,
+        backend_session: Option<TerminalBackendSession>,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.known_tab_mut(&key, tab_id)?;
+        tab.backend_session = backend_session;
+        Ok(())
+    }
+
+    pub fn set_tab_status(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: TerminalTabId,
+        status: TerminalTabStatus,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.known_tab_mut(&key, tab_id)?;
+        tab.status = status;
+        Ok(())
+    }
+
+    pub fn set_tab_scroll_offset(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: TerminalTabId,
+        scroll_offset_rows: usize,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.known_tab_mut(&key, tab_id)?;
+        tab.scroll_offset_rows = scroll_offset_rows;
+        Ok(())
+    }
+
+    pub fn remove_worktree(&mut self, repo_id: &str, path: &Path) {
+        let key = WorktreeKey::new(repo_id.to_string(), path.to_path_buf());
+        self.tabs.remove(&key);
+        self.active_tabs.remove(&key);
+    }
+
+    pub fn remove_repository(&mut self, repo_id: &str) {
+        self.tabs.retain(|key, _| key.repo_id != repo_id);
+        self.active_tabs.retain(|key, _| key.repo_id != repo_id);
+    }
+
+    fn known_tab_mut(
+        &mut self,
+        key: &WorktreeKey,
+        tab_id: TerminalTabId,
+    ) -> anyhow::Result<&mut TerminalTab> {
+        self.tab_mut_for_key(key, tab_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown terminal tab {:?} for repo '{}' worktree {}",
+                tab_id,
+                key.repo_id,
+                key.path.display()
+            )
+        })
+    }
+
+    fn tab_mut_for_key(
+        &mut self,
+        key: &WorktreeKey,
+        tab_id: TerminalTabId,
+    ) -> Option<&mut TerminalTab> {
+        self.tabs
+            .get_mut(key)?
+            .iter_mut()
+            .find(|tab| tab.id == tab_id)
     }
 }

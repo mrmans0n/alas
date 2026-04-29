@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::app::TerminalTabId;
 use crate::terminal::TerminalBackendSession;
@@ -94,5 +94,33 @@ impl TerminalSessionRegistry {
         if let Some(session) = self.sessions.get_mut(id) {
             session.backend_session = backend_session;
         }
+    }
+
+    pub fn remove_sessions_for_worktree(
+        &mut self,
+        repo_id: &str,
+        worktree_path: &Path,
+    ) -> Vec<TerminalSessionRef> {
+        let ids: Vec<_> = self
+            .sessions
+            .keys()
+            .filter(|id| id.repo_id == repo_id && id.worktree_path == worktree_path)
+            .cloned()
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| self.sessions.remove(&id))
+            .collect()
+    }
+
+    pub fn remove_sessions_for_repository(&mut self, repo_id: &str) -> Vec<TerminalSessionRef> {
+        let ids: Vec<_> = self
+            .sessions
+            .keys()
+            .filter(|id| id.repo_id == repo_id)
+            .cloned()
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| self.sessions.remove(&id))
+            .collect()
     }
 }

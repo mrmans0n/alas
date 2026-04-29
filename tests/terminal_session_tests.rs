@@ -496,6 +496,53 @@ fn registry_reuses_existing_session_for_worktree() {
 }
 
 #[test]
+fn registry_removes_sessions_by_worktree_and_repository() {
+    let mut registry = TerminalSessionRegistry::default();
+    let mut backend = CountingBackend::default();
+    let repo = "repo";
+    let worktree_a = PathBuf::from("/repo/a");
+    let worktree_b = PathBuf::from("/repo/b");
+
+    let a1 = registry
+        .get_or_start(
+            TerminalSessionId::new(repo, worktree_a.clone(), TerminalTabId(1)),
+            CommandSpec::shell_command("$SHELL", worktree_a.clone()),
+            &mut backend,
+        )
+        .unwrap();
+    let a2 = registry
+        .get_or_start(
+            TerminalSessionId::new(repo, worktree_a.clone(), TerminalTabId(2)),
+            CommandSpec::shell_command("cargo test", worktree_a.clone()),
+            &mut backend,
+        )
+        .unwrap();
+    let b1 = registry
+        .get_or_start(
+            TerminalSessionId::new(repo, worktree_b.clone(), TerminalTabId(3)),
+            CommandSpec::shell_command("$SHELL", worktree_b.clone()),
+            &mut backend,
+        )
+        .unwrap();
+
+    let removed = registry.remove_sessions_for_worktree(repo, &worktree_a);
+    let removed_handles: Vec<_> = removed.iter().map(|session| session.handle).collect();
+    assert_eq!(removed.len(), 2);
+    assert!(removed_handles.contains(&a1.handle));
+    assert!(removed_handles.contains(&a2.handle));
+    assert_eq!(
+        registry
+            .remove_sessions_for_worktree(repo, &worktree_a)
+            .len(),
+        0
+    );
+
+    let removed = registry.remove_sessions_for_repository(repo);
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].handle, b1.handle);
+}
+
+#[test]
 fn registry_does_not_store_session_when_backend_start_fails() {
     let mut registry = TerminalSessionRegistry::default();
     let mut backend = FailingOnceBackend::default();
