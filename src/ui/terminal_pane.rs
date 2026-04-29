@@ -1,6 +1,9 @@
-use crate::{app::SelectedWorktree, terminal::TerminalGridSnapshot};
+use crate::{
+    app::SelectedWorktree, terminal::TerminalGridSnapshot, ui::terminal_view::render_terminal_grid,
+};
 use gpui::{
-    App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, rgb,
+    AnyElement, App, ClickEvent, IntoElement, ParentElement, ScrollWheelEvent, Styled, Window, div,
+    prelude::*, rgb,
 };
 
 pub fn render_terminal_pane(
@@ -10,6 +13,7 @@ pub fn render_terminal_pane(
     on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_restart: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_focus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_scroll: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
         .id("terminal-pane")
@@ -19,6 +23,7 @@ pub fn render_terminal_pane(
         .bg(rgb(0x111827))
         .text_color(rgb(0xe5e7eb))
         .on_click(on_focus)
+        .on_scroll_wheel(on_scroll)
         .when(selected_worktree.is_none(), |element| {
             element.items_center().justify_center().child(
                 div()
@@ -119,17 +124,20 @@ pub fn render_terminal_pane(
                         div()
                             .flex_1()
                             .overflow_hidden()
-                            .font_family("monospace")
-                            .text_sm()
-                            .line_height(gpui::px(18.0))
-                            .child(
-                                snapshot
-                                    .map(|snapshot| snapshot.plain_lines().join("\n"))
-                                    .filter(|output| !output.is_empty())
-                                    .map(SharedString::from)
-                                    .unwrap_or_else(|| SharedString::from(" ")),
-                            ),
+                            .child(render_terminal_body(snapshot)),
                     )
             },
         )
+}
+
+fn render_terminal_body(snapshot: Option<&TerminalGridSnapshot>) -> AnyElement {
+    match snapshot {
+        Some(snapshot) => render_terminal_grid(snapshot).into_any_element(),
+        None => div()
+            .font_family("monospace")
+            .text_sm()
+            .line_height(gpui::px(18.0))
+            .child(" ")
+            .into_any_element(),
+    }
 }

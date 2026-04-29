@@ -12,8 +12,8 @@ use crate::{
     git::{GitInspectorService, GitInspectorState, GitRunner, GitWorktreeService},
     terminal::{
         CommandSpec, GhosttyTerminalBackend, TerminalBackend, TerminalGridSnapshot,
-        TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry, TerminalSize,
-        TerminalViewport,
+        TerminalScreenMode, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
+        TerminalSize, TerminalViewport,
     },
     ui::{
         dialogs::{
@@ -28,7 +28,8 @@ use crate::{
 };
 use gpui::{
     App, Application, Context, FocusHandle, IntoElement, KeyDownEvent, PathPromptOptions,
-    PromptLevel, Render, SharedString, Window, WindowOptions, div, prelude::*, px, rgb,
+    PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window, WindowOptions, div,
+    prelude::*, px, rgb,
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -59,6 +60,7 @@ pub struct AlasShell {
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
     terminal_size: Option<TerminalSize>,
+    terminal_scroll_offset_rows: usize,
     git_inspector: Option<GitInspectorState>,
     git_inspector_error: Option<String>,
 }
@@ -90,6 +92,7 @@ impl AlasShell {
             terminal_error: None,
             terminal_focus: cx.focus_handle(),
             terminal_size: None,
+            terminal_scroll_offset_rows: 0,
             git_inspector: None,
             git_inspector_error: None,
         };
@@ -122,11 +125,20 @@ impl AlasShell {
     fn terminal_snapshot(&mut self) -> Option<TerminalGridSnapshot> {
         let session = self.active_terminal.as_ref()?;
         let rows = self.terminal_size.map_or(24, |size| size.rows);
+        let viewport = TerminalViewport {
+            scroll_offset_rows: self.terminal_scroll_offset_rows,
+            visible_rows: rows,
+        };
+
         match self
             .terminal_backend
-            .snapshot(session.backend_session, TerminalViewport::visible(rows))
+            .snapshot(session.backend_session, viewport)
         {
             Ok(snapshot) => {
+                self.terminal_scroll_offset_rows = match snapshot.screen_mode {
+                    TerminalScreenMode::Main => snapshot.viewport.scroll_offset_rows,
+                    TerminalScreenMode::Alternate => 0,
+                };
                 self.terminal_error = None;
                 Some(snapshot)
             }
@@ -157,6 +169,7 @@ impl AlasShell {
     }
 
     fn restart_active_terminal(&mut self) {
+        self.terminal_scroll_offset_rows = 0;
         let Some(active) = self.active_terminal.as_mut() else {
             return;
         };
@@ -197,6 +210,47 @@ impl AlasShell {
                 true
             }
         }
+    }
+
+    fn scroll_terminal(
+        &mut self,
+        event: &ScrollWheelEvent,
+        screen_mode: TerminalScreenMode,
+        scrollback_rows: usize,
+    ) -> bool {
+        if self.active_terminal.is_none() {
+            return false;
+        }
+
+        if screen_mode == TerminalScreenMode::Alternate {
+            // Alternate-screen apps often expect wheel input as terminal mouse
+            // events. Alas does not translate GPUI wheel events into PTY mouse
+            // reports yet, so keep the main-screen scrollback offset pinned.
+            let changed = self.terminal_scroll_offset_rows != 0;
+            self.terminal_scroll_offset_rows = 0;
+            return changed;
+        }
+
+        let rows = terminal_scroll_rows(event);
+        if rows == 0 {
+            return false;
+        }
+
+        let next_offset = if rows > 0 {
+            self.terminal_scroll_offset_rows
+                .saturating_add(rows.unsigned_abs())
+        } else {
+            self.terminal_scroll_offset_rows
+                .saturating_sub(rows.unsigned_abs())
+        }
+        .min(scrollback_rows);
+
+        if next_offset == self.terminal_scroll_offset_rows {
+            return false;
+        }
+
+        self.terminal_scroll_offset_rows = next_offset;
+        true
     }
 
     fn open_add_repository_dialog(&mut self, cx: &mut Context<Self>) {
@@ -624,6 +678,7 @@ impl AlasShell {
 
     fn select_worktree(&mut self, repo_id: String, path: PathBuf, cx: &mut Context<Self>) {
         self.model.select_worktree(repo_id.clone(), path.clone());
+        self.terminal_scroll_offset_rows = 0;
         self.git_inspector = None;
         self.git_inspector_error = None;
         self.refresh_git_inspector(repo_id.clone(), path.clone(), cx);
@@ -940,6 +995,7 @@ impl AlasShell {
         self.active_terminal_tab = None;
         self.active_terminal = None;
         self.terminal_error = None;
+        self.terminal_scroll_offset_rows = 0;
         self.git_inspector = None;
         self.git_inspector_error = None;
     }
@@ -977,6 +1033,24 @@ impl AlasShell {
         self.add_repository_dialog
             .as_ref()
             .and_then(|dialog| dialog.error.as_deref())
+    }
+}
+
+fn terminal_scroll_rows(event: &ScrollWheelEvent) -> isize {
+    let rows = match &event.delta {
+        ScrollDelta::Lines(delta) => f64::from(delta.y),
+        ScrollDelta::Pixels(delta) => delta.y.to_f64() / 18.0,
+    };
+
+    if rows == 0.0 {
+        return 0;
+    }
+
+    let rounded = rows.round() as isize;
+    if rounded == 0 {
+        rows.signum() as isize
+    } else {
+        rounded
     }
 }
 
@@ -1308,6 +1382,20 @@ impl Render for AlasShell {
             window.focus(&shell.terminal_focus);
             cx.notify();
         });
+        let terminal_screen_mode = terminal_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.screen_mode)
+            .unwrap_or(TerminalScreenMode::Main);
+        let terminal_scrollback_rows = terminal_snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.scrollback_rows);
+        let on_terminal_scroll =
+            cx.listener(move |shell, event: &ScrollWheelEvent, _window, cx| {
+                if shell.scroll_terminal(event, terminal_screen_mode, terminal_scrollback_rows) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
 
         div()
             .flex()
@@ -1592,6 +1680,7 @@ impl Render for AlasShell {
                                 on_retry_terminal,
                                 on_restart_terminal,
                                 on_focus_terminal,
+                                on_terminal_scroll,
                             )),
                     ),
             )
