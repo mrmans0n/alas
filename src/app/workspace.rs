@@ -62,6 +62,9 @@ impl WorkspaceSession {
         command: CommandSpec,
     ) -> TerminalTabId {
         let key = WorktreeKey::new(repo_id, path);
+        if let Some(active) = self.active_tabs.get(&key).copied() {
+            return active;
+        }
         if let Some(existing) = self.tabs.get(&key).and_then(|tabs| tabs.first()) {
             self.active_tabs.insert(key, existing.id);
             return existing.id;
@@ -122,17 +125,23 @@ impl WorkspaceSession {
         repo_id: impl Into<String>,
         path: &Path,
         tab_id: TerminalTabId,
-    ) -> bool {
+    ) -> anyhow::Result<()> {
         let key = WorktreeKey::new(repo_id, path.to_path_buf());
         let has_tab = self
             .tabs
             .get(&key)
             .is_some_and(|tabs| tabs.iter().any(|tab| tab.id == tab_id));
 
-        if has_tab {
-            self.active_tabs.insert(key, tab_id);
+        if !has_tab {
+            anyhow::bail!(
+                "unknown terminal tab {:?} for repo '{}' worktree {}",
+                tab_id,
+                key.repo_id,
+                key.path.display()
+            );
         }
 
-        has_tab
+        self.active_tabs.insert(key, tab_id);
+        Ok(())
     }
 }

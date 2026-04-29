@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use alas::app::{TerminalTabKind, WorkspaceSession};
+use alas::app::{TerminalTabId, TerminalTabKind, WorkspaceSession};
 use alas::terminal::CommandSpec;
 
 fn shell_command(path: &str) -> CommandSpec {
@@ -51,10 +51,21 @@ fn worktree_can_have_multiple_named_terminal_tabs() {
         Some(tests)
     );
 
-    assert!(session.set_active_tab("repo", &path, shell));
+    session
+        .set_active_tab("repo", &path, shell)
+        .expect("set active tab");
     let active = session.active_tab("repo", &path).expect("active tab");
     assert_eq!(active.id, shell);
     assert_eq!(active.name, "Shell");
+
+    let ensured =
+        session.ensure_default_terminal_tab("repo", path.clone(), shell_command("/repo/a"));
+    assert_eq!(ensured, shell);
+    assert_eq!(session.tabs_for_worktree("repo", &path).len(), 2);
+    assert_eq!(
+        session.active_tab("repo", &path).map(|tab| tab.id),
+        Some(shell)
+    );
 }
 
 #[test]
@@ -85,7 +96,9 @@ fn active_tab_is_scoped_per_worktree() {
         shell_command("/repo/b"),
     );
 
-    assert!(session.set_active_tab("repo", &path_a, shell_a));
+    session
+        .set_active_tab("repo", &path_a, shell_a)
+        .expect("set active tab");
 
     assert_eq!(
         session.active_tab("repo", &path_a).map(|tab| tab.id),
@@ -96,4 +109,26 @@ fn active_tab_is_scoped_per_worktree() {
         Some(shell_b)
     );
     assert_ne!(tests_a, shell_b);
+}
+
+#[test]
+fn setting_unknown_active_tab_returns_contextual_error() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+
+    let error = session
+        .set_active_tab("repo", &path, TerminalTabId(999))
+        .expect_err("unknown tab should fail")
+        .to_string();
+
+    assert!(error.contains("unknown terminal tab"));
+    assert!(error.contains("repo"));
+    assert!(error.contains("/repo/a"));
 }
