@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Alas icon placeholder">
+  <rect width="512" height="512" rx="96" fill="#111827"/>
+  <path d="M128 352 L224 128 H288 L384 352 H320 L300 304 H212 L192 352 Z" fill="#F9FAFB"/>
+  <path d="M232 248 H280 L256 184 Z" fill="#60A5FA"/>
+  <rect x="128" y="384" width="256" height="24" rx="12" fill="#60A5FA"/>
+</svg>
