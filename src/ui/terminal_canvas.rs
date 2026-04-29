@@ -1,7 +1,7 @@
 use crate::{
     terminal::{
         GhosttyCellStyle, GhosttyRenderFrame, TerminalColor, TerminalCursorShape, TerminalMetrics,
-        background_runs, text_runs,
+        background_runs_with_defaults, effective_background, text_runs,
     },
     ui::terminal_view::TERMINAL_FONT_FAMILY,
 };
@@ -86,7 +86,7 @@ pub fn terminal_paint_plan(
 
     for (row_index, row) in frame.rows_data.iter().enumerate() {
         commands.extend(
-            background_runs(row, frame.default_background)
+            background_runs_with_defaults(row, frame.default_foreground, frame.default_background)
                 .into_iter()
                 .filter(|run| run.background != frame.default_background)
                 .map(|run| TerminalPaintCommand::BackgroundRun {
@@ -196,17 +196,8 @@ impl Element for TerminalCanvas {
         window.paint_layer(bounds, |window| {
             for command in plan.commands {
                 match command {
-                    TerminalPaintCommand::FillBackground { color, cols, rows } => {
-                        paint_terminal_rect(
-                            window,
-                            bounds,
-                            metrics,
-                            0,
-                            0,
-                            usize::from(cols),
-                            usize::from(rows),
-                            render_color(color),
-                        );
+                    TerminalPaintCommand::FillBackground { color, .. } => {
+                        window.paint_quad(fill(bounds, render_color(color)));
                     }
                     TerminalPaintCommand::BackgroundRun {
                         row,
@@ -253,12 +244,14 @@ impl Element for TerminalCanvas {
                     } => {
                         paint_terminal_cursor(
                             window,
+                            cx,
                             bounds,
                             metrics,
+                            &self.frame,
                             usize::from(row),
                             usize::from(col),
                             shape,
-                            render_color(color.unwrap_or(default_foreground)),
+                            color.unwrap_or(default_foreground),
                         );
                     }
                 }
@@ -348,12 +341,14 @@ fn paint_terminal_text_run(
 
 fn paint_terminal_cursor(
     window: &mut Window,
+    cx: &mut App,
     bounds: Bounds<Pixels>,
     metrics: TerminalMetrics,
+    frame: &GhosttyRenderFrame,
     row: usize,
     col: usize,
     shape: TerminalCursorShape,
-    color: gpui::Rgba,
+    color: TerminalColor,
 ) {
     let origin = point(
         bounds.origin.x + px(col as f32 * metrics.cell_width_px),
@@ -371,7 +366,50 @@ fn paint_terminal_cursor(
         ),
     };
 
-    window.paint_quad(fill(Bounds::new(origin, rect_size), color));
+    window.paint_quad(fill(Bounds::new(origin, rect_size), render_color(color)));
+
+    if shape == TerminalCursorShape::Block {
+        paint_cursor_cell_text(window, cx, bounds, metrics, frame, row, col);
+    }
+}
+
+fn paint_cursor_cell_text(
+    window: &mut Window,
+    cx: &mut App,
+    bounds: Bounds<Pixels>,
+    metrics: TerminalMetrics,
+    frame: &GhosttyRenderFrame,
+    row: usize,
+    col: usize,
+) {
+    let Some(cell) = frame.rows_data.get(row).and_then(|row| row.cells.get(col)) else {
+        return;
+    };
+    if cell.text.is_empty() {
+        return;
+    }
+
+    let mut cursor_style = cell.style.clone();
+    cursor_style.foreground = Some(effective_background(
+        &cell.style,
+        frame.default_foreground,
+        frame.default_background,
+    ));
+    cursor_style.background = None;
+    cursor_style.inverse = false;
+
+    paint_terminal_text_run(
+        window,
+        cx,
+        bounds,
+        metrics,
+        row,
+        col,
+        cell.text.clone(),
+        cursor_style,
+        frame.default_foreground,
+        frame.default_background,
+    );
 }
 
 fn effective_foreground(

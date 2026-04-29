@@ -662,6 +662,9 @@ impl GhosttyTerminalBackend {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
         state.poll_exit()?;
+        if state.exited {
+            return Ok(false);
+        }
         state.drain_output()?;
         state.fail_on_read_error()?;
 
@@ -680,6 +683,9 @@ impl GhosttyTerminalBackend {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
         state.poll_exit()?;
+        if state.exited {
+            return Ok(false);
+        }
         state.drain_output()?;
         state.fail_on_read_error()?;
 
@@ -699,6 +705,9 @@ impl GhosttyTerminalBackend {
             anyhow::anyhow!("unknown terminal backend session {}", session.backend_id)
         })?;
         state.poll_exit()?;
+        if state.exited {
+            return Ok(false);
+        }
         state.drain_output()?;
         state.fail_on_read_error()?;
 

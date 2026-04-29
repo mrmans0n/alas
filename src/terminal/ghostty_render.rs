@@ -106,10 +106,18 @@ pub fn background_runs(
     row: &GhosttyRenderRow,
     default_background: TerminalColor,
 ) -> Vec<BackgroundRun> {
+    background_runs_with_defaults(row, default_background, default_background)
+}
+
+pub fn background_runs_with_defaults(
+    row: &GhosttyRenderRow,
+    default_foreground: TerminalColor,
+    default_background: TerminalColor,
+) -> Vec<BackgroundRun> {
     let mut runs: Vec<BackgroundRun> = Vec::new();
 
     for (col, cell) in row.cells.iter().enumerate() {
-        let background = effective_background(&cell.style, default_background);
+        let background = effective_background(&cell.style, default_foreground, default_background);
         if let Some(last) = runs.last_mut() {
             if last.background == background {
                 last.cell_count += 1;
@@ -170,12 +178,13 @@ pub fn text_runs(row: &GhosttyRenderRow) -> Vec<TextRun> {
     runs
 }
 
-fn effective_background(
+pub fn effective_background(
     style: &GhosttyCellStyle,
+    default_foreground: TerminalColor,
     default_background: TerminalColor,
 ) -> TerminalColor {
     if style.inverse {
-        style.foreground.unwrap_or(default_background)
+        style.foreground.unwrap_or(default_foreground)
     } else {
         style.background.unwrap_or(default_background)
     }
@@ -299,6 +308,27 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn inverse_background_uses_default_foreground_when_foreground_is_unset() {
+        let row = GhosttyRenderRow {
+            cells: vec![GhosttyRenderCell::narrow(
+                "x",
+                GhosttyCellStyle {
+                    inverse: true,
+                    ..GhosttyCellStyle::default()
+                },
+            )],
+        };
+
+        let runs = background_runs_with_defaults(
+            &row,
+            TerminalColor::rgb(10, 20, 30),
+            TerminalColor::rgb(0, 0, 0),
+        );
+
+        assert_eq!(runs[0].background, TerminalColor::rgb(10, 20, 30));
     }
 
     #[test]
