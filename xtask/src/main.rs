@@ -2,6 +2,7 @@ mod arch;
 mod dist;
 mod fs;
 mod metadata;
+mod platform;
 mod templates;
 mod version;
 
