@@ -31,4 +31,5 @@ pretty_assertions = "1"
 
 [workspace]
 members = ["xtask"]
+default-members = [".", "xtask"]
 resolver = "3"

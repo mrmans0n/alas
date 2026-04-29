@@ -10,6 +10,7 @@ enum Command {
 fn parse_command(args: &[&str]) -> Result<Command> {
     match args {
         ["dist", target] => Ok(Command::Dist(dist::DistTarget::parse(target)?)),
+        ["dist", _, extra @ ..] => bail!("unexpected extra arguments: {}", extra.join(" ")),
         ["dist"] => bail!("missing dist target: expected macos, linux-appimage, linux-deb, or all"),
         [] => bail!("missing command: expected dist"),
         [other, ..] => bail!("unknown command: {other}"),
@@ -62,5 +63,19 @@ mod tests {
     fn rejects_missing_dist_target() {
         let error = parse_command(&["dist"]).unwrap_err().to_string();
         assert!(error.contains("missing dist target"));
+    }
+
+    #[test]
+    fn rejects_unknown_dist_target() {
+        let error = parse_command(&["dist", "windows"]).unwrap_err().to_string();
+        assert!(error.contains("unknown dist target"));
+    }
+
+    #[test]
+    fn rejects_extra_dist_arguments() {
+        let error = parse_command(&["dist", "macos", "extra"])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unexpected extra arguments"));
     }
 }
