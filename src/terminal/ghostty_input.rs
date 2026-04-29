@@ -1,7 +1,7 @@
 use anyhow::Context;
 use libghostty_vt::{
     Terminal,
-    key::{Action, Encoder, Event, Key, Mods},
+    key::{Action, Encoder, Event, Key, Mods, OptionAsAlt},
     terminal::Mode,
 };
 
@@ -127,7 +127,9 @@ pub fn encode_key_input(
     };
 
     let mut encoder = Encoder::new().context("create Ghostty key encoder")?;
-    encoder.set_options_from_terminal(terminal);
+    encoder
+        .set_options_from_terminal(terminal)
+        .set_macos_option_as_alt(OptionAsAlt::True);
 
     let mut bytes = Vec::new();
     if let Err(error) = encoder.encode_to_vec(&event, &mut bytes) {
@@ -371,5 +373,30 @@ mod tests {
                 "expected Ghostty to encode {key}"
             );
         }
+    }
+
+    #[test]
+    fn ghostty_encoder_preserves_alt_escape_prefix() {
+        let terminal = libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
+            cols: 80,
+            rows: 24,
+            max_scrollback: 100,
+        })
+        .unwrap();
+        let bytes = encode_key_input(
+            &terminal,
+            &TerminalKeyInput::new(
+                "a",
+                Some("å".to_string()),
+                TerminalKeyModifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+                false,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(bytes, Some(b"\x1ba".to_vec()));
     }
 }
