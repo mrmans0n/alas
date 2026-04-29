@@ -126,6 +126,10 @@ fn render_repository(
     } else {
         "Show archived".into()
     };
+    let has_visible_worktrees = repository
+        .worktrees
+        .iter()
+        .any(|worktree| repository.show_archived || !worktree.archived);
 
     // GPUI 0.2 exposes low-level mouse events but no stable built-in context
     // menu/popover primitive in this app. Keep the full right-click menu action
@@ -276,6 +280,21 @@ fn render_repository(
                         .text_sm()
                         .text_color(rgb(0x6b7280))
                         .child("No worktrees found for this repository."),
+                )
+            },
+        )
+        .when(
+            !repository.unavailable && !repository.worktrees.is_empty() && !has_visible_worktrees,
+            |element| {
+                element.child(
+                    div()
+                        .ml_3()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0xffffff))
+                        .text_sm()
+                        .text_color(rgb(0x6b7280))
+                        .child("No visible worktrees. Show archived worktrees to view archived entries."),
                 )
             },
         )
