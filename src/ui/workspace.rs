@@ -1,9 +1,12 @@
 use crate::{
     app::{TerminalTab, TerminalTabId, TerminalTabKind},
-    ui::theme::{ACCENT, ACTIVE_TAB_BG, APP_BG, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    ui::theme::{ACCENT, APP_BG, PANEL_BG, PANEL_BORDER},
 };
-use gpui::{
-    App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*,
+use gpui::{App, ClickEvent, IntoElement, ParentElement, Styled, Window, div, prelude::*};
+use gpui_component::{
+    Sizable,
+    button::Button,
+    tab::{Tab, TabBar},
 };
 
 pub fn render_workspace(
@@ -42,6 +45,8 @@ fn render_tab_bar(
     on_select_tab: impl Fn(TerminalTabId, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_new_tab: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let selected_index = tabs.iter().position(|tab| Some(tab.id) == active_tab);
+
     div()
         .id("workspace-tab-bar")
         .flex()
@@ -52,46 +57,33 @@ fn render_tab_bar(
         .border_b_1()
         .border_color(PANEL_BORDER)
         .bg(PANEL_BG)
-        .children(tabs.iter().map(move |tab| {
-            let tab_id = tab.id;
-            let is_active = Some(tab_id) == active_tab;
-            let label = tab.name.clone();
-            let kind = tab.kind;
-            let on_select_tab = on_select_tab.clone();
-
-            div()
-                .id(SharedString::from(format!("workspace-tab-{}", tab_id.0)))
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(if is_active { ACCENT } else { PANEL_BORDER })
-                .bg(if is_active { ACTIVE_TAB_BG } else { PANEL_BG })
-                .text_sm()
-                .text_color(if is_active { TEXT } else { TEXT_MUTED })
-                .font_weight(if is_active {
-                    gpui::FontWeight::SEMIBOLD
-                } else {
-                    gpui::FontWeight::NORMAL
-                })
-                .child(format!("{}{}", tab_kind_prefix(kind), label))
-                .on_click(move |event, window, cx| {
-                    on_select_tab(tab_id, event, window, cx);
-                })
-        }))
         .child(
-            div()
-                .id("workspace-new-tab")
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(PANEL_BORDER)
-                .bg(PANEL_BG)
-                .text_sm()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+            TabBar::new("workspace-tabs")
+                .segmented()
+                .small()
+                .when_some(selected_index, |tab_bar, index| {
+                    tab_bar.selected_index(index)
+                })
+                .children(tabs.iter().map(move |tab| {
+                    let tab_id = tab.id;
+                    let label = tab.name.clone();
+                    let kind = tab.kind;
+                    let on_select_tab = on_select_tab.clone();
+
+                    Tab::new()
+                        .label(format!("{}{}", tab_kind_prefix(kind), label))
+                        .on_click(move |event, window, cx| {
+                            on_select_tab(tab_id, event, window, cx);
+                        })
+                })),
+        )
+        .child(
+            Button::new("workspace-new-tab")
+                .small()
+                .outline()
+                .compact()
+                .label("+")
                 .text_color(ACCENT)
-                .child("+")
                 .on_click(on_new_tab),
         )
 }

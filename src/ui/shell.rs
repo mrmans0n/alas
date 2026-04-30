@@ -2544,6 +2544,8 @@ impl Render for AlasShell {
 pub fn run() -> anyhow::Result<()> {
     Application::new().run(|cx: &mut App| {
         crate::ui::lifecycle::setup_lifecycle(cx);
+        gpui_component::init(cx);
+
         cx.open_window(WindowOptions::default(), |window, cx| {
             let shell = cx.new(AlasShell::new);
             let weak_shell = shell.downgrade();
@@ -2551,7 +2553,7 @@ pub fn run() -> anyhow::Result<()> {
                 weak_shell.update(cx, |shell, _cx| shell.shutdown()).ok();
                 true
             });
-            shell
+            cx.new(|cx| gpui_component::Root::new(shell, window, cx))
         })
         .expect("failed to open Alas window");
     });

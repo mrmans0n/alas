@@ -15,6 +15,7 @@ portable-pty = "0.8"
 # GPUI is the Rust UI framework used by Zed. If crates.io does not have the
 # needed version, switch this dependency to Zed's Git repository during this task.
 gpui = { version = "0.2", features = ["runtime_shaders"] }
+gpui-component = "0.5.1"
 
 # libghostty-rs currently exposes Ghostty VT bindings through libghostty-vt.
 # Alas keeps this behind src/terminal/ghostty_adapter.rs. If the project adds

@@ -2,12 +2,16 @@ use crate::{
     app::{InspectorPaneState, InspectorTab, SelectedWorktree},
     git::GitInspectorState,
     project::FileTreeNode,
-    ui::theme::{ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    ui::theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
 };
 
 use gpui::{
     AnyElement, App, ClickEvent, FontWeight, IntoElement, ParentElement, SharedString, Styled,
     Window, div, prelude::*, px,
+};
+use gpui_component::{
+    Sizable,
+    tab::{Tab, TabBar},
 };
 
 pub fn render_project_inspector(
@@ -64,56 +68,30 @@ fn render_tab_bar(
     selected_tab: InspectorTab,
     on_select_tab: impl Fn(InspectorTab, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .p_1()
-        .rounded_md()
-        .bg(PANEL_BORDER)
-        .child(render_tab_button(
-            "inspector-tab-files",
-            "Files",
-            InspectorTab::Files,
-            selected_tab,
-            on_select_tab.clone(),
-        ))
-        .child(render_tab_button(
-            "inspector-tab-changes",
-            "Changes",
-            InspectorTab::Changes,
-            selected_tab,
-            on_select_tab,
-        ))
-}
+    let selected_index = match selected_tab {
+        InspectorTab::Files => 0,
+        InspectorTab::Changes => 1,
+    };
+    let on_select_files = on_select_tab.clone();
 
-fn render_tab_button(
-    id: &'static str,
-    label: &'static str,
-    tab: InspectorTab,
-    selected_tab: InspectorTab,
-    on_select_tab: impl Fn(InspectorTab, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
-) -> impl IntoElement {
-    let is_active = tab == selected_tab;
-
-    div()
-        .id(id)
-        .flex_1()
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .text_sm()
-        .font_weight(if is_active {
-            FontWeight::SEMIBOLD
-        } else {
-            FontWeight::NORMAL
-        })
-        .text_color(if is_active { ACCENT_TEXT } else { TEXT_MUTED })
-        .bg(if is_active { ACCENT } else { PANEL_BORDER })
-        .child(label)
-        .on_click(move |event, window, cx| {
-            on_select_tab(tab, event, window, cx);
-        })
+    TabBar::new("inspector-tab-bar")
+        .segmented()
+        .small()
+        .selected_index(selected_index)
+        .child(
+            Tab::new()
+                .label("Files")
+                .on_click(move |event, window, cx| {
+                    on_select_files(InspectorTab::Files, event, window, cx);
+                }),
+        )
+        .child(
+            Tab::new()
+                .label("Changes")
+                .on_click(move |event, window, cx| {
+                    on_select_tab(InspectorTab::Changes, event, window, cx);
+                }),
+        )
 }
 
 fn render_files_tab(state: &InspectorPaneState) -> AnyElement {

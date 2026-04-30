@@ -2,6 +2,10 @@ use crate::config::CommandEntry;
 use gpui::{
     App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, rgb,
 };
+use gpui_component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+};
 use indexmap::IndexMap;
 
 pub fn render_command_picker(
@@ -33,16 +37,11 @@ pub fn render_command_picker(
                         .child("New Terminal Tab"),
                 )
                 .child(
-                    div()
-                        .id("cancel-command-picker")
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                    Button::new("cancel-command-picker")
+                        .xsmall()
+                        .ghost()
+                        .label("Cancel")
                         .text_color(rgb(0x374151))
-                        .bg(rgb(0xe5e7eb))
-                        .child("Cancel")
                         .on_click(on_cancel),
                 ),
         )

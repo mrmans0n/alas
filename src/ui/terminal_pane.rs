@@ -7,12 +7,16 @@ use crate::{
             CELL_HEIGHT_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX,
             render_terminal_bounds_probe,
         },
-        theme::{ACCENT, ACCENT_TEXT, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+        theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
     },
 };
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, IntoElement, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, ScrollWheelEvent, SharedString, Styled, Window, div, prelude::*,
+};
+use gpui_component::{
+    Sizable,
+    button::{Button, ButtonVariants},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -95,15 +99,11 @@ pub fn render_terminal_pane(
                                         .gap_2()
                                         .child(format!("Exited: {status}"))
                                         .child(
-                                            div()
-                                                .id("restart-terminal")
-                                                .px_2()
-                                                .py_1()
-                                                .rounded_md()
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .text_color(ACCENT_TEXT)
-                                                .bg(ACCENT)
-                                                .child("Restart")
+                                            Button::new("restart-terminal")
+                                                .small()
+                                                .primary()
+                                                .compact()
+                                                .label("Restart")
                                                 .on_click(on_restart),
                                         ),
                                 )
@@ -183,31 +183,15 @@ fn render_terminal_failure(
                 .flex()
                 .gap_2()
                 .child(
-                    div()
-                        .id("retry-terminal")
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(ACCENT_TEXT)
-                        .bg(ACCENT)
-                        .child("Retry")
+                    Button::new("retry-terminal")
+                        .primary()
+                        .label("Retry")
                         .on_click(on_retry),
                 )
                 .child(
-                    div()
-                        .id("edit-terminal-command")
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(PANEL_BORDER)
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(TEXT)
-                        .bg(PANEL_BG)
-                        .child("Edit Command")
+                    Button::new("edit-terminal-command")
+                        .outline()
+                        .label("Edit Command")
                         .on_click(on_edit_command),
                 ),
         )
