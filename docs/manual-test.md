@@ -11,6 +11,27 @@
 7. Prune stale worktrees and confirm the destructive prompt.
 8. Open command settings and configure at least two commands.
 
+## UI Overhaul
+
+1. On macOS, start Alas with `cargo run` and confirm the normal titlebar is visually reclaimed: app content is flush with the window and traffic-light buttons sit approximately 20px from the top.
+2. Confirm the top-left safe area is reserved in the left sidebar: no repository row, text, or button sits under the traffic-light buttons.
+3. Drag the window from the top-left safe/chrome area and confirm the window moves.
+4. Try dragging from terminal content, repository rows, worktree rows, and right-sidebar rows; confirm those areas do not drag the window.
+5. Confirm Linux still shows conventional window chrome if tested on Linux.
+6. Confirm the app reads as three columns: repository/worktree tree, flush terminal pane, grouped files/Git tree.
+7. Expand and collapse repository nodes in the left sidebar.
+8. Right-click a repository row and a worktree row; confirm contextual popover menus show the expected actions.
+9. Click each overflow button and confirm it opens the same action set as right-click.
+10. Use the bottom icon-only add repository button; confirm its hover tooltip says “Add repository.”
+11. Select a worktree and confirm the center terminal starts without a persistent `Worktree:` label or workspace card border.
+12. Hover the top edge of the terminal; confirm terminal tabs and the new-tab control appear.
+13. Open a second terminal tab and confirm the tab overlay remains available for switching.
+14. Confirm terminal scroll, mouse, keyboard, paste, resize, and alternate-screen behavior still match the Terminal Emulator Behavior section.
+15. Confirm the right sidebar shows a single grouped tree with Changed and Files sections, not Files/Changes tabs.
+16. Expand and collapse directories in the right Files section.
+17. Create or modify a file and confirm the Changed section updates independently of the Files section.
+18. Confirm the old full-width bottom status bar is gone.
+
 ## Desktop Packaging and Lifecycle
 
 ### macOS `.app`
@@ -76,8 +97,10 @@
 7. Mouse: verify shell scrollback still works; in mouse-aware TUIs, verify clicks/wheel are sent when supported.
 8. Resize: run `stty size`, resize the window, run `stty size` again, confirm cell size changed correctly.
 
-## Files and Changes Inspector
+## Grouped Project Inspector
 
-1. Files tab shows worktree files.
-2. Changes tab shows modified/untracked files.
-3. File loading errors do not break terminal input.
+1. Select a worktree and confirm the right sidebar shows a single grouped tree, not separate Files and Changes tabs.
+2. Confirm the Changed section shows modified/untracked files with status badges.
+3. Confirm the Files section shows worktree files and supports directory expand/collapse.
+4. Confirm file loading errors remain scoped to the Files section and do not break terminal input.
+5. Confirm Git status loading errors remain scoped to the Changed section and do not break terminal input.
