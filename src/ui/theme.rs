@@ -20,3 +20,7 @@ pub const ACCENT_TEXT: Rgba = rgb_const(0x0b1220);
 pub const ACTIVE_TAB_BG: Rgba = rgb_const(0x22313b);
 pub const DANGER: Rgba = rgb_const(0xff6b7a);
 pub const SUCCESS: Rgba = rgb_const(0x6ee08d);
+pub const TERMINAL_BG: Rgba = rgb_const(0x141518);
+pub const OVERLAY_BG: Rgba = rgb_const(0x25272d);
+pub const OVERLAY_BORDER: Rgba = rgb_const(0x444850);
+pub const SIDEBAR_SECTION_TEXT: Rgba = rgb_const(0x8f96a3);

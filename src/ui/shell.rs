@@ -5,8 +5,8 @@ use std::{
 
 use crate::{
     app::{
-        ActionId, AlasModel, InspectorPaneState, InspectorTab, RepositoryNode, TerminalTabId,
-        TerminalTabKind, TerminalTabStatus, WorkspaceSession,
+        ActionId, AlasModel, InspectorPaneState, RepositoryNode, TerminalTabId, TerminalTabKind,
+        TerminalTabStatus, WorkspaceSession,
     },
     config::{
         AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
@@ -24,6 +24,7 @@ use crate::{
         },
     },
     ui::{
+        chrome::alas_window_options,
         command_picker::render_command_picker,
         dialogs::{
             AddRepositoryDialogState, CommandSettingsDialogState, ConfirmPruneWorktreesDialog,
@@ -34,16 +35,19 @@ use crate::{
         sidebar::{SidebarMenuState, render_sidebar},
         terminal_canvas::measure_terminal_metrics,
         terminal_pane::render_terminal_pane,
-        terminal_view::{TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX},
-        theme::{APP_BG, DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED},
+        terminal_view::{
+            TERMINAL_CANVAS_HORIZONTAL_PADDING_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX,
+        },
+        theme::{APP_BG, TEXT},
+        view_models::TreeExpansionState,
         workspace::render_workspace,
     },
 };
 use gpui::{
     App, Application, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels,
-    PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window, WindowOptions, div,
-    prelude::*, px, rgb,
+    PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window, div, prelude::*, px,
+    rgb,
 };
 use indexmap::IndexMap;
 use std::borrow::BorrowMut;
@@ -100,6 +104,7 @@ pub struct AlasShell {
     command_settings_active_field: CommandSettingsField,
     command_picker: Option<CommandPickerState>,
     sidebar_menu: Option<SidebarMenuState>,
+    repo_tree_expansion: TreeExpansionState,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     confirm_remove_worktree_dialog: Option<ConfirmRemoveWorktreeDialog>,
     confirm_prune_worktrees_dialog: Option<ConfirmPruneWorktreesDialog>,
@@ -110,6 +115,7 @@ pub struct AlasShell {
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
+    terminal_tab_overlay_hovered: bool,
     terminal_metrics: TerminalMetrics,
     terminal_size: Option<TerminalSize>,
     terminal_body_size_px: Option<(f32, f32)>,
@@ -117,6 +123,7 @@ pub struct AlasShell {
     terminal_scroll_offset_rows: usize,
     inspector_state: InspectorPaneState,
     inspector_request_generation: u64,
+    file_tree_expansion: TreeExpansionState,
 }
 
 impl AlasShell {
@@ -137,6 +144,7 @@ impl AlasShell {
             command_settings_active_field: CommandSettingsField::DefaultName,
             command_picker: None,
             sidebar_menu: None,
+            repo_tree_expansion: TreeExpansionState::default(),
             confirm_remove_repository_dialog: None,
             confirm_remove_worktree_dialog: None,
             confirm_prune_worktrees_dialog: None,
@@ -147,6 +155,7 @@ impl AlasShell {
             active_terminal: None,
             terminal_error: None,
             terminal_focus: cx.focus_handle(),
+            terminal_tab_overlay_hovered: false,
             terminal_metrics: TerminalMetrics::fallback(),
             terminal_size: None,
             terminal_body_size_px: None,
@@ -154,6 +163,7 @@ impl AlasShell {
             terminal_scroll_offset_rows: 0,
             inspector_state: InspectorPaneState::default(),
             inspector_request_generation: 0,
+            file_tree_expansion: TreeExpansionState::default(),
         };
         shell.refresh_repositories();
         shell.start_terminal_refresh(cx);
@@ -276,7 +286,10 @@ impl AlasShell {
 
     fn current_terminal_size(&self) -> TerminalSize {
         self.terminal_body_size_px
-            .map(|(width, height)| self.terminal_metrics.size_from_pixels(width, height))
+            .map(|(width, height)| {
+                let width = (width - (2.0 * TERMINAL_CANVAS_HORIZONTAL_PADDING_PX)).max(0.0);
+                self.terminal_metrics.size_from_pixels(width, height)
+            })
             .or(self.terminal_size)
             .unwrap_or(TerminalSize { cols: 80, rows: 24 })
     }
@@ -466,8 +479,17 @@ impl AlasShell {
         modifiers: gpui::Modifiers,
     ) -> Option<TerminalMouseInput> {
         let bounds = self.terminal_body_bounds?;
-        let x_px = f32::from(position.x) - f32::from(bounds.origin.x);
+        let mut x_px = f32::from(position.x) - f32::from(bounds.origin.x);
         let y_px = f32::from(position.y) - f32::from(bounds.origin.y);
+
+        let horizontal_padding = TERMINAL_CANVAS_HORIZONTAL_PADDING_PX;
+        x_px -= horizontal_padding;
+
+        let content_width = (f32::from(bounds.size.width) - (2.0 * horizontal_padding)).max(0.0);
+        if x_px < 0.0 || x_px >= content_width {
+            return None;
+        }
+
         let cell = mouse_cell_position(x_px, y_px, self.terminal_metrics)?;
 
         Some(TerminalMouseInput {
@@ -966,6 +988,7 @@ impl AlasShell {
         self.sidebar_menu = None;
         self.terminal_scroll_offset_rows = 0;
         self.inspector_state.clear_for_new_worktree();
+        self.file_tree_expansion = TreeExpansionState::default();
         self.inspector_request_generation = self.inspector_request_generation.wrapping_add(1);
         let inspector_request_generation = self.inspector_request_generation;
         self.refresh_git_inspector(
@@ -1130,18 +1153,6 @@ impl AlasShell {
         self.command_picker = None;
     }
 
-    fn open_sidebar_menu(&mut self, menu: SidebarMenuState) {
-        if self.sidebar_menu.as_ref() == Some(&menu) {
-            self.sidebar_menu = None;
-        } else {
-            self.sidebar_menu = Some(menu);
-        }
-    }
-
-    fn close_sidebar_menu(&mut self) {
-        self.sidebar_menu = None;
-    }
-
     fn handle_sidebar_menu_action(
         &mut self,
         action_id: ActionId,
@@ -1208,6 +1219,17 @@ impl AlasShell {
         }
 
         cx.notify();
+    }
+
+    fn handle_sidebar_menu_action_from_target(
+        &mut self,
+        menu: SidebarMenuState,
+        action_id: ActionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar_menu = Some(menu);
+        self.handle_sidebar_menu_action(action_id, window, cx);
     }
 
     fn handle_command_picker_key_down(&mut self, event: &KeyDownEvent) -> bool {
@@ -1831,56 +1853,6 @@ fn render_create_worktree_field(
         )
 }
 
-fn render_status_bar(
-    repo_summary: String,
-    tab_summary: String,
-    terminal_status: Option<&TerminalTabStatus>,
-) -> impl IntoElement {
-    let (status_label, status_color) = match terminal_status {
-        Some(TerminalTabStatus::Running) => ("running".to_string(), SUCCESS),
-        Some(TerminalTabStatus::Exited(Some(code))) => (
-            format!("exited {code}"),
-            if *code == 0 { SUCCESS } else { DANGER },
-        ),
-        Some(TerminalTabStatus::Exited(None)) => ("exited".to_string(), TEXT_MUTED),
-        Some(TerminalTabStatus::Failed) => ("failed".to_string(), DANGER),
-        Some(TerminalTabStatus::NotStarted) => ("not started".to_string(), TEXT_MUTED),
-        None => ("no terminal".to_string(), TEXT_MUTED),
-    };
-
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_3()
-        .px_4()
-        .py_2()
-        .border_t_1()
-        .border_color(PANEL_BORDER)
-        .bg(PANEL_BG)
-        .text_xs()
-        .text_color(TEXT_MUTED)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .overflow_hidden()
-                .child(div().text_color(TEXT).child("Workspace"))
-                .child(div().child("•"))
-                .child(div().truncate().child(repo_summary)),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().text_color(TEXT).child(tab_summary))
-                .child(div().child("•"))
-                .child(div().text_color(status_color).child(status_label)),
-        )
-}
-
 impl Render for AlasShell {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let measured_metrics =
@@ -1920,16 +1892,16 @@ impl Render for AlasShell {
                 .ok();
             };
         let view = cx.entity().downgrade();
-        let on_select_inspector_tab = move |tab: InspectorTab,
-                                            _event: &gpui::ClickEvent,
-                                            _window: &mut Window,
-                                            app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.inspector_state.select_tab(tab);
-                cx.notify();
-            })
-            .ok();
-        };
+        let on_toggle_file_tree_node =
+            move |path: PathBuf, _event: &gpui::ClickEvent, _window: &mut Window, app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell
+                        .file_tree_expansion
+                        .toggle(crate::ui::view_models::TreeExpansionKey::File(path.clone()));
+                    cx.notify();
+                })
+                .ok();
+            };
         let on_submit_create_worktree = cx.listener(|shell, _event, _window, cx| {
             shell.create_worktree_from_dialog(cx);
             cx.notify();
@@ -1990,6 +1962,16 @@ impl Render for AlasShell {
             {
                 cx.stop_propagation();
                 cx.notify();
+                return;
+            }
+
+            let is_tab = event.keystroke.key.eq_ignore_ascii_case("tab")
+                || event.keystroke.key_char.as_deref() == Some("\t");
+            if is_tab {
+                if shell.write_terminal_input(event) {
+                    cx.notify();
+                }
+                cx.stop_propagation();
                 return;
             }
 
@@ -2099,6 +2081,12 @@ impl Render for AlasShell {
         let on_new_terminal_tab = cx.listener(|shell, _event, _window, cx| {
             shell.open_command_picker(cx);
         });
+        let on_terminal_tabs_hover = cx.listener(|shell, hovered: &bool, _window, cx| {
+            if shell.terminal_tab_overlay_hovered != *hovered {
+                shell.terminal_tab_overlay_hovered = *hovered;
+                cx.notify();
+            }
+        });
         let view = cx.entity().downgrade();
         let on_select_command = move |name: String,
                                       command: String,
@@ -2116,33 +2104,30 @@ impl Render for AlasShell {
             cx.notify();
         });
         let view = cx.entity().downgrade();
-        let on_open_sidebar_menu =
-            move |menu: SidebarMenuState, _window: &mut Window, app: &mut App| {
-                view.update(app, |shell, cx| {
-                    shell.open_sidebar_menu(menu);
-                    cx.notify();
-                })
-                .ok();
-            };
-        let view = cx.entity().downgrade();
-        let on_sidebar_menu_action = move |action_id: ActionId,
-                                           _event: &gpui::ClickEvent,
-                                           window: &mut Window,
-                                           app: &mut App| {
+        let on_toggle_repository = move |repo_id: String,
+                                         _event: &gpui::ClickEvent,
+                                         _window: &mut Window,
+                                         app: &mut App| {
             view.update(app, |shell, cx| {
-                shell.handle_sidebar_menu_action(action_id, window, cx);
+                shell.repo_tree_expansion.toggle(
+                    crate::ui::view_models::TreeExpansionKey::Repository(repo_id.clone()),
+                );
+                cx.notify();
             })
             .ok();
         };
         let view = cx.entity().downgrade();
-        let on_close_sidebar_menu =
-            move |_event: &gpui::ClickEvent, _window: &mut Window, app: &mut App| {
-                view.update(app, |shell, cx| {
-                    shell.close_sidebar_menu();
-                    cx.notify();
-                })
-                .ok();
-            };
+        let on_sidebar_menu_action = move |menu: SidebarMenuState,
+                                           action_id: ActionId,
+                                           _event: &gpui::ClickEvent,
+                                           window: &mut Window,
+                                           app: &mut App| {
+            let view = view.clone();
+            view.update(app, |shell, cx| {
+                shell.handle_sidebar_menu_action_from_target(menu, action_id, window, cx);
+            })
+            .ok();
+        };
         let workspace_tabs = self
             .model
             .selected_worktree()
@@ -2159,38 +2144,6 @@ impl Render for AlasShell {
         let active_tab = workspace_tabs
             .iter()
             .find(|tab| Some(tab.id) == active_workspace_tab);
-        let status_bar_repo = self
-            .model
-            .selected_worktree()
-            .map(|selected| {
-                let repository = self
-                    .model
-                    .repositories()
-                    .iter()
-                    .find(|repository| repository.id == selected.repo_id);
-                let worktree = repository.and_then(|repository| {
-                    repository
-                        .worktrees
-                        .iter()
-                        .find(|worktree| worktree.path == selected.path)
-                });
-                let repo_name = repository
-                    .map(|repository| repository.name.as_str())
-                    .unwrap_or(selected.repo_id.as_str());
-                let branch = worktree
-                    .and_then(|worktree| worktree.branch.as_deref())
-                    .unwrap_or("detached");
-                let path = selected
-                    .path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_else(|| selected.path.to_str().unwrap_or("worktree"));
-                format!("{repo_name} • {branch} • {path}")
-            })
-            .unwrap_or_else(|| "No worktree selected".to_string());
-        let status_bar_tab = active_tab
-            .map(|tab| tab.name.clone())
-            .unwrap_or_else(|| "No terminal tab".to_string());
         let active_terminal_error = active_tab
             .and_then(|tab| tab.failure_cause.as_deref())
             .or_else(|| {
@@ -2204,42 +2157,45 @@ impl Render for AlasShell {
         } else {
             active_tab.and_then(|tab| terminal_status_from_tab_status(&tab.status))
         };
-        let status_bar_terminal_status = if active_terminal_error.is_some() {
+        let terminal_overlay_status = if active_terminal_error.is_some() {
             Some(TerminalTabStatus::Failed)
         } else {
             active_tab.map(|tab| tab.status.clone())
         };
+        let terminal_focused = self.terminal_focus.contains_focused(window, cx);
+        let show_terminal_tabs = crate::ui::view_models::terminal_tab_overlay_visible(
+            self.terminal_tab_overlay_hovered,
+            terminal_focused,
+            workspace_tabs.len(),
+            terminal_overlay_status.as_ref(),
+            active_terminal_error.is_some(),
+        );
 
         div()
             .on_action(cx.listener(|_shell, _: &crate::ui::lifecycle::Quit, _window, cx| {
                 cx.quit();
             }))
+            .relative()
             .flex()
-            .flex_col()
             .size_full()
             .bg(APP_BG)
             .text_color(TEXT)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(render_sidebar(
-                        self.model.repositories(),
-                        self.model.selected_worktree(),
-                        self.sidebar_menu.as_ref(),
-                        cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
-                        on_select_worktree,
-                        on_open_sidebar_menu,
-                        on_sidebar_menu_action,
-                        on_close_sidebar_menu,
-                        self.add_repository_error(),
-                    ))
+            .child(render_sidebar(
+                self.model.repositories(),
+                self.model.selected_worktree(),
+                &self.repo_tree_expansion,
+                on_toggle_repository,
+                cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
+                on_select_worktree,
+                on_sidebar_menu_action,
+                self.add_repository_error(),
+            ))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_w(px(0.0))
                     .when(self.command_picker.is_some(), |element| {
                         let picker = self.command_picker.as_ref().unwrap();
                         element.child(render_command_picker(
@@ -2505,6 +2461,8 @@ impl Render for AlasShell {
                             .child(render_workspace(
                                 workspace_tabs,
                                 active_workspace_tab,
+                                show_terminal_tabs,
+                                on_terminal_tabs_hover,
                                 on_select_terminal_tab,
                                 on_new_terminal_tab,
                                 render_terminal_pane(
@@ -2530,13 +2488,8 @@ impl Render for AlasShell {
             .child(render_project_inspector(
                 self.model.selected_worktree(),
                 &self.inspector_state,
-                on_select_inspector_tab,
-            )),
-            )
-            .child(render_status_bar(
-                status_bar_repo,
-                status_bar_tab,
-                status_bar_terminal_status.as_ref(),
+                &self.file_tree_expansion,
+                on_toggle_file_tree_node,
             ))
     }
 }
@@ -2546,7 +2499,7 @@ pub fn run() -> anyhow::Result<()> {
         crate::ui::lifecycle::setup_lifecycle(cx);
         gpui_component::init(cx);
 
-        cx.open_window(WindowOptions::default(), |window, cx| {
+        cx.open_window(alas_window_options(), |window, cx| {
             let shell = cx.new(AlasShell::new);
             let weak_shell = shell.downgrade();
             window.on_window_should_close(cx, move |_window, cx| {

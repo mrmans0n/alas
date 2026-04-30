@@ -13,6 +13,11 @@ pub const TERMINAL_FONT_SIZE_PX: f32 = 14.0;
 pub const CELL_WIDTH_PX: f32 = 9.0;
 pub const CELL_HEIGHT_PX: f32 = 19.0;
 
+// Horizontal padding (left/right) inside the terminal canvas for visual breathing
+// room. Keep this value in sync with terminal mouse/size calculations so input
+// mapping stays aligned.
+pub const TERMINAL_CANVAS_HORIZONTAL_PADDING_PX: f32 = 8.0;
+
 type BoundsCallback = dyn Fn(Bounds<Pixels>, &mut App);
 
 pub fn terminal_size_from_pixels(width_px: f32, height_px: f32) -> TerminalSize {

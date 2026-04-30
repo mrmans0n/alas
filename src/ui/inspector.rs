@@ -1,232 +1,183 @@
+use std::path::PathBuf;
+
 use crate::{
-    app::{InspectorPaneState, InspectorTab, SelectedWorktree},
-    git::GitInspectorState,
-    project::FileTreeNode,
+    app::{InspectorPaneState, SelectedWorktree},
     ui::theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    ui::view_models::{InspectorTreeRow, TreeExpansionState, build_inspector_tree_rows},
 };
 
 use gpui::{
     AnyElement, App, ClickEvent, FontWeight, IntoElement, ParentElement, SharedString, Styled,
     Window, div, prelude::*, px,
 };
-use gpui_component::{
-    Sizable,
-    tab::{Tab, TabBar},
-};
+use gpui_component::{Icon, IconName, Sizable, list::ListItem};
 
 pub fn render_project_inspector(
     selected_worktree: Option<&SelectedWorktree>,
     state: &InspectorPaneState,
-    on_select_tab: impl Fn(InspectorTab, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    file_expansion: &TreeExpansionState,
+    on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
+    let rows = build_inspector_tree_rows(selected_worktree, state, file_expansion);
+
     div()
+        .id("project-inspector")
         .flex()
         .flex_col()
         .flex_shrink_0()
         .size_full()
         .w(px(320.0))
-        .p_4()
-        .gap_3()
+        .px_4()
+        .py_3()
+        .gap_2()
         .border_l_1()
         .border_color(PANEL_BORDER)
         .bg(PANEL_BG)
         .text_color(TEXT)
-        .child(
-            div()
-                .text_lg()
-                .font_weight(FontWeight::BOLD)
-                .child("Inspector"),
-        )
-        .child(render_tab_bar(state.selected_tab, on_select_tab))
-        .when(selected_worktree.is_none(), |element| {
-            element.child(
-                div()
-                    .text_sm()
-                    .text_color(TEXT_MUTED)
-                    .child("Select a worktree to inspect its files and changes."),
-            )
-        })
-        .when(selected_worktree.is_some(), |element| {
-            let selected_worktree = selected_worktree.expect("checked selected worktree");
-            element
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(TEXT_MUTED)
-                        .child(SharedString::from(
-                            selected_worktree.path.display().to_string(),
-                        )),
-                )
-                .child(match state.selected_tab {
-                    InspectorTab::Files => render_files_tab(state),
-                    InspectorTab::Changes => render_changes_tab(state),
-                })
-        })
+        .child(render_inspector_rows(rows, on_toggle_file))
 }
 
-fn render_tab_bar(
-    selected_tab: InspectorTab,
-    on_select_tab: impl Fn(InspectorTab, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+fn render_inspector_rows(
+    rows: Vec<InspectorTreeRow>,
+    on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
-    let selected_index = match selected_tab {
-        InspectorTab::Files => 0,
-        InspectorTab::Changes => 1,
-    };
-    let on_select_files = on_select_tab.clone();
-
-    TabBar::new("inspector-tab-bar")
-        .segmented()
-        .small()
-        .selected_index(selected_index)
-        .child(
-            Tab::new()
-                .label("Files")
-                .on_click(move |event, window, cx| {
-                    on_select_files(InspectorTab::Files, event, window, cx);
-                }),
-        )
-        .child(
-            Tab::new()
-                .label("Changes")
-                .on_click(move |event, window, cx| {
-                    on_select_tab(InspectorTab::Changes, event, window, cx);
-                }),
-        )
-}
-
-fn render_files_tab(state: &InspectorPaneState) -> AnyElement {
     div()
-        .id("inspector-files-scroll")
+        .id("grouped-inspector-tree")
         .flex()
         .flex_col()
         .flex_1()
         .min_h(px(0.0))
-        .gap_2()
         .overflow_scroll()
-        .when(state.files_error.is_some(), |element| {
-            element.child(warning_text(
-                "Files tree load failed",
-                state.files_error.as_deref().unwrap_or_default(),
-            ))
-        })
-        .when(
-            state.files.is_none() && state.files_error.is_none(),
-            |element| element.child(loading_text("Loading file tree…")),
-        )
-        .when(state.files.is_some(), |element| {
-            let root = state.files.as_ref().expect("checked files state");
-            element
-                .when(root.children.is_empty(), |element| {
-                    element.child(empty_text("No files found."))
-                })
-                .when(!root.children.is_empty(), |element| {
-                    element.child(render_file_node(root, 0))
-                })
-        })
-        .into_any_element()
-}
-
-fn render_file_node(node: &FileTreeNode, depth: usize) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
         .gap_1()
-        .child(div().pl(px((depth * 12) as f32)).text_sm().child(format!(
-            "{} {}",
-            if node.is_dir { "▸" } else { "☰" },
-            node.name
-        )))
         .children(
-            node.children
-                .iter()
-                .map(move |child| render_file_node(child, depth + 1)),
+            rows.into_iter()
+                .map(move |row| render_inspector_row(row, on_toggle_file.clone())),
         )
-        .when(node.truncated, |element| {
-            element.child(
-                div()
-                    .pl(px(((depth + 1) * 12) as f32))
-                    .text_xs()
-                    .text_color(TEXT_MUTED)
-                    .child("… additional entries hidden"),
-            )
-        })
 }
 
-fn render_changes_tab(state: &InspectorPaneState) -> AnyElement {
-    div()
-        .id("inspector-changes-scroll")
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h(px(0.0))
-        .gap_2()
-        .overflow_scroll()
-        .when(state.changes_error.is_some(), |element| {
-            element.child(warning_text(
-                "Git changes refresh failed",
-                state.changes_error.as_deref().unwrap_or_default(),
-            ))
-        })
-        .when(
-            state.changes.is_none() && state.changes_error.is_none(),
-            |element| element.child(loading_text("Loading Git changes…")),
-        )
-        .when(state.changes.is_some(), |element| {
-            let changes = state.changes.as_ref().expect("checked changes state");
-            element.child(render_changes(changes))
-        })
-        .into_any_element()
-}
-
-fn render_changes(state: &GitInspectorState) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(section_header("Branch"))
-        .child(
-            div().text_sm().child(SharedString::from(
-                state
-                    .branch
-                    .as_deref()
-                    .unwrap_or("Detached HEAD")
-                    .to_string(),
-            )),
-        )
-        .child(section_header("Changed Files"))
-        .when(state.changed_files.is_empty(), |element| {
-            element.child(empty_text("No changed files."))
-        })
-        .children(state.changed_files.iter().map(|file| {
+fn render_inspector_row(
+    row: InspectorTreeRow,
+    on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+) -> AnyElement {
+    match row {
+        InspectorTreeRow::EmptyState => {
+            empty_text_owned("Select a worktree to inspect its files and changes.".to_string())
+                .into_any_element()
+        }
+        InspectorTreeRow::Context {
+            branch_label,
+            changed_count,
+        } => {
+            let count = changed_count
+                .map(|count| format!(" · {count} changed"))
+                .unwrap_or_default();
             div()
-                .flex()
-                .gap_2()
-                .text_sm()
-                .child(
-                    div()
-                        .w(px(32.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(TEXT_MUTED)
-                        .child(SharedString::from(file.status.clone())),
-                )
-                .child(SharedString::from(file.path.clone()))
-        }))
+                .px_1()
+                .pb_2()
+                .text_xs()
+                .text_color(TEXT_MUTED)
+                .child(SharedString::from(format!("{branch_label}{count}")))
+                .into_any_element()
+        }
+        InspectorTreeRow::Section { title } => section_header(title).into_any_element(),
+        InspectorTreeRow::Loading { section } => {
+            loading_text_owned(format!("Loading {section}…")).into_any_element()
+        }
+        InspectorTreeRow::Error { section, message } => {
+            warning_text(section, &message).into_any_element()
+        }
+        InspectorTreeRow::ChangedFile { status, path } => {
+            changed_file_row(status, path).into_any_element()
+        }
+        InspectorTreeRow::Clean { path } => empty_text_owned(path).into_any_element(),
+        InspectorTreeRow::File {
+            depth,
+            name,
+            path,
+            is_dir,
+            expanded,
+        } => file_row(depth, name, path, is_dir, expanded, on_toggle_file).into_any_element(),
+        InspectorTreeRow::Truncated { depth } => truncated_row(depth).into_any_element(),
+    }
 }
 
-fn section_header(title: &'static str) -> impl IntoElement {
+fn section_header(title: impl Into<String>) -> impl IntoElement {
     div()
         .pt_2()
         .text_sm()
         .font_weight(FontWeight::SEMIBOLD)
-        .child(title)
+        .child(SharedString::from(title.into()))
 }
 
-fn loading_text(text: &'static str) -> impl IntoElement {
+fn loading_text_owned(text: String) -> impl IntoElement {
     div().text_sm().text_color(TEXT_MUTED).child(text)
 }
 
-fn empty_text(text: &'static str) -> impl IntoElement {
+fn empty_text_owned(text: String) -> impl IntoElement {
     div().text_sm().text_color(TEXT_MUTED).child(text)
+}
+
+fn changed_file_row(status: String, path: String) -> impl IntoElement {
+    div()
+        .flex()
+        .gap_2()
+        .text_sm()
+        .child(
+            div()
+                .w(px(32.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(TEXT_MUTED)
+                .child(SharedString::from(status)),
+        )
+        .child(div().truncate().child(SharedString::from(path)))
+}
+
+fn file_row(
+    depth: usize,
+    name: String,
+    path: PathBuf,
+    is_dir: bool,
+    expanded: bool,
+    on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+) -> impl IntoElement {
+    let row_id = SharedString::from(format!("inspector-file-row-{}", path.display()));
+    let row = ListItem::new(row_id).child(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_sm()
+            .pl(px((depth * 12) as f32))
+            .child(
+                Icon::new(if is_dir {
+                    if expanded {
+                        IconName::FolderOpen
+                    } else {
+                        IconName::FolderClosed
+                    }
+                } else {
+                    IconName::File
+                })
+                .small(),
+            )
+            .child(div().truncate().child(name)),
+    );
+
+    if is_dir {
+        row.on_click(move |event, window, cx| {
+            on_toggle_file(path.clone(), event, window, cx);
+        })
+    } else {
+        row
+    }
+}
+
+fn truncated_row(depth: usize) -> impl IntoElement {
+    div()
+        .pl(px(((depth + 1) * 12) as f32))
+        .text_xs()
+        .text_color(TEXT_MUTED)
+        .child("… additional entries hidden")
 }
 
 fn warning_text(title: &'static str, error: &str) -> impl IntoElement {

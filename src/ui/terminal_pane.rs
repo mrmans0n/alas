@@ -7,7 +7,7 @@ use crate::{
             CELL_HEIGHT_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX,
             render_terminal_bounds_probe,
         },
-        theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+        theme::{DANGER, PANEL_BG, PANEL_BORDER, TERMINAL_BG, TEXT, TEXT_MUTED},
     },
 };
 use gpui::{
@@ -42,7 +42,7 @@ pub fn render_terminal_pane(
         .flex()
         .flex_1()
         .size_full()
-        .bg(PANEL_BG)
+        .bg(TERMINAL_BG)
         .text_color(TEXT)
         .on_click(on_focus)
         .on_scroll_wheel(on_scroll)
@@ -70,75 +70,61 @@ pub fn render_terminal_pane(
         .when(
             selected_worktree.is_some() && terminal_error.is_none(),
             |element| {
-                element
-                    .flex_col()
-                    .p_3()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .text_xs()
-                            .text_color(TEXT_MUTED)
-                            .child(format!(
-                                "Worktree: {}",
-                                selected_worktree
-                                    .expect("checked selected worktree")
-                                    .path
-                                    .display()
-                            ))
-                            .when(terminal_exited(terminal_status), |element| {
-                                let status = terminal_exit_status(terminal_status)
-                                    .map(|status| status.to_string())
-                                    .unwrap_or_else(|| "unknown".to_string());
-                                element.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(format!("Exited: {status}"))
-                                        .child(
-                                            Button::new("restart-terminal")
-                                                .small()
-                                                .primary()
-                                                .compact()
-                                                .label("Restart")
-                                                .on_click(on_restart),
-                                        ),
-                                )
-                            }),
-                    )
-                    .when(terminal_exited(terminal_status), |element| {
-                        element.child(
+                element.flex_col().child(
+                    div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .relative()
+                        .on_any_mouse_down(on_mouse_down)
+                        .capture_any_mouse_up(on_mouse_up)
+                        .on_mouse_move(on_mouse_move)
+                        .child(render_terminal_body(terminal_frame, terminal_metrics))
+                        .child(
                             div()
-                                .px_3()
-                                .py_2()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(PANEL_BORDER)
-                                .bg(PANEL_BG)
-                                .text_xs()
-                                .text_color(TEXT_MUTED)
-                                .child("Process exited; final screen is preserved."),
+                                .absolute()
+                                .size_full()
+                                .child(render_terminal_bounds_probe(on_body_bounds)),
                         )
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .relative()
-                            .on_any_mouse_down(on_mouse_down)
-                            .capture_any_mouse_up(on_mouse_up)
-                            .on_mouse_move(on_mouse_move)
-                            .child(render_terminal_body(terminal_frame, terminal_metrics))
-                            .child(
+                        .when(terminal_exited(terminal_status), |element| {
+                            let status = terminal_exit_status(terminal_status)
+                                .map(|status| status.to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            element.child(
                                 div()
                                     .absolute()
-                                    .size_full()
-                                    .child(render_terminal_bounds_probe(on_body_bounds)),
-                            ),
-                    )
+                                    .bottom_0()
+                                    .left_0()
+                                    .right_0()
+                                    .flex()
+                                    .flex_col()
+                                    .px_3()
+                                    .py_2()
+                                    .bg(PANEL_BG)
+                                    .border_t_1()
+                                    .border_color(PANEL_BORDER)
+                                    .text_xs()
+                                    .text_color(TEXT_MUTED)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(format!("Exited: {status}"))
+                                            .child(
+                                                Button::new("restart-terminal")
+                                                    .small()
+                                                    .primary()
+                                                    .compact()
+                                                    .label("Restart")
+                                                    .on_click(on_restart),
+                                            ),
+                                    )
+                                    .child(
+                                        div().child("Process exited; final screen is preserved."),
+                                    ),
+                            )
+                        }),
+                )
             },
         )
 }

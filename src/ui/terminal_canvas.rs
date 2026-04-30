@@ -3,7 +3,7 @@ use crate::{
         GhosttyCellStyle, GhosttyRenderFrame, TerminalColor, TerminalCursorShape, TerminalMetrics,
         background_runs_with_defaults, effective_background, text_runs,
     },
-    ui::terminal_view::TERMINAL_FONT_FAMILY,
+    ui::terminal_view::{TERMINAL_CANVAS_HORIZONTAL_PADDING_PX, TERMINAL_FONT_FAMILY},
 };
 use gpui::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
@@ -274,7 +274,7 @@ fn paint_terminal_rect(
     window.paint_quad(fill(
         Bounds::new(
             point(
-                bounds.origin.x + px(col as f32 * metrics.cell_width_px),
+                terminal_paint_x_origin(bounds.origin.x, col, metrics),
                 bounds.origin.y + px(row as f32 * metrics.cell_height_px),
             ),
             size(
@@ -304,7 +304,7 @@ fn paint_terminal_text_run(
     }
 
     let text_origin = point(
-        bounds.origin.x + px(col as f32 * metrics.cell_width_px),
+        terminal_paint_x_origin(bounds.origin.x, col, metrics),
         bounds.origin.y + px(row as f32 * metrics.cell_height_px),
     );
     let foreground = effective_foreground(&style, default_foreground, default_background);
@@ -354,7 +354,7 @@ fn paint_terminal_cursor(
     color: TerminalColor,
 ) {
     let origin = point(
-        bounds.origin.x + px(col as f32 * metrics.cell_width_px),
+        terminal_paint_x_origin(bounds.origin.x, col, metrics),
         bounds.origin.y + px(row as f32 * metrics.cell_height_px),
     );
     let cell_width = px(metrics.cell_width_px);
@@ -413,6 +413,10 @@ fn paint_cursor_cell_text(
         frame.default_foreground,
         frame.default_background,
     );
+}
+
+fn terminal_paint_x_origin(origin_x: Pixels, col: usize, metrics: TerminalMetrics) -> Pixels {
+    origin_x + px(col as f32 * metrics.cell_width_px + TERMINAL_CANVAS_HORIZONTAL_PADDING_PX)
 }
 
 fn effective_foreground(
