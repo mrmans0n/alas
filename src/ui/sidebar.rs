@@ -8,7 +8,7 @@ use crate::{
     git::WorktreeKind,
     ui::{
         chrome::render_mac_titlebar_safe_area_spacer,
-        theme::{DANGER, PANEL_BG, PANEL_BORDER, SIDEBAR_BG, TEXT, TEXT_MUTED},
+        theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED, sidebar_background},
         view_models::{RepoTreeRow, TreeExpansionState, build_repo_tree_rows},
     },
 };
@@ -56,7 +56,7 @@ pub fn render_sidebar(
         .gap_3()
         .border_r_1()
         .border_color(PANEL_BORDER)
-        .bg(SIDEBAR_BG)
+        .bg(sidebar_background())
         .text_color(TEXT)
         .child(render_mac_titlebar_safe_area_spacer())
         .child(

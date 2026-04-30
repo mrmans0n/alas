@@ -24,7 +24,7 @@ use crate::{
         },
     },
     ui::{
-        chrome::alas_window_options,
+        chrome::{alas_window_options, apply_window_background_appearance},
         command_picker::render_command_picker,
         dialogs::{
             AddRepositoryDialogState, CommandSettingsDialogState, ConfirmPruneWorktreesDialog,
@@ -38,7 +38,7 @@ use crate::{
         terminal_view::{
             TERMINAL_CANVAS_HORIZONTAL_PADDING_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX,
         },
-        theme::{APP_BG, TEXT},
+        theme::{TEXT, root_background},
         view_models::TreeExpansionState,
         workspace::render_workspace,
     },
@@ -2178,7 +2178,10 @@ impl Render for AlasShell {
             .relative()
             .flex()
             .size_full()
-            .bg(APP_BG)
+            // On macOS the root is intentionally unpainted so the window's
+            // NSVisualEffectView material shows through anywhere a child
+            // does not paint its own background.
+            .when_some(root_background(), |element, color| element.bg(color))
             .text_color(TEXT)
             .child(render_sidebar(
                 self.model.repositories(),
@@ -2500,6 +2503,7 @@ pub fn run() -> anyhow::Result<()> {
         gpui_component::init(cx);
 
         cx.open_window(alas_window_options(), |window, cx| {
+            apply_window_background_appearance(window);
             let shell = cx.new(AlasShell::new);
             let weak_shell = shell.downgrade();
             window.on_window_should_close(cx, move |_window, cx| {
