@@ -10,6 +10,9 @@ pub use action_registry::{
 pub use actions::AppAction;
 pub use inspector_state::{InspectorPaneState, InspectorTab};
 pub use model::{AlasModel, RepositoryNode, SelectedWorktree, WorktreeNode};
+pub use workspace::WorkspaceTabId as TerminalTabId;
 pub use workspace::{
-    TerminalTab, TerminalTabId, TerminalTabKind, TerminalTabStatus, WorkspaceSession, WorktreeKey,
+    FILE_TAB_MAX_BYTES, FileTabLoadState, FileTabState, TerminalTabKind, TerminalTabState,
+    TerminalTabStatus, WorkspaceSession, WorkspaceTab, WorkspaceTabContent, WorkspaceTabId,
+    WorkspaceTabKind, WorktreeKey,
 };

@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::app::TerminalTabId;
+use crate::app::WorkspaceTabId;
 use crate::terminal::TerminalBackendSession;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TerminalSessionId {
     pub repo_id: String,
     pub worktree_path: PathBuf,
-    pub tab_id: TerminalTabId,
+    pub tab_id: WorkspaceTabId,
 }
 
 impl TerminalSessionId {
-    pub fn new(repo_id: impl Into<String>, worktree_path: PathBuf, tab_id: TerminalTabId) -> Self {
+    pub fn new(repo_id: impl Into<String>, worktree_path: PathBuf, tab_id: WorkspaceTabId) -> Self {
         Self {
             repo_id: repo_id.into(),
             worktree_path,
@@ -127,6 +127,10 @@ impl TerminalSessionRegistry {
         ids.into_iter()
             .filter_map(|id| self.sessions.remove(&id))
             .collect()
+    }
+
+    pub fn remove(&mut self, id: &TerminalSessionId) -> Option<TerminalSessionRef> {
+        self.sessions.remove(id)
     }
 
     pub fn remove_sessions_for_repository(&mut self, repo_id: &str) -> Vec<TerminalSessionRef> {

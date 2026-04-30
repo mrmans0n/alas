@@ -1,5 +1,5 @@
 use crate::{
-    app::{SelectedWorktree, TerminalTab},
+    app::{SelectedWorktree, TerminalTabState, WorkspaceTab},
     terminal::{GhosttyRenderFrame, TerminalMetrics, TerminalStatus},
     ui::{
         terminal_canvas::render_terminal_canvas,
@@ -22,7 +22,8 @@ use gpui_component::{
 #[allow(clippy::too_many_arguments)]
 pub fn render_terminal_pane(
     selected_worktree: Option<&SelectedWorktree>,
-    active_tab: Option<&TerminalTab>,
+    active_tab: Option<&WorkspaceTab>,
+    terminal_state: Option<&TerminalTabState>,
     terminal_frame: Option<GhosttyRenderFrame>,
     terminal_status: Option<TerminalStatus>,
     terminal_metrics: TerminalMetrics,
@@ -62,6 +63,7 @@ pub fn render_terminal_pane(
                 .child(render_terminal_failure(
                     selected_worktree,
                     active_tab,
+                    terminal_state,
                     terminal_error.unwrap_or_default(),
                     on_retry,
                     on_edit_command,
@@ -131,16 +133,17 @@ pub fn render_terminal_pane(
 
 fn render_terminal_failure(
     selected_worktree: Option<&SelectedWorktree>,
-    active_tab: Option<&TerminalTab>,
+    _active_tab: Option<&WorkspaceTab>,
+    terminal_state: Option<&TerminalTabState>,
     terminal_error: &str,
     on_retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_edit_command: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let command = active_tab
-        .map(|tab| tab.command.display.clone())
+    let command = terminal_state
+        .map(|state| state.command.display.clone())
         .unwrap_or_else(|| "unknown command".to_string());
-    let cwd = active_tab
-        .map(|tab| tab.command.cwd.display().to_string())
+    let cwd = terminal_state
+        .map(|state| state.command.cwd.display().to_string())
         .or_else(|| selected_worktree.map(|worktree| worktree.path.display().to_string()))
         .unwrap_or_else(|| "unknown cwd".to_string());
 

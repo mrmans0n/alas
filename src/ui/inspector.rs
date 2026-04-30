@@ -17,6 +17,7 @@ pub fn render_project_inspector(
     state: &InspectorPaneState,
     file_expansion: &TreeExpansionState,
     on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_open_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
     let rows = build_inspector_tree_rows(selected_worktree, state, file_expansion);
 
@@ -34,12 +35,13 @@ pub fn render_project_inspector(
         .border_color(PANEL_BORDER)
         .bg(sidebar_background())
         .text_color(TEXT)
-        .child(render_inspector_rows(rows, on_toggle_file))
+        .child(render_inspector_rows(rows, on_toggle_file, on_open_file))
 }
 
 fn render_inspector_rows(
     rows: Vec<InspectorTreeRow>,
     on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_open_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
     div()
         .id("grouped-inspector-tree")
@@ -49,15 +51,15 @@ fn render_inspector_rows(
         .min_h(px(0.0))
         .overflow_scroll()
         .gap_1()
-        .children(
-            rows.into_iter()
-                .map(move |row| render_inspector_row(row, on_toggle_file.clone())),
-        )
+        .children(rows.into_iter().map(move |row| {
+            render_inspector_row(row, on_toggle_file.clone(), on_open_file.clone())
+        }))
 }
 
 fn render_inspector_row(
     row: InspectorTreeRow,
     on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_open_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> AnyElement {
     match row {
         InspectorTreeRow::EmptyState => {
@@ -96,7 +98,16 @@ fn render_inspector_row(
             path,
             is_dir,
             expanded,
-        } => file_row(depth, name, path, is_dir, expanded, on_toggle_file).into_any_element(),
+        } => file_row(
+            depth,
+            name,
+            path,
+            is_dir,
+            expanded,
+            on_toggle_file,
+            on_open_file,
+        )
+        .into_any_element(),
         InspectorTreeRow::Truncated { depth } => truncated_row(depth).into_any_element(),
     }
 }
@@ -139,6 +150,7 @@ fn file_row(
     is_dir: bool,
     expanded: bool,
     on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_open_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
     let row_id = SharedString::from(format!("inspector-file-row-{}", path.display()));
     let row = ListItem::new(row_id).child(
@@ -168,7 +180,9 @@ fn file_row(
             on_toggle_file(path.clone(), event, window, cx);
         })
     } else {
-        row
+        row.on_click(move |event, window, cx| {
+            on_open_file(path.clone(), event, window, cx);
+        })
     }
 }
 
