@@ -32,6 +32,25 @@
 17. Create or modify a file and confirm the Changed section updates independently of the Files section.
 18. Confirm the old full-width bottom status bar is gone.
 
+## macOS Window Material
+
+1. On macOS, set a colorful desktop wallpaper or place a colorful window (e.g.
+   Finder showing a vivid background) where Alas's sidebar will sit.
+2. Start Alas with `cargo run`.
+3. Confirm the left sidebar is visibly translucent: the wallpaper / window
+   behind Alas shows through as a soft blurred wash.
+4. Confirm the titlebar drag region (the strip above the sidebar/terminal
+   reserved by `mac_titlebar_safe_area_height_px`) also shows the blurred
+   material around the traffic-light buttons.
+5. Confirm the terminal canvas remains fully opaque — text legibility is
+   unchanged from the prior build.
+6. Confirm the floating tab overlay pill (when terminal tabs are visible)
+   remains fully opaque.
+7. Drag a colorful window behind Alas across the desktop and verify the blur
+   under the sidebar updates in real time.
+8. On Linux, repeat steps (2)–(7) and confirm the sidebar and root are fully
+   opaque (no behavior change vs. the prior build).
+
 ## Desktop Packaging and Lifecycle
 
 ### macOS `.app`

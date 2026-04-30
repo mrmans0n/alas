@@ -1,4 +1,4 @@
-use gpui::{IntoElement, WindowOptions, div, prelude::*, px};
+use gpui::{IntoElement, Window, WindowBackgroundAppearance, WindowOptions, div, prelude::*, px};
 
 pub const TRAFFIC_LIGHT_LEFT_PX: f32 = 20.0;
 pub const TRAFFIC_LIGHT_TOP_PX: f32 = 20.0;
@@ -41,6 +41,18 @@ pub fn render_mac_titlebar_safe_area_spacer() -> impl IntoElement {
         .h(px(mac_titlebar_safe_area_height_px()))
 }
 
+pub fn macos_window_background_appearance() -> WindowBackgroundAppearance {
+    if cfg!(target_os = "macos") {
+        WindowBackgroundAppearance::Blurred
+    } else {
+        WindowBackgroundAppearance::Opaque
+    }
+}
+
+pub fn apply_window_background_appearance(window: &Window) {
+    window.set_background_appearance(macos_window_background_appearance());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +73,23 @@ mod tests {
         let options = alas_window_options();
         let titlebar = options.titlebar.expect("default titlebar options");
         assert!(!titlebar.appears_transparent);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_uses_blurred_background_appearance() {
+        assert_eq!(
+            macos_window_background_appearance(),
+            gpui::WindowBackgroundAppearance::Blurred,
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn non_macos_window_uses_opaque_background_appearance() {
+        assert_eq!(
+            macos_window_background_appearance(),
+            gpui::WindowBackgroundAppearance::Opaque,
+        );
     }
 }
