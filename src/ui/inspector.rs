@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::{
     app::{InspectorPaneState, SelectedWorktree},
-    ui::theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
+    ui::theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED, sidebar_background},
     ui::view_models::{InspectorTreeRow, TreeExpansionState, build_inspector_tree_rows},
 };
 
@@ -32,7 +32,7 @@ pub fn render_project_inspector(
         .gap_2()
         .border_l_1()
         .border_color(PANEL_BORDER)
-        .bg(PANEL_BG)
+        .bg(sidebar_background())
         .text_color(TEXT)
         .child(render_inspector_rows(rows, on_toggle_file))
 }
