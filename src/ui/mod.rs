@@ -1,6 +1,7 @@
 pub mod chrome;
 pub mod command_picker;
 pub mod dialogs;
+pub mod file_pane;
 pub mod inspector;
 pub mod lifecycle;
 pub mod shell;

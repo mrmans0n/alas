@@ -5,8 +5,9 @@ use std::{
 
 use crate::{
     app::{
-        ActionId, AlasModel, InspectorPaneState, RepositoryNode, TerminalTabId, TerminalTabKind,
-        TerminalTabStatus, WorkspaceSession,
+        ActionId, AlasModel, FILE_TAB_MAX_BYTES, FileTabLoadState, InspectorPaneState,
+        RepositoryNode, TerminalTabKind, TerminalTabStatus, WorkspaceSession, WorkspaceTabContent,
+        WorkspaceTabId, WorkspaceTabKind,
     },
     config::{
         AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
@@ -31,6 +32,7 @@ use crate::{
             ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
             CreateWorktreeField,
         },
+        file_pane::render_file_pane,
         inspector::render_project_inspector,
         sidebar::{SidebarMenuState, render_sidebar},
         terminal_canvas::measure_terminal_metrics,
@@ -38,7 +40,7 @@ use crate::{
         terminal_view::{
             TERMINAL_CANVAS_HORIZONTAL_PADDING_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX,
         },
-        theme::{TEXT, root_background},
+        theme::{DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED, root_background},
         view_models::TreeExpansionState,
         workspace::render_workspace,
     },
@@ -114,7 +116,7 @@ pub struct AlasShell {
     terminal_registry: TerminalSessionRegistry,
     terminal_backend: GhosttyTerminalBackend,
     workspace_session: WorkspaceSession,
-    active_terminal_tab: Option<TerminalTabId>,
+    active_terminal_tab: Option<WorkspaceTabId>,
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
@@ -197,6 +199,10 @@ impl AlasShell {
     }
 
     fn terminal_render_frame(&mut self) -> Option<GhosttyRenderFrame> {
+        if !self.active_tab_is_terminal() {
+            return None;
+        }
+
         let session = self.active_terminal.as_ref()?.clone();
         let rows = self.terminal_size.map_or(24, |size| size.rows);
         let viewport = TerminalViewport {
@@ -224,6 +230,9 @@ impl AlasShell {
     }
 
     fn refresh_active_terminal_status(&mut self) {
+        if !self.active_tab_is_terminal() {
+            return;
+        }
         let Some(session) = self.active_terminal.as_ref().cloned() else {
             return;
         };
@@ -257,6 +266,9 @@ impl AlasShell {
     }
 
     fn resize_active_terminal(&mut self, size: TerminalSize) {
+        if !self.active_tab_is_terminal() {
+            return;
+        }
         if self.terminal_size == Some(size) {
             return;
         }
@@ -271,6 +283,10 @@ impl AlasShell {
     }
 
     fn update_terminal_body_bounds(&mut self, bounds: Bounds<Pixels>) -> bool {
+        if !self.active_tab_is_terminal() {
+            return false;
+        }
+
         let width_px = f32::from(bounds.size.width);
         let height_px = f32::from(bounds.size.height);
         if width_px <= 0.0 || height_px <= 0.0 {
@@ -300,8 +316,8 @@ impl AlasShell {
 
     fn terminal_tab_has_failure(&self, id: &TerminalSessionId) -> bool {
         self.workspace_session
-            .tab(&id.repo_id, &id.worktree_path, id.tab_id)
-            .is_some_and(|tab| tab.failure_cause.is_some())
+            .terminal_tab_state(&id.repo_id, &id.worktree_path, id.tab_id)
+            .is_some_and(|state| state.failure_cause.is_some())
     }
 
     fn mark_terminal_tab_failed(&mut self, id: &TerminalSessionId, cause: String) {
@@ -410,6 +426,10 @@ impl AlasShell {
     }
 
     fn write_terminal_input(&mut self, event: &KeyDownEvent) -> bool {
+        if !self.should_route_terminal_input() {
+            return false;
+        }
+
         let Some(session) = self.active_terminal.as_ref() else {
             return false;
         };
@@ -429,6 +449,10 @@ impl AlasShell {
     }
 
     fn write_terminal_paste(&mut self, text: &str) -> bool {
+        if !self.should_route_terminal_input() {
+            return false;
+        }
+
         let Some(session) = self.active_terminal.as_ref() else {
             return false;
         };
@@ -447,6 +471,10 @@ impl AlasShell {
     }
 
     fn write_terminal_mouse_input(&mut self, input: TerminalMouseInput) -> bool {
+        if !self.should_route_terminal_input() {
+            return false;
+        }
+
         let Some(session) = self.active_terminal.as_ref() else {
             return false;
         };
@@ -535,6 +563,10 @@ impl AlasShell {
         screen_mode: TerminalScreenMode,
         scrollback_rows: usize,
     ) -> bool {
+        if !self.active_tab_is_terminal() {
+            return false;
+        }
+
         let Some(session) = self.active_terminal.as_ref().cloned() else {
             return false;
         };
@@ -1038,10 +1070,15 @@ impl AlasShell {
         self.start_or_reuse_terminal_tab(repo_id, path, tab_id);
     }
 
-    fn select_terminal_tab(&mut self, tab_id: TerminalTabId) {
+    fn select_workspace_tab(&mut self, tab_id: WorkspaceTabId) {
         let Some(selected) = self.model.selected_worktree().cloned() else {
             return;
         };
+
+        let is_terminal = self
+            .workspace_session
+            .tab(&selected.repo_id, &selected.path, tab_id)
+            .is_some_and(|t| t.is_terminal());
 
         if let Err(error) =
             self.workspace_session
@@ -1051,14 +1088,48 @@ impl AlasShell {
             return;
         }
 
-        self.start_or_reuse_terminal_tab(selected.repo_id, selected.path, tab_id);
+        if is_terminal {
+            self.start_or_reuse_terminal_tab(selected.repo_id, selected.path, tab_id);
+        } else {
+            self.active_terminal_tab = Some(tab_id);
+            self.active_terminal = None;
+            self.terminal_scroll_offset_rows = 0;
+            self.terminal_error = None;
+        }
+    }
+
+    fn active_workspace_tab_kind(&self) -> Option<WorkspaceTabKind> {
+        let selected = self.model.selected_worktree()?;
+        self.workspace_session
+            .active_tab(&selected.repo_id, &selected.path)
+            .map(|tab| tab.kind)
+    }
+
+    fn active_tab_is_terminal(&self) -> bool {
+        self.active_workspace_tab_kind()
+            .is_some_and(|kind| matches!(kind, WorkspaceTabKind::Terminal(_)))
+    }
+
+    fn should_route_terminal_input(&self) -> bool {
+        Self::should_route_terminal_input_for(
+            self.active_workspace_tab_kind(),
+            self.active_terminal.is_some(),
+        )
+    }
+
+    fn should_route_terminal_input_for(
+        active_tab_kind: Option<WorkspaceTabKind>,
+        has_active_terminal: bool,
+    ) -> bool {
+        active_tab_kind.is_some_and(|kind| matches!(kind, WorkspaceTabKind::Terminal(_)))
+            && has_active_terminal
     }
 
     fn start_or_reuse_terminal_tab(
         &mut self,
         repo_id: String,
         path: PathBuf,
-        tab_id: TerminalTabId,
+        tab_id: WorkspaceTabId,
     ) {
         self.start_or_reuse_terminal_tab_inner(repo_id, path, tab_id, false);
     }
@@ -1067,7 +1138,7 @@ impl AlasShell {
         &mut self,
         repo_id: String,
         path: PathBuf,
-        tab_id: TerminalTabId,
+        tab_id: WorkspaceTabId,
     ) {
         self.start_or_reuse_terminal_tab_inner(repo_id, path, tab_id, true);
     }
@@ -1076,10 +1147,15 @@ impl AlasShell {
         &mut self,
         repo_id: String,
         path: PathBuf,
-        tab_id: TerminalTabId,
+        tab_id: WorkspaceTabId,
         clear_existing_failure: bool,
     ) {
-        let Some(tab) = self.workspace_session.active_tab(&repo_id, &path).cloned() else {
+        let terminal_state = self
+            .workspace_session
+            .terminal_tab_state(&repo_id, &path, tab_id)
+            .cloned();
+
+        let Some(terminal_state) = terminal_state else {
             self.active_terminal = None;
             self.active_terminal_tab = None;
             self.terminal_error = Some("No active terminal tab for selected worktree".to_string());
@@ -1087,21 +1163,17 @@ impl AlasShell {
         };
 
         let id = TerminalSessionId::new(repo_id, path, tab_id);
-        let preserve_failure = tab.failure_cause.is_some() && !clear_existing_failure;
+        let preserve_failure = terminal_state.failure_cause.is_some() && !clear_existing_failure;
         self.active_terminal_tab = Some(tab_id);
-        self.terminal_scroll_offset_rows = tab.scroll_offset_rows;
+        self.terminal_scroll_offset_rows = terminal_state.scroll_offset_rows;
         self.terminal_error = None;
 
         if preserve_failure {
-            // Selecting a failed startup tab must not call get_or_start: missing registry entries
-            // would start the command again without an explicit Retry. Runtime failures can still
-            // have a live backend session, so deliberately reuse only sessions we already know
-            // about and leave the failure/status untouched until retry or restart clears it.
             let session = self.terminal_registry.get(&id).or_else(|| {
-                tab.backend_session.map(|backend_session| {
+                terminal_state.backend_session.map(|backend_session| {
                     self.terminal_registry.attach_existing(
                         id.clone(),
-                        tab.command.clone(),
+                        terminal_state.command.clone(),
                         backend_session,
                     )
                 })
@@ -1123,7 +1195,7 @@ impl AlasShell {
 
         match self.terminal_registry.get_or_start(
             id.clone(),
-            tab.command.clone(),
+            terminal_state.command.clone(),
             &mut self.terminal_backend,
         ) {
             Ok(session) => {
@@ -1155,6 +1227,143 @@ impl AlasShell {
                 self.mark_terminal_tab_failed(&id, error.to_string());
             }
         }
+    }
+
+    fn close_workspace_tab(&mut self, tab_id: WorkspaceTabId) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+
+        let is_terminal = self
+            .workspace_session
+            .tab(&selected.repo_id, &selected.path, tab_id)
+            .is_some_and(|t| t.is_terminal());
+
+        if is_terminal {
+            let session_id =
+                TerminalSessionId::new(&selected.repo_id, selected.path.clone(), tab_id);
+            if let Some(session) = self.terminal_registry.remove(&session_id) {
+                if Some(session.backend_session)
+                    == self.active_terminal.as_ref().map(|a| a.backend_session)
+                {
+                    self.active_terminal = None;
+                    self.active_terminal_tab = None;
+                    self.terminal_scroll_offset_rows = 0;
+                }
+                let _ = self.terminal_backend.stop(session.backend_session);
+            }
+        }
+
+        if let Some(fallback_id) =
+            self.workspace_session
+                .close_tab(&selected.repo_id, &selected.path, tab_id)
+        {
+            let is_terminal_fallback = self
+                .workspace_session
+                .tab(&selected.repo_id, &selected.path, fallback_id)
+                .is_some_and(|t| t.is_terminal());
+
+            if is_terminal_fallback {
+                self.start_or_reuse_terminal_tab(selected.repo_id, selected.path, fallback_id);
+            } else {
+                self.active_terminal_tab = Some(fallback_id);
+                self.active_terminal = None;
+                self.terminal_error = None;
+            }
+        } else {
+            self.active_terminal_tab = None;
+            self.active_terminal = None;
+            self.terminal_error = None;
+        }
+    }
+
+    fn open_file_from_inspector(&mut self, file_path: PathBuf, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+
+        let file_path = if file_path.is_absolute() {
+            file_path
+        } else {
+            selected.path.join(file_path)
+        };
+
+        let tab_id = self.workspace_session.open_file_tab(
+            &selected.repo_id,
+            selected.path.clone(),
+            file_path.clone(),
+        );
+        self.select_workspace_tab(tab_id);
+        self.load_file_tab_if_needed(
+            selected.repo_id.clone(),
+            selected.path.clone(),
+            tab_id,
+            file_path,
+            cx,
+        );
+    }
+
+    fn load_file_tab_if_needed(
+        &mut self,
+        repo_id: String,
+        path: PathBuf,
+        tab_id: WorkspaceTabId,
+        file_path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let already_loaded = self
+            .workspace_session
+            .tab(&repo_id, &path, tab_id)
+            .and_then(|tab| match &tab.content {
+                WorkspaceTabContent::File(state) => Some(state.load_state.clone()),
+                WorkspaceTabContent::Terminal(_) => None,
+            })
+            .is_some_and(|state| matches!(state, FileTabLoadState::Loaded { .. }));
+
+        if already_loaded {
+            return;
+        }
+
+        let worktree_path = path.clone();
+        let task = cx.background_executor().spawn(async move {
+            if !file_path.starts_with(&worktree_path) {
+                return Err("file is outside the selected worktree".to_string());
+            }
+
+            let metadata = std::fs::metadata(&file_path)
+                .map_err(|error| format!("failed to read file metadata: {error}"))?;
+
+            if !metadata.is_file() {
+                return Err("path is not a regular file".to_string());
+            }
+            if metadata.len() > FILE_TAB_MAX_BYTES {
+                return Err(format!(
+                    "file is too large ({} bytes, max {FILE_TAB_MAX_BYTES})",
+                    metadata.len()
+                ));
+            }
+
+            let content = std::fs::read_to_string(&file_path)
+                .map_err(|error| format!("failed to read file: {error}"))?;
+
+            Ok(content)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |shell, cx| {
+                let load_state = match result {
+                    Ok(content) => FileTabLoadState::Loaded { content },
+                    Err(message) => FileTabLoadState::Error { message },
+                };
+                let _ = shell
+                    .workspace_session
+                    .set_file_tab_load_state(&repo_id, &path, tab_id, load_state);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_command_picker(&mut self, cx: &mut Context<Self>) {
@@ -1878,6 +2087,61 @@ fn render_create_worktree_field(
         )
 }
 
+fn render_status_bar(
+    repo_summary: String,
+    tab_summary: String,
+    terminal_status: Option<&TerminalTabStatus>,
+    active_tab_kind: Option<WorkspaceTabKind>,
+) -> impl IntoElement {
+    let (status_label, status_color) = match terminal_status {
+        Some(TerminalTabStatus::Running) => ("running".to_string(), SUCCESS),
+        Some(TerminalTabStatus::Exited(Some(code))) => (
+            format!("exited {code}"),
+            if *code == 0 { SUCCESS } else { DANGER },
+        ),
+        Some(TerminalTabStatus::Exited(None)) => ("exited".to_string(), TEXT_MUTED),
+        Some(TerminalTabStatus::Failed) => ("failed".to_string(), DANGER),
+        Some(TerminalTabStatus::NotStarted) => ("not started".to_string(), TEXT_MUTED),
+        None if matches!(active_tab_kind, Some(WorkspaceTabKind::File)) => {
+            ("file".to_string(), TEXT_MUTED)
+        }
+        None if active_tab_kind.is_none() => ("no tab".to_string(), TEXT_MUTED),
+        None => ("no terminal".to_string(), TEXT_MUTED),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .px_4()
+        .py_2()
+        .border_t_1()
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .text_xs()
+        .text_color(TEXT_MUTED)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .overflow_hidden()
+                .child(div().text_color(TEXT).child("Workspace"))
+                .child(div().child("•"))
+                .child(div().truncate().child(repo_summary)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_color(TEXT).child(tab_summary))
+                .child(div().child("•"))
+                .child(div().text_color(status_color).child(status_label)),
+        )
+}
+
 impl Render for AlasShell {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let measured_metrics =
@@ -1923,6 +2187,18 @@ impl Render for AlasShell {
                     shell
                         .file_tree_expansion
                         .toggle(crate::ui::view_models::TreeExpansionKey::File(path.clone()));
+                    cx.notify();
+                })
+                .ok();
+            };
+        let view = cx.entity().downgrade();
+        let on_open_file_from_inspector =
+            move |file_path: PathBuf,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.open_file_from_inspector(file_path, cx);
                     cx.notify();
                 })
                 .ok();
@@ -2067,24 +2343,29 @@ impl Render for AlasShell {
             .ok();
         };
         let view = cx.entity().downgrade();
-        let on_select_terminal_tab = move |tab_id: TerminalTabId,
+        let on_select_workspace_tab = move |tab_id: WorkspaceTabId,
+                                            _event: &gpui::ClickEvent,
+                                            _window: &mut Window,
+                                            app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.select_workspace_tab(tab_id);
+                cx.notify();
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_close_workspace_tab = move |tab_id: WorkspaceTabId,
                                            _event: &gpui::ClickEvent,
                                            _window: &mut Window,
                                            app: &mut App| {
             view.update(app, |shell, cx| {
-                shell.select_terminal_tab(tab_id);
+                shell.close_workspace_tab(tab_id);
                 cx.notify();
             })
             .ok();
         };
         let on_new_terminal_tab = cx.listener(|shell, _event, _window, cx| {
             shell.open_command_picker(cx);
-        });
-        let on_terminal_tabs_hover = cx.listener(|shell, hovered: &bool, _window, cx| {
-            if shell.terminal_tab_overlay_hovered != *hovered {
-                shell.terminal_tab_overlay_hovered = *hovered;
-                cx.notify();
-            }
         });
         let view = cx.entity().downgrade();
         let on_select_command = move |name: String,
@@ -2130,8 +2411,43 @@ impl Render for AlasShell {
         let active_tab = workspace_tabs
             .iter()
             .find(|tab| Some(tab.id) == active_workspace_tab);
+        let status_bar_repo = self
+            .model
+            .selected_worktree()
+            .map(|selected| {
+                let repository = self
+                    .model
+                    .repositories()
+                    .iter()
+                    .find(|repository| repository.id == selected.repo_id);
+                let worktree = repository.and_then(|repository| {
+                    repository
+                        .worktrees
+                        .iter()
+                        .find(|worktree| worktree.path == selected.path)
+                });
+                let repo_name = repository
+                    .map(|repository| repository.name.as_str())
+                    .unwrap_or(selected.repo_id.as_str());
+                let branch = worktree
+                    .and_then(|worktree| worktree.branch.as_deref())
+                    .unwrap_or("detached");
+                let path = selected
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_else(|| selected.path.to_str().unwrap_or("worktree"));
+                format!("{repo_name} • {branch} • {path}")
+            })
+            .unwrap_or_else(|| "No worktree selected".to_string());
+        let status_bar_tab = match active_tab {
+            Some(tab) => tab.name.clone(),
+            None => "No tab".to_string(),
+        };
+        let is_active_terminal_tab = active_tab.is_some_and(|t| t.is_terminal());
         let active_terminal_error = active_tab
-            .and_then(|tab| tab.failure_cause.as_deref())
+            .and_then(|t| t.terminal_tab_state())
+            .and_then(|state| state.failure_cause.as_deref())
             .or_else(|| {
                 active_tab
                     .is_none()
@@ -2141,22 +2457,50 @@ impl Render for AlasShell {
         let active_terminal_status = if active_terminal_error.is_some() {
             Some(TerminalStatus::Failed)
         } else {
-            active_tab.and_then(|tab| terminal_status_from_tab_status(&tab.status))
+            active_tab
+                .and_then(|t| t.terminal_tab_state())
+                .and_then(|state| terminal_status_from_tab_status(&state.status))
         };
-        let terminal_overlay_status = if active_terminal_error.is_some() {
+        let status_bar_terminal_status = if active_terminal_error.is_some() {
             Some(TerminalTabStatus::Failed)
+        } else if is_active_terminal_tab {
+            active_tab
+                .and_then(|t| t.terminal_tab_state())
+                .map(|state| state.status.clone())
         } else {
-            active_tab.map(|tab| tab.status.clone())
+            None
         };
-        self.terminal_focused = self.terminal_focus.contains_focused(window, cx);
-        let show_terminal_tabs = crate::ui::view_models::terminal_tab_overlay_visible(
-            self.terminal_tab_overlay_hovered,
-            self.terminal_focused,
-            workspace_tabs.len(),
-            terminal_overlay_status.as_ref(),
-            active_terminal_error.is_some(),
-        );
 
+        let selected_worktree = self.model.selected_worktree();
+        let terminal_state = active_tab.and_then(|t| t.terminal_tab_state());
+        let file_load_state = active_tab.and_then(|t| match &t.content {
+            WorkspaceTabContent::File(state) => Some(state.load_state.clone()),
+            WorkspaceTabContent::Terminal(_) => None,
+        });
+
+        let workspace_body = if let Some(load_state) = file_load_state {
+            render_file_pane(&load_state).into_any_element()
+        } else {
+            render_terminal_pane(
+                selected_worktree,
+                active_tab,
+                terminal_state,
+                terminal_frame,
+                active_terminal_status,
+                self.terminal_metrics,
+                active_terminal_error,
+                on_retry_terminal,
+                on_edit_terminal_command,
+                on_restart_terminal,
+                on_focus_terminal,
+                on_terminal_scroll,
+                on_terminal_mouse_down,
+                on_terminal_mouse_up,
+                on_terminal_mouse_move,
+                on_terminal_body_bounds,
+            )
+            .into_any_element()
+        };
         div()
             .on_action(cx.listener(|_shell, _: &crate::ui::lifecycle::Quit, _window, cx| {
                 cx.quit();
@@ -2448,27 +2792,10 @@ impl Render for AlasShell {
                             .child(render_workspace(
                                 workspace_tabs,
                                 active_workspace_tab,
-                                show_terminal_tabs,
-                                on_terminal_tabs_hover,
-                                on_select_terminal_tab,
+                                on_select_workspace_tab,
+                                on_close_workspace_tab,
                                 on_new_terminal_tab,
-                                render_terminal_pane(
-                                    self.model.selected_worktree(),
-                                    active_tab,
-                                    terminal_frame,
-                                    active_terminal_status,
-                                    self.terminal_metrics,
-                                    active_terminal_error,
-                                    on_retry_terminal,
-                                    on_edit_terminal_command,
-                                    on_restart_terminal,
-                                    on_focus_terminal,
-                                    on_terminal_scroll,
-                                    on_terminal_mouse_down,
-                                    on_terminal_mouse_up,
-                                    on_terminal_mouse_move,
-                                    on_terminal_body_bounds,
-                                ),
+                                workspace_body,
                             )),
                     ),
             )
@@ -2477,6 +2804,13 @@ impl Render for AlasShell {
                 &self.inspector_state,
                 &self.file_tree_expansion,
                 on_toggle_file_tree_node,
+                on_open_file_from_inspector,
+            ))
+            .child(render_status_bar(
+                status_bar_repo,
+                status_bar_tab,
+                status_bar_terminal_status.as_ref(),
+                active_tab.map(|tab| tab.kind),
             ))
     }
 }
@@ -2544,5 +2878,29 @@ mod tests {
     fn terminal_intercepts_keys_only_while_focused() {
         assert!(terminal_should_intercept_key(true));
         assert!(!terminal_should_intercept_key(false));
+    }
+
+    #[test]
+    fn terminal_tab_with_active_session_routes_terminal_input() {
+        assert!(AlasShell::should_route_terminal_input_for(
+            Some(WorkspaceTabKind::Terminal(TerminalTabKind::Shell)),
+            true,
+        ));
+    }
+
+    #[test]
+    fn file_tab_does_not_route_terminal_input() {
+        assert!(!AlasShell::should_route_terminal_input_for(
+            Some(WorkspaceTabKind::File),
+            true,
+        ));
+    }
+
+    #[test]
+    fn terminal_tab_without_active_session_does_not_route_terminal_input() {
+        assert!(!AlasShell::should_route_terminal_input_for(
+            Some(WorkspaceTabKind::Terminal(TerminalTabKind::Shell)),
+            false,
+        ));
     }
 }
