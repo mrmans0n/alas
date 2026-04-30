@@ -16,7 +16,7 @@ pub use grid::{
     TerminalCell, TerminalCellStyle, TerminalColor, TerminalCursor, TerminalCursorShape,
     TerminalGridSnapshot, TerminalRow, TerminalScreenMode, TerminalStatus, TerminalViewport,
 };
-pub use harness::{HarnessKind, HarnessState};
+pub use harness::HarnessKind;
 pub use input::terminal_input_bytes;
 pub use session::{
     CommandSpec, TerminalHandle, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,
