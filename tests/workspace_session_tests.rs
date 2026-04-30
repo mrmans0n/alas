@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use alas::app::{TerminalTabId, TerminalTabKind, TerminalTabStatus, WorkspaceSession};
-use alas::terminal::{CommandSpec, TerminalBackendSession};
+use alas::terminal::{CommandSpec, HarnessKind, HarnessState, TerminalBackendSession};
 
 fn shell_command(path: &str) -> CommandSpec {
     CommandSpec::shell_command("$SHELL", PathBuf::from(path))
@@ -66,6 +66,55 @@ fn worktree_can_have_multiple_named_terminal_tabs() {
         session.active_tab("repo", &path).map(|tab| tab.id),
         Some(shell)
     );
+}
+
+#[test]
+fn terminal_tabs_store_detected_supported_harness() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let tab_id = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Claude".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("claude", path.clone()),
+    );
+
+    let tab = session.tab("repo", &path, tab_id).expect("terminal tab");
+
+    assert_eq!(
+        tab.harness,
+        HarnessState::Supported(HarnessKind::ClaudeCode)
+    );
+}
+
+#[test]
+fn terminal_tabs_store_unsupported_for_non_harness_commands() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let tab_id = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Tests".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("cargo test", path.clone()),
+    );
+
+    let tab = session.tab("repo", &path, tab_id).expect("terminal tab");
+
+    assert_eq!(tab.harness, HarnessState::Unsupported);
+}
+
+#[test]
+fn default_shell_tab_stores_unsupported_harness() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let tab_id =
+        session.ensure_default_terminal_tab("repo", path.clone(), shell_command("/repo/a"));
+
+    let tab = session.tab("repo", &path, tab_id).expect("terminal tab");
+
+    assert_eq!(tab.harness, HarnessState::Unsupported);
 }
 
 #[test]
