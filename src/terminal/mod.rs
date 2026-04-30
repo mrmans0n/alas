@@ -2,6 +2,7 @@ pub mod ghostty_adapter;
 pub mod ghostty_input;
 pub mod ghostty_render;
 pub mod grid;
+pub mod harness;
 pub mod input;
 pub mod session;
 pub mod terminal_metrics;
@@ -15,6 +16,7 @@ pub use grid::{
     TerminalCell, TerminalCellStyle, TerminalColor, TerminalCursor, TerminalCursorShape,
     TerminalGridSnapshot, TerminalRow, TerminalScreenMode, TerminalStatus, TerminalViewport,
 };
+pub use harness::{HarnessKind, HarnessState};
 pub use input::terminal_input_bytes;
 pub use session::{
     CommandSpec, TerminalHandle, TerminalSessionId, TerminalSessionRef, TerminalSessionRegistry,

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::terminal::{CommandSpec, TerminalBackendSession};
+use crate::terminal::{CommandSpec, HarnessState, TerminalBackendSession};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerminalTabId(pub u64);
@@ -42,6 +42,7 @@ pub struct TerminalTab {
     pub name: String,
     pub kind: TerminalTabKind,
     pub command: CommandSpec,
+    pub harness: HarnessState,
     pub backend_session: Option<TerminalBackendSession>,
     pub status: TerminalTabStatus,
     pub failure_cause: Option<String>,
@@ -95,11 +96,13 @@ impl WorkspaceSession {
     ) -> TerminalTabId {
         self.next_tab_id += 1;
         let id = TerminalTabId(self.next_tab_id);
+        let harness = HarnessState::detect(&command);
         let tab = TerminalTab {
             id,
             name,
             kind,
             command,
+            harness,
             backend_session: None,
             status: TerminalTabStatus::NotStarted,
             failure_cause: None,
