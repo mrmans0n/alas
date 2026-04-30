@@ -72,6 +72,10 @@ fn terminal_refresh_interval() -> Duration {
     Duration::from_millis(16)
 }
 
+fn terminal_should_intercept_key(terminal_focused: bool) -> bool {
+    terminal_focused
+}
+
 fn is_terminal_paste_key(event: &KeyDownEvent) -> bool {
     if !event.keystroke.key.eq_ignore_ascii_case("v") {
         return false;
@@ -104,7 +108,6 @@ pub struct AlasShell {
     command_settings_active_field: CommandSettingsField,
     command_picker: Option<CommandPickerState>,
     sidebar_menu: Option<SidebarMenuState>,
-    repo_tree_expansion: TreeExpansionState,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     confirm_remove_worktree_dialog: Option<ConfirmRemoveWorktreeDialog>,
     confirm_prune_worktrees_dialog: Option<ConfirmPruneWorktreesDialog>,
@@ -115,6 +118,7 @@ pub struct AlasShell {
     active_terminal: Option<TerminalSessionRef>,
     terminal_error: Option<String>,
     terminal_focus: FocusHandle,
+    terminal_focused: bool,
     terminal_tab_overlay_hovered: bool,
     terminal_metrics: TerminalMetrics,
     terminal_size: Option<TerminalSize>,
@@ -144,7 +148,6 @@ impl AlasShell {
             command_settings_active_field: CommandSettingsField::DefaultName,
             command_picker: None,
             sidebar_menu: None,
-            repo_tree_expansion: TreeExpansionState::default(),
             confirm_remove_repository_dialog: None,
             confirm_remove_worktree_dialog: None,
             confirm_prune_worktrees_dialog: None,
@@ -155,6 +158,7 @@ impl AlasShell {
             active_terminal: None,
             terminal_error: None,
             terminal_focus: cx.focus_handle(),
+            terminal_focused: false,
             terminal_tab_overlay_hovered: false,
             terminal_metrics: TerminalMetrics::fallback(),
             terminal_size: None,
@@ -382,6 +386,27 @@ impl AlasShell {
                 self.mark_terminal_tab_failed(&active.id, error.to_string());
             }
         }
+    }
+
+    fn handle_terminal_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if self.handle_command_picker_key_down(event) {
+            cx.notify();
+            return true;
+        }
+
+        if is_terminal_paste_key(event)
+            && let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+            && self.write_terminal_paste(&text)
+        {
+            cx.notify();
+            return true;
+        }
+
+        if self.write_terminal_input(event) {
+            cx.notify();
+        }
+
+        true
     }
 
     fn write_terminal_input(&mut self, event: &KeyDownEvent) -> bool {
@@ -1950,34 +1975,8 @@ impl Render for AlasShell {
                 }
             });
         let on_terminal_key_down = cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
-            if shell.handle_command_picker_key_down(event) {
+            if shell.handle_terminal_key_down(event, cx) {
                 cx.stop_propagation();
-                cx.notify();
-                return;
-            }
-
-            if is_terminal_paste_key(event)
-                && let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
-                && shell.write_terminal_paste(&text)
-            {
-                cx.stop_propagation();
-                cx.notify();
-                return;
-            }
-
-            let is_tab = event.keystroke.key.eq_ignore_ascii_case("tab")
-                || event.keystroke.key_char.as_deref() == Some("\t");
-            if is_tab {
-                if shell.write_terminal_input(event) {
-                    cx.notify();
-                }
-                cx.stop_propagation();
-                return;
-            }
-
-            if shell.write_terminal_input(event) {
-                cx.stop_propagation();
-                cx.notify();
             }
         });
         let on_retry_terminal = cx.listener(|shell, _event, _window, cx| {
@@ -2104,19 +2103,6 @@ impl Render for AlasShell {
             cx.notify();
         });
         let view = cx.entity().downgrade();
-        let on_toggle_repository = move |repo_id: String,
-                                         _event: &gpui::ClickEvent,
-                                         _window: &mut Window,
-                                         app: &mut App| {
-            view.update(app, |shell, cx| {
-                shell.repo_tree_expansion.toggle(
-                    crate::ui::view_models::TreeExpansionKey::Repository(repo_id.clone()),
-                );
-                cx.notify();
-            })
-            .ok();
-        };
-        let view = cx.entity().downgrade();
         let on_sidebar_menu_action = move |menu: SidebarMenuState,
                                            action_id: ActionId,
                                            _event: &gpui::ClickEvent,
@@ -2162,10 +2148,10 @@ impl Render for AlasShell {
         } else {
             active_tab.map(|tab| tab.status.clone())
         };
-        let terminal_focused = self.terminal_focus.contains_focused(window, cx);
+        self.terminal_focused = self.terminal_focus.contains_focused(window, cx);
         let show_terminal_tabs = crate::ui::view_models::terminal_tab_overlay_visible(
             self.terminal_tab_overlay_hovered,
-            terminal_focused,
+            self.terminal_focused,
             workspace_tabs.len(),
             terminal_overlay_status.as_ref(),
             active_terminal_error.is_some(),
@@ -2186,8 +2172,6 @@ impl Render for AlasShell {
             .child(render_sidebar(
                 self.model.repositories(),
                 self.model.selected_worktree(),
-                &self.repo_tree_expansion,
-                on_toggle_repository,
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
                 on_select_worktree,
                 on_sidebar_menu_action,
@@ -2506,6 +2490,27 @@ pub fn run() -> anyhow::Result<()> {
             apply_window_background_appearance(window);
             let shell = cx.new(AlasShell::new);
             let weak_shell = shell.downgrade();
+            let weak_shell_for_keys = shell.downgrade();
+            cx.intercept_keystrokes(move |event, window, cx| {
+                weak_shell_for_keys
+                    .update(cx, |shell, cx| {
+                        if !terminal_should_intercept_key(
+                            shell.terminal_focus.contains_focused(window, cx),
+                        ) {
+                            return;
+                        }
+
+                        let key_down = KeyDownEvent {
+                            keystroke: event.keystroke.clone(),
+                            is_held: false,
+                        };
+                        if shell.handle_terminal_key_down(&key_down, cx) {
+                            cx.stop_propagation();
+                        }
+                    })
+                    .ok();
+            })
+            .detach();
             window.on_window_should_close(cx, move |_window, cx| {
                 weak_shell.update(cx, |shell, _cx| shell.shutdown()).ok();
                 true
@@ -2533,5 +2538,11 @@ mod tests {
     #[test]
     fn terminal_refresh_interval_targets_sixty_fps_input_echo() {
         assert!(terminal_refresh_interval() <= Duration::from_millis(16));
+    }
+
+    #[test]
+    fn terminal_intercepts_keys_only_while_focused() {
+        assert!(terminal_should_intercept_key(true));
+        assert!(!terminal_should_intercept_key(false));
     }
 }

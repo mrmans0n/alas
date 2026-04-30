@@ -8,8 +8,10 @@ use crate::{
     git::WorktreeKind,
     ui::{
         chrome::render_mac_titlebar_safe_area_spacer,
-        theme::{DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED, sidebar_background},
-        view_models::{RepoTreeRow, TreeExpansionState, build_repo_tree_rows},
+        theme::{
+            ACTIVE_TAB_BG, DANGER, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED, sidebar_background,
+        },
+        view_models::{RepoSection, RepoWorktreeRow, build_repo_sections},
     },
 };
 use gpui::{
@@ -17,9 +19,8 @@ use gpui::{
     prelude::*, px,
 };
 use gpui_component::{
-    Icon, IconName, Sizable,
+    Sizable,
     button::{Button, ButtonVariants},
-    list::ListItem,
     menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem},
     tag::Tag,
 };
@@ -31,12 +32,9 @@ pub struct SidebarMenuState {
     pub scope: ActionScope,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn render_sidebar(
     repositories: &[RepositoryNode],
     selected_worktree: Option<&SelectedWorktree>,
-    expansion: &TreeExpansionState,
-    on_toggle_repository: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_sidebar_menu_action: impl Fn(SidebarMenuState, ActionId, &ClickEvent, &mut Window, &mut App)
@@ -44,7 +42,7 @@ pub fn render_sidebar(
     + 'static,
     add_repository_error: Option<&str>,
 ) -> impl IntoElement {
-    let rows = build_repo_tree_rows(repositories, selected_worktree, expansion);
+    let sections = build_repo_sections(repositories, selected_worktree);
 
     div()
         .flex()
@@ -61,9 +59,23 @@ pub fn render_sidebar(
         .child(render_mac_titlebar_safe_area_spacer())
         .child(
             div()
-                .text_lg()
-                .font_weight(FontWeight::BOLD)
-                .child("Repositories"),
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::BOLD)
+                        .child("Repositories"),
+                )
+                .child(
+                    Button::new("add-repository")
+                        .ghost()
+                        .compact()
+                        .label("+")
+                        .tooltip("Add repository")
+                        .on_click(on_add_repository),
+                ),
         )
         .when(repositories.is_empty(), |element| {
             element.child(
@@ -78,261 +90,235 @@ pub fn render_sidebar(
                     .child("No repositories configured. Add a Git repository to begin."),
             )
         })
-        .children(rows.into_iter().map(|row| match row {
-            RepoTreeRow::Repository {
-                id,
-                name,
-                unavailable,
-                expanded,
-            } => {
-                let repository = repositories
-                    .iter()
-                    .find(|r| r.id == id)
-                    .cloned()
-                    .expect("repository row must have a matching repository");
-                let menu_state = SidebarMenuState {
-                    repo_id: id.clone(),
-                    worktree_path: None,
-                    scope: ActionScope::Repository,
-                };
-                render_repository_row(
-                    id,
-                    name,
-                    unavailable,
-                    expanded,
-                    repository,
-                    menu_state,
-                    on_toggle_repository.clone(),
-                    on_sidebar_menu_action.clone(),
-                )
-                .into_any_element()
-            }
-            RepoTreeRow::Worktree {
-                repo_id,
-                path,
-                label,
-                selected,
-                archived,
-                kind,
-            } => {
-                let repository = repositories
-                    .iter()
-                    .find(|r| r.id == repo_id)
-                    .cloned()
-                    .expect("worktree row must have a matching repository");
-                let worktree = repository
-                    .worktrees
-                    .iter()
-                    .find(|w| w.path == path)
-                    .cloned()
-                    .expect("worktree row must have a matching worktree");
-                let menu_state = SidebarMenuState {
-                    repo_id: repo_id.clone(),
-                    worktree_path: Some(path.clone()),
-                    scope: ActionScope::Worktree,
-                };
-                render_worktree_row(
-                    repo_id,
-                    path,
-                    label,
-                    selected,
-                    archived,
-                    kind,
-                    repository,
-                    worktree,
-                    menu_state,
-                    on_select_worktree.clone(),
-                    on_sidebar_menu_action.clone(),
-                )
-                .into_any_element()
-            }
-        }))
         .child(
             div()
-                .mt_auto()
                 .flex()
                 .flex_col()
-                .gap_2()
-                .child(
-                    Button::new("add-repository")
-                        .ghost()
-                        .compact()
-                        .icon(IconName::Plus)
-                        .tooltip("Add repository")
-                        .on_click(on_add_repository),
-                )
-                .when(add_repository_error.is_some(), |element| {
-                    element.child(
-                        div()
-                            .text_sm()
-                            .text_color(DANGER)
-                            .child(add_repository_error.unwrap_or_default().to_string()),
+                .gap_3()
+                .children(sections.into_iter().map(|section| {
+                    let repository = repositories
+                        .iter()
+                        .find(|repository| repository.id == section.id)
+                        .cloned()
+                        .expect("repository section must have a matching repository");
+                    render_repository_section(
+                        section,
+                        repository,
+                        on_select_worktree.clone(),
+                        on_sidebar_menu_action.clone(),
                     )
-                }),
+                })),
         )
+        .when(add_repository_error.is_some(), |element| {
+            element.child(
+                div()
+                    .mt_auto()
+                    .text_sm()
+                    .text_color(DANGER)
+                    .child(add_repository_error.unwrap_or_default().to_string()),
+            )
+        })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render_repository_row(
-    repo_id: String,
-    name: String,
-    unavailable: bool,
-    expanded: bool,
+fn render_repository_section(
+    section: RepoSection,
     repository: RepositoryNode,
-    menu_state: SidebarMenuState,
-    on_toggle_repository: impl Fn(String, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_sidebar_menu_action: impl Fn(SidebarMenuState, ActionId, &ClickEvent, &mut Window, &mut App)
     + Clone
     + 'static,
 ) -> impl IntoElement {
-    let repo_id_for_click = repo_id.clone();
-    let on_toggle = move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
-        if event.is_right_click() {
-            return;
-        }
-        on_toggle_repository(repo_id_for_click.clone(), event, window, cx);
+    let repo_id = section.id.clone();
+    let menu_state = SidebarMenuState {
+        repo_id: repo_id.clone(),
+        worktree_path: None,
+        scope: ActionScope::Repository,
     };
 
-    let repo_id_for_button = repo_id.clone();
-    let repository_for_suffix = repository.clone();
-    let menu_state_for_suffix = menu_state.clone();
-    let on_action_for_suffix = on_sidebar_menu_action.clone();
+    let repository_for_header_menu = repository.clone();
+    let menu_state_for_header_menu = menu_state.clone();
+    let on_action_for_header_menu = on_sidebar_menu_action.clone();
 
     let repository_for_context = repository.clone();
     let menu_state_for_context = menu_state.clone();
     let on_action_for_context = on_sidebar_menu_action.clone();
 
-    ListItem::new(SharedString::from(format!("repo-row-{repo_id}")))
-        .on_click(on_toggle)
+    div()
+        .id(SharedString::from(format!("repo-section-{repo_id}")))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .id(SharedString::from(format!("repo-section-header-{repo_id}")))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .w_full()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_start()
+                        .min_w(px(0.0))
+                        .flex_1()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(section.name),
+                        )
+                        .when(section.unavailable, |el| {
+                            el.child(status_badge("Unavailable"))
+                        }),
+                )
+                .child(sidebar_menu_button(
+                    format!("repository-actions-{repo_id}"),
+                    repository_for_header_menu,
+                    None,
+                    menu_state_for_header_menu,
+                    on_action_for_header_menu,
+                ))
+                .context_menu(move |menu, _window, _cx| {
+                    build_sidebar_popup_menu(
+                        menu,
+                        repository_for_context.clone(),
+                        None,
+                        menu_state_for_context.clone(),
+                        on_action_for_context.clone(),
+                    )
+                }),
+        )
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    Icon::new(if expanded {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .small(),
-                )
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(name),
-                )
-                .when(unavailable, |el| el.child(status_badge("Unavailable"))),
+                .flex_col()
+                .gap_1()
+                .children(section.worktrees.into_iter().map(move |worktree| {
+                    let worktree_node = repository
+                        .worktrees
+                        .iter()
+                        .find(|candidate| candidate.path == worktree.path)
+                        .cloned()
+                        .expect("worktree row must have a matching worktree");
+                    let menu_state = SidebarMenuState {
+                        repo_id: worktree.repo_id.clone(),
+                        worktree_path: Some(worktree.path.clone()),
+                        scope: ActionScope::Worktree,
+                    };
+                    render_worktree_row(
+                        worktree,
+                        repository.clone(),
+                        worktree_node,
+                        menu_state,
+                        on_select_worktree.clone(),
+                        on_sidebar_menu_action.clone(),
+                    )
+                })),
         )
-        .suffix(move |_window: &mut Window, _cx: &mut App| {
-            let repository = repository_for_suffix.clone();
-            let menu_state = menu_state_for_suffix.clone();
-            let on_sidebar_menu_action = on_action_for_suffix.clone();
-            Button::new(SharedString::from(format!(
-                "repository-actions-{repo_id_for_button}"
-            )))
-            .ghost()
-            .compact()
-            .icon(IconName::Ellipsis)
-            .on_click(|_event, _window, cx| {
-                cx.stop_propagation();
-            })
-            .dropdown_menu(move |menu, _window, _cx| {
-                build_sidebar_popup_menu(
-                    menu,
-                    repository.clone(),
-                    None,
-                    menu_state.clone(),
-                    on_sidebar_menu_action.clone(),
-                )
-            })
-            .into_any_element()
-        })
-        .context_menu(move |menu, _window, _cx| {
-            build_sidebar_popup_menu(
-                menu,
-                repository_for_context.clone(),
-                None,
-                menu_state_for_context.clone(),
-                on_action_for_context.clone(),
-            )
-        })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn render_worktree_row(
-    repo_id: String,
-    path: PathBuf,
-    label: String,
-    selected: bool,
-    archived: bool,
-    kind: WorktreeKind,
+    worktree: RepoWorktreeRow,
     repository: RepositoryNode,
-    worktree: WorktreeNode,
+    worktree_node: WorktreeNode,
     menu_state: SidebarMenuState,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_sidebar_menu_action: impl Fn(SidebarMenuState, ActionId, &ClickEvent, &mut Window, &mut App)
     + Clone
     + 'static,
 ) -> impl IntoElement {
-    let repo_id_for_click = repo_id.clone();
-    let path_for_click = path.clone();
+    let repo_id = worktree.repo_id.clone();
+    let path = worktree.path.clone();
     let on_click = move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
         if event.is_right_click() {
             return;
         }
-        on_select_worktree(
-            repo_id_for_click.clone(),
-            path_for_click.clone(),
-            event,
-            window,
-            cx,
-        );
+        on_select_worktree(repo_id.clone(), path.clone(), event, window, cx);
     };
 
-    let is_main = kind == WorktreeKind::Main;
+    let row_id = format!(
+        "worktree-row-{}-{}",
+        worktree.repo_id,
+        worktree.path.display()
+    );
+    let is_main = worktree.kind == WorktreeKind::Main;
 
-    let repo_id_for_button = repo_id.clone();
-    let path_for_button = path.clone();
-    let repository_for_suffix = repository.clone();
-    let worktree_for_suffix = worktree.clone();
-    let menu_state_for_suffix = menu_state.clone();
-    let on_action_for_suffix = on_sidebar_menu_action.clone();
+    let repository_for_menu = repository.clone();
+    let worktree_for_menu = worktree_node.clone();
+    let menu_state_for_menu = menu_state.clone();
+    let on_action_for_menu = on_sidebar_menu_action.clone();
 
     let repository_for_context = repository.clone();
-    let worktree_for_context = worktree.clone();
+    let worktree_for_context = worktree_node.clone();
     let menu_state_for_context = menu_state.clone();
     let on_action_for_context = on_sidebar_menu_action.clone();
 
-    ListItem::new(SharedString::from(format!(
-        "worktree-row-{repo_id}-{}",
-        path.display()
-    )))
-    .selected(selected)
-    .on_click(on_click)
-    .child(
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .pl_4()
-            .child(div().truncate().child(label))
-            .when(archived, |el| el.child(status_badge("Archived")))
-            .child(status_badge(if is_main { "Main" } else { "Linked" })),
-    )
-    .suffix(move |_window: &mut Window, _cx: &mut App| {
-        let repository = repository_for_suffix.clone();
-        let worktree = worktree_for_suffix.clone();
-        let menu_state = menu_state_for_suffix.clone();
-        let on_sidebar_menu_action = on_action_for_suffix.clone();
-        Button::new(SharedString::from(format!(
-            "worktree-actions-{repo_id_for_button}-{}",
-            path_for_button.display()
-        )))
+    div()
+        .id(SharedString::from(row_id))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .w_full()
+        .ml_2()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .when(worktree.selected, |element| element.bg(ACTIVE_TAB_BG))
+        .on_click(on_click)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w(px(0.0))
+                .flex_1()
+                .child(div().truncate().text_sm().child(worktree.label))
+                .when(worktree.archived, |el| el.child(status_badge("Archived")))
+                .child(status_badge(if is_main { "Main" } else { "Linked" })),
+        )
+        .child(sidebar_menu_button(
+            format!(
+                "worktree-actions-{}-{}",
+                worktree.repo_id,
+                worktree.path.display()
+            ),
+            repository_for_menu,
+            Some(worktree_for_menu),
+            menu_state_for_menu,
+            on_action_for_menu,
+        ))
+        .context_menu(move |menu, _window, _cx| {
+            build_sidebar_popup_menu(
+                menu,
+                repository_for_context.clone(),
+                Some(worktree_for_context.clone()),
+                menu_state_for_context.clone(),
+                on_action_for_context.clone(),
+            )
+        })
+}
+
+fn sidebar_menu_button(
+    id: String,
+    repository: RepositoryNode,
+    worktree: Option<WorktreeNode>,
+    menu_state: SidebarMenuState,
+    on_sidebar_menu_action: impl Fn(SidebarMenuState, ActionId, &ClickEvent, &mut Window, &mut App)
+    + Clone
+    + 'static,
+) -> impl IntoElement {
+    Button::new(SharedString::from(id))
         .ghost()
         .compact()
-        .icon(IconName::Ellipsis)
+        .label("⋯")
+        .tooltip("Actions")
         .on_click(|_event, _window, cx| {
             cx.stop_propagation();
         })
@@ -340,22 +326,11 @@ fn render_worktree_row(
             build_sidebar_popup_menu(
                 menu,
                 repository.clone(),
-                Some(worktree.clone()),
+                worktree.clone(),
                 menu_state.clone(),
                 on_sidebar_menu_action.clone(),
             )
         })
-        .into_any_element()
-    })
-    .context_menu(move |menu, _window, _cx| {
-        build_sidebar_popup_menu(
-            menu,
-            repository_for_context.clone(),
-            Some(worktree_for_context.clone()),
-            menu_state_for_context.clone(),
-            on_action_for_context.clone(),
-        )
-    })
 }
 
 fn build_sidebar_popup_menu(
@@ -382,7 +357,6 @@ fn build_sidebar_popup_menu(
     {
         let action_id = action.id;
         let label = sidebar_action_label(action, &repository);
-        let _destructive = action.destructive;
         let menu_state = menu_state.clone();
         let on_sidebar_menu_action = on_sidebar_menu_action.clone();
 

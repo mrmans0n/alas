@@ -5,8 +5,9 @@ use alas::{
     git::{ChangedFile, GitInspectorState, WorktreeKind},
     project::FileTreeNode,
     ui::view_models::{
-        InspectorTreeRow, RepoTreeRow, TreeExpansionKey, TreeExpansionState,
-        build_inspector_tree_rows, build_repo_tree_rows, terminal_tab_overlay_visible,
+        InspectorTreeRow, RepoSection, RepoTreeRow, RepoWorktreeRow, TreeExpansionKey,
+        TreeExpansionState, build_inspector_tree_rows, build_repo_sections, build_repo_tree_rows,
+        terminal_tab_overlay_visible,
     },
 };
 
@@ -35,6 +36,44 @@ fn expansion_state_tracks_repository_and_file_keys() {
 
     state.toggle(file_key.clone());
     assert!(!state.is_expanded(&file_key));
+}
+
+#[test]
+fn repo_sections_filter_archived_worktrees_and_mark_selection_without_expansion() {
+    let repos = vec![RepositoryNode {
+        id: "repo-1".to_string(),
+        name: "alas".to_string(),
+        path: PathBuf::from("/repo"),
+        worktrees: vec![
+            worktree("/repo", "main", false, WorktreeKind::Main),
+            worktree("/repo/old", "old", true, WorktreeKind::Linked),
+        ],
+        show_archived: false,
+        unavailable: false,
+    }];
+    let selected = SelectedWorktree {
+        repo_id: "repo-1".to_string(),
+        path: PathBuf::from("/repo"),
+    };
+
+    let sections = build_repo_sections(&repos, Some(&selected));
+
+    assert_eq!(
+        sections,
+        vec![RepoSection {
+            id: "repo-1".to_string(),
+            name: "alas".to_string(),
+            unavailable: false,
+            worktrees: vec![RepoWorktreeRow {
+                repo_id: "repo-1".to_string(),
+                path: PathBuf::from("/repo"),
+                label: "main".to_string(),
+                selected: true,
+                archived: false,
+                kind: WorktreeKind::Main,
+            }],
+        }]
+    );
 }
 
 #[test]

@@ -38,6 +38,24 @@ impl TreeExpansionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoWorktreeRow {
+    pub repo_id: String,
+    pub path: PathBuf,
+    pub label: String,
+    pub selected: bool,
+    pub archived: bool,
+    pub kind: WorktreeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoSection {
+    pub id: String,
+    pub name: String,
+    pub unavailable: bool,
+    pub worktrees: Vec<RepoWorktreeRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoTreeRow {
     Repository {
         id: String,
@@ -55,6 +73,21 @@ pub enum RepoTreeRow {
     },
 }
 
+pub fn build_repo_sections(
+    repos: &[RepositoryNode],
+    selected: Option<&SelectedWorktree>,
+) -> Vec<RepoSection> {
+    repos
+        .iter()
+        .map(|repo| RepoSection {
+            id: repo.id.clone(),
+            name: repo.name.clone(),
+            unavailable: repo.unavailable,
+            worktrees: repo_worktree_rows(repo, selected),
+        })
+        .collect()
+}
+
 pub fn build_repo_tree_rows(
     repos: &[RepositoryNode],
     selected: Option<&SelectedWorktree>,
@@ -70,32 +103,54 @@ pub fn build_repo_tree_rows(
             expanded,
         });
         if expanded {
-            for worktree in &repo.worktrees {
-                if !repo.show_archived && worktree.archived {
-                    continue;
-                }
-                let is_selected =
-                    selected.is_some_and(|s| s.repo_id == repo.id && s.path == worktree.path);
-                let label = worktree.branch.clone().unwrap_or_else(|| {
-                    worktree
-                        .path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| worktree.path.display().to_string())
-                });
-                rows.push(RepoTreeRow::Worktree {
-                    repo_id: repo.id.clone(),
-                    path: worktree.path.clone(),
-                    label,
-                    selected: is_selected,
-                    archived: worktree.archived,
-                    kind: worktree.kind.clone(),
-                });
-            }
+            rows.extend(
+                repo_worktree_rows(repo, selected)
+                    .into_iter()
+                    .map(|worktree| RepoTreeRow::Worktree {
+                        repo_id: worktree.repo_id,
+                        path: worktree.path,
+                        label: worktree.label,
+                        selected: worktree.selected,
+                        archived: worktree.archived,
+                        kind: worktree.kind,
+                    }),
+            );
         }
     }
     rows
+}
+
+fn repo_worktree_rows(
+    repo: &RepositoryNode,
+    selected: Option<&SelectedWorktree>,
+) -> Vec<RepoWorktreeRow> {
+    repo.worktrees
+        .iter()
+        .filter(|worktree| repo.show_archived || !worktree.archived)
+        .map(|worktree| {
+            let selected =
+                selected.is_some_and(|s| s.repo_id == repo.id && s.path == worktree.path);
+            RepoWorktreeRow {
+                repo_id: repo.id.clone(),
+                path: worktree.path.clone(),
+                label: worktree_label(worktree),
+                selected,
+                archived: worktree.archived,
+                kind: worktree.kind.clone(),
+            }
+        })
+        .collect()
+}
+
+fn worktree_label(worktree: &crate::app::WorktreeNode) -> String {
+    worktree.branch.clone().unwrap_or_else(|| {
+        worktree
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| worktree.path.display().to_string())
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
