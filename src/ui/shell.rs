@@ -406,6 +406,10 @@ impl AlasShell {
             return true;
         }
 
+        if !self.should_route_terminal_input() {
+            return false;
+        }
+
         if is_terminal_paste_key(event)
             && let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
             && self.write_terminal_paste(&text)

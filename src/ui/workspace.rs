@@ -97,6 +97,7 @@ fn render_tab_bar(
                         .text_color(TEXT_MUTED)
                         .child("×")
                         .on_click(move |event, window, cx| {
+                            cx.stop_propagation();
                             on_close_tab(tab_id, event, window, cx);
                         }),
                 )
