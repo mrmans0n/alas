@@ -6,8 +6,8 @@ use std::{
 use crate::{
     app::{
         ActionId, AlasModel, FILE_TAB_MAX_BYTES, FileTabLoadState, InspectorPaneState,
-        RepositoryNode, TerminalTabKind, TerminalTabStatus, WorkspaceSession, WorkspaceTabContent,
-        WorkspaceTabId, WorkspaceTabKind,
+        MarkdownViewMode, RepositoryNode, TerminalTabKind, TerminalTabStatus, WorkspaceSession,
+        WorkspaceTabContent, WorkspaceTabId, WorkspaceTabKind,
     },
     config::{
         AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
@@ -34,6 +34,7 @@ use crate::{
         },
         file_pane::render_file_pane,
         inspector::render_project_inspector,
+        markdown_pane::render_markdown_pane,
         sidebar::{SidebarMenuState, render_sidebar},
         terminal_canvas::measure_terminal_metrics,
         terminal_pane::render_terminal_pane,
@@ -1316,6 +1317,7 @@ impl AlasShell {
             .tab(&repo_id, &path, tab_id)
             .and_then(|tab| match &tab.content {
                 WorkspaceTabContent::File(state) => Some(state.load_state.clone()),
+                WorkspaceTabContent::Markdown(state) => Some(state.file.load_state.clone()),
                 WorkspaceTabContent::Terminal(_) => None,
             })
             .is_some_and(|state| matches!(state, FileTabLoadState::Loaded { .. }));
@@ -2368,6 +2370,28 @@ impl Render for AlasShell {
             shell.open_command_picker(cx);
         });
         let view = cx.entity().downgrade();
+        let on_set_markdown_mode = move |tab_id: WorkspaceTabId,
+                                         mode: MarkdownViewMode,
+                                         _event: &gpui::ClickEvent,
+                                         _window: &mut Window,
+                                         app: &mut App| {
+            view.update(app, |shell, cx| {
+                let Some(selected) = shell.model.selected_worktree().cloned() else {
+                    return;
+                };
+                if let Err(error) = shell.workspace_session.set_markdown_view_mode(
+                    &selected.repo_id,
+                    &selected.path,
+                    tab_id,
+                    mode,
+                ) {
+                    shell.terminal_error = Some(error.to_string());
+                }
+                cx.notify();
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
         let on_select_command = move |name: String,
                                       command: String,
                                       _event: &gpui::ClickEvent,
@@ -2473,15 +2497,18 @@ impl Render for AlasShell {
 
         let selected_worktree = self.model.selected_worktree();
         let terminal_state = active_tab.and_then(|t| t.terminal_tab_state());
-        let file_load_state = active_tab.and_then(|t| match &t.content {
-            WorkspaceTabContent::File(state) => Some(state.load_state.clone()),
-            WorkspaceTabContent::Terminal(_) => None,
-        });
-
-        let workspace_body = if let Some(load_state) = file_load_state {
-            render_file_pane(&load_state).into_any_element()
-        } else {
-            render_terminal_pane(
+        let workspace_body = match active_tab.map(|tab| &tab.content) {
+            Some(WorkspaceTabContent::File(state)) => {
+                render_file_pane(&state.load_state).into_any_element()
+            }
+            Some(WorkspaceTabContent::Markdown(state)) => render_markdown_pane(
+                active_tab
+                    .map(|tab| tab.id)
+                    .expect("active markdown tab has id"),
+                state,
+                on_set_markdown_mode,
+            ),
+            Some(WorkspaceTabContent::Terminal(_)) | None => render_terminal_pane(
                 selected_worktree,
                 active_tab,
                 terminal_state,
@@ -2499,7 +2526,7 @@ impl Render for AlasShell {
                 on_terminal_mouse_move,
                 on_terminal_body_bounds,
             )
-            .into_any_element()
+            .into_any_element(),
         };
         div()
             .on_action(cx.listener(|_shell, _: &crate::ui::lifecycle::Quit, _window, cx| {

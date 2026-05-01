@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use alas::app::{
-    TerminalTabId, TerminalTabKind, TerminalTabStatus, WorkspaceSession, WorkspaceTabContent,
-    WorkspaceTabKind,
+    FileTabLoadState, MarkdownViewMode, TerminalTabId, TerminalTabKind, TerminalTabStatus,
+    WorkspaceSession, WorkspaceTabContent, WorkspaceTabKind,
 };
 use alas::terminal::{CommandSpec, TerminalBackendSession};
 
@@ -469,14 +469,14 @@ fn removing_worktree_and_repository_removes_all_tab_kinds() {
 fn file_tab_load_state_can_be_updated() {
     let mut session = WorkspaceSession::default();
     let path = PathBuf::from("/repo/a");
-    let file = session.open_file_tab("repo", path.clone(), PathBuf::from("/repo/a/README.md"));
+    let file = session.open_file_tab("repo", path.clone(), PathBuf::from("/repo/a/notes.txt"));
 
     session
         .set_file_tab_load_state(
             "repo",
             &path,
             file,
-            alas::app::FileTabLoadState::Loaded {
+            FileTabLoadState::Loaded {
                 content: "hello".to_string(),
             },
         )
@@ -486,8 +486,88 @@ fn file_tab_load_state_can_be_updated() {
     match &active.content {
         WorkspaceTabContent::File(state) => assert!(matches!(
             &state.load_state,
-            alas::app::FileTabLoadState::Loaded { content } if content == "hello"
+            FileTabLoadState::Loaded { content } if content == "hello"
         )),
-        WorkspaceTabContent::Terminal(_) => panic!("expected file tab"),
+        WorkspaceTabContent::Markdown(_) | WorkspaceTabContent::Terminal(_) => {
+            panic!("expected file tab")
+        }
     }
+}
+
+#[test]
+fn markdown_files_open_in_split_mode_by_default() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let markdown = session.open_file_tab("repo", path.clone(), PathBuf::from("/repo/a/README.md"));
+
+    let active = session
+        .active_tab("repo", &path)
+        .expect("active markdown tab");
+    assert_eq!(active.id, markdown);
+    assert_eq!(active.kind, WorkspaceTabKind::File);
+    match &active.content {
+        WorkspaceTabContent::Markdown(state) => {
+            assert_eq!(state.view_mode, MarkdownViewMode::Split);
+            assert!(matches!(state.file.load_state, FileTabLoadState::Loading));
+        }
+        WorkspaceTabContent::File(_) | WorkspaceTabContent::Terminal(_) => {
+            panic!("expected markdown tab")
+        }
+    }
+}
+
+#[test]
+fn markdown_mode_can_switch_between_code_preview_and_split() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let markdown = session.open_file_tab("repo", path.clone(), PathBuf::from("/repo/a/README.md"));
+
+    session
+        .set_markdown_view_mode("repo", &path, markdown, MarkdownViewMode::Code)
+        .expect("set code mode");
+    session
+        .set_markdown_view_mode("repo", &path, markdown, MarkdownViewMode::Preview)
+        .expect("set preview mode");
+    session
+        .set_markdown_view_mode("repo", &path, markdown, MarkdownViewMode::Split)
+        .expect("set split mode");
+
+    let active = session
+        .active_tab("repo", &path)
+        .expect("active markdown tab");
+    match &active.content {
+        WorkspaceTabContent::Markdown(state) => {
+            assert_eq!(state.view_mode, MarkdownViewMode::Split);
+        }
+        WorkspaceTabContent::File(_) | WorkspaceTabContent::Terminal(_) => {
+            panic!("expected markdown tab")
+        }
+    }
+}
+
+#[test]
+fn opening_same_markdown_file_focuses_existing_tab() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+
+    let first = session.open_file_tab(
+        "repo",
+        path.clone(),
+        PathBuf::from("/repo/a/docs/../README.md"),
+    );
+    let second = session.open_file_tab("repo", path.clone(), PathBuf::from("/repo/a/README.md"));
+
+    assert_eq!(first, second);
+    assert_eq!(session.tabs_for_worktree("repo", &path).len(), 2);
+    assert_eq!(
+        session.active_tab("repo", &path).map(|tab| tab.id),
+        Some(first)
+    );
 }
