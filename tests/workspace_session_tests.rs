@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use alas::app::{
-    DetectedLanguage, FileTabLoadState, MarkdownViewMode, TerminalTabId, TerminalTabKind,
-    TerminalTabStatus, WorkspaceSession, WorkspaceTabContent, WorkspaceTabKind,
+    DetectedLanguage, FileTabLoadState, ImagePreflight, ImageZoom, MarkdownViewMode, TerminalTabId,
+    TerminalTabKind, TerminalTabStatus, WorkspaceSession, WorkspaceTabContent, WorkspaceTabKind,
+    is_supported_image_path, preflight_image_path,
 };
 use alas::terminal::{CommandSpec, TerminalBackendSession};
 
@@ -492,7 +493,9 @@ fn file_tab_load_state_can_be_updated() {
             &state.load_state,
             FileTabLoadState::Loaded { content, .. } if content == "hello"
         )),
-        WorkspaceTabContent::Markdown(_) | WorkspaceTabContent::Terminal(_) => {
+        WorkspaceTabContent::Markdown(_)
+        | WorkspaceTabContent::Terminal(_)
+        | WorkspaceTabContent::Image(_) => {
             panic!("expected file tab")
         }
     }
@@ -515,7 +518,9 @@ fn markdown_files_open_in_split_mode_by_default() {
             assert_eq!(state.file.language, DetectedLanguage::Markdown);
             assert!(matches!(state.file.load_state, FileTabLoadState::Loading));
         }
-        WorkspaceTabContent::File(_) | WorkspaceTabContent::Terminal(_) => {
+        WorkspaceTabContent::File(_)
+        | WorkspaceTabContent::Terminal(_)
+        | WorkspaceTabContent::Image(_) => {
             panic!("expected markdown tab")
         }
     }
@@ -544,7 +549,9 @@ fn markdown_mode_can_switch_between_code_preview_and_split() {
         WorkspaceTabContent::Markdown(state) => {
             assert_eq!(state.view_mode, MarkdownViewMode::Split);
         }
-        WorkspaceTabContent::File(_) | WorkspaceTabContent::Terminal(_) => {
+        WorkspaceTabContent::File(_)
+        | WorkspaceTabContent::Terminal(_)
+        | WorkspaceTabContent::Image(_) => {
             panic!("expected markdown tab")
         }
     }
@@ -575,4 +582,114 @@ fn opening_same_markdown_file_focuses_existing_tab() {
         session.active_tab("repo", &path).map(|tab| tab.id),
         Some(first)
     );
+}
+
+#[test]
+fn image_extension_detection_is_case_insensitive() {
+    assert!(is_supported_image_path(&PathBuf::from("photo.PNG")));
+    assert!(is_supported_image_path(&PathBuf::from("photo.JpEg")));
+    assert!(is_supported_image_path(&PathBuf::from("vector.SVG")));
+    assert!(!is_supported_image_path(&PathBuf::from("notes.txt")));
+}
+
+#[test]
+fn image_preflight_reports_unsupported_extensions() {
+    assert_eq!(
+        preflight_image_path(&PathBuf::from("notes.txt")),
+        ImagePreflight::UnsupportedExtension("txt".to_string())
+    );
+    assert_eq!(
+        preflight_image_path(&PathBuf::from("README")),
+        ImagePreflight::UnsupportedExtension(String::new())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn image_preflight_reports_permission_denied_when_file_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let worktree = std::env::temp_dir().join(format!(
+        "alas-image-permission-denied-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&worktree).expect("create temp worktree");
+    let image = worktree.join("photo.png");
+    std::fs::write(&image, b"not really a png").expect("write image path");
+    let original_permissions = std::fs::metadata(&image)
+        .expect("image metadata")
+        .permissions();
+
+    std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o000))
+        .expect("remove read permission");
+    let preflight = preflight_image_path(&image);
+    std::fs::set_permissions(&image, original_permissions).expect("restore permissions");
+
+    assert_eq!(preflight, ImagePreflight::PermissionDenied);
+
+    let _ = std::fs::remove_file(image);
+    let _ = std::fs::remove_dir(worktree);
+}
+
+#[test]
+fn image_zoom_transitions_clamp_and_fit_resets() {
+    assert_eq!(ImageZoom::Fit.zoom_in(), ImageZoom::Fixed(1.25));
+    assert_eq!(ImageZoom::Fit.zoom_out(), ImageZoom::Fixed(0.75));
+    assert_eq!(ImageZoom::Fixed(9.9).zoom_in(), ImageZoom::Fixed(10.0));
+    assert_eq!(ImageZoom::Fixed(0.2).zoom_out(), ImageZoom::Fixed(0.1));
+    assert_eq!(ImageZoom::Fit.label(), "Fit");
+    assert_eq!(ImageZoom::Fixed(1.5).label(), "150%");
+}
+
+#[test]
+fn opening_same_image_path_reuses_existing_tab_and_preserves_zoom() {
+    let mut session = WorkspaceSession::default();
+    let worktree = std::env::temp_dir().join(format!("alas-image-dedupe-{}", std::process::id()));
+    std::fs::create_dir_all(&worktree).expect("create temp worktree");
+    let image = worktree.join("photo.png");
+    std::fs::write(&image, b"not really a png").expect("write image path");
+
+    let first = session.open_or_focus_image_tab("repo", worktree.clone(), image.clone());
+    session
+        .set_image_zoom("repo", &worktree, first, ImageZoom::Fixed(2.0))
+        .expect("set zoom");
+    let second = session.open_or_focus_image_tab("repo", worktree.clone(), image.clone());
+
+    assert_eq!(first, second);
+    assert_eq!(session.tabs_for_worktree("repo", &worktree).len(), 1);
+    let active = session.active_tab("repo", &worktree).expect("active tab");
+    let image_state = active.image_tab_state().expect("image tab");
+    assert_eq!(image_state.zoom, ImageZoom::Fixed(2.0));
+    assert_eq!(image_state.preflight, ImagePreflight::Ready);
+
+    let _ = std::fs::remove_file(image);
+    let _ = std::fs::remove_dir(worktree);
+}
+
+#[test]
+fn opening_distinct_images_creates_distinct_tabs() {
+    let mut session = WorkspaceSession::default();
+    let worktree = PathBuf::from("/repo/a");
+
+    let first = session.open_or_focus_image_tab("repo", worktree.clone(), worktree.join("a.png"));
+    let second = session.open_or_focus_image_tab("repo", worktree.clone(), worktree.join("b.png"));
+
+    assert_ne!(first, second);
+    assert_eq!(session.tabs_for_worktree("repo", &worktree).len(), 2);
+    assert_eq!(
+        session.active_tab("repo", &worktree).map(|tab| tab.kind),
+        Some(WorkspaceTabKind::Image)
+    );
+}
+
+#[test]
+fn image_tab_does_not_expose_terminal_state() {
+    let mut session = WorkspaceSession::default();
+    let worktree = PathBuf::from("/repo/a");
+    let tab_id = session.open_or_focus_image_tab("repo", worktree.clone(), worktree.join("a.png"));
+
+    let active = session.active_tab("repo", &worktree).expect("active tab");
+    assert_eq!(active.id, tab_id);
+    assert!(active.terminal_tab_state().is_none());
+    assert!(active.image_tab_state().is_some());
 }

@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::app::{DetectedLanguage, HighlightedSource, detect_language};
 use crate::terminal::{CommandSpec, TerminalBackendSession};
 
 pub const FILE_TAB_MAX_BYTES: u64 = 2 * 1024 * 1024;
+pub const IMAGE_ZOOM_MIN: f32 = 0.10;
+pub const IMAGE_ZOOM_MAX: f32 = 10.0;
+pub const IMAGE_ZOOM_STEP: f32 = 0.25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WorkspaceTabId(pub u64);
@@ -20,6 +24,7 @@ pub enum TerminalTabKind {
 pub enum WorkspaceTabKind {
     Terminal(TerminalTabKind),
     File,
+    Image,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,14 +96,105 @@ pub struct MarkdownTabState {
     pub preview_scroll_offset_rows: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImageZoom {
+    Fit,
+    Fixed(f32),
+}
+
+impl ImageZoom {
+    pub fn zoom_in(self) -> Self {
+        Self::Fixed((self.fixed_start() + IMAGE_ZOOM_STEP).clamp(IMAGE_ZOOM_MIN, IMAGE_ZOOM_MAX))
+    }
+
+    pub fn zoom_out(self) -> Self {
+        Self::Fixed((self.fixed_start() - IMAGE_ZOOM_STEP).clamp(IMAGE_ZOOM_MIN, IMAGE_ZOOM_MAX))
+    }
+
+    pub fn is_min(self) -> bool {
+        matches!(self, Self::Fixed(value) if value <= IMAGE_ZOOM_MIN)
+    }
+
+    pub fn is_max(self) -> bool {
+        matches!(self, Self::Fixed(value) if value >= IMAGE_ZOOM_MAX)
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Self::Fit => "Fit".to_string(),
+            Self::Fixed(value) => format!("{:.0}%", value * 100.0),
+        }
+    }
+
+    fn fixed_start(self) -> f32 {
+        match self {
+            Self::Fit => 1.0,
+            Self::Fixed(value) => value,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImagePreflight {
+    Ready,
+    UnsupportedExtension(String),
+    NotFound,
+    PermissionDenied,
+    NotAFile,
+    IoError(String),
+}
+
+impl ImagePreflight {
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::Ready => "Image ready",
+            Self::UnsupportedExtension(_) => "Unsupported image format",
+            Self::NotFound => "Image file not found",
+            Self::PermissionDenied => "Image file is not readable",
+            Self::NotAFile => "Selected path is not a file",
+            Self::IoError(_) => "Image file could not be opened",
+        }
+    }
+
+    pub fn detail(&self) -> String {
+        match self {
+            Self::Ready => "Ready".to_string(),
+            Self::UnsupportedExtension(extension) if extension.is_empty() => {
+                "The file has no extension supported by the image viewer.".to_string()
+            }
+            Self::UnsupportedExtension(extension) => {
+                format!("'.{extension}' is not supported by the image viewer.")
+            }
+            Self::NotFound => "The file no longer exists at this path.".to_string(),
+            Self::PermissionDenied => {
+                "The app does not have permission to read this file.".to_string()
+            }
+            Self::NotAFile => {
+                "Directories and special files cannot be previewed as images.".to_string()
+            }
+            Self::IoError(error) => error.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageTabState {
+    pub path: PathBuf,
+    pub display_path: PathBuf,
+    pub path_key: PathBuf,
+    pub zoom: ImageZoom,
+    pub preflight: ImagePreflight,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkspaceTabContent {
     Terminal(TerminalTabState),
     File(FileTabState),
     Markdown(MarkdownTabState),
+    Image(ImageTabState),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkspaceTab {
     pub id: WorkspaceTabId,
     pub name: String,
@@ -110,21 +206,25 @@ impl WorkspaceTab {
     pub fn terminal_tab_state(&self) -> Option<&TerminalTabState> {
         match &self.content {
             WorkspaceTabContent::Terminal(state) => Some(state),
-            WorkspaceTabContent::File(_) | WorkspaceTabContent::Markdown(_) => None,
+            WorkspaceTabContent::File(_)
+            | WorkspaceTabContent::Markdown(_)
+            | WorkspaceTabContent::Image(_) => None,
         }
     }
 
     pub fn terminal_tab_state_mut(&mut self) -> Option<&mut TerminalTabState> {
         match &mut self.content {
             WorkspaceTabContent::Terminal(state) => Some(state),
-            WorkspaceTabContent::File(_) | WorkspaceTabContent::Markdown(_) => None,
+            WorkspaceTabContent::File(_)
+            | WorkspaceTabContent::Markdown(_)
+            | WorkspaceTabContent::Image(_) => None,
         }
     }
 
     pub fn terminal_kind(&self) -> Option<TerminalTabKind> {
         match self.kind {
             WorkspaceTabKind::Terminal(kind) => Some(kind),
-            WorkspaceTabKind::File => None,
+            WorkspaceTabKind::File | WorkspaceTabKind::Image => None,
         }
     }
 
@@ -136,11 +236,33 @@ impl WorkspaceTab {
         matches!(self.kind, WorkspaceTabKind::File)
     }
 
+    pub fn is_image(&self) -> bool {
+        matches!(self.kind, WorkspaceTabKind::Image)
+    }
+
+    pub fn image_tab_state(&self) -> Option<&ImageTabState> {
+        match &self.content {
+            WorkspaceTabContent::Image(state) => Some(state),
+            WorkspaceTabContent::Terminal(_)
+            | WorkspaceTabContent::File(_)
+            | WorkspaceTabContent::Markdown(_) => None,
+        }
+    }
+
+    pub fn image_tab_state_mut(&mut self) -> Option<&mut ImageTabState> {
+        match &mut self.content {
+            WorkspaceTabContent::Image(state) => Some(state),
+            WorkspaceTabContent::Terminal(_)
+            | WorkspaceTabContent::File(_)
+            | WorkspaceTabContent::Markdown(_) => None,
+        }
+    }
+
     pub fn file_tab_path(&self) -> Option<&PathBuf> {
         match &self.content {
             WorkspaceTabContent::File(state) => Some(&state.file_path),
             WorkspaceTabContent::Markdown(state) => Some(&state.file.file_path),
-            WorkspaceTabContent::Terminal(_) => None,
+            WorkspaceTabContent::Terminal(_) | WorkspaceTabContent::Image(_) => None,
         }
     }
 }
@@ -268,6 +390,49 @@ impl WorkspaceSession {
             name,
             kind: WorkspaceTabKind::File,
             content,
+        };
+
+        self.tabs.entry(key.clone()).or_default().push(tab);
+        self.active_tabs.insert(key, id);
+        id
+    }
+
+    pub fn open_or_focus_image_tab(
+        &mut self,
+        repo_id: impl Into<String>,
+        worktree_path: PathBuf,
+        image_path: PathBuf,
+    ) -> WorkspaceTabId {
+        let key = WorktreeKey::new(repo_id, worktree_path.clone());
+        let path_key = image_path_key(&worktree_path, &image_path);
+        if let Some(existing_id) = self.tabs.get(&key).and_then(|tabs| {
+            tabs.iter().find_map(|tab| match &tab.content {
+                WorkspaceTabContent::Image(state) if state.path_key == path_key => Some(tab.id),
+                _ => None,
+            })
+        }) {
+            self.active_tabs.insert(key, existing_id);
+            return existing_id;
+        }
+
+        self.next_tab_id += 1;
+        let id = WorkspaceTabId(self.next_tab_id);
+        let name = image_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Image")
+            .to_string();
+        let tab = WorkspaceTab {
+            id,
+            name,
+            kind: WorkspaceTabKind::Image,
+            content: WorkspaceTabContent::Image(ImageTabState {
+                path: image_path.clone(),
+                display_path: image_path.clone(),
+                path_key,
+                zoom: ImageZoom::Fit,
+                preflight: preflight_image_path(&image_path),
+            }),
         };
 
         self.tabs.entry(key.clone()).or_default().push(tab);
@@ -417,6 +582,34 @@ impl WorkspaceSession {
         let key = WorktreeKey::new(repo_id, path.to_path_buf());
         let tab = self.known_terminal_tab_mut(&key, tab_id)?;
         tab.scroll_offset_rows = scroll_offset_rows;
+        Ok(())
+    }
+
+    pub fn set_image_zoom(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: WorkspaceTabId,
+        zoom: ImageZoom,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.tab_mut_for_key(&key, tab_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown workspace tab {:?} for repo '{}' worktree {}",
+                tab_id,
+                key.repo_id,
+                key.path.display()
+            )
+        })?;
+        let Some(state) = tab.image_tab_state_mut() else {
+            anyhow::bail!("workspace tab {:?} is not an image tab", tab_id);
+        };
+        state.zoom = match zoom {
+            ImageZoom::Fit => ImageZoom::Fit,
+            ImageZoom::Fixed(value) => {
+                ImageZoom::Fixed(value.clamp(IMAGE_ZOOM_MIN, IMAGE_ZOOM_MAX))
+            }
+        };
         Ok(())
     }
 
@@ -582,7 +775,7 @@ impl WorkspaceSession {
         match &mut tab.content {
             WorkspaceTabContent::File(state) => Ok(FileTabHandle::Text(state)),
             WorkspaceTabContent::Markdown(state) => Ok(FileTabHandle::Markdown(state)),
-            WorkspaceTabContent::Terminal(_) => {
+            WorkspaceTabContent::Terminal(_) | WorkspaceTabContent::Image(_) => {
                 anyhow::bail!("workspace tab {:?} is not a file tab", tab_id)
             }
         }
@@ -604,7 +797,9 @@ impl WorkspaceSession {
 
         match &mut tab.content {
             WorkspaceTabContent::Markdown(state) => Ok(state),
-            WorkspaceTabContent::File(_) | WorkspaceTabContent::Terminal(_) => {
+            WorkspaceTabContent::File(_)
+            | WorkspaceTabContent::Terminal(_)
+            | WorkspaceTabContent::Image(_) => {
                 anyhow::bail!("workspace tab {:?} is not a markdown tab", tab_id)
             }
         }
@@ -633,6 +828,70 @@ pub fn is_markdown_path(path: &Path) -> bool {
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
         })
+}
+
+pub fn is_supported_image_path(path: &Path) -> bool {
+    let Some(extension) = normalized_extension(path) else {
+        return false;
+    };
+    gpui::Img::extensions()
+        .iter()
+        .any(|supported| supported.eq_ignore_ascii_case(&extension))
+}
+
+pub fn preflight_image_path(path: &Path) -> ImagePreflight {
+    let Some(extension) = normalized_extension(path) else {
+        return ImagePreflight::UnsupportedExtension(String::new());
+    };
+    if !gpui::Img::extensions()
+        .iter()
+        .any(|supported| supported.eq_ignore_ascii_case(&extension))
+    {
+        return ImagePreflight::UnsupportedExtension(extension);
+    }
+
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return match error.kind() {
+                ErrorKind::NotFound => ImagePreflight::NotFound,
+                ErrorKind::PermissionDenied => ImagePreflight::PermissionDenied,
+                _ => ImagePreflight::IoError(error.to_string()),
+            };
+        }
+    };
+
+    if !metadata.is_file() {
+        return ImagePreflight::NotAFile;
+    }
+
+    match std::fs::File::open(path) {
+        Ok(_) => ImagePreflight::Ready,
+        Err(error) => match error.kind() {
+            ErrorKind::NotFound => ImagePreflight::NotFound,
+            ErrorKind::PermissionDenied => ImagePreflight::PermissionDenied,
+            _ => ImagePreflight::IoError(error.to_string()),
+        },
+    }
+}
+
+fn normalized_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+}
+
+fn image_path_key(worktree_path: &Path, image_path: &Path) -> PathBuf {
+    if let Ok(path) = std::fs::canonicalize(image_path) {
+        return path;
+    }
+
+    let absolute = if image_path.is_absolute() {
+        image_path.to_path_buf()
+    } else {
+        worktree_path.join(image_path)
+    };
+    normalize_file_path(&absolute)
 }
 
 fn normalize_file_path(path: &Path) -> PathBuf {

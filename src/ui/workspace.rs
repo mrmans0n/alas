@@ -130,5 +130,6 @@ fn tab_label(tab: &WorkspaceTab) -> String {
             TerminalTabKind::Agent => format!("⚙ {}", tab.name),
         },
         WorkspaceTabKind::File => tab.name.clone(),
+        WorkspaceTabKind::Image => format!("▧ {}", tab.name),
     }
 }
