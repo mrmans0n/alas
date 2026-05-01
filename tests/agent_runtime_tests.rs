@@ -109,7 +109,7 @@ fn process_connection_dispatches_terminal_callbacks() {
 }
 
 #[test]
-fn process_connection_dispatches_permission_without_pending_continuation() {
+fn process_connection_ask_permission_returns_honest_error() {
     let temp = tempfile::tempdir().unwrap();
     let provider = AgentProviderConfig::new("dispatcher", "Dispatcher", "/bin/cat");
     let mut connection = AcpProcessConnection::spawn(&provider, temp.path().to_path_buf())
@@ -119,7 +119,7 @@ fn process_connection_dispatches_permission_without_pending_continuation() {
             AgentTerminalService::new(AgentTrustMode::Ask, temp.path().to_path_buf()),
         );
 
-    let response = connection
+    let error = connection
         .dispatch_client_request(
             "session/request_permission",
             serde_json::json!({
@@ -131,9 +131,13 @@ fn process_connection_dispatches_permission_without_pending_continuation() {
                 ]
             }),
         )
-        .unwrap();
+        .expect_err("Ask mode cannot silently choose an ACP permission option");
 
-    assert_eq!(response["outcome"]["optionId"], "reject");
+    assert!(
+        error
+            .to_string()
+            .contains("permission request requires user approval")
+    );
 }
 
 #[test]
@@ -143,8 +147,8 @@ fn process_connection_does_not_select_allow_when_permission_denied() {
     let mut connection = AcpProcessConnection::spawn(&provider, temp.path().to_path_buf())
         .unwrap()
         .with_callback_services(
-            FilesystemCallbackService::new(AgentTrustMode::Ask, temp.path().to_path_buf()),
-            AgentTerminalService::new(AgentTrustMode::Ask, temp.path().to_path_buf()),
+            FilesystemCallbackService::new(AgentTrustMode::Deny, temp.path().to_path_buf()),
+            AgentTerminalService::new(AgentTrustMode::Deny, temp.path().to_path_buf()),
         );
 
     let error = connection
