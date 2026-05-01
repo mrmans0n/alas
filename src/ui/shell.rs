@@ -14,6 +14,7 @@ use crate::{
         ResolvedRepoConfig, repository_id_for_path,
     },
     git::{GitInspectorService, GitRunner, GitWorktreeService},
+    notifications::{NotificationController, NotificationService},
     project::FileTreeService,
     terminal::{
         CommandSpec, GhosttyRenderFrame, GhosttyTerminalBackend, TerminalBackend, TerminalKeyInput,
@@ -30,7 +31,7 @@ use crate::{
         dialogs::{
             AddRepositoryDialogState, CommandSettingsDialogState, ConfirmPruneWorktreesDialog,
             ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
-            CreateWorktreeField,
+            CreateWorktreeField, NotificationPreferencesDialogState,
         },
         inspector::render_project_inspector,
         markdown_pane::render_markdown_pane,
@@ -109,6 +110,8 @@ pub struct AlasShell {
     command_settings_dialog: Option<CommandSettingsDialogState>,
     command_settings_focus: FocusHandle,
     command_settings_active_field: CommandSettingsField,
+    notification_preferences_dialog: Option<NotificationPreferencesDialogState>,
+    notification_controller: NotificationController<NotificationService>,
     command_picker: Option<CommandPickerState>,
     sidebar_menu: Option<SidebarMenuState>,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
@@ -136,6 +139,7 @@ impl AlasShell {
         let app_config_store =
             AppConfigStore::default_store().expect("failed to resolve app config store");
         let config = app_config_store.load().unwrap_or_default();
+        let notification_preferences = config.notifications.clone();
 
         let mut shell = Self {
             model: AlasModel::default(),
@@ -147,6 +151,11 @@ impl AlasShell {
             command_settings_dialog: None,
             command_settings_focus: cx.focus_handle(),
             command_settings_active_field: CommandSettingsField::DefaultName,
+            notification_preferences_dialog: None,
+            notification_controller: NotificationController::new_with_preferences(
+                NotificationService,
+                notification_preferences,
+            ),
             command_picker: None,
             sidebar_menu: None,
             confirm_remove_repository_dialog: None,
@@ -1002,6 +1011,60 @@ impl AlasShell {
         }
     }
 
+    fn open_notification_preferences_dialog(&mut self) {
+        self.notification_preferences_dialog = Some(
+            NotificationPreferencesDialogState::from_config(&self.config),
+        );
+    }
+
+    fn close_notification_preferences_dialog(&mut self) {
+        self.notification_preferences_dialog = None;
+    }
+
+    fn toggle_harness_completion_notifications(&mut self) {
+        if let Some(dialog) = self.notification_preferences_dialog.as_mut() {
+            dialog.harness_completion_enabled = !dialog.harness_completion_enabled;
+            dialog.error = None;
+        }
+    }
+
+    fn toggle_success_completion_notifications(&mut self) {
+        if let Some(dialog) = self.notification_preferences_dialog.as_mut() {
+            dialog.harness_completion_success = !dialog.harness_completion_success;
+            dialog.error = None;
+        }
+    }
+
+    fn toggle_failure_completion_notifications(&mut self) {
+        if let Some(dialog) = self.notification_preferences_dialog.as_mut() {
+            dialog.harness_completion_failure = !dialog.harness_completion_failure;
+            dialog.error = None;
+        }
+    }
+
+    fn save_notification_preferences_from_dialog(&mut self) {
+        let Some(dialog) = self.notification_preferences_dialog.clone() else {
+            return;
+        };
+        let mut next_config = self.config.clone();
+        dialog.apply_to_config(&mut next_config);
+
+        if let Err(error) = self.app_config_store.save(&next_config) {
+            self.set_notification_preferences_error(error.to_string());
+            return;
+        }
+        self.config = next_config;
+        self.notification_controller
+            .update_preferences(self.config.notifications.clone());
+        self.notification_preferences_dialog = None;
+    }
+
+    fn set_notification_preferences_error(&mut self, error: impl Into<String>) {
+        if let Some(dialog) = self.notification_preferences_dialog.as_mut() {
+            dialog.error = Some(error.into());
+        }
+    }
+
     fn create_worktree_from_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.create_worktree_dialog.clone() else {
             return;
@@ -1452,6 +1515,7 @@ impl AlasShell {
                 }
             }
             ActionId::AddRepository => self.open_add_repository_dialog(cx),
+            ActionId::NotificationPreferences => self.open_notification_preferences_dialog(),
         }
 
         cx.notify();
@@ -2042,6 +2106,50 @@ fn render_command_settings_field(
         )
 }
 
+fn render_notification_toggle(
+    id: &'static str,
+    label: &'static str,
+    checked: bool,
+    on_toggle: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .px_2()
+        .py_2()
+        .rounded_md()
+        .bg(rgb(0xffffff))
+        .border_1()
+        .border_color(rgb(0xd1d5db))
+        .child(div().text_sm().text_color(rgb(0x111827)).child(label))
+        .child(
+            div()
+                .w(px(44.0))
+                .h(px(24.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(if checked {
+                    rgb(0xffffff)
+                } else {
+                    rgb(0x4b5563)
+                })
+                .bg(if checked {
+                    rgb(0x2563eb)
+                } else {
+                    rgb(0xe5e7eb)
+                })
+                .child(if checked { "On" } else { "Off" }),
+        )
+        .on_click(on_toggle)
+}
+
 fn render_create_worktree_field(
     label: &'static str,
     value: &str,
@@ -2252,6 +2360,29 @@ impl Render for AlasShell {
                     cx.notify();
                 }
             });
+        let on_toggle_harness_completion_notifications =
+            cx.listener(|shell, _event, _window, cx| {
+                shell.toggle_harness_completion_notifications();
+                cx.notify();
+            });
+        let on_toggle_success_completion_notifications =
+            cx.listener(|shell, _event, _window, cx| {
+                shell.toggle_success_completion_notifications();
+                cx.notify();
+            });
+        let on_toggle_failure_completion_notifications =
+            cx.listener(|shell, _event, _window, cx| {
+                shell.toggle_failure_completion_notifications();
+                cx.notify();
+            });
+        let on_submit_notification_preferences = cx.listener(|shell, _event, _window, cx| {
+            shell.save_notification_preferences_from_dialog();
+            cx.notify();
+        });
+        let on_cancel_notification_preferences = cx.listener(|shell, _event, _window, cx| {
+            shell.close_notification_preferences_dialog();
+            cx.notify();
+        });
         let on_terminal_key_down = cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
             if shell.handle_terminal_key_down(event, cx) {
                 cx.stop_propagation();
@@ -2542,6 +2673,10 @@ impl Render for AlasShell {
                 self.model.repositories(),
                 self.model.selected_worktree(),
                 cx.listener(|shell, _event, _window, cx| shell.open_add_repository_dialog(cx)),
+                cx.listener(|shell, _event, _window, cx| {
+                    shell.open_notification_preferences_dialog();
+                    cx.notify();
+                }),
                 on_select_worktree,
                 on_sidebar_menu_action,
                 self.add_repository_error(),
@@ -2559,6 +2694,92 @@ impl Render for AlasShell {
                             on_select_command,
                             on_cancel_command_picker,
                         ))
+                    })
+                    .when(self.notification_preferences_dialog.is_some(), |element| {
+                        let dialog = self.notification_preferences_dialog.as_ref().unwrap();
+                        element.child(
+                            div()
+                                .m_3()
+                                .p_3()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(0xbfdbfe))
+                                .bg(rgb(0xeff6ff))
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("Notification Preferences"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x4b5563))
+                                        .child("Hook-backed harnesses"),
+                                )
+                                .child(render_notification_toggle(
+                                    "harness-completion-notifications",
+                                    "Harness completion notifications",
+                                    dialog.harness_completion_enabled,
+                                    on_toggle_harness_completion_notifications,
+                                ))
+                                .child(render_notification_toggle(
+                                    "harness-completion-success-notifications",
+                                    "Successful completions",
+                                    dialog.harness_completion_success,
+                                    on_toggle_success_completion_notifications,
+                                ))
+                                .child(render_notification_toggle(
+                                    "harness-completion-failure-notifications",
+                                    "Failed completions",
+                                    dialog.harness_completion_failure,
+                                    on_toggle_failure_completion_notifications,
+                                ))
+                                .when(dialog.error.is_some(), |element| {
+                                    element.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(0xdc2626))
+                                            .child(SharedString::from(
+                                                dialog.error.clone().unwrap_or_default(),
+                                            )),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("submit-notification-preferences")
+                                                .px_3()
+                                                .py_2()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(0xffffff))
+                                                .bg(rgb(0x2563eb))
+                                                .child("Save")
+                                                .on_click(on_submit_notification_preferences),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("cancel-notification-preferences")
+                                                .px_3()
+                                                .py_2()
+                                                .rounded_md()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(rgb(0x374151))
+                                                .bg(rgb(0xe5e7eb))
+                                                .child("Cancel")
+                                                .on_click(on_cancel_notification_preferences),
+                                        ),
+                                ),
+                        )
                     })
                     .when(self.command_settings_dialog.is_some(), |element| {
                         let dialog = self.command_settings_dialog.as_ref().unwrap();

@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub repositories: Vec<AppRepository>,
     #[serde(default)]
     pub archived_worktrees: IndexMap<String, Vec<PathBuf>>,
+    #[serde(default)]
+    pub notifications: NotificationPrefs,
 }
 
 impl AppConfig {
@@ -23,6 +25,36 @@ impl AppConfig {
             paths.retain(|archived_path| archived_path != path);
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NotificationPrefs {
+    #[serde(default)]
+    pub harness_completion: HarnessCompletionNotificationPrefs,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HarnessCompletionNotificationPrefs {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub success: bool,
+    #[serde(default = "default_true")]
+    pub failure: bool,
+}
+
+impl Default for HarnessCompletionNotificationPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            success: true,
+            failure: true,
+        }
+    }
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

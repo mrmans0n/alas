@@ -36,6 +36,7 @@ pub fn render_sidebar(
     repositories: &[RepositoryNode],
     selected_worktree: Option<&SelectedWorktree>,
     on_add_repository: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_notification_preferences: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_select_worktree: impl Fn(String, PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_sidebar_menu_action: impl Fn(SidebarMenuState, ActionId, &ClickEvent, &mut Window, &mut App)
     + Clone
@@ -109,10 +110,17 @@ pub fn render_sidebar(
                     )
                 })),
         )
+        .child(
+            Button::new("notification-preferences")
+                .ghost()
+                .compact()
+                .mt_auto()
+                .label("Notifications")
+                .on_click(on_notification_preferences),
+        )
         .when(add_repository_error.is_some(), |element| {
             element.child(
                 div()
-                    .mt_auto()
                     .text_sm()
                     .text_color(DANGER)
                     .child(add_repository_error.unwrap_or_default().to_string()),

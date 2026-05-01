@@ -2,7 +2,7 @@ use alas::config::{
     AppConfig, AppConfigStore, AppRepository, CommandConfig, CommandEntry, RepoConfigFile,
     RepoConfigStore, ResolvedRepoConfig,
 };
-use alas::ui::dialogs::CommandSettingsDialogState;
+use alas::ui::dialogs::{CommandSettingsDialogState, NotificationPreferencesDialogState};
 use indexmap::IndexMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -34,11 +34,67 @@ fn app_config_round_trips_repositories_and_archives() {
             name: Some("Repo One".to_string()),
         }],
         archived_worktrees,
+        ..AppConfig::default()
     };
 
     store.save(&config).unwrap();
 
     assert!(config_path.exists());
+    assert_eq!(store.load().unwrap(), config);
+}
+
+#[test]
+fn app_config_defaults_enable_harness_completion_notifications() {
+    let config = AppConfig::default();
+    let prefs = config.notifications.harness_completion;
+
+    assert!(prefs.enabled);
+    assert!(prefs.success);
+    assert!(prefs.failure);
+}
+
+#[test]
+fn app_config_loads_notification_defaults_from_existing_toml() {
+    let toml = r#"
+        [[repositories]]
+        id = "repo-1"
+        path = "/tmp/repo-1"
+    "#;
+
+    let config: AppConfig = toml::from_str(toml).unwrap();
+    let prefs = config.notifications.harness_completion;
+
+    assert!(prefs.enabled);
+    assert!(prefs.success);
+    assert!(prefs.failure);
+}
+
+#[test]
+fn app_config_loads_partial_notification_defaults_as_enabled() {
+    let toml = r#"
+        [notifications.harness_completion]
+        success = false
+    "#;
+
+    let config: AppConfig = toml::from_str(toml).unwrap();
+    let prefs = config.notifications.harness_completion;
+
+    assert!(prefs.enabled);
+    assert!(!prefs.success);
+    assert!(prefs.failure);
+}
+
+#[test]
+fn app_config_round_trips_notification_preferences() {
+    let temp = tempdir().unwrap();
+    let store = AppConfigStore::new(temp.path().join("config.toml"));
+    let mut config = AppConfig::default();
+    config.notifications.harness_completion.enabled = false;
+    config.notifications.harness_completion.success = false;
+    config.notifications.harness_completion.failure = true;
+
+    store.save(&config).unwrap();
+
     assert_eq!(store.load().unwrap(), config);
 }
 
@@ -235,6 +291,46 @@ fn command_settings_dialog_rejects_missing_default_entry() {
         dialog.to_repo_config().unwrap_err(),
         "Default command must match a named command"
     );
+}
+
+#[test]
+fn notification_preferences_dialog_initializes_from_config() {
+    let mut config = AppConfig::default();
+    config.notifications.harness_completion.enabled = false;
+    config.notifications.harness_completion.success = true;
+    config.notifications.harness_completion.failure = false;
+
+    let dialog = NotificationPreferencesDialogState::from_config(&config);
+
+    assert!(!dialog.harness_completion_enabled);
+    assert!(dialog.harness_completion_success);
+    assert!(!dialog.harness_completion_failure);
+    assert_eq!(dialog.error, None);
+}
+
+#[test]
+fn notification_preferences_dialog_applies_only_notification_preferences() {
+    let mut config = AppConfig {
+        repositories: vec![AppRepository {
+            id: "repo-1".to_string(),
+            path: PathBuf::from("/tmp/repo-1"),
+            name: Some("Repo One".to_string()),
+        }],
+        ..AppConfig::default()
+    };
+    let dialog = NotificationPreferencesDialogState {
+        harness_completion_enabled: false,
+        harness_completion_success: false,
+        harness_completion_failure: true,
+        error: Some("ignored".to_string()),
+    };
+
+    dialog.apply_to_config(&mut config);
+
+    assert_eq!(config.repositories.len(), 1);
+    assert!(!config.notifications.harness_completion.enabled);
+    assert!(!config.notifications.harness_completion.success);
+    assert!(config.notifications.harness_completion.failure);
 }
 
 #[test]
