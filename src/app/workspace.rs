@@ -21,6 +21,13 @@ pub enum WorkspaceTabKind {
     File,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkdownViewMode {
+    Code,
+    Preview,
+    Split,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalTabStatus {
     NotStarted,
@@ -68,9 +75,17 @@ pub struct FileTabState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownTabState {
+    pub file: FileTabState,
+    pub view_mode: MarkdownViewMode,
+    pub preview_scroll_offset_rows: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceTabContent {
     Terminal(TerminalTabState),
     File(FileTabState),
+    Markdown(MarkdownTabState),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,14 +100,14 @@ impl WorkspaceTab {
     pub fn terminal_tab_state(&self) -> Option<&TerminalTabState> {
         match &self.content {
             WorkspaceTabContent::Terminal(state) => Some(state),
-            WorkspaceTabContent::File(_) => None,
+            WorkspaceTabContent::File(_) | WorkspaceTabContent::Markdown(_) => None,
         }
     }
 
     pub fn terminal_tab_state_mut(&mut self) -> Option<&mut TerminalTabState> {
         match &mut self.content {
             WorkspaceTabContent::Terminal(state) => Some(state),
-            WorkspaceTabContent::File(_) => None,
+            WorkspaceTabContent::File(_) | WorkspaceTabContent::Markdown(_) => None,
         }
     }
 
@@ -114,6 +129,7 @@ impl WorkspaceTab {
     pub fn file_tab_path(&self) -> Option<&PathBuf> {
         match &self.content {
             WorkspaceTabContent::File(state) => Some(&state.file_path),
+            WorkspaceTabContent::Markdown(state) => Some(&state.file.file_path),
             WorkspaceTabContent::Terminal(_) => None,
         }
     }
@@ -134,10 +150,18 @@ impl WorkspaceSession {
         command: CommandSpec,
     ) -> WorkspaceTabId {
         let key = WorktreeKey::new(repo_id, path);
-        if let Some(active) = self.active_tabs.get(&key).copied() {
+        if let Some(active) = self.active_tabs.get(&key).copied()
+            && self
+                .tab(&key.repo_id, &key.path, active)
+                .is_some_and(|tab| tab.is_terminal())
+        {
             return active;
         }
-        if let Some(existing) = self.tabs.get(&key).and_then(|tabs| tabs.first()) {
+        if let Some(existing) = self
+            .tabs
+            .get(&key)
+            .and_then(|tabs| tabs.iter().find(|tab| tab.is_terminal()))
+        {
             self.active_tabs.insert(key, existing.id);
             return existing.id;
         }
@@ -214,14 +238,25 @@ impl WorkspaceSession {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| file_path.display().to_string());
 
+        let file = FileTabState {
+            file_path,
+            load_state: FileTabLoadState::Loading,
+        };
+        let content = if is_markdown_path(&normalized) {
+            WorkspaceTabContent::Markdown(MarkdownTabState {
+                file,
+                view_mode: MarkdownViewMode::Split,
+                preview_scroll_offset_rows: 0,
+            })
+        } else {
+            WorkspaceTabContent::File(file)
+        };
+
         let tab = WorkspaceTab {
             id,
             name,
             kind: WorkspaceTabKind::File,
-            content: WorkspaceTabContent::File(FileTabState {
-                file_path,
-                load_state: FileTabLoadState::Loading,
-            }),
+            content,
         };
 
         self.tabs.entry(key.clone()).or_default().push(tab);
@@ -383,7 +418,36 @@ impl WorkspaceSession {
     ) -> anyhow::Result<()> {
         let key = WorktreeKey::new(repo_id, path.to_path_buf());
         let tab = self.known_file_tab_mut(&key, tab_id)?;
-        tab.load_state = load_state;
+        match tab {
+            FileTabHandle::Text(tab) => tab.load_state = load_state,
+            FileTabHandle::Markdown(tab) => tab.file.load_state = load_state,
+        }
+        Ok(())
+    }
+
+    pub fn set_markdown_view_mode(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: WorkspaceTabId,
+        view_mode: MarkdownViewMode,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.known_markdown_tab_mut(&key, tab_id)?;
+        tab.view_mode = view_mode;
+        Ok(())
+    }
+
+    pub fn set_markdown_preview_scroll_offset(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        tab_id: WorkspaceTabId,
+        scroll_offset_rows: usize,
+    ) -> anyhow::Result<()> {
+        let key = WorktreeKey::new(repo_id, path.to_path_buf());
+        let tab = self.known_markdown_tab_mut(&key, tab_id)?;
+        tab.preview_scroll_offset_rows = scroll_offset_rows;
         Ok(())
     }
 
@@ -494,7 +558,7 @@ impl WorkspaceSession {
         &mut self,
         key: &WorktreeKey,
         tab_id: WorkspaceTabId,
-    ) -> anyhow::Result<&mut FileTabState> {
+    ) -> anyhow::Result<FileTabHandle<'_>> {
         let tab = self.tab_mut_for_key(key, tab_id).ok_or_else(|| {
             anyhow::anyhow!(
                 "unknown workspace tab {:?} for repo '{}' worktree {}",
@@ -505,9 +569,32 @@ impl WorkspaceSession {
         })?;
 
         match &mut tab.content {
-            WorkspaceTabContent::File(state) => Ok(state),
+            WorkspaceTabContent::File(state) => Ok(FileTabHandle::Text(state)),
+            WorkspaceTabContent::Markdown(state) => Ok(FileTabHandle::Markdown(state)),
             WorkspaceTabContent::Terminal(_) => {
                 anyhow::bail!("workspace tab {:?} is not a file tab", tab_id)
+            }
+        }
+    }
+
+    fn known_markdown_tab_mut(
+        &mut self,
+        key: &WorktreeKey,
+        tab_id: WorkspaceTabId,
+    ) -> anyhow::Result<&mut MarkdownTabState> {
+        let tab = self.tab_mut_for_key(key, tab_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown workspace tab {:?} for repo '{}' worktree {}",
+                tab_id,
+                key.repo_id,
+                key.path.display()
+            )
+        })?;
+
+        match &mut tab.content {
+            WorkspaceTabContent::Markdown(state) => Ok(state),
+            WorkspaceTabContent::File(_) | WorkspaceTabContent::Terminal(_) => {
+                anyhow::bail!("workspace tab {:?} is not a markdown tab", tab_id)
             }
         }
     }
@@ -522,6 +609,19 @@ impl WorkspaceSession {
             .iter_mut()
             .find(|tab| tab.id == tab_id)
     }
+}
+
+enum FileTabHandle<'a> {
+    Text(&'a mut FileTabState),
+    Markdown(&'a mut MarkdownTabState),
+}
+
+pub fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        })
 }
 
 fn normalize_file_path(path: &Path) -> PathBuf {

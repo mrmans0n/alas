@@ -1,5 +1,6 @@
 pub mod action_registry;
 pub mod actions;
+pub mod file_loader;
 pub mod inspector_state;
 pub mod model;
 pub mod workspace;
@@ -8,11 +9,12 @@ pub use action_registry::{
     ActionAvailability, ActionDefinition, ActionHandlerId, ActionId, ActionRegistry, ActionScope,
 };
 pub use actions::AppAction;
+pub use file_loader::{FileLoadError, FileLoader};
 pub use inspector_state::{InspectorPaneState, InspectorTab};
 pub use model::{AlasModel, RepositoryNode, SelectedWorktree, WorktreeNode};
 pub use workspace::WorkspaceTabId as TerminalTabId;
 pub use workspace::{
-    FILE_TAB_MAX_BYTES, FileTabLoadState, FileTabState, TerminalTabKind, TerminalTabState,
-    TerminalTabStatus, WorkspaceSession, WorkspaceTab, WorkspaceTabContent, WorkspaceTabId,
-    WorkspaceTabKind, WorktreeKey,
+    FILE_TAB_MAX_BYTES, FileTabLoadState, FileTabState, MarkdownTabState, MarkdownViewMode,
+    TerminalTabKind, TerminalTabState, TerminalTabStatus, WorkspaceSession, WorkspaceTab,
+    WorkspaceTabContent, WorkspaceTabId, WorkspaceTabKind, WorktreeKey,
 };
