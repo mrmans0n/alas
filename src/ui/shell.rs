@@ -5,9 +5,10 @@ use std::{
 
 use crate::{
     app::{
-        ActionId, AlasModel, FileLoader, FileTabLoadState, HighlightError, InspectorPaneState,
-        MarkdownViewMode, RepositoryNode, TerminalTabKind, TerminalTabStatus, WorkspaceSession,
-        WorkspaceTabContent, WorkspaceTabId, WorkspaceTabKind, highlight_source,
+        ActionId, AlasModel, FileLoader, FileTabLoadState, HighlightError, ImageZoom,
+        InspectorPaneState, MarkdownViewMode, RepositoryNode, TerminalTabKind, TerminalTabStatus,
+        WorkspaceSession, WorkspaceTabContent, WorkspaceTabId, WorkspaceTabKind, highlight_source,
+        is_supported_image_path,
     },
     config::{
         AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
@@ -33,6 +34,7 @@ use crate::{
             ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
             CreateWorktreeField, NotificationPreferencesDialogState,
         },
+        image_view::render_image_view,
         inspector::render_project_inspector,
         markdown_pane::render_markdown_pane,
         sidebar::{SidebarMenuState, render_sidebar},
@@ -412,6 +414,11 @@ impl AlasShell {
 
     fn handle_terminal_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         if self.handle_command_picker_key_down(event) {
+            cx.notify();
+            return true;
+        }
+
+        if self.handle_image_key_down(event) {
             cx.notify();
             return true;
         }
@@ -1174,6 +1181,40 @@ impl AlasShell {
             .is_some_and(|kind| matches!(kind, WorkspaceTabKind::Terminal(_)))
     }
 
+    fn active_image_zoom(&self) -> Option<(WorkspaceTabId, ImageZoom)> {
+        let selected = self.model.selected_worktree()?;
+        let tab = self
+            .workspace_session
+            .active_tab(&selected.repo_id, &selected.path)?;
+        tab.image_tab_state().map(|state| (tab.id, state.zoom))
+    }
+
+    fn set_image_zoom_for_tab(&mut self, tab_id: WorkspaceTabId, zoom: ImageZoom) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let _ =
+            self.workspace_session
+                .set_image_zoom(&selected.repo_id, &selected.path, tab_id, zoom);
+    }
+
+    fn handle_image_key_down(&mut self, event: &KeyDownEvent) -> bool {
+        let Some((tab_id, zoom)) = self.active_image_zoom() else {
+            return false;
+        };
+        if !event.keystroke.modifiers.platform {
+            return false;
+        }
+
+        match event.keystroke.key.as_str() {
+            "=" | "+" => self.set_image_zoom_for_tab(tab_id, zoom.zoom_in()),
+            "-" => self.set_image_zoom_for_tab(tab_id, zoom.zoom_out()),
+            "0" => self.set_image_zoom_for_tab(tab_id, ImageZoom::Fit),
+            _ => return false,
+        }
+        true
+    }
+
     fn should_route_terminal_input(&self) -> bool {
         Self::should_route_terminal_input_for(
             self.active_workspace_tab_kind(),
@@ -1352,6 +1393,16 @@ impl AlasShell {
             selected.path.join(file_path)
         };
 
+        if is_supported_image_path(&file_path) {
+            let tab_id = self.workspace_session.open_or_focus_image_tab(
+                &selected.repo_id,
+                selected.path.clone(),
+                file_path,
+            );
+            self.select_workspace_tab(tab_id);
+            return;
+        }
+
         let tab_id = self.workspace_session.open_file_tab(
             &selected.repo_id,
             selected.path.clone(),
@@ -1381,7 +1432,7 @@ impl AlasShell {
             .and_then(|tab| match &tab.content {
                 WorkspaceTabContent::File(state) => Some(state.load_state.clone()),
                 WorkspaceTabContent::Markdown(state) => Some(state.file.load_state.clone()),
-                WorkspaceTabContent::Terminal(_) => None,
+                WorkspaceTabContent::Terminal(_) | WorkspaceTabContent::Image(_) => None,
             })
             .is_some_and(|state| matches!(state, FileTabLoadState::Loaded { .. }));
 
@@ -2215,6 +2266,9 @@ fn render_status_bar(
         None if matches!(active_tab_kind, Some(WorkspaceTabKind::File)) => {
             ("file".to_string(), TEXT_MUTED)
         }
+        None if matches!(active_tab_kind, Some(WorkspaceTabKind::Image)) => {
+            ("image".to_string(), TEXT_MUTED)
+        }
         None if active_tab_kind.is_none() => ("no tab".to_string(), TEXT_MUTED),
         None => ("no terminal".to_string(), TEXT_MUTED),
     };
@@ -2501,6 +2555,47 @@ impl Render for AlasShell {
             shell.open_command_picker(cx);
         });
         let view = cx.entity().downgrade();
+        let on_image_fit = move |tab_id: WorkspaceTabId,
+                                 _event: &gpui::ClickEvent,
+                                 _window: &mut Window,
+                                 app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.set_image_zoom_for_tab(tab_id, ImageZoom::Fit);
+                cx.notify();
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_image_zoom_in = move |tab_id: WorkspaceTabId,
+                                     _event: &gpui::ClickEvent,
+                                     _window: &mut Window,
+                                     app: &mut App| {
+            view.update(app, |shell, cx| {
+                if let Some((active_tab_id, zoom)) = shell.active_image_zoom()
+                    && active_tab_id == tab_id
+                {
+                    shell.set_image_zoom_for_tab(tab_id, zoom.zoom_in());
+                    cx.notify();
+                }
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
+        let on_image_zoom_out = move |tab_id: WorkspaceTabId,
+                                      _event: &gpui::ClickEvent,
+                                      _window: &mut Window,
+                                      app: &mut App| {
+            view.update(app, |shell, cx| {
+                if let Some((active_tab_id, zoom)) = shell.active_image_zoom()
+                    && active_tab_id == tab_id
+                {
+                    shell.set_image_zoom_for_tab(tab_id, zoom.zoom_out());
+                    cx.notify();
+                }
+            })
+            .ok();
+        };
+        let view = cx.entity().downgrade();
         let on_set_markdown_mode = move |tab_id: WorkspaceTabId,
                                          mode: MarkdownViewMode,
                                          _event: &gpui::ClickEvent,
@@ -2637,6 +2732,16 @@ impl Render for AlasShell {
                 state,
                 on_set_markdown_mode,
             ),
+            Some(WorkspaceTabContent::Image(state)) => render_image_view(
+                active_tab
+                    .map(|tab| tab.id)
+                    .expect("active image tab has id"),
+                state,
+                on_image_fit,
+                on_image_zoom_in,
+                on_image_zoom_out,
+            )
+            .into_any_element(),
             Some(WorkspaceTabContent::Terminal(_)) | None => render_terminal_pane(
                 selected_worktree,
                 active_tab,
