@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::config::{CommandConfig, CommandEntry, RepoConfigFile};
+use crate::config::{AppConfig, CommandConfig, CommandEntry, RepoConfigFile};
 use indexmap::IndexMap;
 
 #[derive(Debug, Clone, Default)]
@@ -26,6 +26,33 @@ pub struct CommandSettingsDialogState {
     pub default_name: String,
     pub entries: Vec<(String, String)>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NotificationPreferencesDialogState {
+    pub harness_completion_enabled: bool,
+    pub harness_completion_success: bool,
+    pub harness_completion_failure: bool,
+    pub error: Option<String>,
+}
+
+impl NotificationPreferencesDialogState {
+    pub fn from_config(config: &AppConfig) -> Self {
+        let prefs = &config.notifications.harness_completion;
+        Self {
+            harness_completion_enabled: prefs.enabled,
+            harness_completion_success: prefs.success,
+            harness_completion_failure: prefs.failure,
+            error: None,
+        }
+    }
+
+    pub fn apply_to_config(&self, config: &mut AppConfig) {
+        let prefs = &mut config.notifications.harness_completion;
+        prefs.enabled = self.harness_completion_enabled;
+        prefs.success = self.harness_completion_success;
+        prefs.failure = self.harness_completion_failure;
+    }
 }
 
 impl CommandSettingsDialogState {

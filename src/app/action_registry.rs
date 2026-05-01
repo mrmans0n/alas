@@ -10,6 +10,7 @@ pub enum ActionId {
     PruneWorktrees,
     ToggleArchivedWorktrees,
     CommandSettings,
+    NotificationPreferences,
     OpenPath,
     CopyPath,
 }
@@ -43,6 +44,7 @@ pub enum ActionHandlerId {
     PruneWorktrees,
     ToggleArchivedWorktrees,
     CommandSettings,
+    NotificationPreferences,
     OpenPath,
     CopyPath,
 }
@@ -154,6 +156,15 @@ impl Default for ActionRegistry {
                     scope: ActionScope::Repository,
                     availability: ActionAvailability::WhenRepositoryAvailable,
                     handler: ActionHandlerId::CommandSettings,
+                    destructive: false,
+                    requires_confirmation: false,
+                },
+                ActionDefinition {
+                    id: ActionId::NotificationPreferences,
+                    label: "Notification Preferences",
+                    scope: ActionScope::Global,
+                    availability: ActionAvailability::Always,
+                    handler: ActionHandlerId::NotificationPreferences,
                     destructive: false,
                     requires_confirmation: false,
                 },

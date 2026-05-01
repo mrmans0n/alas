@@ -18,6 +18,7 @@ fn registry_contains_all_current_repo_and_worktree_actions() {
             ActionId::PruneWorktrees,
             ActionId::ToggleArchivedWorktrees,
             ActionId::CommandSettings,
+            ActionId::NotificationPreferences,
             ActionId::OpenPath,
             ActionId::CopyPath,
         ]
@@ -61,7 +62,7 @@ fn actions_are_scoped_for_context_menus() {
 
     assert_eq!(
         ids_for_scope(&registry, ActionScope::Global),
-        vec![ActionId::AddRepository]
+        vec![ActionId::AddRepository, ActionId::NotificationPreferences]
     );
     assert_eq!(
         ids_for_scope(&registry, ActionScope::Repository),
@@ -149,6 +150,12 @@ fn actions_include_availability_and_handler_identity() {
         ActionId::CommandSettings,
         ActionAvailability::WhenRepositoryAvailable,
         ActionHandlerId::CommandSettings,
+    );
+    assert_action(
+        &registry,
+        ActionId::NotificationPreferences,
+        ActionAvailability::Always,
+        ActionHandlerId::NotificationPreferences,
     );
     assert_action(
         &registry,
