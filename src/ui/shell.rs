@@ -5,9 +5,9 @@ use std::{
 
 use crate::{
     app::{
-        ActionId, AlasModel, FILE_TAB_MAX_BYTES, FileTabLoadState, InspectorPaneState,
+        ActionId, AlasModel, FileLoader, FileTabLoadState, HighlightError, InspectorPaneState,
         MarkdownViewMode, RepositoryNode, TerminalTabKind, TerminalTabStatus, WorkspaceSession,
-        WorkspaceTabContent, WorkspaceTabId, WorkspaceTabKind,
+        WorkspaceTabContent, WorkspaceTabId, WorkspaceTabKind, highlight_source,
     },
     config::{
         AppConfig, AppConfigStore, AppRepository, CommandEntry, RepoConfigStore,
@@ -32,10 +32,10 @@ use crate::{
             ConfirmRemoveRepositoryDialog, ConfirmRemoveWorktreeDialog, CreateWorktreeDialogState,
             CreateWorktreeField,
         },
-        file_pane::render_file_pane,
         inspector::render_project_inspector,
         markdown_pane::render_markdown_pane,
         sidebar::{SidebarMenuState, render_sidebar},
+        source_viewer::render_source_viewer,
         terminal_canvas::measure_terminal_metrics,
         terminal_pane::render_terminal_pane,
         terminal_view::{
@@ -1332,30 +1332,30 @@ impl AlasShell {
                 return Err("file is outside the selected worktree".to_string());
             }
 
-            let metadata = std::fs::metadata(&file_path)
-                .map_err(|error| format!("failed to read file metadata: {error}"))?;
+            let loaded = FileLoader::default()
+                .load_source_file(&file_path)
+                .map_err(|error| error.to_string())?;
+            let language = crate::app::detect_language(&file_path);
+            let (highlight, highlight_error) = match highlight_source(&loaded.text, language) {
+                Ok(highlight) => (Some(highlight), None),
+                Err(HighlightError::Unsupported(_)) => (None, None),
+                Err(error) => (None, Some(error.to_string())),
+            };
 
-            if !metadata.is_file() {
-                return Err("path is not a regular file".to_string());
-            }
-            if metadata.len() > FILE_TAB_MAX_BYTES {
-                return Err(format!(
-                    "file is too large ({} bytes, max {FILE_TAB_MAX_BYTES})",
-                    metadata.len()
-                ));
-            }
-
-            let content = std::fs::read_to_string(&file_path)
-                .map_err(|error| format!("failed to read file: {error}"))?;
-
-            Ok(content)
+            Ok(FileTabLoadState::Loaded {
+                content: loaded.text,
+                size_bytes: loaded.size_bytes,
+                line_count: loaded.line_count,
+                highlight,
+                highlight_error,
+            })
         });
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |shell, cx| {
                 let load_state = match result {
-                    Ok(content) => FileTabLoadState::Loaded { content },
+                    Ok(load_state) => load_state,
                     Err(message) => FileTabLoadState::Error { message },
                 };
                 let _ = shell
@@ -2498,9 +2498,7 @@ impl Render for AlasShell {
         let selected_worktree = self.model.selected_worktree();
         let terminal_state = active_tab.and_then(|t| t.terminal_tab_state());
         let workspace_body = match active_tab.map(|tab| &tab.content) {
-            Some(WorkspaceTabContent::File(state)) => {
-                render_file_pane(&state.load_state).into_any_element()
-            }
+            Some(WorkspaceTabContent::File(state)) => render_source_viewer(state),
             Some(WorkspaceTabContent::Markdown(state)) => render_markdown_pane(
                 active_tab
                     .map(|tab| tab.id)

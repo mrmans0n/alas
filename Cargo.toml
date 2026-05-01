@@ -23,6 +23,9 @@ gpui-component = "0.5.1"
 # Alas keeps this behind src/terminal/ghostty_adapter.rs. If the project adds
 # higher-level PTY/process crates, add them here without changing TerminalBackend.
 libghostty-vt = { version = "0.1", optional = true }
+tree-sitter-highlight = "0.25.10"
+tree-sitter-rust = "0.24.2"
+tree-sitter-json = "0.24.8"
 
 [features]
 default = ["ghostty-vt"]
