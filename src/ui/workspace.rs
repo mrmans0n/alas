@@ -4,7 +4,7 @@ use crate::{
     ui::theme::{ACCENT, ACTIVE_TAB_BG, APP_BG, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
 };
 use gpui::{
-    App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*,
+    App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px,
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -68,6 +68,7 @@ pub fn render_workspace(
                 .flex()
                 .flex_col()
                 .flex_1()
+                .min_h(px(0.0))
                 .overflow_hidden()
                 .rounded_lg()
                 .border_1()
@@ -80,7 +81,14 @@ pub fn render_workspace(
                     on_close_tab,
                     on_new_tab,
                 ))
-                .child(div().flex().flex_1().overflow_hidden().child(body)),
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .overflow_hidden()
+                        .child(body),
+                ),
         )
 }
 

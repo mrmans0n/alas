@@ -2,7 +2,7 @@ use crate::{
     app::FileTabLoadState,
     ui::theme::{DANGER, PANEL_BG, TEXT, TEXT_MUTED},
 };
-use gpui::{AnyElement, IntoElement, SharedString, Styled, div, prelude::*};
+use gpui::{AnyElement, IntoElement, SharedString, Styled, div, prelude::*, px};
 
 pub fn render_file_pane(load_state: &FileTabLoadState) -> impl IntoElement {
     div()
@@ -29,6 +29,7 @@ fn render_file_content(load_state: &FileTabLoadState) -> AnyElement {
             .flex()
             .flex_1()
             .size_full()
+            .min_h(px(0.0))
             .overflow_scroll()
             .p_3()
             .child(
