@@ -13,6 +13,11 @@ directories = "6"
 indexmap = { version = "2", features = ["serde"] }
 portable-pty = "0.8"
 pulldown-cmark = "0.12"
+agent-client-protocol = "0.11.1"
+keyring = { version = "3", default-features = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # GPUI is the Rust UI framework used by Zed. If crates.io does not have the
 # needed version, switch this dependency to Zed's Git repository during this task.

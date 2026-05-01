@@ -1,8 +1,11 @@
-use alas::config::{
-    AppConfig, AppConfigStore, AppRepository, CommandConfig, CommandEntry, RepoConfigFile,
-    RepoConfigStore, ResolvedRepoConfig,
-};
 use alas::ui::dialogs::{CommandSettingsDialogState, NotificationPreferencesDialogState};
+use alas::{
+    agent::{AgentProviderConfig, AgentProviderEnvVar, AgentTrustMode, ProviderCwdPolicy},
+    config::{
+        AppConfig, AppConfigStore, AppRepository, CommandConfig, CommandEntry, RepoConfigFile,
+        RepoConfigStore, ResolvedRepoConfig,
+    },
+};
 use indexmap::IndexMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -95,6 +98,63 @@ fn app_config_round_trips_notification_preferences() {
 
     store.save(&config).unwrap();
 
+    assert_eq!(store.load().unwrap(), config);
+}
+
+#[test]
+fn app_config_defaults_provider_discovery_config() {
+    let config: AppConfig = toml::from_str("").expect("empty config");
+    assert!(
+        config
+            .agent_provider_discovery
+            .ignored_provider_ids
+            .is_empty()
+    );
+}
+
+#[test]
+fn app_config_round_trips_provider_discovery_ignored_ids() {
+    let mut config = AppConfig::default();
+    config
+        .agent_provider_discovery
+        .ignored_provider_ids
+        .push("opencode".to_string());
+    let toml = toml::to_string(&config).expect("serialize config");
+    assert!(toml.contains("agent_provider_discovery"));
+    assert!(toml.contains("opencode"));
+    let loaded: AppConfig = toml::from_str(&toml).expect("deserialize config");
+    assert_eq!(loaded, config);
+}
+
+#[test]
+fn app_config_store_persists_agent_providers_without_inline_secrets() {
+    let temp = tempdir().unwrap();
+    let config_path = temp.path().join("alas").join("config.toml");
+    let store = AppConfigStore::new(config_path.clone());
+
+    let mut config = AppConfig::default();
+    config.agent_providers.push(AgentProviderConfig {
+        id: "opencode".to_string(),
+        display_name: "OpenCode".to_string(),
+        command: "opencode".to_string(),
+        args: vec!["acp".to_string()],
+        env: vec![AgentProviderEnvVar::secure_ref(
+            "OPENCODE_API_KEY",
+            "opencode/api-key",
+        )],
+        auth_methods: Vec::new(),
+        cwd_policy: ProviderCwdPolicy::SelectedWorktree,
+        trust_mode: AgentTrustMode::Ask,
+        enabled: true,
+    });
+
+    store.save(&config).unwrap();
+
+    let saved = std::fs::read_to_string(config_path).unwrap();
+    assert!(saved.contains("agent_providers"));
+    assert!(saved.contains("opencode/api-key"));
+    assert!(!saved.contains("super-secret"));
+    assert!(!saved.contains("value ="));
     assert_eq!(store.load().unwrap(), config);
 }
 
