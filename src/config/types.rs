@@ -10,6 +10,16 @@ pub struct AppConfig {
     pub archived_worktrees: IndexMap<String, Vec<PathBuf>>,
     #[serde(default)]
     pub notifications: NotificationPrefs,
+    #[serde(default)]
+    pub agent_providers: Vec<crate::agent::AgentProviderConfig>,
+    #[serde(default)]
+    pub agent_provider_discovery: AgentProviderDiscoveryConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentProviderDiscoveryConfig {
+    #[serde(default)]
+    pub ignored_provider_ids: Vec<String>,
 }
 
 impl AppConfig {

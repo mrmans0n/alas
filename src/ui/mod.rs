@@ -1,3 +1,4 @@
+pub mod agent_pane;
 pub mod chrome;
 pub mod command_picker;
 pub mod dialogs;
@@ -7,6 +8,7 @@ pub mod inspector;
 pub mod lifecycle;
 pub mod markdown_pane;
 pub mod markdown_preview;
+pub mod provider_settings;
 pub mod shell;
 pub mod sidebar;
 pub mod source_viewer;

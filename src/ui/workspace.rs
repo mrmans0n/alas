@@ -1,10 +1,51 @@
 use crate::{
+    agent::AgentProviderConfig,
     app::{TerminalTabKind, WorkspaceTab, WorkspaceTabId, WorkspaceTabKind},
     ui::theme::{ACCENT, ACTIVE_TAB_BG, APP_BG, PANEL_BG, PANEL_BORDER, TEXT, TEXT_MUTED},
 };
 use gpui::{
     App, ClickEvent, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*,
 };
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum NewWorkspaceTabChoice {
+    Terminal,
+    AgentChat,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AgentChatProviderFlow {
+    ProviderSettings,
+    CreateTab(AgentProviderConfig),
+    ProviderPicker(Vec<AgentProviderConfig>),
+}
+
+pub fn new_workspace_tab_choices() -> [NewWorkspaceTabChoice; 2] {
+    [
+        NewWorkspaceTabChoice::Terminal,
+        NewWorkspaceTabChoice::AgentChat,
+    ]
+}
+
+pub fn new_workspace_tab_choice_label(choice: NewWorkspaceTabChoice) -> &'static str {
+    match choice {
+        NewWorkspaceTabChoice::Terminal => "Terminal",
+        NewWorkspaceTabChoice::AgentChat => "Agent Chat",
+    }
+}
+
+pub fn agent_chat_provider_flow(providers: &[AgentProviderConfig]) -> AgentChatProviderFlow {
+    let enabled = providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    match enabled.as_slice() {
+        [] => AgentChatProviderFlow::ProviderSettings,
+        _ => AgentChatProviderFlow::ProviderPicker(enabled),
+    }
+}
 
 pub fn render_workspace(
     tabs: &[WorkspaceTab],
@@ -131,5 +172,6 @@ fn tab_label(tab: &WorkspaceTab) -> String {
         },
         WorkspaceTabKind::File => tab.name.clone(),
         WorkspaceTabKind::Image => format!("▧ {}", tab.name),
+        WorkspaceTabKind::AgentChat => format!("◇ {}", tab.name),
     }
 }

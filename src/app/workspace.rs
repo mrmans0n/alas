@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use crate::agent::{AgentResumeState, AgentThreadRecord, AgentThreadState, AgentThreadStatus};
 use crate::app::{DetectedLanguage, HighlightedSource, detect_language};
 use crate::terminal::{CommandSpec, TerminalBackendSession};
 
@@ -25,6 +26,7 @@ pub enum WorkspaceTabKind {
     Terminal(TerminalTabKind),
     File,
     Image,
+    AgentChat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +194,7 @@ pub enum WorkspaceTabContent {
     File(FileTabState),
     Markdown(MarkdownTabState),
     Image(ImageTabState),
+    AgentChat(Box<AgentThreadState>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -208,7 +211,8 @@ impl WorkspaceTab {
             WorkspaceTabContent::Terminal(state) => Some(state),
             WorkspaceTabContent::File(_)
             | WorkspaceTabContent::Markdown(_)
-            | WorkspaceTabContent::Image(_) => None,
+            | WorkspaceTabContent::Image(_)
+            | WorkspaceTabContent::AgentChat(_) => None,
         }
     }
 
@@ -217,14 +221,15 @@ impl WorkspaceTab {
             WorkspaceTabContent::Terminal(state) => Some(state),
             WorkspaceTabContent::File(_)
             | WorkspaceTabContent::Markdown(_)
-            | WorkspaceTabContent::Image(_) => None,
+            | WorkspaceTabContent::Image(_)
+            | WorkspaceTabContent::AgentChat(_) => None,
         }
     }
 
     pub fn terminal_kind(&self) -> Option<TerminalTabKind> {
         match self.kind {
             WorkspaceTabKind::Terminal(kind) => Some(kind),
-            WorkspaceTabKind::File | WorkspaceTabKind::Image => None,
+            WorkspaceTabKind::File | WorkspaceTabKind::Image | WorkspaceTabKind::AgentChat => None,
         }
     }
 
@@ -240,12 +245,27 @@ impl WorkspaceTab {
         matches!(self.kind, WorkspaceTabKind::Image)
     }
 
+    pub fn is_agent_chat(&self) -> bool {
+        matches!(self.kind, WorkspaceTabKind::AgentChat)
+    }
+
     pub fn image_tab_state(&self) -> Option<&ImageTabState> {
         match &self.content {
             WorkspaceTabContent::Image(state) => Some(state),
             WorkspaceTabContent::Terminal(_)
             | WorkspaceTabContent::File(_)
-            | WorkspaceTabContent::Markdown(_) => None,
+            | WorkspaceTabContent::Markdown(_)
+            | WorkspaceTabContent::AgentChat(_) => None,
+        }
+    }
+
+    pub fn agent_thread_state(&self) -> Option<&AgentThreadState> {
+        match &self.content {
+            WorkspaceTabContent::AgentChat(state) => Some(state.as_ref()),
+            WorkspaceTabContent::Terminal(_)
+            | WorkspaceTabContent::File(_)
+            | WorkspaceTabContent::Markdown(_)
+            | WorkspaceTabContent::Image(_) => None,
         }
     }
 
@@ -254,7 +274,18 @@ impl WorkspaceTab {
             WorkspaceTabContent::Image(state) => Some(state),
             WorkspaceTabContent::Terminal(_)
             | WorkspaceTabContent::File(_)
-            | WorkspaceTabContent::Markdown(_) => None,
+            | WorkspaceTabContent::Markdown(_)
+            | WorkspaceTabContent::AgentChat(_) => None,
+        }
+    }
+
+    pub fn agent_thread_state_mut(&mut self) -> Option<&mut AgentThreadState> {
+        match &mut self.content {
+            WorkspaceTabContent::AgentChat(state) => Some(state.as_mut()),
+            WorkspaceTabContent::Terminal(_)
+            | WorkspaceTabContent::File(_)
+            | WorkspaceTabContent::Markdown(_)
+            | WorkspaceTabContent::Image(_) => None,
         }
     }
 
@@ -262,7 +293,9 @@ impl WorkspaceTab {
         match &self.content {
             WorkspaceTabContent::File(state) => Some(&state.file_path),
             WorkspaceTabContent::Markdown(state) => Some(&state.file.file_path),
-            WorkspaceTabContent::Terminal(_) | WorkspaceTabContent::Image(_) => None,
+            WorkspaceTabContent::Terminal(_)
+            | WorkspaceTabContent::Image(_)
+            | WorkspaceTabContent::AgentChat(_) => None,
         }
     }
 }
@@ -339,6 +372,135 @@ impl WorkspaceSession {
         self.tabs.entry(key.clone()).or_default().push(tab);
         self.active_tabs.insert(key, id);
         id
+    }
+
+    pub fn create_agent_chat_tab(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: PathBuf,
+        provider_id: String,
+    ) -> WorkspaceTabId {
+        let state = AgentThreadState::new(provider_id, path.clone());
+        self.create_agent_chat_tab_from_state(repo_id, path, state)
+    }
+
+    pub fn create_agent_chat_tab_from_state(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: PathBuf,
+        state: AgentThreadState,
+    ) -> WorkspaceTabId {
+        let key = WorktreeKey::new(repo_id, path);
+        self.next_tab_id += 1;
+        let id = WorkspaceTabId(self.next_tab_id);
+        let tab = WorkspaceTab {
+            id,
+            name: state.title.clone(),
+            kind: WorkspaceTabKind::AgentChat,
+            content: WorkspaceTabContent::AgentChat(Box::new(state)),
+        };
+
+        self.tabs.entry(key.clone()).or_default().push(tab);
+        self.active_tabs.insert(key, id);
+        id
+    }
+
+    pub fn restore_agent_chat_tabs(
+        &mut self,
+        repo_id: impl Into<String>,
+        path: &Path,
+        records: &[AgentThreadRecord],
+    ) -> Vec<WorkspaceTabId> {
+        let repo_id = repo_id.into();
+        self.restore_agent_chat_tabs_for_key(
+            &WorktreeKey::new(repo_id, path.to_path_buf()),
+            records,
+        )
+    }
+
+    pub fn restore_agent_chat_tabs_for_worktrees(
+        &mut self,
+        worktrees: impl IntoIterator<Item = (String, PathBuf)>,
+        records: &[AgentThreadRecord],
+    ) -> Vec<WorkspaceTabId> {
+        let mut restored = Vec::new();
+        let mut restored_thread_ids = HashSet::new();
+        for (repo_id, path) in worktrees {
+            let key = WorktreeKey::new(repo_id, path);
+            let matching_records = records
+                .iter()
+                .filter(|record| !restored_thread_ids.contains(&record.thread_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let restored_for_key = self.restore_agent_chat_tabs_for_key(&key, &matching_records);
+            for tab_id in &restored_for_key {
+                if let Some(thread_id) = self
+                    .tab(&key.repo_id, &key.path, *tab_id)
+                    .and_then(|tab| tab.agent_thread_state())
+                    .map(|state| state.thread_id.clone())
+                {
+                    restored_thread_ids.insert(thread_id);
+                }
+            }
+            restored.extend(restored_for_key);
+        }
+        restored
+    }
+
+    fn restore_agent_chat_tabs_for_key(
+        &mut self,
+        key: &WorktreeKey,
+        records: &[AgentThreadRecord],
+    ) -> Vec<WorkspaceTabId> {
+        let mut existing_thread_ids = self
+            .tabs
+            .get(key)
+            .into_iter()
+            .flat_map(|tabs| tabs.iter())
+            .filter_map(|tab| {
+                tab.agent_thread_state()
+                    .map(|state| state.thread_id.clone())
+            })
+            .collect::<HashSet<_>>();
+
+        let mut restored = Vec::new();
+        for record in records {
+            if record.state.worktree_path != key.path
+                || existing_thread_ids.contains(&record.thread_id)
+            {
+                continue;
+            }
+            existing_thread_ids.insert(record.thread_id.clone());
+            let mut state = record.state.clone();
+            state.thread_id = record.thread_id.clone();
+            if matches!(
+                state.status,
+                AgentThreadStatus::Running | AgentThreadStatus::Starting
+            ) {
+                state.status = AgentThreadStatus::ReadOnly {
+                    reason: "Waiting for agent session resume".to_string(),
+                };
+            }
+            if state.acp_session_id.is_some() && !matches!(state.resume, AgentResumeState::Resumed)
+            {
+                state.resume = AgentResumeState::Pending;
+            }
+            restored.push(self.create_agent_chat_tab_from_state(
+                key.repo_id.clone(),
+                key.path.clone(),
+                state,
+            ));
+        }
+        restored
+    }
+
+    pub fn agent_thread_records(&self) -> Vec<AgentThreadRecord> {
+        self.tabs
+            .values()
+            .flat_map(|tabs| tabs.iter())
+            .filter_map(|tab| tab.agent_thread_state())
+            .map(|state| AgentThreadRecord::from_state(state.thread_id.clone(), state))
+            .collect()
     }
 
     pub fn open_file_tab(
@@ -775,7 +937,9 @@ impl WorkspaceSession {
         match &mut tab.content {
             WorkspaceTabContent::File(state) => Ok(FileTabHandle::Text(state)),
             WorkspaceTabContent::Markdown(state) => Ok(FileTabHandle::Markdown(state)),
-            WorkspaceTabContent::Terminal(_) | WorkspaceTabContent::Image(_) => {
+            WorkspaceTabContent::Terminal(_)
+            | WorkspaceTabContent::Image(_)
+            | WorkspaceTabContent::AgentChat(_) => {
                 anyhow::bail!("workspace tab {:?} is not a file tab", tab_id)
             }
         }
@@ -799,7 +963,8 @@ impl WorkspaceSession {
             WorkspaceTabContent::Markdown(state) => Ok(state),
             WorkspaceTabContent::File(_)
             | WorkspaceTabContent::Terminal(_)
-            | WorkspaceTabContent::Image(_) => {
+            | WorkspaceTabContent::Image(_)
+            | WorkspaceTabContent::AgentChat(_) => {
                 anyhow::bail!("workspace tab {:?} is not a markdown tab", tab_id)
             }
         }
