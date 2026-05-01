@@ -119,6 +119,7 @@ fn render_image_body(state: &ImageTabState) -> impl IntoElement {
         .id("image-body")
         .flex()
         .flex_1()
+        .min_h(px(0.0))
         .items_center()
         .justify_center()
         .overflow_scroll()
