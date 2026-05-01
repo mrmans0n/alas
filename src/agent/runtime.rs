@@ -60,6 +60,11 @@ pub enum AgentRuntimeEvent {
         title: String,
         status: String,
     },
+    ToolCallUpdate {
+        id: String,
+        title: Option<String>,
+        status: Option<String>,
+    },
     Plan(Vec<String>),
     AvailableCommands(Vec<AgentSlashCommand>),
     AvailableModes {
@@ -407,12 +412,22 @@ impl AcpProcessConnection {
             "session/request_permission" => {
                 let request: acp::RequestPermissionRequest = serde_json::from_value(params)
                     .context("failed to decode session/request_permission")?;
-                let allow = matches!(
-                    self.permission_policy
-                        .as_ref()
-                        .map(|policy| &policy.trust_mode),
-                    Some(super::AgentTrustMode::AllowEverything)
-                );
+                let trust_mode = self
+                    .permission_policy
+                    .as_ref()
+                    .map(|policy| &policy.trust_mode);
+                if matches!(trust_mode, Some(super::AgentTrustMode::Ask)) {
+                    anyhow::bail!(
+                        "permission request requires user approval and cannot be continued in process callbacks: {}",
+                        request
+                            .tool_call
+                            .fields
+                            .title
+                            .as_deref()
+                            .unwrap_or("ACP permission request")
+                    );
+                }
+                let allow = matches!(trust_mode, Some(super::AgentTrustMode::AllowEverything));
                 if request.options.is_empty() {
                     anyhow::bail!("permission request did not include options");
                 }
@@ -1227,6 +1242,9 @@ pub fn apply_runtime_event(thread: &mut AgentThreadState, event: AgentRuntimeEve
         AgentRuntimeEvent::ToolCall { id, title, status } => {
             apply_agent_update(thread, AgentUpdate::ToolCall { id, title, status });
         }
+        AgentRuntimeEvent::ToolCallUpdate { id, title, status } => {
+            apply_agent_update(thread, AgentUpdate::ToolCallUpdate { id, title, status });
+        }
         AgentRuntimeEvent::Plan(entries) => apply_agent_update(thread, AgentUpdate::Plan(entries)),
         AgentRuntimeEvent::AvailableCommands(commands) => {
             apply_agent_update(thread, AgentUpdate::AvailableCommands(commands));
@@ -1361,17 +1379,12 @@ fn agent_runtime_event_from_update(update: AgentUpdate) -> AgentRuntimeEvent {
     match update {
         AgentUpdate::AgentMessageChunk(text) => AgentRuntimeEvent::AgentMessageChunk(text),
         AgentUpdate::ThoughtChunk(text) => AgentRuntimeEvent::ThoughtChunk(text),
-        AgentUpdate::ToolCall { id, title, status }
-        | AgentUpdate::ToolCallUpdate {
-            id,
-            title: Some(title),
-            status: Some(status),
-        } => AgentRuntimeEvent::ToolCall { id, title, status },
-        AgentUpdate::ToolCallUpdate { id, title, status } => AgentRuntimeEvent::ToolCall {
-            id,
-            title: title.unwrap_or_default(),
-            status: status.unwrap_or_default(),
-        },
+        AgentUpdate::ToolCall { id, title, status } => {
+            AgentRuntimeEvent::ToolCall { id, title, status }
+        }
+        AgentUpdate::ToolCallUpdate { id, title, status } => {
+            AgentRuntimeEvent::ToolCallUpdate { id, title, status }
+        }
         AgentUpdate::Plan(entries) => AgentRuntimeEvent::Plan(entries),
         AgentUpdate::AvailableCommands(commands) => AgentRuntimeEvent::AvailableCommands(commands),
         AgentUpdate::AvailableModes { modes, current } => {
