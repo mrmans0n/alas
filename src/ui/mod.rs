@@ -9,6 +9,7 @@ pub mod lifecycle;
 pub mod markdown_pane;
 pub mod markdown_preview;
 pub mod provider_settings;
+pub mod resize_handle;
 pub mod shell;
 pub mod sidebar;
 pub mod source_viewer;

@@ -14,6 +14,8 @@ pub struct AppConfig {
     pub agent_providers: Vec<crate::agent::AgentProviderConfig>,
     #[serde(default)]
     pub agent_provider_discovery: AgentProviderDiscoveryConfig,
+    #[serde(default)]
+    pub layout: LayoutPrefs,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -65,6 +67,31 @@ impl Default for HarnessCompletionNotificationPrefs {
 
 const fn default_true() -> bool {
     true
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LayoutPrefs {
+    #[serde(default = "default_left_sidebar_width_px")]
+    pub left_sidebar_width_px: u32,
+    #[serde(default = "default_right_sidebar_width_px")]
+    pub right_sidebar_width_px: u32,
+}
+
+impl Default for LayoutPrefs {
+    fn default() -> Self {
+        Self {
+            left_sidebar_width_px: default_left_sidebar_width_px(),
+            right_sidebar_width_px: default_right_sidebar_width_px(),
+        }
+    }
+}
+
+const fn default_left_sidebar_width_px() -> u32 {
+    280
+}
+
+const fn default_right_sidebar_width_px() -> u32 {
+    320
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

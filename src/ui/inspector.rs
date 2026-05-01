@@ -18,6 +18,7 @@ pub fn render_project_inspector(
     file_expansion: &TreeExpansionState,
     on_toggle_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
     on_open_file: impl Fn(PathBuf, &ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    width: f32,
 ) -> impl IntoElement {
     let rows = build_inspector_tree_rows(selected_worktree, state, file_expansion);
 
@@ -27,7 +28,7 @@ pub fn render_project_inspector(
         .flex_col()
         .flex_shrink_0()
         .size_full()
-        .w(px(320.0))
+        .w(px(width))
         .px_4()
         .py_3()
         .gap_2()

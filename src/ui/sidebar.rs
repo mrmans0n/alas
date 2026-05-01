@@ -32,6 +32,7 @@ pub struct SidebarMenuState {
     pub scope: ActionScope,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_sidebar(
     repositories: &[RepositoryNode],
     selected_worktree: Option<&SelectedWorktree>,
@@ -42,6 +43,7 @@ pub fn render_sidebar(
     + Clone
     + 'static,
     add_repository_error: Option<&str>,
+    width: f32,
 ) -> impl IntoElement {
     let sections = build_repo_sections(repositories, selected_worktree);
 
@@ -50,7 +52,7 @@ pub fn render_sidebar(
         .flex_col()
         .flex_shrink_0()
         .size_full()
-        .w(px(280.0))
+        .w(px(width))
         .p_4()
         .gap_3()
         .border_r_1()
