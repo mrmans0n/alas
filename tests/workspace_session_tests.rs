@@ -495,7 +495,8 @@ fn file_tab_load_state_can_be_updated() {
         )),
         WorkspaceTabContent::Markdown(_)
         | WorkspaceTabContent::Terminal(_)
-        | WorkspaceTabContent::Image(_) => {
+        | WorkspaceTabContent::Image(_)
+        | WorkspaceTabContent::AgentChat(_) => {
             panic!("expected file tab")
         }
     }
@@ -520,7 +521,8 @@ fn markdown_files_open_in_split_mode_by_default() {
         }
         WorkspaceTabContent::File(_)
         | WorkspaceTabContent::Terminal(_)
-        | WorkspaceTabContent::Image(_) => {
+        | WorkspaceTabContent::Image(_)
+        | WorkspaceTabContent::AgentChat(_) => {
             panic!("expected markdown tab")
         }
     }
@@ -551,7 +553,8 @@ fn markdown_mode_can_switch_between_code_preview_and_split() {
         }
         WorkspaceTabContent::File(_)
         | WorkspaceTabContent::Terminal(_)
-        | WorkspaceTabContent::Image(_) => {
+        | WorkspaceTabContent::Image(_)
+        | WorkspaceTabContent::AgentChat(_) => {
             panic!("expected markdown tab")
         }
     }

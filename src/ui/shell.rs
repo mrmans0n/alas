@@ -3,7 +3,17 @@ use std::{
     time::Duration,
 };
 
+use directories::ProjectDirs;
+
 use crate::{
+    agent::{
+        AcpCancelHandle, AcpProcessConnection, AgentDebugEvent, AgentProviderConfig,
+        AgentProviderSuggestion, AgentRuntime, AgentThreadRecord, AgentThreadState,
+        AgentThreadStatus, AgentThreadStore, AgentTranscriptEntry, AgentTrustMode,
+        OsCredentialStore, ProviderSettingsState, apply_provider_discovery_to_config,
+        discover_agent_providers, filter_agent_thread_records, merge_agent_thread_records,
+        remove_provider_and_record_discovery_ignore, resolve_provider_cwd,
+    },
     app::{
         ActionId, AlasModel, FileLoader, FileTabLoadState, HighlightError, ImageZoom,
         InspectorPaneState, MarkdownViewMode, RepositoryNode, TerminalTabKind, TerminalTabStatus,
@@ -27,6 +37,7 @@ use crate::{
         },
     },
     ui::{
+        agent_pane::{AgentPaneHandlers, render_agent_pane},
         chrome::{alas_window_options, apply_window_background_appearance},
         command_picker::render_command_picker,
         dialogs::{
@@ -37,6 +48,9 @@ use crate::{
         image_view::render_image_view,
         inspector::render_project_inspector,
         markdown_pane::render_markdown_pane,
+        provider_settings::{
+            ProviderSettingsField, ProviderSettingsHandlers, render_provider_settings,
+        },
         sidebar::{SidebarMenuState, render_sidebar},
         source_viewer::render_source_viewer,
         terminal_canvas::measure_terminal_metrics,
@@ -46,17 +60,27 @@ use crate::{
         },
         theme::{DANGER, PANEL_BG, PANEL_BORDER, SUCCESS, TEXT, TEXT_MUTED, root_background},
         view_models::TreeExpansionState,
-        workspace::render_workspace,
+        workspace::{
+            AgentChatProviderFlow, NewWorkspaceTabChoice, agent_chat_provider_flow,
+            new_workspace_tab_choice_label, new_workspace_tab_choices, render_workspace,
+        },
     },
 };
 use gpui::{
     App, Application, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels,
-    PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Window, div, prelude::*, px,
-    rgb,
+    PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Task, Window, div,
+    prelude::*, px, rgb,
 };
 use indexmap::IndexMap;
-use std::borrow::BorrowMut;
+use std::{
+    borrow::BorrowMut,
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum CommandSettingsField {
@@ -76,6 +100,33 @@ const INSPECTOR_FILE_TREE_MAX_DEPTH: usize = 3;
 
 fn terminal_refresh_interval() -> Duration {
     Duration::from_millis(16)
+}
+
+fn agent_thread_persist_debounce_interval() -> Duration {
+    Duration::from_millis(400)
+}
+
+fn provider_plain_env(
+    settings: &ProviderSettingsState,
+    provider_id: &str,
+) -> Option<(String, String)> {
+    let provider = settings
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)?;
+    Some(
+        provider
+            .env
+            .iter()
+            .find(|entry| entry.secure_ref.is_none())
+            .map(|entry| {
+                (
+                    entry.name.clone(),
+                    entry.value.clone().unwrap_or_else(String::new),
+                )
+            })
+            .unwrap_or_else(|| (String::new(), String::new())),
+    )
 }
 
 fn terminal_should_intercept_key(terminal_focused: bool) -> bool {
@@ -115,6 +166,13 @@ pub struct AlasShell {
     notification_preferences_dialog: Option<NotificationPreferencesDialogState>,
     notification_controller: NotificationController<NotificationService>,
     command_picker: Option<CommandPickerState>,
+    new_tab_picker_open: bool,
+    agent_provider_picker: Option<Vec<AgentProviderConfig>>,
+    provider_discovery_suggestions: Vec<AgentProviderSuggestion>,
+    provider_discovery_error: Option<String>,
+    provider_settings: Option<ProviderSettingsState>,
+    provider_settings_focus: FocusHandle,
+    provider_settings_active_field: Option<ProviderSettingsField>,
     sidebar_menu: Option<SidebarMenuState>,
     confirm_remove_repository_dialog: Option<ConfirmRemoveRepositoryDialog>,
     confirm_remove_worktree_dialog: Option<ConfirmRemoveWorktreeDialog>,
@@ -131,17 +189,42 @@ pub struct AlasShell {
     terminal_body_size_px: Option<(f32, f32)>,
     terminal_body_bounds: Option<Bounds<Pixels>>,
     terminal_scroll_offset_rows: usize,
+    agent_composer_focus: FocusHandle,
+    active_agent_composer_tab: Option<WorkspaceTabId>,
     inspector_state: InspectorPaneState,
     inspector_request_generation: u64,
     file_tree_expansion: TreeExpansionState,
+    agent_runtimes: HashMap<WorkspaceTabId, AgentRuntime<AcpProcessConnection>>,
+    agent_cancel_handles: HashMap<WorkspaceTabId, AcpCancelHandle>,
+    agent_thread_store: AgentThreadStore,
+    agent_thread_records_cache: BTreeMap<String, AgentThreadRecord>,
+    agent_thread_records_loaded: bool,
+    pending_agent_thread_exclusions: BTreeSet<String>,
+    pending_removed_agent_worktrees: BTreeSet<PathBuf>,
+    pending_removed_agent_repos: BTreeSet<PathBuf>,
+    agent_thread_persist_generation: Arc<AtomicU64>,
+    agent_thread_persist_lock: Arc<Mutex<()>>,
 }
 
 impl AlasShell {
     fn new(cx: &mut Context<Self>) -> Self {
         let app_config_store =
             AppConfigStore::default_store().expect("failed to resolve app config store");
-        let config = app_config_store.load().unwrap_or_default();
+        let mut config = app_config_store.load().unwrap_or_default();
         let notification_preferences = config.notifications.clone();
+        let provider_discovery = discover_agent_providers();
+        let provider_discovery_startup =
+            apply_provider_discovery_to_config(&mut config, &provider_discovery, |config| {
+                app_config_store.save(config)
+            });
+
+        let agent_thread_store = AgentThreadStore::new(
+            ProjectDirs::from("dev", "alas", "Alas")
+                .expect("failed to resolve app data directory")
+                .data_dir()
+                .join("agent_threads.json"),
+        );
+        let agent_thread_records_cache = BTreeMap::new();
 
         let mut shell = Self {
             model: AlasModel::default(),
@@ -159,6 +242,13 @@ impl AlasShell {
                 notification_preferences,
             ),
             command_picker: None,
+            new_tab_picker_open: false,
+            agent_provider_picker: None,
+            provider_discovery_suggestions: provider_discovery_startup.suggestions,
+            provider_discovery_error: provider_discovery_startup.error,
+            provider_settings: None,
+            provider_settings_focus: cx.focus_handle(),
+            provider_settings_active_field: None,
             sidebar_menu: None,
             confirm_remove_repository_dialog: None,
             confirm_remove_worktree_dialog: None,
@@ -175,14 +265,70 @@ impl AlasShell {
             terminal_body_size_px: None,
             terminal_body_bounds: None,
             terminal_scroll_offset_rows: 0,
+            agent_composer_focus: cx.focus_handle(),
+            active_agent_composer_tab: None,
             inspector_state: InspectorPaneState::default(),
             inspector_request_generation: 0,
             file_tree_expansion: TreeExpansionState::default(),
+            agent_runtimes: HashMap::new(),
+            agent_cancel_handles: HashMap::new(),
+            agent_thread_store,
+            agent_thread_records_cache,
+            agent_thread_records_loaded: false,
+            pending_agent_thread_exclusions: BTreeSet::new(),
+            pending_removed_agent_worktrees: BTreeSet::new(),
+            pending_removed_agent_repos: BTreeSet::new(),
+            agent_thread_persist_generation: Arc::new(AtomicU64::new(0)),
+            agent_thread_persist_lock: Arc::new(Mutex::new(())),
         };
-        shell.refresh_repositories();
+        shell.start_agent_thread_record_load(cx);
+        shell.refresh_repositories_and_restore_agent_threads(cx);
         shell.start_terminal_refresh(cx);
         shell.register_app_quit_cleanup(cx);
         shell
+    }
+
+    fn start_agent_thread_record_load(&self, cx: &mut Context<Self>) {
+        let store = self.agent_thread_store.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { store.load_records() });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |shell, cx| {
+                let loaded_records = match result {
+                    Ok(records) => records,
+                    Err(error) => {
+                        eprintln!("failed to load agent threads: {error:#}");
+                        Vec::new()
+                    }
+                };
+                let loaded_records = filter_agent_thread_records(
+                    loaded_records,
+                    shell.pending_agent_thread_exclusions.iter().cloned(),
+                    shell.pending_removed_agent_worktrees.iter().cloned(),
+                    shell.pending_removed_agent_repos.iter().cloned(),
+                );
+                let records = merge_agent_thread_records(
+                    loaded_records,
+                    shell.workspace_session.agent_thread_records(),
+                    Vec::<String>::new(),
+                );
+                shell.agent_thread_records_cache = records
+                    .iter()
+                    .cloned()
+                    .map(|record| (record.thread_id.clone(), record))
+                    .collect();
+                shell.agent_thread_records_loaded = true;
+                shell.pending_agent_thread_exclusions.clear();
+                shell.pending_removed_agent_worktrees.clear();
+                shell.pending_removed_agent_repos.clear();
+                shell.restore_agent_threads_for_known_worktrees(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn start_terminal_refresh(&self, cx: &mut Context<Self>) {
@@ -646,7 +792,7 @@ impl AlasShell {
                 if let Some(path) = paths.into_iter().next() {
                     this.update(cx, |shell, cx| {
                         shell.set_add_repository_path(path);
-                        shell.add_repository_from_dialog();
+                        shell.add_repository_from_dialog(cx);
                         cx.notify();
                     })
                     .ok();
@@ -687,7 +833,7 @@ impl AlasShell {
         dialog.error = None;
     }
 
-    fn add_repository_from_dialog(&mut self) {
+    fn add_repository_from_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self
             .add_repository_dialog
             .as_ref()
@@ -727,7 +873,7 @@ impl AlasShell {
 
         self.config = next_config;
         self.add_repository_dialog = None;
-        self.refresh_repositories();
+        self.refresh_repositories_and_restore_agent_threads(cx);
     }
 
     fn set_add_repository_error(&mut self, error: impl Into<String>) {
@@ -1105,7 +1251,7 @@ impl AlasShell {
             return;
         }
 
-        self.refresh_repositories();
+        self.refresh_repositories_and_restore_agent_threads(cx);
         self.create_worktree_dialog = None;
         self.select_worktree(dialog.repo_id.clone(), target_path, cx);
     }
@@ -1138,7 +1284,8 @@ impl AlasShell {
             path.clone(),
             default_command,
         );
-        self.start_or_reuse_terminal_tab(repo_id, path, tab_id);
+        self.start_or_reuse_terminal_tab(repo_id.clone(), path.clone(), tab_id);
+        self.restore_agent_threads_for_selected_worktree(cx);
     }
 
     fn select_workspace_tab(&mut self, tab_id: WorkspaceTabId) {
@@ -1164,6 +1311,7 @@ impl AlasShell {
         } else {
             self.active_terminal_tab = Some(tab_id);
             self.active_terminal = None;
+            self.active_agent_composer_tab = None;
             self.terminal_scroll_offset_rows = 0;
             self.terminal_error = None;
         }
@@ -1334,15 +1482,24 @@ impl AlasShell {
         }
     }
 
-    fn close_workspace_tab(&mut self, tab_id: WorkspaceTabId) {
+    fn close_workspace_tab(&mut self, tab_id: WorkspaceTabId, cx: &mut Context<Self>) {
         let Some(selected) = self.model.selected_worktree().cloned() else {
             return;
         };
 
-        let is_terminal = self
+        let tab = self
             .workspace_session
-            .tab(&selected.repo_id, &selected.path, tab_id)
-            .is_some_and(|t| t.is_terminal());
+            .tab(&selected.repo_id, &selected.path, tab_id);
+        let is_terminal = tab.is_some_and(|t| t.is_terminal());
+        let closed_agent_thread_id = tab
+            .and_then(|tab| tab.agent_thread_state())
+            .map(|thread| thread.thread_id.clone());
+
+        self.agent_runtimes.remove(&tab_id);
+        self.agent_cancel_handles.remove(&tab_id);
+        if self.active_agent_composer_tab == Some(tab_id) {
+            self.active_agent_composer_tab = None;
+        }
 
         if is_terminal {
             let session_id =
@@ -1373,6 +1530,7 @@ impl AlasShell {
             } else {
                 self.active_terminal_tab = Some(fallback_id);
                 self.active_terminal = None;
+                self.active_agent_composer_tab = None;
                 self.terminal_error = None;
             }
         } else {
@@ -1380,6 +1538,7 @@ impl AlasShell {
             self.active_terminal = None;
             self.terminal_error = None;
         }
+        self.persist_agent_threads_excluding(closed_agent_thread_id.as_deref(), cx);
     }
 
     fn open_file_from_inspector(&mut self, file_path: PathBuf, cx: &mut Context<Self>) {
@@ -1432,7 +1591,9 @@ impl AlasShell {
             .and_then(|tab| match &tab.content {
                 WorkspaceTabContent::File(state) => Some(state.load_state.clone()),
                 WorkspaceTabContent::Markdown(state) => Some(state.file.load_state.clone()),
-                WorkspaceTabContent::Terminal(_) | WorkspaceTabContent::Image(_) => None,
+                WorkspaceTabContent::Terminal(_)
+                | WorkspaceTabContent::Image(_)
+                | WorkspaceTabContent::AgentChat(_) => None,
             })
             .is_some_and(|state| matches!(state, FileTabLoadState::Loaded { .. }));
 
@@ -1483,6 +1644,7 @@ impl AlasShell {
     }
 
     fn open_command_picker(&mut self, cx: &mut Context<Self>) {
+        self.provider_settings = None;
         let Some(selected) = self.model.selected_worktree().cloned() else {
             return;
         };
@@ -1501,6 +1663,1143 @@ impl AlasShell {
 
     fn close_command_picker(&mut self) {
         self.command_picker = None;
+    }
+
+    fn open_new_tab_picker(&mut self, cx: &mut Context<Self>) {
+        self.new_tab_picker_open = true;
+        self.command_picker = None;
+        self.agent_provider_picker = None;
+        self.provider_settings = None;
+        cx.notify();
+    }
+
+    fn close_new_tab_picker(&mut self) {
+        self.new_tab_picker_open = false;
+    }
+
+    fn open_provider_settings(&mut self, cx: &mut Context<Self>) {
+        self.new_tab_picker_open = false;
+        self.agent_provider_picker = None;
+        let mut settings = ProviderSettingsState {
+            providers: self.config.agent_providers.clone(),
+            selected_provider_id: self
+                .config
+                .agent_providers
+                .first()
+                .map(|provider| provider.id.clone()),
+            discovery_suggestions: self.provider_discovery_suggestions.clone(),
+            ..ProviderSettingsState::default()
+        };
+        if let Some(error) = self.provider_discovery_error.as_ref() {
+            settings.error = Some(error.clone());
+        }
+        self.provider_settings = Some(settings);
+        self.provider_settings_active_field = None;
+        cx.notify();
+    }
+
+    fn close_provider_settings(&mut self) {
+        self.provider_settings = None;
+        self.provider_settings_active_field = None;
+    }
+
+    fn add_provider_settings_entry(&mut self) {
+        let Some(settings) = self.provider_settings.as_mut() else {
+            return;
+        };
+        let mut index = settings.providers.len() + 1;
+        let provider_id = loop {
+            let candidate = format!("provider-{index}");
+            if !settings
+                .providers
+                .iter()
+                .any(|provider| provider.id == candidate)
+            {
+                break candidate;
+            }
+            index += 1;
+        };
+        settings.add_provider(AgentProviderConfig::new(
+            provider_id.clone(),
+            "New Provider",
+            "agent-acp",
+        ));
+        self.provider_settings_active_field = Some(ProviderSettingsField::DisplayName(provider_id));
+    }
+
+    fn set_provider_settings_field(&mut self, field: ProviderSettingsField) {
+        self.provider_settings_active_field = Some(field);
+        if let Some(settings) = self.provider_settings.as_mut() {
+            settings.error = None;
+        }
+    }
+
+    fn edit_provider_settings_field(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.provider_settings.is_none() || self.provider_settings_active_field.is_none() {
+            return false;
+        }
+
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.provider_settings_active_field = None;
+                return true;
+            }
+            "enter" => {
+                self.save_provider_settings(cx);
+                return true;
+            }
+            "tab" => {
+                self.advance_provider_settings_field();
+                return true;
+            }
+            "backspace" => {
+                self.edit_active_provider_settings_text(|text| {
+                    text.pop();
+                });
+                return true;
+            }
+            _ => {}
+        }
+
+        if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
+            return false;
+        }
+        if let Some(text) = event.keystroke.key_char.as_deref() {
+            self.edit_active_provider_settings_text(|active_text| active_text.push_str(text));
+            return true;
+        }
+
+        false
+    }
+
+    fn edit_active_provider_settings_text(&mut self, edit: impl FnOnce(&mut String)) {
+        let Some(field) = self.provider_settings_active_field.clone() else {
+            return;
+        };
+        let Some(settings) = self.provider_settings.as_mut() else {
+            return;
+        };
+        match field {
+            ProviderSettingsField::DisplayName(provider_id) => {
+                if let Some(provider) = settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == provider_id)
+                {
+                    let mut value = provider.display_name.clone();
+                    edit(&mut value);
+                    settings.update_display_name(&provider_id, value);
+                }
+            }
+            ProviderSettingsField::Command(provider_id) => {
+                if let Some(provider) = settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == provider_id)
+                {
+                    let mut value = provider.command.clone();
+                    edit(&mut value);
+                    settings.update_command(&provider_id, value);
+                }
+            }
+            ProviderSettingsField::Args(provider_id) => {
+                let _ = settings.edit_args_json(&provider_id, edit);
+            }
+            ProviderSettingsField::EnvKey(provider_id) => {
+                if let Some((mut key, value)) = provider_plain_env(settings, &provider_id) {
+                    edit(&mut key);
+                    settings.update_plain_env(&provider_id, vec![(key, value)]);
+                }
+            }
+            ProviderSettingsField::EnvValue(provider_id) => {
+                if let Some((key, mut value)) = provider_plain_env(settings, &provider_id) {
+                    edit(&mut value);
+                    settings.update_plain_env(&provider_id, vec![(key, value)]);
+                }
+            }
+            ProviderSettingsField::AuthEnvValue {
+                provider_id,
+                env_name,
+            } => {
+                let mut value = settings.auth_env_value(&provider_id, &env_name);
+                edit(&mut value);
+                settings.update_auth_env_value(&provider_id, &env_name, value);
+            }
+        }
+    }
+
+    fn authenticate_provider_settings(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        let Some(settings) = self.provider_settings.as_ref() else {
+            return;
+        };
+        let provider_id = provider_id.to_string();
+        let original_provider = settings
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .cloned();
+        let mut next_settings = settings.clone();
+        let task = cx.background_executor().spawn(async move {
+            let result = next_settings
+                .authenticate_with_available_method(&provider_id, &OsCredentialStore)
+                .map_err(|error| error.to_string());
+            (provider_id, original_provider, next_settings, result)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let (provider_id, original_provider, mut next_settings, result) = task.await;
+            this.update(cx, |shell, cx| {
+                let Some(current_settings) = shell.provider_settings.as_mut() else {
+                    return;
+                };
+                let provider_unchanged = current_settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == provider_id)
+                    == original_provider.as_ref();
+                if !provider_unchanged {
+                    return;
+                }
+                if let Err(error) = result {
+                    next_settings.error = Some(error);
+                }
+                current_settings.apply_auth_io_result(&provider_id, &next_settings);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn run_provider_settings_terminal_auth(&mut self, provider_id: &str) {
+        if let Some(settings) = self.provider_settings.as_mut() {
+            settings.mark_terminal_auth_unavailable(provider_id);
+        }
+    }
+
+    fn clear_provider_settings_credentials(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        let Some(settings) = self.provider_settings.as_ref() else {
+            return;
+        };
+        let provider_id = provider_id.to_string();
+        let original_provider = settings
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .cloned();
+        let mut next_settings = settings.clone();
+        let task = cx.background_executor().spawn(async move {
+            let result = next_settings
+                .clear_env_auth_values(&provider_id, &OsCredentialStore)
+                .map_err(|error| error.to_string());
+            (provider_id, original_provider, next_settings, result)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let (provider_id, original_provider, mut next_settings, result) = task.await;
+            this.update(cx, |shell, cx| {
+                let Some(current_settings) = shell.provider_settings.as_mut() else {
+                    return;
+                };
+                let provider_unchanged = current_settings
+                    .providers
+                    .iter()
+                    .find(|provider| provider.id == provider_id)
+                    == original_provider.as_ref();
+                if !provider_unchanged {
+                    return;
+                }
+                if let Err(error) = result {
+                    next_settings.error = Some(error);
+                }
+                current_settings.apply_clear_auth_io_result(&provider_id, &next_settings);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn view_provider_settings_auth_instructions(&mut self, provider_id: &str) {
+        if let Some(settings) = self.provider_settings.as_mut() {
+            settings.show_auth_instructions(provider_id);
+        }
+    }
+
+    fn advance_provider_settings_field(&mut self) {
+        let Some(settings) = self.provider_settings.as_ref() else {
+            return;
+        };
+        if settings.providers.is_empty() {
+            self.provider_settings_active_field = None;
+            return;
+        }
+        let fields = settings
+            .providers
+            .iter()
+            .flat_map(|provider| {
+                [
+                    ProviderSettingsField::DisplayName(provider.id.clone()),
+                    ProviderSettingsField::Command(provider.id.clone()),
+                    ProviderSettingsField::Args(provider.id.clone()),
+                    ProviderSettingsField::EnvKey(provider.id.clone()),
+                    ProviderSettingsField::EnvValue(provider.id.clone()),
+                ]
+                .into_iter()
+                .chain(provider.auth_methods.iter().flat_map(|method| {
+                    match method {
+                        crate::agent::AgentAuthMethod::EnvVar { fields, .. } => fields
+                            .iter()
+                            .map(|field| ProviderSettingsField::AuthEnvValue {
+                                provider_id: provider.id.clone(),
+                                env_name: field.env_name.clone(),
+                            })
+                            .collect::<Vec<_>>(),
+                        crate::agent::AgentAuthMethod::Agent { .. }
+                        | crate::agent::AgentAuthMethod::Terminal { .. } => Vec::new(),
+                    }
+                }))
+            })
+            .collect::<Vec<_>>();
+        let next_index = self
+            .provider_settings_active_field
+            .as_ref()
+            .and_then(|active| fields.iter().position(|field| field == active))
+            .map(|index| (index + 1) % fields.len())
+            .unwrap_or(0);
+        self.provider_settings_active_field = fields.get(next_index).cloned();
+    }
+
+    fn toggle_provider_settings_enabled(&mut self, provider_id: &str) {
+        if let Some(settings) = self.provider_settings.as_mut()
+            && let Some(provider) = settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id)
+        {
+            settings.update_enabled(provider_id, !provider.enabled);
+        }
+    }
+
+    fn cycle_provider_settings_trust_mode(&mut self, provider_id: &str) {
+        if let Some(settings) = self.provider_settings.as_mut()
+            && let Some(provider) = settings
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id)
+        {
+            let next = match provider.trust_mode {
+                AgentTrustMode::AllowEverything => AgentTrustMode::Ask,
+                AgentTrustMode::Ask => AgentTrustMode::WorktreeOnly,
+                AgentTrustMode::WorktreeOnly => AgentTrustMode::Deny,
+                AgentTrustMode::Deny => AgentTrustMode::AllowEverything,
+            };
+            settings.update_trust_mode(provider_id, next);
+        }
+    }
+
+    fn save_provider_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(settings) = self.provider_settings.as_ref() else {
+            return;
+        };
+        let providers = settings.providers.clone();
+        self.config.agent_providers = providers.clone();
+        let config = self.config.clone();
+        let app_config_store = self.app_config_store.clone();
+        let task = cx.background_executor().spawn(async move {
+            app_config_store
+                .save(&config)
+                .map(|_| providers)
+                .map_err(|error| error.to_string())
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |shell, cx| {
+                match result {
+                    Ok(saved_providers) => {
+                        if shell
+                            .provider_settings
+                            .as_ref()
+                            .is_some_and(|settings| settings.providers == saved_providers)
+                        {
+                            shell.provider_settings = None;
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(settings) = shell.provider_settings.as_mut() {
+                            settings.error = Some(error);
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn remove_provider_settings_entry(&mut self, provider_id: &str) {
+        if let Some(settings) = self.provider_settings.as_mut()
+            && remove_provider_and_record_discovery_ignore(&mut self.config, settings, provider_id)
+        {
+            self.provider_discovery_suggestions
+                .retain(|suggestion| suggestion.id != provider_id);
+        }
+    }
+
+    fn create_agent_chat_from_provider(&mut self, provider_id: &str, cx: &mut Context<Self>) {
+        let Some(provider) = self
+            .config
+            .agent_providers
+            .iter()
+            .find(|provider| provider.id == provider_id && provider.enabled)
+            .cloned()
+        else {
+            if let Some(settings) = self.provider_settings.as_mut() {
+                settings.error = Some("Provider is not enabled or no longer exists".to_string());
+            }
+            cx.notify();
+            return;
+        };
+        self.create_agent_chat_tab(provider, cx);
+    }
+
+    fn handle_new_workspace_tab_choice(
+        &mut self,
+        choice: NewWorkspaceTabChoice,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_new_tab_picker();
+        match choice {
+            NewWorkspaceTabChoice::Terminal => self.open_command_picker(cx),
+            NewWorkspaceTabChoice::AgentChat => {
+                match agent_chat_provider_flow(&self.config.agent_providers) {
+                    AgentChatProviderFlow::ProviderSettings => {
+                        self.open_provider_settings(cx);
+                        if let Some(settings) = self.provider_settings.as_mut() {
+                            settings.error = Some(
+                                "Add or enable an agent provider to start a chat.".to_string(),
+                            );
+                        }
+                        cx.notify();
+                    }
+                    AgentChatProviderFlow::CreateTab(provider) => {
+                        self.create_agent_chat_tab(provider, cx)
+                    }
+                    AgentChatProviderFlow::ProviderPicker(providers) => {
+                        self.provider_settings = None;
+                        self.agent_provider_picker = Some(providers);
+                        cx.notify();
+                    }
+                }
+            }
+        }
+    }
+
+    fn create_agent_chat_tab(&mut self, provider: AgentProviderConfig, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        self.agent_provider_picker = None;
+        self.provider_settings = None;
+        let tab_id = self.workspace_session.create_agent_chat_tab(
+            selected.repo_id,
+            selected.path,
+            provider.id.clone(),
+        );
+        self.start_agent_runtime_for_tab(tab_id, provider, cx);
+        self.persist_agent_threads(cx);
+        cx.notify();
+    }
+
+    fn start_agent_runtime_for_tab(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        provider: AgentProviderConfig,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let repository_root = self
+            .model
+            .repositories()
+            .iter()
+            .find(|repo| repo.id == selected.repo_id)
+            .map(|repo| repo.path.as_path())
+            .unwrap_or(selected.path.as_path());
+        let cwd = resolve_provider_cwd(&provider, &selected.path, repository_root);
+        let Some(tab) =
+            self.workspace_session
+                .tab_mut(selected.repo_id.clone(), &selected.path, tab_id)
+        else {
+            return;
+        };
+        let Some(thread) = tab.agent_thread_state_mut() else {
+            return;
+        };
+        thread.status = AgentThreadStatus::Starting;
+        let initial_thread = thread.clone();
+        self.persist_agent_threads(cx);
+        cx.notify();
+
+        let repo_id = selected.repo_id.clone();
+        let worktree_path = selected.path.clone();
+        let task = cx.background_executor().spawn(async move {
+            let mut thread = initial_thread;
+            match AcpProcessConnection::spawn_with_credentials(&provider, cwd, &OsCredentialStore) {
+                Ok(connection) => {
+                    let cancel_handle = connection.cancel_handle();
+                    let connection = connection.with_callback_services(
+                        crate::agent::FilesystemCallbackService::new(
+                            provider.trust_mode.clone(),
+                            worktree_path.clone(),
+                        ),
+                        crate::agent::AgentTerminalService::new(
+                            provider.trust_mode.clone(),
+                            worktree_path.clone(),
+                        ),
+                    );
+                    let filesystem = crate::agent::FilesystemCallbackService::new(
+                        provider.trust_mode.clone(),
+                        worktree_path.clone(),
+                    );
+                    let terminal = crate::agent::AgentTerminalService::new(
+                        provider.trust_mode.clone(),
+                        worktree_path.clone(),
+                    );
+                    let mut runtime = AgentRuntime::with_connection(thread, connection)
+                        .with_callback_services(filesystem, terminal);
+                    let start_result = runtime.initialize().and_then(|_| runtime.create_session());
+                    let (thread, runtime_with_cancel) =
+                        finish_agent_runtime_start(runtime, cancel_handle, start_result);
+                    (repo_id, worktree_path, tab_id, thread, runtime_with_cancel)
+                }
+                Err(error) => {
+                    thread.status = AgentThreadStatus::Failed {
+                        message: error.to_string(),
+                    };
+                    (repo_id, worktree_path, tab_id, thread, None)
+                }
+            }
+        });
+
+        cx.spawn(async move |this, cx| {
+            let (repo_id, worktree_path, tab_id, updated_thread, runtime_with_cancel) = task.await;
+            this.update(cx, |shell, cx| {
+                if let Some(tab) = shell
+                    .workspace_session
+                    .tab_mut(repo_id, &worktree_path, tab_id)
+                    && let Some(thread) = tab.agent_thread_state_mut()
+                {
+                    *thread = updated_thread;
+                    if let Some((runtime, cancel_handle)) = runtime_with_cancel {
+                        shell.agent_cancel_handles.insert(tab_id, cancel_handle);
+                        shell.agent_runtimes.insert(tab_id, runtime);
+                    } else {
+                        shell.agent_cancel_handles.remove(&tab_id);
+                    }
+                    shell.persist_agent_threads(cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn send_agent_prompt(&mut self, tab_id: WorkspaceTabId, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let prompt = self
+            .workspace_session
+            .tab(selected.repo_id.clone(), &selected.path, tab_id)
+            .and_then(|tab| tab.agent_thread_state())
+            .map(|thread| thread.draft.clone())
+            .unwrap_or_default();
+        if prompt.trim().is_empty() {
+            return;
+        }
+        if let Some(mut runtime) = self.agent_runtimes.remove(&tab_id) {
+            if matches!(runtime.thread().status, AgentThreadStatus::ReadOnly { .. }) {
+                runtime.thread_mut().push_debug_event(AgentDebugEvent {
+                    message: "Ignored stale prompt send for read-only ACP session".to_string(),
+                });
+                self.agent_runtimes.insert(tab_id, runtime);
+                self.sync_agent_thread_from_runtime(tab_id);
+                self.persist_agent_threads(cx);
+                cx.notify();
+                return;
+            }
+
+            if let Some(tab) =
+                self.workspace_session
+                    .tab_mut(selected.repo_id.clone(), &selected.path, tab_id)
+                && let Some(thread) = tab.agent_thread_state_mut()
+            {
+                thread.status = AgentThreadStatus::Running;
+                thread.draft.clear();
+            }
+            self.persist_agent_threads(cx);
+            cx.notify();
+
+            let repo_id = selected.repo_id.clone();
+            let worktree_path = selected.path.clone();
+            let task = cx.background_executor().spawn(async move {
+                if let Err(error) = runtime.prompt(prompt) {
+                    runtime.thread_mut().status = AgentThreadStatus::Failed {
+                        message: error.to_string(),
+                    };
+                }
+                runtime.thread_mut().draft.clear();
+                (repo_id, worktree_path, tab_id, runtime)
+            });
+
+            cx.spawn(async move |this, cx| {
+                let (repo_id, worktree_path, tab_id, runtime) = task.await;
+                this.update(cx, |shell, cx| {
+                    let updated = runtime.thread().clone();
+                    if let Some(tab) =
+                        shell
+                            .workspace_session
+                            .tab_mut(repo_id, &worktree_path, tab_id)
+                        && let Some(thread) = tab.agent_thread_state_mut()
+                    {
+                        *thread = updated;
+                        shell.agent_runtimes.insert(tab_id, runtime);
+                        shell.persist_agent_threads(cx);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        } else if let Some(tab) =
+            self.workspace_session
+                .tab_mut(selected.repo_id, &selected.path, tab_id)
+            && let Some(thread) = tab.agent_thread_state_mut()
+        {
+            if matches!(thread.status, AgentThreadStatus::ReadOnly { .. }) {
+                thread.push_debug_event(AgentDebugEvent {
+                    message: "Ignored stale prompt send for read-only ACP session".to_string(),
+                });
+            } else if matches!(
+                thread.status,
+                AgentThreadStatus::Starting | AgentThreadStatus::Running
+            ) {
+                thread.push_debug_event(AgentDebugEvent {
+                    message: "Ignored prompt send while ACP runtime is busy".to_string(),
+                });
+            } else {
+                thread.transcript.push(AgentTranscriptEntry::user(prompt));
+                thread.draft.clear();
+                thread.status = AgentThreadStatus::Failed {
+                    message: "Agent runtime is not connected".to_string(),
+                };
+            }
+            self.persist_agent_threads(cx);
+        }
+        cx.notify();
+    }
+
+    fn cycle_agent_mode(&mut self, tab_id: WorkspaceTabId, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let Some(tab) = self
+            .workspace_session
+            .tab_mut(&selected.repo_id, &selected.path, tab_id)
+        else {
+            return;
+        };
+        let Some(thread) = tab.agent_thread_state_mut() else {
+            return;
+        };
+        if thread.available_modes.len() < 2 {
+            return;
+        }
+        let current = thread.current_mode.as_deref();
+        let index = thread
+            .available_modes
+            .iter()
+            .position(|mode| Some(mode.id.as_str()) == current)
+            .unwrap_or(0);
+        let next_mode = thread.available_modes[(index + 1) % thread.available_modes.len()]
+            .id
+            .clone();
+        self.run_agent_selector_update(
+            tab_id,
+            selected.repo_id,
+            selected.path,
+            move |runtime| runtime.set_mode(next_mode),
+            cx,
+        );
+    }
+
+    fn cycle_agent_config_option(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        config_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let Some(tab) = self
+            .workspace_session
+            .tab_mut(&selected.repo_id, &selected.path, tab_id)
+        else {
+            return;
+        };
+        let Some(thread) = tab.agent_thread_state_mut() else {
+            return;
+        };
+        let Some(option) = thread
+            .config_options
+            .iter_mut()
+            .find(|option| option.id == config_id)
+        else {
+            return;
+        };
+        if option.options.len() < 2 {
+            return;
+        }
+        let current = option.value.as_deref();
+        let index = option
+            .options
+            .iter()
+            .position(|value| Some(value.id.as_str()) == current)
+            .unwrap_or(0);
+        let next_value = option.options[(index + 1) % option.options.len()]
+            .id
+            .clone();
+        self.run_agent_selector_update(
+            tab_id,
+            selected.repo_id,
+            selected.path,
+            move |runtime| runtime.set_config_option(config_id, next_value),
+            cx,
+        );
+    }
+
+    fn run_agent_selector_update(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        repo_id: String,
+        worktree_path: PathBuf,
+        update: impl FnOnce(&mut AgentRuntime<AcpProcessConnection>) -> anyhow::Result<()>
+        + Send
+        + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut runtime) = self.agent_runtimes.remove(&tab_id) else {
+            if let Some(tab) = self
+                .workspace_session
+                .tab_mut(&repo_id, &worktree_path, tab_id)
+                && let Some(thread) = tab.agent_thread_state_mut()
+            {
+                thread.push_debug_event(AgentDebugEvent {
+                    message: "Ignored selector change while ACP runtime is busy or disconnected"
+                        .to_string(),
+                });
+                self.persist_agent_threads(cx);
+            }
+            return;
+        };
+        let task = cx.background_executor().spawn(async move {
+            if let Err(error) = update(&mut runtime) {
+                runtime.thread_mut().push_debug_event(AgentDebugEvent {
+                    message: error.to_string(),
+                });
+            }
+            (repo_id, worktree_path, tab_id, runtime)
+        });
+        cx.spawn(async move |this, cx| {
+            let (repo_id, worktree_path, tab_id, runtime) = task.await;
+            this.update(cx, |shell, cx| {
+                let updated = runtime.thread().clone();
+                if let Some(tab) = shell
+                    .workspace_session
+                    .tab_mut(repo_id, &worktree_path, tab_id)
+                    && let Some(thread) = tab.agent_thread_state_mut()
+                {
+                    *thread = updated;
+                    shell.agent_runtimes.insert(tab_id, runtime);
+                    shell.persist_agent_threads(cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn focus_agent_composer(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_agent_composer_tab = Some(tab_id);
+        window.focus(&self.agent_composer_focus);
+        cx.notify();
+    }
+
+    fn handle_agent_composer_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab_id) = self.active_agent_composer_tab else {
+            return false;
+        };
+
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.active_agent_composer_tab = None;
+                return true;
+            }
+            "enter" => {
+                self.send_agent_prompt(tab_id, cx);
+                return true;
+            }
+            "backspace" => {
+                self.edit_agent_draft(
+                    tab_id,
+                    |draft| {
+                        draft.pop();
+                    },
+                    cx,
+                );
+                cx.notify();
+                return true;
+            }
+            _ => {}
+        }
+
+        if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
+            return false;
+        }
+
+        if let Some(text) = event.keystroke.key_char.as_deref() {
+            self.edit_agent_draft(tab_id, |draft| draft.push_str(text), cx);
+            cx.notify();
+            return true;
+        }
+
+        false
+    }
+
+    fn edit_agent_draft(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        edit: impl FnOnce(&mut String),
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return false;
+        };
+        let Some(tab) = self
+            .workspace_session
+            .tab_mut(&selected.repo_id, &selected.path, tab_id)
+        else {
+            return false;
+        };
+        let Some(thread) = tab.agent_thread_state_mut() else {
+            return false;
+        };
+
+        edit(&mut thread.draft);
+        if let Some(runtime) = self.agent_runtimes.get_mut(&tab_id) {
+            runtime.thread_mut().draft = thread.draft.clone();
+        }
+        self.persist_agent_threads(cx);
+        true
+    }
+
+    fn cancel_agent_prompt(&mut self, tab_id: WorkspaceTabId, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let Some(tab) = self
+            .workspace_session
+            .tab_mut(&selected.repo_id, &selected.path, tab_id)
+        else {
+            return;
+        };
+        let Some(thread) = tab.agent_thread_state_mut() else {
+            return;
+        };
+        let Some(session_id) = thread.acp_session_id.clone() else {
+            thread.push_debug_event(AgentDebugEvent {
+                message: "Cannot cancel ACP prompt without an active session".to_string(),
+            });
+            self.persist_agent_threads(cx);
+            cx.notify();
+            return;
+        };
+        let Some(cancel_handle) = self.agent_cancel_handles.get(&tab_id).cloned() else {
+            thread.push_debug_event(AgentDebugEvent {
+                message: "Cannot cancel ACP prompt because the runtime is not connected"
+                    .to_string(),
+            });
+            self.persist_agent_threads(cx);
+            cx.notify();
+            return;
+        };
+
+        let repo_id = selected.repo_id.clone();
+        let worktree_path = selected.path.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { cancel_handle.cancel(session_id) });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |shell, cx| {
+                if let Some(tab) = shell
+                    .workspace_session
+                    .tab_mut(repo_id, &worktree_path, tab_id)
+                    && let Some(thread) = tab.agent_thread_state_mut()
+                {
+                    match result {
+                        Ok(()) => {
+                            thread.status = AgentThreadStatus::Ready;
+                            if let Some(runtime) = shell.agent_runtimes.get_mut(&tab_id) {
+                                runtime.thread_mut().status = AgentThreadStatus::Ready;
+                            }
+                        }
+                        Err(error) => {
+                            let message = error.to_string();
+                            thread.push_debug_event(AgentDebugEvent {
+                                message: message.clone(),
+                            });
+                            if let Some(runtime) = shell.agent_runtimes.get_mut(&tab_id) {
+                                runtime
+                                    .thread_mut()
+                                    .push_debug_event(AgentDebugEvent { message });
+                            }
+                        }
+                    }
+                    shell.persist_agent_threads(cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn resolve_agent_permission(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        request_id: &str,
+        allow: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(runtime) = self.agent_runtimes.get_mut(&tab_id) {
+            if let Err(error) = runtime.resolve_permission_request(request_id, allow) {
+                runtime
+                    .thread_mut()
+                    .push_debug_event(crate::agent::AgentDebugEvent {
+                        message: error.to_string(),
+                    });
+            }
+            self.sync_agent_thread_from_runtime(tab_id);
+            self.persist_agent_threads(cx);
+        }
+    }
+
+    fn persist_agent_threads(&mut self, cx: &mut Context<Self>) {
+        self.persist_agent_threads_with_exclusions(
+            Vec::new(),
+            agent_thread_persist_debounce_interval(),
+            cx,
+        )
+        .detach();
+    }
+
+    fn persist_agent_threads_excluding(
+        &mut self,
+        excluded_thread_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let excluded_thread_ids = excluded_thread_id
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        self.persist_agent_threads_immediately_excluding(excluded_thread_ids, cx);
+    }
+
+    fn persist_agent_threads_immediately_excluding(
+        &mut self,
+        excluded_thread_ids: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.persist_agent_threads_with_exclusions(excluded_thread_ids, Duration::ZERO, cx)
+            .detach();
+    }
+
+    fn persist_agent_threads_with_exclusions(
+        &mut self,
+        excluded_thread_ids: Vec<String>,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        if !self.agent_thread_records_loaded {
+            self.pending_agent_thread_exclusions
+                .extend(excluded_thread_ids.iter().cloned());
+        }
+        let records = merge_agent_thread_records(
+            self.agent_thread_records_cache.values().cloned(),
+            self.workspace_session.agent_thread_records(),
+            excluded_thread_ids,
+        );
+        self.agent_thread_records_cache = records
+            .iter()
+            .cloned()
+            .map(|record| (record.thread_id.clone(), record))
+            .collect();
+        self.spawn_agent_thread_records_save(records, delay, cx)
+    }
+
+    fn spawn_agent_thread_records_save(
+        &self,
+        records: Vec<AgentThreadRecord>,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        let store = self.agent_thread_store.clone();
+        let latest_generation = self.agent_thread_persist_generation.clone();
+        let generation = latest_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let save_lock = self.agent_thread_persist_lock.clone();
+        let executor = cx.background_executor().clone();
+        let timer_executor = executor.clone();
+
+        executor.spawn(async move {
+            timer_executor.timer(delay).await;
+            let _guard = match save_lock.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if generation != latest_generation.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Err(error) = store.save_records(&records) {
+                eprintln!("failed to persist agent threads: {error:#}");
+            }
+        })
+    }
+
+    fn cached_agent_thread_records(&self) -> Vec<AgentThreadRecord> {
+        self.agent_thread_records_cache.values().cloned().collect()
+    }
+
+    fn agent_thread_ids_for_worktree(&self, path: &Path) -> Vec<String> {
+        let workspace_records = self.workspace_session.agent_thread_records();
+        self.agent_thread_records_cache
+            .values()
+            .chain(workspace_records.iter())
+            .filter(|record| record.state.worktree_path == path)
+            .map(|record| record.thread_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn agent_thread_ids_for_repo(&self, repo_id: &str) -> Vec<String> {
+        let repository_path = self.repository_path(repo_id);
+        let worktree_paths = self
+            .model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .map(|repository| {
+                repository
+                    .worktrees
+                    .iter()
+                    .map(|worktree| worktree.path.clone())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let workspace_records = self.workspace_session.agent_thread_records();
+        self.agent_thread_records_cache
+            .values()
+            .chain(workspace_records.iter())
+            .filter(|record| {
+                worktree_paths.contains(&record.state.worktree_path)
+                    || repository_path
+                        .as_ref()
+                        .is_some_and(|path| record.state.worktree_path.starts_with(path))
+            })
+            .map(|record| record.thread_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn restore_agent_threads_for_selected_worktree(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let records = self.cached_agent_thread_records();
+        if !self
+            .workspace_session
+            .restore_agent_chat_tabs(&selected.repo_id, &selected.path, &records)
+            .is_empty()
+        {
+            cx.notify();
+        }
+    }
+
+    fn restore_agent_threads_for_known_worktrees(&mut self, cx: &mut Context<Self>) {
+        let records = self.cached_agent_thread_records();
+        let worktrees = self
+            .model
+            .repositories()
+            .iter()
+            .flat_map(|repository| {
+                repository
+                    .worktrees
+                    .iter()
+                    .map(|worktree| (repository.id.clone(), worktree.path.clone()))
+            })
+            .collect::<Vec<_>>();
+        if !self
+            .workspace_session
+            .restore_agent_chat_tabs_for_worktrees(worktrees, &records)
+            .is_empty()
+        {
+            cx.notify();
+        }
+    }
+
+    fn sync_agent_thread_from_runtime(&mut self, tab_id: WorkspaceTabId) {
+        let Some(selected) = self.model.selected_worktree().cloned() else {
+            return;
+        };
+        let Some(runtime_thread) = self
+            .agent_runtimes
+            .get(&tab_id)
+            .map(|runtime| runtime.thread().clone())
+        else {
+            return;
+        };
+        if let Some(tab) = self
+            .workspace_session
+            .tab_mut(selected.repo_id, &selected.path, tab_id)
+            && let Some(thread) = tab.agent_thread_state_mut()
+        {
+            *thread = runtime_thread;
+        }
     }
 
     fn handle_sidebar_menu_action(
@@ -1787,7 +3086,8 @@ impl AlasShell {
         cx.spawn(async move |this, cx| {
             let should_remove = answer.await.unwrap_or(1) == 0;
             this.update(cx, |shell, cx| {
-                if should_remove && let Err(error) = shell.remove_repository_from_alas(&repo_id) {
+                if should_remove && let Err(error) = shell.remove_repository_from_alas(&repo_id, cx)
+                {
                     shell.set_add_repository_error(error.to_string());
                 }
                 shell.confirm_remove_repository_dialog = None;
@@ -1800,17 +3100,45 @@ impl AlasShell {
         cx.notify();
     }
 
-    fn remove_repository_from_alas(&mut self, repo_id: &str) -> anyhow::Result<()> {
+    fn remove_repository_from_alas(
+        &mut self,
+        repo_id: &str,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
         let mut next_config = self.config.clone();
         next_config
             .repositories
             .retain(|repository| repository.id != repo_id);
         next_config.archived_worktrees.shift_remove(repo_id);
 
+        let excluded_thread_ids = self.agent_thread_ids_for_repo(repo_id);
+        let pending_removed_repo = self.repository_path(repo_id);
+        let pending_removed_worktrees = self
+            .model
+            .repositories()
+            .iter()
+            .find(|repository| repository.id == repo_id)
+            .map(|repository| {
+                repository
+                    .worktrees
+                    .iter()
+                    .map(|worktree| worktree.path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         self.app_config_store.save(&next_config)?;
+        if !self.agent_thread_records_loaded {
+            if let Some(path) = pending_removed_repo {
+                self.pending_removed_agent_repos.insert(path);
+            }
+            self.pending_removed_agent_worktrees
+                .extend(pending_removed_worktrees);
+        }
         self.config = next_config;
         self.cleanup_repository_sessions(repo_id);
         self.workspace_session.remove_repository(repo_id);
+        self.persist_agent_threads_immediately_excluding(excluded_thread_ids, cx);
 
         if self
             .model
@@ -1820,7 +3148,7 @@ impl AlasShell {
             self.clear_selection_and_active_terminal();
         }
 
-        self.refresh_repositories();
+        self.refresh_repositories_and_restore_agent_threads(cx);
         Ok(())
     }
 
@@ -1862,7 +3190,7 @@ impl AlasShell {
         cx.spawn(async move |this, cx| {
             let should_remove = answer.await.unwrap_or(1) == 0;
             this.update(cx, |shell, cx| {
-                if should_remove && let Err(error) = shell.remove_worktree(&repo_id, &path) {
+                if should_remove && let Err(error) = shell.remove_worktree(&repo_id, &path, cx) {
                     shell.set_add_repository_error(error.to_string());
                 }
                 shell.confirm_remove_worktree_dialog = None;
@@ -1875,14 +3203,26 @@ impl AlasShell {
         cx.notify();
     }
 
-    fn remove_worktree(&mut self, repo_id: &str, path: &Path) -> anyhow::Result<()> {
+    fn remove_worktree(
+        &mut self,
+        repo_id: &str,
+        path: &Path,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
         let repo_path = self
             .repository_path(repo_id)
             .ok_or_else(|| anyhow::anyhow!("Repository not found"))?;
 
+        let excluded_thread_ids = self.agent_thread_ids_for_worktree(path);
+
         GitWorktreeService::new(GitRunner::new()).remove_worktree(&repo_path, path)?;
+        if !self.agent_thread_records_loaded {
+            self.pending_removed_agent_worktrees
+                .insert(path.to_path_buf());
+        }
         self.cleanup_worktree_sessions(repo_id, path);
         self.workspace_session.remove_worktree(repo_id, path);
+        self.persist_agent_threads_immediately_excluding(excluded_thread_ids, cx);
 
         if self
             .model
@@ -1892,7 +3232,7 @@ impl AlasShell {
             self.clear_selection_and_active_terminal();
         }
 
-        self.refresh_repositories();
+        self.refresh_repositories_and_restore_agent_threads(cx);
         Ok(())
     }
 
@@ -1987,9 +3327,12 @@ impl AlasShell {
     }
 
     fn register_app_quit_cleanup(&self, cx: &mut Context<Self>) {
-        cx.on_app_quit(|shell, _cx| {
+        cx.on_app_quit(|shell, cx| {
+            let save = shell.persist_agent_threads_with_exclusions(Vec::new(), Duration::ZERO, cx);
             shell.shutdown();
-            async {}
+            async move {
+                save.await;
+            }
         })
         .detach();
     }
@@ -2054,6 +3397,11 @@ impl AlasShell {
         }
 
         self.model.set_repositories(nodes);
+    }
+
+    fn refresh_repositories_and_restore_agent_threads(&mut self, cx: &mut Context<Self>) {
+        self.refresh_repositories();
+        self.restore_agent_threads_for_known_worktrees(cx);
     }
 
     fn add_repository_error(&self) -> Option<&str> {
@@ -2306,6 +3654,107 @@ fn render_status_bar(
         )
 }
 
+fn render_new_tab_picker(
+    on_select: impl Fn(NewWorkspaceTabChoice, &gpui::ClickEvent, &mut Window, &mut App)
+    + Clone
+    + 'static,
+    on_cancel: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id("new-tab-picker")
+        .m_3()
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child("New Workspace Tab"),
+        )
+        .children(new_workspace_tab_choices().into_iter().map(|choice| {
+            let on_select = on_select.clone();
+            div()
+                .id(SharedString::from(format!("new-tab-choice-{choice:?}")))
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .text_sm()
+                .text_color(rgb(0x111827))
+                .bg(rgb(0xe5e7eb))
+                .child(new_workspace_tab_choice_label(choice))
+                .on_click(move |event, window, cx| on_select(choice, event, window, cx))
+        }))
+        .child(
+            div()
+                .id("cancel-new-tab-picker")
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .text_sm()
+                .text_color(TEXT_MUTED)
+                .child("Cancel")
+                .on_click(on_cancel),
+        )
+}
+
+fn render_agent_provider_picker(
+    providers: &[AgentProviderConfig],
+    on_select: impl Fn(AgentProviderConfig, &gpui::ClickEvent, &mut Window, &mut App) + Clone + 'static,
+    on_cancel: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id("agent-provider-picker")
+        .m_3()
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(PANEL_BORDER)
+        .bg(PANEL_BG)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child("Choose Agent Provider"),
+        )
+        .children(providers.iter().map(|provider| {
+            let on_select = on_select.clone();
+            let provider = provider.clone();
+            div()
+                .id(SharedString::from(format!(
+                    "agent-provider-{}",
+                    provider.id
+                )))
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .text_sm()
+                .text_color(rgb(0x111827))
+                .bg(rgb(0xe5e7eb))
+                .child(SharedString::from(provider.display_name.clone()))
+                .on_click(move |event, window, cx| on_select(provider.clone(), event, window, cx))
+        }))
+        .child(
+            div()
+                .id("cancel-agent-provider-picker")
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .text_sm()
+                .text_color(TEXT_MUTED)
+                .child("Cancel")
+                .on_click(on_cancel),
+        )
+}
+
 impl Render for AlasShell {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let measured_metrics =
@@ -2442,6 +3891,11 @@ impl Render for AlasShell {
                 cx.stop_propagation();
             }
         });
+        let on_agent_composer_key_down = cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+            if shell.handle_agent_composer_key_down(event, cx) {
+                cx.stop_propagation();
+            }
+        });
         let on_retry_terminal = cx.listener(|shell, _event, _window, cx| {
             shell.retry_active_terminal();
             cx.notify();
@@ -2546,13 +4000,13 @@ impl Render for AlasShell {
                                            _window: &mut Window,
                                            app: &mut App| {
             view.update(app, |shell, cx| {
-                shell.close_workspace_tab(tab_id);
+                shell.close_workspace_tab(tab_id, cx);
                 cx.notify();
             })
             .ok();
         };
-        let on_new_terminal_tab = cx.listener(|shell, _event, _window, cx| {
-            shell.open_command_picker(cx);
+        let on_new_workspace_tab = cx.listener(|shell, _event, _window, cx| {
+            shell.open_new_tab_picker(cx);
         });
         let view = cx.entity().downgrade();
         let on_image_fit = move |tab_id: WorkspaceTabId,
@@ -2633,6 +4087,163 @@ impl Render for AlasShell {
             shell.close_command_picker();
             cx.notify();
         });
+        let view = cx.entity().downgrade();
+        let on_select_new_tab_choice = move |choice: NewWorkspaceTabChoice,
+                                             _event: &gpui::ClickEvent,
+                                             _window: &mut Window,
+                                             app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.handle_new_workspace_tab_choice(choice, cx);
+            })
+            .ok();
+        };
+        let on_cancel_new_tab_picker = cx.listener(|shell, _event, _window, cx| {
+            shell.close_new_tab_picker();
+            cx.notify();
+        });
+        let view = cx.entity().downgrade();
+        let on_select_agent_provider = move |provider: AgentProviderConfig,
+                                             _event: &gpui::ClickEvent,
+                                             _window: &mut Window,
+                                             app: &mut App| {
+            view.update(app, |shell, cx| {
+                shell.create_agent_chat_from_provider(&provider.id, cx);
+            })
+            .ok();
+        };
+        let on_cancel_agent_provider_picker = cx.listener(|shell, _event, _window, cx| {
+            shell.agent_provider_picker = None;
+            cx.notify();
+        });
+        let on_close_provider_settings = cx.listener(|shell, _event, _window, cx| {
+            shell.close_provider_settings();
+            cx.notify();
+        });
+        let on_add_provider = cx.listener(|shell, _event, window, cx| {
+            shell.add_provider_settings_entry();
+            window.focus(&shell.provider_settings_focus);
+            cx.notify();
+        });
+        let on_save_provider_settings = cx.listener(|shell, _event, _window, cx| {
+            shell.save_provider_settings(cx);
+            cx.notify();
+        });
+        let on_cancel_provider_settings = cx.listener(|shell, _event, _window, cx| {
+            shell.close_provider_settings();
+            cx.notify();
+        });
+        let on_provider_settings_key_down =
+            cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
+                if shell.edit_provider_settings_field(event, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
+        let view = cx.entity().downgrade();
+        let on_select_provider_settings_field = Arc::new(
+            move |field: ProviderSettingsField,
+                  _event: &gpui::ClickEvent,
+                  window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.set_provider_settings_field(field);
+                    window.focus(&shell.provider_settings_focus);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let view = cx.entity().downgrade();
+        let on_toggle_provider_enabled = Arc::new(
+            move |provider_id: String,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.toggle_provider_settings_enabled(&provider_id);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let view = cx.entity().downgrade();
+        let on_cycle_provider_trust_mode = Arc::new(
+            move |provider_id: String,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.cycle_provider_settings_trust_mode(&provider_id);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let view = cx.entity().downgrade();
+        let on_remove_provider = Arc::new(
+            move |provider_id: String,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.remove_provider_settings_entry(&provider_id);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let view = cx.entity().downgrade();
+        let on_authenticate_provider = Arc::new(
+            move |provider_id: String,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.authenticate_provider_settings(&provider_id, cx);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let view = cx.entity().downgrade();
+        let on_run_terminal_auth = Arc::new(
+            move |provider_id: String,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.run_provider_settings_terminal_auth(&provider_id);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let view = cx.entity().downgrade();
+        let on_clear_credentials = Arc::new(
+            move |provider_id: String,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.clear_provider_settings_credentials(&provider_id, cx);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let view = cx.entity().downgrade();
+        let on_view_auth_instructions = Arc::new(
+            move |provider_id: String,
+                  _event: &gpui::ClickEvent,
+                  _window: &mut Window,
+                  app: &mut App| {
+                view.update(app, |shell, cx| {
+                    shell.view_provider_settings_auth_instructions(&provider_id);
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
         let view = cx.entity().downgrade();
         let on_sidebar_menu_action = move |menu: SidebarMenuState,
                                            action_id: ActionId,
@@ -2723,6 +4334,107 @@ impl Render for AlasShell {
 
         let selected_worktree = self.model.selected_worktree();
         let terminal_state = active_tab.and_then(|t| t.terminal_tab_state());
+        let on_send_agent_prompt = {
+            let tab_id = active_tab.map(|tab| tab.id);
+            let view = cx.entity().downgrade();
+            Arc::new(
+                move |_event: &gpui::ClickEvent, _window: &mut Window, app: &mut App| {
+                    if let Some(tab_id) = tab_id {
+                        view.update(app, |shell, cx| shell.send_agent_prompt(tab_id, cx))
+                            .ok();
+                    }
+                },
+            )
+        };
+        let on_cancel_agent_prompt = {
+            let tab_id = active_tab.map(|tab| tab.id);
+            let view = cx.entity().downgrade();
+            Arc::new(
+                move |_event: &gpui::ClickEvent, _window: &mut Window, app: &mut App| {
+                    if let Some(tab_id) = tab_id {
+                        view.update(app, |shell, cx| shell.cancel_agent_prompt(tab_id, cx))
+                            .ok();
+                    }
+                },
+            )
+        };
+        let on_focus_agent_composer = {
+            let tab_id = active_tab.map(|tab| tab.id);
+            let view = cx.entity().downgrade();
+            Arc::new(
+                move |_event: &gpui::ClickEvent, window: &mut Window, app: &mut App| {
+                    if let Some(tab_id) = tab_id {
+                        view.update(app, |shell, cx| {
+                            shell.focus_agent_composer(tab_id, window, cx)
+                        })
+                        .ok();
+                    }
+                },
+            )
+        };
+        let on_allow_agent_permission = {
+            let tab_id = active_tab.map(|tab| tab.id);
+            let view = cx.entity().downgrade();
+            Arc::new(
+                move |request_id: String,
+                      _event: &gpui::ClickEvent,
+                      _window: &mut Window,
+                      app: &mut App| {
+                    if let Some(tab_id) = tab_id {
+                        view.update(app, |shell, cx| {
+                            shell.resolve_agent_permission(tab_id, &request_id, true, cx)
+                        })
+                        .ok();
+                    }
+                },
+            )
+        };
+        let on_deny_agent_permission = {
+            let tab_id = active_tab.map(|tab| tab.id);
+            let view = cx.entity().downgrade();
+            Arc::new(
+                move |request_id: String,
+                      _event: &gpui::ClickEvent,
+                      _window: &mut Window,
+                      app: &mut App| {
+                    if let Some(tab_id) = tab_id {
+                        view.update(app, |shell, cx| {
+                            shell.resolve_agent_permission(tab_id, &request_id, false, cx)
+                        })
+                        .ok();
+                    }
+                },
+            )
+        };
+        let on_cycle_agent_mode = {
+            let tab_id = active_tab.map(|tab| tab.id);
+            let view = cx.entity().downgrade();
+            Arc::new(
+                move |_event: &gpui::ClickEvent, _window: &mut Window, app: &mut App| {
+                    if let Some(tab_id) = tab_id {
+                        view.update(app, |shell, cx| shell.cycle_agent_mode(tab_id, cx))
+                            .ok();
+                    }
+                },
+            )
+        };
+        let on_cycle_agent_config = {
+            let tab_id = active_tab.map(|tab| tab.id);
+            let view = cx.entity().downgrade();
+            Arc::new(
+                move |config_id: String,
+                      _event: &gpui::ClickEvent,
+                      _window: &mut Window,
+                      app: &mut App| {
+                    if let Some(tab_id) = tab_id {
+                        view.update(app, |shell, cx| {
+                            shell.cycle_agent_config_option(tab_id, config_id, cx)
+                        })
+                        .ok();
+                    }
+                },
+            )
+        };
         let workspace_body = match active_tab.map(|tab| &tab.content) {
             Some(WorkspaceTabContent::File(state)) => render_source_viewer(state),
             Some(WorkspaceTabContent::Markdown(state)) => render_markdown_pane(
@@ -2761,6 +4473,22 @@ impl Render for AlasShell {
                 on_terminal_body_bounds,
             )
             .into_any_element(),
+            Some(WorkspaceTabContent::AgentChat(state)) => div()
+                .track_focus(&self.agent_composer_focus)
+                .on_key_down(on_agent_composer_key_down)
+                .child(render_agent_pane(
+                    state,
+                    AgentPaneHandlers {
+                        on_send: on_send_agent_prompt,
+                        on_cancel: on_cancel_agent_prompt,
+                        on_focus_composer: on_focus_agent_composer,
+                        on_allow_permission: on_allow_agent_permission,
+                        on_deny_permission: on_deny_agent_permission,
+                        on_cycle_mode: on_cycle_agent_mode,
+                        on_cycle_config: on_cycle_agent_config,
+                    },
+                ))
+                .into_any_element(),
         };
         div()
             .on_action(cx.listener(|_shell, _: &crate::ui::lifecycle::Quit, _window, cx| {
@@ -2792,6 +4520,17 @@ impl Render for AlasShell {
                     .flex_col()
                     .flex_1()
                     .min_w(px(0.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w(px(0.0))
                     .when(self.command_picker.is_some(), |element| {
                         let picker = self.command_picker.as_ref().unwrap();
                         element.child(render_command_picker(
@@ -2884,6 +4623,44 @@ impl Render for AlasShell {
                                                 .on_click(on_cancel_notification_preferences),
                                         ),
                                 ),
+                        )
+                    })
+                    .when(self.new_tab_picker_open, |element| {
+                        element.child(render_new_tab_picker(
+                            on_select_new_tab_choice,
+                            on_cancel_new_tab_picker,
+                        ))
+                    })
+                    .when(self.agent_provider_picker.is_some(), |element| {
+                        element.child(render_agent_provider_picker(
+                            self.agent_provider_picker.as_deref().unwrap_or(&[]),
+                            on_select_agent_provider,
+                            on_cancel_agent_provider_picker,
+                        ))
+                    })
+                    .when(self.provider_settings.is_some(), |element| {
+                        element.child(
+                            div()
+                                .track_focus(&self.provider_settings_focus)
+                                .on_key_down(on_provider_settings_key_down)
+                                .child(render_provider_settings(
+                                    self.provider_settings.as_ref().unwrap(),
+                                    self.provider_settings_active_field.as_ref(),
+                                    ProviderSettingsHandlers {
+                                        on_close: Arc::new(on_close_provider_settings),
+                                        on_add_provider: Arc::new(on_add_provider),
+                                        on_save: Arc::new(on_save_provider_settings),
+                                        on_cancel: Arc::new(on_cancel_provider_settings),
+                                        on_select_field: on_select_provider_settings_field,
+                                        on_toggle_enabled: on_toggle_provider_enabled,
+                                        on_cycle_trust_mode: on_cycle_provider_trust_mode,
+                                        on_remove_provider,
+                                        on_authenticate: on_authenticate_provider,
+                                        on_run_terminal_auth,
+                                        on_clear_credentials,
+                                        on_view_auth_instructions,
+                                    },
+                                )),
                         )
                     })
                     .when(self.command_settings_dialog.is_some(), |element| {
@@ -3145,24 +4922,26 @@ impl Render for AlasShell {
                                 active_workspace_tab,
                                 on_select_workspace_tab,
                                 on_close_workspace_tab,
-                                on_new_terminal_tab,
+                                on_new_workspace_tab,
                                 workspace_body,
                             )),
                     ),
+                            )
+                            .child(render_project_inspector(
+                                self.model.selected_worktree(),
+                                &self.inspector_state,
+                                &self.file_tree_expansion,
+                                on_toggle_file_tree_node,
+                                on_open_file_from_inspector,
+                            )),
+                    )
+                    .child(render_status_bar(
+                        status_bar_repo,
+                        status_bar_tab,
+                        status_bar_terminal_status.as_ref(),
+                        active_tab.map(|tab| tab.kind),
+                    )),
             )
-            .child(render_project_inspector(
-                self.model.selected_worktree(),
-                &self.inspector_state,
-                &self.file_tree_expansion,
-                on_toggle_file_tree_node,
-                on_open_file_from_inspector,
-            ))
-            .child(render_status_bar(
-                status_bar_repo,
-                status_bar_tab,
-                status_bar_terminal_status.as_ref(),
-                active_tab.map(|tab| tab.kind),
-            ))
     }
 }
 
@@ -3216,6 +4995,25 @@ fn infer_repository_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+fn finish_agent_runtime_start<C, H>(
+    mut runtime: AgentRuntime<C>,
+    cancel_handle: H,
+    start_result: anyhow::Result<()>,
+) -> (AgentThreadState, Option<(AgentRuntime<C>, H)>) {
+    match start_result {
+        Ok(()) => {
+            let thread = runtime.thread().clone();
+            (thread, Some((runtime, cancel_handle)))
+        }
+        Err(error) => {
+            runtime.thread_mut().status = AgentThreadStatus::Failed {
+                message: error.to_string(),
+            };
+            (runtime.thread().clone(), None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3223,6 +5021,25 @@ mod tests {
     #[test]
     fn terminal_refresh_interval_targets_sixty_fps_input_echo() {
         assert!(terminal_refresh_interval() <= Duration::from_millis(16));
+    }
+
+    #[test]
+    fn failed_agent_runtime_start_drops_runtime_and_cancel_handle() {
+        let thread = AgentThreadState::new("provider", PathBuf::from("/repo/worktree"));
+        let runtime =
+            AgentRuntime::with_connection(thread, crate::agent::fake::FakeAcpConnection::new());
+
+        let (thread, runtime_with_cancel) = finish_agent_runtime_start::<_, String>(
+            runtime,
+            "cancel-handle".to_string(),
+            Err(anyhow::anyhow!("create session failed")),
+        );
+
+        assert!(runtime_with_cancel.is_none());
+        assert!(matches!(
+            thread.status,
+            AgentThreadStatus::Failed { ref message } if message == "create session failed"
+        ));
     }
 
     #[test]
