@@ -604,6 +604,33 @@ fn image_preflight_reports_unsupported_extensions() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn image_preflight_reports_permission_denied_when_file_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let worktree = std::env::temp_dir().join(format!(
+        "alas-image-permission-denied-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&worktree).expect("create temp worktree");
+    let image = worktree.join("photo.png");
+    std::fs::write(&image, b"not really a png").expect("write image path");
+    let original_permissions = std::fs::metadata(&image)
+        .expect("image metadata")
+        .permissions();
+
+    std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o000))
+        .expect("remove read permission");
+    let preflight = preflight_image_path(&image);
+    std::fs::set_permissions(&image, original_permissions).expect("restore permissions");
+
+    assert_eq!(preflight, ImagePreflight::PermissionDenied);
+
+    let _ = std::fs::remove_file(image);
+    let _ = std::fs::remove_dir(worktree);
+}
+
 #[test]
 fn image_zoom_transitions_clamp_and_fit_resets() {
     assert_eq!(ImageZoom::Fit.zoom_in(), ImageZoom::Fixed(1.25));

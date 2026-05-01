@@ -850,9 +850,23 @@ pub fn preflight_image_path(path: &Path) -> ImagePreflight {
         return ImagePreflight::UnsupportedExtension(extension);
     }
 
-    match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => ImagePreflight::Ready,
-        Ok(_) => ImagePreflight::NotAFile,
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return match error.kind() {
+                ErrorKind::NotFound => ImagePreflight::NotFound,
+                ErrorKind::PermissionDenied => ImagePreflight::PermissionDenied,
+                _ => ImagePreflight::IoError(error.to_string()),
+            };
+        }
+    };
+
+    if !metadata.is_file() {
+        return ImagePreflight::NotAFile;
+    }
+
+    match std::fs::File::open(path) {
+        Ok(_) => ImagePreflight::Ready,
         Err(error) => match error.kind() {
             ErrorKind::NotFound => ImagePreflight::NotFound,
             ErrorKind::PermissionDenied => ImagePreflight::PermissionDenied,
