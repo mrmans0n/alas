@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use alas::app::{TerminalTabKind, WorkspaceSession};
 use alas::config::NotificationPrefs;
 use alas::notifications::{
-    HarnessCompletionEvent, HarnessCompletionOutcome, HarnessCompletionSource, HookProvider,
-    NotificationController, NotificationSink,
+    AppFocusState, HarnessCompletionContext, HarnessCompletionEvent, HarnessCompletionOutcome,
+    HarnessCompletionSource, HookProvider, NotificationController, NotificationSink,
+    NotificationSound,
 };
 use alas::terminal::{CommandSpec, HarnessKind};
 use serde_json::json;
@@ -21,12 +22,31 @@ impl NotificationSink for FakeNotifier {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FakeFocusState {
+    active: bool,
+}
+
+impl AppFocusState for FakeFocusState {
+    fn is_app_active(&self) -> bool {
+        self.active
+    }
+}
+
 fn controller() -> NotificationController<FakeNotifier> {
     NotificationController::new(FakeNotifier::default())
 }
 
 fn controller_with_preferences(prefs: NotificationPrefs) -> NotificationController<FakeNotifier> {
     NotificationController::new_with_preferences(FakeNotifier::default(), prefs)
+}
+
+fn controller_with_focus(active: bool) -> NotificationController<FakeNotifier, FakeFocusState> {
+    NotificationController::new_with_preferences_and_focus(
+        FakeNotifier::default(),
+        NotificationPrefs::default(),
+        FakeFocusState { active },
+    )
 }
 
 fn cwd() -> PathBuf {
@@ -146,6 +166,9 @@ fn claude_stop_hook_notifies() {
     assert_eq!(event.source, HarnessCompletionSource::ClaudeCodeStop);
     assert_eq!(event.outcome, HarnessCompletionOutcome::Success);
     assert_eq!(event.terminal_tab_id.map(|id| id.0), Some(7));
+    assert_eq!(event.title, "Claude Code completed");
+    assert_eq!(event.body, "Claude Code finished successfully.");
+    assert_eq!(event.sound, NotificationSound::Success);
 }
 
 #[test]
@@ -194,6 +217,98 @@ fn codex_agent_turn_complete_hook_notifies() {
         HarnessCompletionSource::CodexAgentTurnComplete
     );
     assert_eq!(event.terminal_tab_id.map(|id| id.0), Some(11));
+}
+
+#[test]
+fn focused_app_suppresses_hook_notifications() {
+    let mut controller = controller_with_focus(true);
+
+    controller
+        .handle_raw_hook_payload(
+            HookProvider::ClaudeCode,
+            &json!({
+                "hook_event_name": "Stop",
+                "success": true
+            }),
+        )
+        .expect("handle hook");
+
+    assert!(controller.notifier().completions.is_empty());
+}
+
+#[test]
+fn unfocused_app_allows_hook_notifications() {
+    let mut controller = controller_with_focus(false);
+
+    controller
+        .handle_raw_hook_payload(
+            HookProvider::ClaudeCode,
+            &json!({
+                "hook_event_name": "Stop",
+                "success": true
+            }),
+        )
+        .expect("handle hook");
+
+    assert_eq!(controller.notifier().completions.len(), 1);
+}
+
+#[test]
+fn hook_notification_includes_resolved_tab_context() {
+    let mut controller = controller();
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/alas");
+    let tab_id = session.create_terminal_tab(
+        "alas",
+        path.clone(),
+        "Tests".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("cargo test", path),
+    );
+
+    controller
+        .handle_raw_hook_payload_with_context(
+            HookProvider::ClaudeCode,
+            &json!({
+                "hook_event_name": "Stop",
+                "success": false,
+                "terminal_tab_id": tab_id.0
+            }),
+            session
+                .terminal_tab_context(tab_id)
+                .expect("terminal tab context")
+                .into(),
+        )
+        .expect("handle hook");
+
+    assert_eq!(controller.notifier().completions.len(), 1);
+    let event = &controller.notifier().completions[0];
+    assert_eq!(event.title, "Claude Code failed");
+    assert_eq!(event.body, "Claude Code failed in Tests - alas.");
+    assert_eq!(event.sound, NotificationSound::Failure);
+}
+
+#[test]
+fn unresolved_hook_context_does_not_invent_context() {
+    let mut controller = controller();
+
+    controller
+        .handle_raw_hook_payload_with_context(
+            HookProvider::ClaudeCode,
+            &json!({
+                "hook_event_name": "Stop",
+                "success": true,
+                "terminal_tab_id": 7
+            }),
+            HarnessCompletionContext::unresolved(Some(alas::app::TerminalTabId(7))),
+        )
+        .expect("handle hook");
+
+    assert_eq!(controller.notifier().completions.len(), 1);
+    assert_eq!(
+        controller.notifier().completions[0].body,
+        "Claude Code finished successfully."
+    );
 }
 
 #[test]

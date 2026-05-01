@@ -25,7 +25,7 @@ use crate::{
         ResolvedRepoConfig, repository_id_for_path,
     },
     git::{GitInspectorService, GitRunner, GitWorktreeService},
-    notifications::{NotificationController, NotificationService},
+    notifications::{DefaultAppFocusState, DefaultNotificationSink, NotificationController},
     project::FileTreeService,
     terminal::{
         CommandSpec, GhosttyRenderFrame, GhosttyTerminalBackend, TerminalBackend, TerminalKeyInput,
@@ -164,7 +164,7 @@ pub struct AlasShell {
     command_settings_focus: FocusHandle,
     command_settings_active_field: CommandSettingsField,
     notification_preferences_dialog: Option<NotificationPreferencesDialogState>,
-    notification_controller: NotificationController<NotificationService>,
+    notification_controller: NotificationController<DefaultNotificationSink, DefaultAppFocusState>,
     command_picker: Option<CommandPickerState>,
     new_tab_picker_open: bool,
     agent_provider_picker: Option<Vec<AgentProviderConfig>>,
@@ -237,9 +237,10 @@ impl AlasShell {
             command_settings_focus: cx.focus_handle(),
             command_settings_active_field: CommandSettingsField::DefaultName,
             notification_preferences_dialog: None,
-            notification_controller: NotificationController::new_with_preferences(
-                NotificationService,
+            notification_controller: NotificationController::new_with_preferences_and_focus(
+                DefaultNotificationSink::default(),
                 notification_preferences,
+                DefaultAppFocusState::default(),
             ),
             command_picker: None,
             new_tab_picker_open: false,

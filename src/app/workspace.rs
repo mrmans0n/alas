@@ -300,6 +300,14 @@ impl WorkspaceTab {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceTabContext {
+    pub tab_id: WorkspaceTabId,
+    pub tab_name: String,
+    pub repo_id: String,
+    pub worktree_path: PathBuf,
+}
+
 #[derive(Debug, Default)]
 pub struct WorkspaceSession {
     next_tab_id: u64,
@@ -650,6 +658,19 @@ impl WorkspaceSession {
     ) -> Option<&WorkspaceTab> {
         self.tab(repo_id, path, tab_id)
             .filter(|tab| tab.is_terminal())
+    }
+
+    pub fn terminal_tab_context(&self, tab_id: WorkspaceTabId) -> Option<WorkspaceTabContext> {
+        self.tabs.iter().find_map(|(key, tabs)| {
+            tabs.iter()
+                .find(|tab| tab.id == tab_id && tab.is_terminal())
+                .map(|tab| WorkspaceTabContext {
+                    tab_id,
+                    tab_name: tab.name.clone(),
+                    repo_id: key.repo_id.clone(),
+                    worktree_path: key.path.clone(),
+                })
+        })
     }
 
     pub fn terminal_tab_state(
