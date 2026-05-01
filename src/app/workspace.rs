@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::app::{DetectedLanguage, HighlightedSource, detect_language};
 use crate::terminal::{CommandSpec, TerminalBackendSession};
 
-pub const FILE_TAB_MAX_BYTES: u64 = 1_048_576;
+pub const FILE_TAB_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WorkspaceTabId(pub u64);
@@ -39,8 +40,16 @@ pub enum TerminalTabStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileTabLoadState {
     Loading,
-    Loaded { content: String },
-    Error { message: String },
+    Loaded {
+        content: String,
+        size_bytes: u64,
+        line_count: usize,
+        highlight: Option<HighlightedSource>,
+        highlight_error: Option<String>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -71,6 +80,7 @@ pub struct TerminalTabState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileTabState {
     pub file_path: PathBuf,
+    pub language: DetectedLanguage,
     pub load_state: FileTabLoadState,
 }
 
@@ -239,6 +249,7 @@ impl WorkspaceSession {
             .unwrap_or_else(|| file_path.display().to_string());
 
         let file = FileTabState {
+            language: detect_language(&file_path),
             file_path,
             load_state: FileTabLoadState::Loading,
         };

@@ -24,7 +24,7 @@ fn render_file_content(load_state: &FileTabLoadState) -> AnyElement {
             .text_color(TEXT_MUTED)
             .child("Loading file…")
             .into_any_element(),
-        FileTabLoadState::Loaded { content } => div()
+        FileTabLoadState::Loaded { content, .. } => div()
             .id("file-pane-content")
             .flex()
             .flex_1()

@@ -33,10 +33,10 @@ pub fn render_markdown_pane(
             | (FileTabLoadState::Loaded { .. }, MarkdownViewMode::Code) => {
                 render_source_viewer(&tab.file)
             }
-            (FileTabLoadState::Loaded { content }, MarkdownViewMode::Preview) => {
+            (FileTabLoadState::Loaded { content, .. }, MarkdownViewMode::Preview) => {
                 render_preview(content)
             }
-            (FileTabLoadState::Loaded { content }, MarkdownViewMode::Split) => div()
+            (FileTabLoadState::Loaded { content, .. }, MarkdownViewMode::Split) => div()
                 .flex()
                 .flex_1()
                 .min_h(px(0.0))

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use alas::app::{
-    FileTabLoadState, MarkdownViewMode, TerminalTabId, TerminalTabKind, TerminalTabStatus,
-    WorkspaceSession, WorkspaceTabContent, WorkspaceTabKind,
+    DetectedLanguage, FileTabLoadState, MarkdownViewMode, TerminalTabId, TerminalTabKind,
+    TerminalTabStatus, WorkspaceSession, WorkspaceTabContent, WorkspaceTabKind,
 };
 use alas::terminal::{CommandSpec, TerminalBackendSession};
 
@@ -478,6 +478,10 @@ fn file_tab_load_state_can_be_updated() {
             file,
             FileTabLoadState::Loaded {
                 content: "hello".to_string(),
+                size_bytes: 5,
+                line_count: 1,
+                highlight: None,
+                highlight_error: None,
             },
         )
         .expect("set file state");
@@ -486,7 +490,7 @@ fn file_tab_load_state_can_be_updated() {
     match &active.content {
         WorkspaceTabContent::File(state) => assert!(matches!(
             &state.load_state,
-            FileTabLoadState::Loaded { content } if content == "hello"
+            FileTabLoadState::Loaded { content, .. } if content == "hello"
         )),
         WorkspaceTabContent::Markdown(_) | WorkspaceTabContent::Terminal(_) => {
             panic!("expected file tab")
@@ -508,6 +512,7 @@ fn markdown_files_open_in_split_mode_by_default() {
     match &active.content {
         WorkspaceTabContent::Markdown(state) => {
             assert_eq!(state.view_mode, MarkdownViewMode::Split);
+            assert_eq!(state.file.language, DetectedLanguage::Markdown);
             assert!(matches!(state.file.load_state, FileTabLoadState::Loading));
         }
         WorkspaceTabContent::File(_) | WorkspaceTabContent::Terminal(_) => {
