@@ -123,3 +123,24 @@
 3. Confirm the Files section shows worktree files and supports directory expand/collapse.
 4. Confirm file loading errors remain scoped to the Files section and do not break terminal input.
 5. Confirm Git status loading errors remain scoped to the Changed section and do not break terminal input.
+
+## ACP Agent Chat
+
+1. Ensure an ACP provider is installed, for example `opencode acp` or another provider command.
+2. Open Alas and select a worktree.
+3. Open provider settings and add a global provider with command/args.
+4. Authenticate from Alas if the provider reports auth is required.
+5. Use `+ → Agent Chat` and select the provider.
+6. Send a prompt and confirm streamed transcript updates appear.
+7. Trigger a file read/write or terminal command and confirm the tool card shows the side effect under Allow Everything.
+8. Restart Alas and confirm the chat returns.
+9. Confirm the composer is enabled only if ACP resume succeeds; otherwise the transcript is read-only.
+
+## ACP Provider Auto-Discovery
+
+1. Ensure `opencode` is installed and available on `PATH`.
+2. Start Alas with no configured `opencode` provider.
+3. Open Provider Settings and confirm OpenCode appears with command `opencode` and args `["acp"]`.
+4. Disable OpenCode, restart Alas, and confirm it stays disabled.
+5. Remove OpenCode, save settings, restart Alas, and confirm it is not re-added.
+6. If `claude` or `codex` are installed, confirm they appear only as suggestions unless manually configured.
