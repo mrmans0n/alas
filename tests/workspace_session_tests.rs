@@ -190,6 +190,72 @@ fn tab_runtime_state_can_be_updated_and_removed() {
 }
 
 #[test]
+fn terminal_tab_status_can_be_read_and_updated_by_global_id() {
+    let mut session = WorkspaceSession::default();
+    let path_a = PathBuf::from("/repo/a");
+    let path_b = PathBuf::from("/repo/b");
+    let inactive = session.create_terminal_tab(
+        "repo",
+        path_a.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+    let active = session.create_terminal_tab(
+        "repo",
+        path_a.clone(),
+        "Tests".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("cargo test", path_a.clone()),
+    );
+    let other_worktree = session.create_terminal_tab(
+        "repo",
+        path_b.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/b"),
+    );
+
+    session
+        .set_tab_status("repo", &path_a, inactive, TerminalTabStatus::Running)
+        .expect("set inactive running");
+    session
+        .set_terminal_tab_status_by_id(inactive, TerminalTabStatus::Exited(Some(0)))
+        .expect("set status by id");
+
+    assert_eq!(
+        session.terminal_tab_status_by_id(inactive),
+        Some(&TerminalTabStatus::Exited(Some(0)))
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(active),
+        Some(&TerminalTabStatus::NotStarted)
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(other_worktree),
+        Some(&TerminalTabStatus::NotStarted)
+    );
+    assert_eq!(
+        session.active_tab("repo", &path_a).map(|tab| tab.id),
+        Some(active)
+    );
+}
+
+#[test]
+fn terminal_tab_status_lookup_ignores_non_terminal_tabs() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let file = session.open_file_tab("repo", path.clone(), path.join("src/main.rs"));
+
+    assert_eq!(session.terminal_tab_status_by_id(file), None);
+    assert!(
+        session
+            .set_terminal_tab_status_by_id(file, TerminalTabStatus::Failed)
+            .is_err()
+    );
+}
+
+#[test]
 fn failed_startup_tab_preserves_failure_without_backend_session() {
     let mut session = WorkspaceSession::default();
     let path = PathBuf::from("/repo/a");

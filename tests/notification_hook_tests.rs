@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use alas::app::{TerminalTabKind, WorkspaceSession};
+use alas::app::{TerminalTabKind, TerminalTabStatus, WorkspaceSession};
 use alas::config::NotificationPrefs;
+use alas::harness_completion::{HarnessCompletionIngestionResult, ingest_harness_completion_hook};
 use alas::notifications::{
     AppFocusState, HarnessCompletionContext, HarnessCompletionEvent, HarnessCompletionOutcome,
     HarnessCompletionSource, HookProvider, NotificationController, NotificationSink,
@@ -74,6 +75,25 @@ fn shell_tab(path: &Path) -> WorkspaceSession {
         CommandSpec::shell_command("$SHELL", path.to_path_buf()),
     );
     session
+}
+
+fn running_terminal_tab(
+    session: &mut WorkspaceSession,
+    name: &str,
+    command: &str,
+    path: &Path,
+) -> alas::app::TerminalTabId {
+    let tab_id = session.create_terminal_tab(
+        "repo",
+        path.to_path_buf(),
+        name.to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command(command, path.to_path_buf()),
+    );
+    session
+        .set_tab_status("repo", path, tab_id, TerminalTabStatus::Running)
+        .expect("set tab running");
+    tab_id
 }
 
 #[test]
@@ -237,6 +257,184 @@ fn focused_app_suppresses_hook_notifications() {
 }
 
 #[test]
+fn claude_stop_hook_ingestion_marks_running_tab_completed_and_notifies() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let tab_id = running_terminal_tab(&mut session, "Claude", "claude", &path);
+    let mut controller = controller();
+
+    let result = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &json!({
+            "hook_event_name": "Stop",
+            "success": true,
+            "terminal_tab_id": tab_id.0
+        }),
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest hook");
+
+    assert_eq!(
+        result,
+        HarnessCompletionIngestionResult::CompletedTab { tab_id }
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(tab_id),
+        Some(&TerminalTabStatus::Exited(Some(0)))
+    );
+    assert_eq!(controller.notifier().completions.len(), 1);
+    assert_eq!(
+        controller.notifier().completions[0].outcome,
+        HarnessCompletionOutcome::Success
+    );
+}
+
+#[test]
+fn codex_completion_hook_ingestion_marks_running_tab_failed_and_notifies() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let tab_id = running_terminal_tab(&mut session, "Codex", "codex", &path);
+    let mut controller = controller();
+
+    let result = ingest_harness_completion_hook(
+        HookProvider::Codex,
+        &json!({
+            "type": "agent-turn-complete",
+            "status": "failed",
+            "alas_terminal_tab_id": tab_id.0
+        }),
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest hook");
+
+    assert_eq!(
+        result,
+        HarnessCompletionIngestionResult::FailedTab { tab_id }
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(tab_id),
+        Some(&TerminalTabStatus::Failed)
+    );
+    assert_eq!(controller.notifier().completions.len(), 1);
+    assert_eq!(
+        controller.notifier().completions[0].outcome,
+        HarnessCompletionOutcome::Failure
+    );
+}
+
+#[test]
+fn hook_ingestion_correlates_inactive_terminal_tabs() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let inactive = running_terminal_tab(&mut session, "Claude", "claude", &path);
+    let active = running_terminal_tab(&mut session, "Tests", "cargo test", &path);
+    session
+        .set_active_tab("repo", &path, active)
+        .expect("set active tab");
+    let mut controller = controller();
+
+    let result = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &json!({
+            "hook_event_name": "Stop",
+            "exit_code": 0,
+            "terminal_tab_id": inactive.0
+        }),
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest hook");
+
+    assert_eq!(
+        result,
+        HarnessCompletionIngestionResult::CompletedTab { tab_id: inactive }
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(inactive),
+        Some(&TerminalTabStatus::Exited(Some(0)))
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(active),
+        Some(&TerminalTabStatus::Running)
+    );
+    assert_eq!(
+        session.active_tab("repo", &path).map(|tab| tab.id),
+        Some(active)
+    );
+    assert_eq!(controller.notifier().completions.len(), 1);
+}
+
+#[test]
+fn duplicate_completed_tab_hook_is_suppressed() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let tab_id = running_terminal_tab(&mut session, "Claude", "claude", &path);
+    let mut controller = controller();
+    let payload = json!({
+        "hook_event_name": "Stop",
+        "success": true,
+        "terminal_tab_id": tab_id.0
+    });
+
+    let first = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &payload,
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest first hook");
+    let second = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &payload,
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest duplicate hook");
+
+    assert_eq!(
+        first,
+        HarnessCompletionIngestionResult::CompletedTab { tab_id }
+    );
+    assert_eq!(
+        second,
+        HarnessCompletionIngestionResult::IgnoredDuplicate { tab_id }
+    );
+    assert_eq!(controller.notifier().completions.len(), 1);
+}
+
+#[test]
+fn unsupported_hook_ingestion_does_not_notify_or_mutate_tab() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let tab_id = running_terminal_tab(&mut session, "Command", "cargo test", &path);
+    let mut controller = controller();
+
+    let result = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &json!({
+            "hook_event_name": "PreToolUse",
+            "success": true,
+            "terminal_tab_id": tab_id.0
+        }),
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest hook");
+
+    assert_eq!(
+        result,
+        HarnessCompletionIngestionResult::IgnoredUnsupportedPayload
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(tab_id),
+        Some(&TerminalTabStatus::Running)
+    );
+    assert!(controller.notifier().completions.is_empty());
+}
+
+#[test]
 fn unfocused_app_allows_hook_notifications() {
     let mut controller = controller_with_focus(false);
 
@@ -309,6 +507,68 @@ fn unresolved_hook_context_does_not_invent_context() {
         controller.notifier().completions[0].body,
         "Claude Code finished successfully."
     );
+}
+
+#[test]
+fn hook_without_tab_id_notifies_without_mutating_tabs() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let tab_id = running_terminal_tab(&mut session, "Claude", "claude", &path);
+    let mut controller = controller();
+
+    let result = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &json!({
+            "hook_event_name": "Stop",
+            "success": true
+        }),
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest hook");
+
+    assert_eq!(result, HarnessCompletionIngestionResult::NotifiedWithoutTab);
+    assert_eq!(
+        session.terminal_tab_status_by_id(tab_id),
+        Some(&TerminalTabStatus::Running)
+    );
+    assert_eq!(controller.notifier().completions.len(), 1);
+}
+
+#[test]
+fn non_running_tab_hook_does_not_complete_or_notify() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let tab_id = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Claude".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("claude", path.clone()),
+    );
+    let mut controller = controller();
+
+    let result = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &json!({
+            "hook_event_name": "Stop",
+            "success": true,
+            "terminal_tab_id": tab_id.0
+        }),
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest hook");
+
+    assert_eq!(
+        result,
+        HarnessCompletionIngestionResult::IgnoredNonRunningTab { tab_id }
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(tab_id),
+        Some(&TerminalTabStatus::NotStarted)
+    );
+    assert!(controller.notifier().completions.is_empty());
 }
 
 #[test]

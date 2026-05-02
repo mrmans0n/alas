@@ -683,6 +683,15 @@ impl WorkspaceSession {
             .and_then(|tab| tab.terminal_tab_state())
     }
 
+    pub fn terminal_tab_status_by_id(&self, tab_id: WorkspaceTabId) -> Option<&TerminalTabStatus> {
+        self.tabs
+            .values()
+            .flat_map(|tabs| tabs.iter())
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| tab.terminal_tab_state())
+            .map(|state| &state.status)
+    }
+
     pub fn set_active_tab(
         &mut self,
         repo_id: impl Into<String>,
@@ -725,6 +734,16 @@ impl WorkspaceSession {
     ) -> anyhow::Result<()> {
         let key = WorktreeKey::new(repo_id, path.to_path_buf());
         let tab = self.known_terminal_tab_mut(&key, tab_id)?;
+        tab.status = status;
+        Ok(())
+    }
+
+    pub fn set_terminal_tab_status_by_id(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        status: TerminalTabStatus,
+    ) -> anyhow::Result<()> {
+        let tab = self.known_terminal_tab_mut_by_id(tab_id)?;
         tab.status = status;
         Ok(())
     }
@@ -936,6 +955,21 @@ impl WorkspaceSession {
                 key.path.display()
             )
         })?;
+
+        tab.terminal_tab_state_mut()
+            .ok_or_else(|| anyhow::anyhow!("workspace tab {:?} is not a terminal tab", tab_id))
+    }
+
+    fn known_terminal_tab_mut_by_id(
+        &mut self,
+        tab_id: WorkspaceTabId,
+    ) -> anyhow::Result<&mut TerminalTabState> {
+        let tab = self
+            .tabs
+            .values_mut()
+            .flat_map(|tabs| tabs.iter_mut())
+            .find(|tab| tab.id == tab_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown workspace tab {:?}", tab_id))?;
 
         tab.terminal_tab_state_mut()
             .ok_or_else(|| anyhow::anyhow!("workspace tab {:?} is not a terminal tab", tab_id))
