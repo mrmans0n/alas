@@ -748,6 +748,17 @@ impl WorkspaceSession {
         Ok(())
     }
 
+    pub fn set_terminal_tab_failure_by_id(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        cause: impl Into<String>,
+    ) -> anyhow::Result<()> {
+        let tab = self.known_terminal_tab_mut_by_id(tab_id)?;
+        tab.status = TerminalTabStatus::Failed;
+        tab.failure_cause = Some(cause.into());
+        Ok(())
+    }
+
     pub fn set_tab_failure(
         &mut self,
         repo_id: impl Into<String>,

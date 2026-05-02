@@ -405,6 +405,51 @@ fn duplicate_completed_tab_hook_is_suppressed() {
 }
 
 #[test]
+fn first_hook_for_already_exited_tab_still_notifies() {
+    let path = cwd();
+    let mut session = WorkspaceSession::default();
+    let tab_id = running_terminal_tab(&mut session, "Claude", "claude", &path);
+    session
+        .set_terminal_tab_status_by_id(tab_id, TerminalTabStatus::Exited(Some(0)))
+        .expect("mark tab exited");
+    let mut controller = controller();
+    let payload = json!({
+        "hook_event_name": "Stop",
+        "success": true,
+        "terminal_tab_id": tab_id.0
+    });
+
+    let first = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &payload,
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest first hook");
+    let second = ingest_harness_completion_hook(
+        HookProvider::ClaudeCode,
+        &payload,
+        &mut session,
+        &mut controller,
+    )
+    .expect("ingest duplicate hook");
+
+    assert_eq!(
+        first,
+        HarnessCompletionIngestionResult::NotifiedWithoutTerminalTransition { tab_id }
+    );
+    assert_eq!(
+        second,
+        HarnessCompletionIngestionResult::IgnoredDuplicate { tab_id }
+    );
+    assert_eq!(
+        session.terminal_tab_status_by_id(tab_id),
+        Some(&TerminalTabStatus::Exited(Some(0)))
+    );
+    assert_eq!(controller.notifier().completions.len(), 1);
+}
+
+#[test]
 fn unsupported_hook_ingestion_does_not_notify_or_mutate_tab() {
     let path = cwd();
     let mut session = WorkspaceSession::default();
