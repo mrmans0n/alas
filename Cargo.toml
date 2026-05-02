@@ -32,6 +32,13 @@ tree-sitter-highlight = "0.25.10"
 tree-sitter-rust = "0.24.2"
 tree-sitter-json = "0.24.8"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSDictionary", "NSError", "NSObject", "NSString", "std"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter", "block2"] }
+
 [features]
 default = ["ghostty-vt"]
 ghostty-vt = ["dep:libghostty-vt"]

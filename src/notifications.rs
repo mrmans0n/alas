@@ -1,5 +1,11 @@
-use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    path::PathBuf,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use serde_json::Value;
 
@@ -22,6 +28,19 @@ pub type DefaultNotificationSink = NotificationService;
 use crate::app::{TerminalTabId, WorkspaceTabContext};
 use crate::config::NotificationPrefs;
 use crate::terminal::HarnessKind;
+
+const ACTIVATION_KIND_KEY: &str = "alas_activation_kind";
+const ACTIVATION_TOKEN_KEY: &str = "alas_activation_token";
+const ACTIVATION_REPO_ID_KEY: &str = "alas_repo_id";
+const ACTIVATION_WORKTREE_PATH_KEY: &str = "alas_worktree_path";
+const ACTIVATION_TERMINAL_TAB_ID_KEY: &str = "alas_terminal_tab_id";
+const HARNESS_COMPLETION_ACTIVATION_KIND: &str = "harness_completion";
+const ACTIVATION_REGISTRY_CAPACITY: usize = 256;
+
+static NEXT_ACTIVATION_TOKEN: AtomicU64 = AtomicU64::new(1);
+static GLOBAL_ACTIVATION_REGISTRY: OnceLock<Mutex<NotificationActivationRegistry>> =
+    OnceLock::new();
+static PENDING_ACTIVATIONS: OnceLock<Mutex<Vec<NotificationActivation>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookProvider {
@@ -56,6 +75,16 @@ pub struct HarnessCompletionEvent {
     pub sound: NotificationSound,
 }
 
+impl HarnessCompletionEvent {
+    pub fn activation_target(&self) -> Option<NotificationTabTarget> {
+        Some(NotificationTabTarget {
+            repo_id: self.context.repo_id.clone()?,
+            worktree_path: self.context.worktree_path.clone()?,
+            terminal_tab_id: self.context.terminal_tab_id?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HarnessCompletionContext {
     pub terminal_tab_id: Option<TerminalTabId>,
@@ -88,6 +117,183 @@ impl From<WorkspaceTabContext> for HarnessCompletionContext {
 pub enum NotificationSound {
     Success,
     Failure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationTabTarget {
+    pub repo_id: String,
+    pub worktree_path: PathBuf,
+    pub terminal_tab_id: TerminalTabId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NotificationActivationToken(String);
+
+impl NotificationActivationToken {
+    fn generate() -> Self {
+        let token_id = NEXT_ACTIVATION_TOKEN.fetch_add(1, Ordering::Relaxed);
+        Self(format!("{}-{token_id}", std::process::id()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for NotificationActivationToken {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for NotificationActivationToken {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationActivationPayload {
+    pub kind: String,
+    pub token: Option<NotificationActivationToken>,
+    pub target: Option<NotificationTabTarget>,
+}
+
+impl NotificationActivationPayload {
+    pub fn harness_completion(
+        token: NotificationActivationToken,
+        target: NotificationTabTarget,
+    ) -> Self {
+        Self {
+            kind: HARNESS_COMPLETION_ACTIVATION_KIND.to_string(),
+            token: Some(token),
+            target: Some(target),
+        }
+    }
+
+    pub fn from_values(kind: Option<&str>, token: Option<&str>) -> Option<Self> {
+        Some(Self {
+            kind: kind?.to_string(),
+            token: token.map(NotificationActivationToken::from),
+            target: None,
+        })
+    }
+
+    pub fn from_user_info_values(
+        kind: Option<&str>,
+        token: Option<&str>,
+        repo_id: Option<&str>,
+        worktree_path: Option<&str>,
+        terminal_tab_id: Option<&str>,
+    ) -> Option<Self> {
+        let target = match (repo_id, worktree_path, terminal_tab_id) {
+            (Some(repo_id), Some(worktree_path), Some(terminal_tab_id)) => {
+                Some(NotificationTabTarget {
+                    repo_id: repo_id.to_string(),
+                    worktree_path: PathBuf::from(worktree_path),
+                    terminal_tab_id: TerminalTabId(terminal_tab_id.parse().ok()?),
+                })
+            }
+            _ => None,
+        };
+
+        Some(Self {
+            kind: kind?.to_string(),
+            token: token.map(NotificationActivationToken::from),
+            target,
+        })
+    }
+
+    pub fn user_info_entries(&self) -> Vec<(&'static str, String)> {
+        let mut entries = vec![(ACTIVATION_KIND_KEY, self.kind.clone())];
+        if let Some(token) = self.token.as_ref() {
+            entries.push((ACTIVATION_TOKEN_KEY, token.as_str().to_string()));
+        }
+        if let Some(target) = self.target.as_ref() {
+            entries.push((ACTIVATION_REPO_ID_KEY, target.repo_id.clone()));
+            entries.push((
+                ACTIVATION_WORKTREE_PATH_KEY,
+                target.worktree_path.to_string_lossy().into_owned(),
+            ));
+            entries.push((
+                ACTIVATION_TERMINAL_TAB_ID_KEY,
+                target.terminal_tab_id.0.to_string(),
+            ));
+        }
+        entries
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationActivation {
+    HarnessCompletion(NotificationTabTarget),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationActivationResolution {
+    Resolved(NotificationTabTarget),
+    MissingToken,
+    UnknownToken,
+    UnsupportedKind,
+}
+
+#[derive(Debug, Default)]
+pub struct NotificationActivationRegistry {
+    entries: HashMap<NotificationActivationToken, NotificationTabTarget>,
+    insertion_order: VecDeque<NotificationActivationToken>,
+}
+
+impl NotificationActivationRegistry {
+    pub fn register_harness_completion(
+        &mut self,
+        target: NotificationTabTarget,
+    ) -> NotificationActivationPayload {
+        let token = NotificationActivationToken::generate();
+        self.register_harness_completion_with_token(token, target)
+    }
+
+    pub fn register_harness_completion_with_token(
+        &mut self,
+        token: NotificationActivationToken,
+        target: NotificationTabTarget,
+    ) -> NotificationActivationPayload {
+        self.entries.remove(&token);
+        self.insertion_order
+            .retain(|existing_token| existing_token != &token);
+        self.entries.insert(token.clone(), target.clone());
+        self.insertion_order.push_back(token.clone());
+        while self.insertion_order.len() > ACTIVATION_REGISTRY_CAPACITY {
+            if let Some(expired_token) = self.insertion_order.pop_front() {
+                self.entries.remove(&expired_token);
+            }
+        }
+        NotificationActivationPayload::harness_completion(token, target)
+    }
+
+    pub fn resolve(
+        &mut self,
+        payload: Option<NotificationActivationPayload>,
+    ) -> NotificationActivationResolution {
+        let Some(payload) = payload else {
+            return NotificationActivationResolution::MissingToken;
+        };
+        if payload.kind != HARNESS_COMPLETION_ACTIVATION_KIND {
+            return NotificationActivationResolution::UnsupportedKind;
+        }
+
+        if let Some(token) = payload.token
+            && let Some(target) = self.entries.remove(&token)
+        {
+            self.insertion_order
+                .retain(|existing_token| existing_token != &token);
+            return NotificationActivationResolution::Resolved(target);
+        }
+
+        payload
+            .target
+            .map(NotificationActivationResolution::Resolved)
+            .unwrap_or(NotificationActivationResolution::UnknownToken)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -445,6 +651,82 @@ fn terminal_tab_id(payload: &Value) -> Option<TerminalTabId> {
         .and_then(Value::as_u64)
         .or_else(|| payload.get("alas_terminal_tab_id").and_then(Value::as_u64))
         .map(TerminalTabId)
+}
+
+pub fn register_harness_completion_activation(
+    target: NotificationTabTarget,
+) -> NotificationActivationPayload {
+    global_registry()
+        .lock()
+        .expect("notification activation registry poisoned")
+        .register_harness_completion(target)
+}
+
+pub fn resolve_notification_activation(
+    payload: Option<NotificationActivationPayload>,
+) -> NotificationActivationResolution {
+    global_registry()
+        .lock()
+        .expect("notification activation registry poisoned")
+        .resolve(payload)
+}
+
+pub fn enqueue_notification_activation(activation: NotificationActivation) {
+    pending_activations()
+        .lock()
+        .expect("notification activation queue poisoned")
+        .push(activation);
+}
+
+pub fn drain_notification_activations() -> Vec<NotificationActivation> {
+    pending_activations()
+        .lock()
+        .expect("notification activation queue poisoned")
+        .drain(..)
+        .collect()
+}
+
+pub fn activation_payload_from_values(
+    kind: Option<&str>,
+    token: Option<&str>,
+) -> Option<NotificationActivationPayload> {
+    NotificationActivationPayload::from_values(kind, token)
+}
+
+pub fn activation_kind_key() -> &'static str {
+    ACTIVATION_KIND_KEY
+}
+
+pub fn activation_token_key() -> &'static str {
+    ACTIVATION_TOKEN_KEY
+}
+
+pub fn activation_repo_id_key() -> &'static str {
+    ACTIVATION_REPO_ID_KEY
+}
+
+pub fn activation_worktree_path_key() -> &'static str {
+    ACTIVATION_WORKTREE_PATH_KEY
+}
+
+pub fn activation_terminal_tab_id_key() -> &'static str {
+    ACTIVATION_TERMINAL_TAB_ID_KEY
+}
+
+#[cfg(target_os = "macos")]
+pub fn install_notification_activation_handler() {
+    macos::install_delegate();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn install_notification_activation_handler() {}
+
+fn global_registry() -> &'static Mutex<NotificationActivationRegistry> {
+    GLOBAL_ACTIVATION_REGISTRY.get_or_init(|| Mutex::new(NotificationActivationRegistry::default()))
+}
+
+fn pending_activations() -> &'static Mutex<Vec<NotificationActivation>> {
+    PENDING_ACTIVATIONS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn notification_event(signal: &HookSignal) -> HarnessCompletionNotificationEvent {

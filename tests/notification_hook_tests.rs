@@ -529,6 +529,14 @@ fn hook_notification_includes_resolved_tab_context() {
     assert_eq!(event.title, "Claude Code failed");
     assert_eq!(event.body, "Claude Code failed in Tests - alas.");
     assert_eq!(event.sound, NotificationSound::Failure);
+    assert_eq!(
+        event.activation_target(),
+        Some(alas::notifications::NotificationTabTarget {
+            repo_id: "alas".to_string(),
+            worktree_path: PathBuf::from("/repo/alas"),
+            terminal_tab_id: tab_id,
+        })
+    );
 }
 
 #[test]

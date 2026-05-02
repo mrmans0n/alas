@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agent::{AgentResumeState, AgentThreadRecord, AgentThreadState, AgentThreadStatus};
 use crate::app::{DetectedLanguage, HighlightedSource, detect_language};
+use crate::notifications::NotificationTabTarget;
 use crate::terminal::{CommandSpec, TerminalBackendSession};
 
 pub const FILE_TAB_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -671,6 +672,45 @@ impl WorkspaceSession {
                     worktree_path: key.path.clone(),
                 })
         })
+    }
+
+    pub fn find_terminal_tab_target(
+        &self,
+        tab_id: WorkspaceTabId,
+    ) -> Option<NotificationTabTarget> {
+        self.terminal_tab_context(tab_id)
+            .map(|context| NotificationTabTarget {
+                repo_id: context.repo_id,
+                worktree_path: context.worktree_path,
+                terminal_tab_id: context.tab_id,
+            })
+    }
+
+    pub fn activate_terminal_tab_target(
+        &mut self,
+        target: &NotificationTabTarget,
+    ) -> anyhow::Result<()> {
+        if self
+            .terminal_tab(
+                &target.repo_id,
+                &target.worktree_path,
+                target.terminal_tab_id,
+            )
+            .is_none()
+        {
+            anyhow::bail!(
+                "unknown terminal tab {:?} for repo '{}' worktree {}",
+                target.terminal_tab_id,
+                target.repo_id,
+                target.worktree_path.display()
+            );
+        }
+
+        self.set_active_tab(
+            &target.repo_id,
+            &target.worktree_path,
+            target.terminal_tab_id,
+        )
     }
 
     pub fn terminal_tab_state(
