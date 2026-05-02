@@ -73,6 +73,38 @@ fn worktree_can_have_multiple_named_terminal_tabs() {
 }
 
 #[test]
+fn terminal_tab_context_resolves_existing_terminal_tab() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let tab_id = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Tests".to_string(),
+        TerminalTabKind::Command,
+        CommandSpec::shell_command("cargo test", path.clone()),
+    );
+
+    let context = session
+        .terminal_tab_context(tab_id)
+        .expect("terminal tab context");
+
+    assert_eq!(context.tab_id, tab_id);
+    assert_eq!(context.tab_name, "Tests");
+    assert_eq!(context.repo_id, "repo");
+    assert_eq!(context.worktree_path, path);
+}
+
+#[test]
+fn terminal_tab_context_ignores_missing_or_non_terminal_tabs() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let file_tab = session.open_file_tab("repo", path.clone(), path.join("README.md"));
+
+    assert!(session.terminal_tab_context(file_tab).is_none());
+    assert!(session.terminal_tab_context(TerminalTabId(999)).is_none());
+}
+
+#[test]
 fn active_tab_is_scoped_per_worktree() {
     let mut session = WorkspaceSession::default();
     let path_a = PathBuf::from("/repo/a");

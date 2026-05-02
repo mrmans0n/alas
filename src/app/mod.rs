@@ -23,6 +23,6 @@ pub use workspace::WorkspaceTabId as TerminalTabId;
 pub use workspace::{
     FILE_TAB_MAX_BYTES, FileTabLoadState, FileTabState, ImagePreflight, ImageTabState, ImageZoom,
     MarkdownTabState, MarkdownViewMode, TerminalTabKind, TerminalTabState, TerminalTabStatus,
-    WorkspaceSession, WorkspaceTab, WorkspaceTabContent, WorkspaceTabId, WorkspaceTabKind,
-    WorktreeKey, is_supported_image_path, preflight_image_path,
+    WorkspaceSession, WorkspaceTab, WorkspaceTabContent, WorkspaceTabContext, WorkspaceTabId,
+    WorkspaceTabKind, WorktreeKey, is_supported_image_path, preflight_image_path,
 };
