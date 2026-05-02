@@ -1,3 +1,4 @@
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -95,7 +96,7 @@ pub enum HookBackedHarness {
     Codex,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum HarnessCompletionOutcome {
     Success,
     Failure,
@@ -215,7 +216,30 @@ pub struct NotificationController<N, F = NeverFocusedAppFocusState> {
     focus_state: F,
     preferences: NotificationPrefs,
     notification_service: NotificationService,
+    recent_hook_signals: VecDeque<HookSignalKey>,
+    seen_hook_signals: HashSet<HookSignalKey>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct HookSignalKey {
+    harness: HarnessKind,
+    source: HarnessCompletionSource,
+    outcome: HarnessCompletionOutcome,
+    terminal_tab_id: Option<TerminalTabId>,
+}
+
+impl From<&HookSignal> for HookSignalKey {
+    fn from(signal: &HookSignal) -> Self {
+        Self {
+            harness: signal.harness,
+            source: signal.source,
+            outcome: signal.outcome,
+            terminal_tab_id: signal.terminal_tab_id,
+        }
+    }
+}
+
+const RECENT_HOOK_SIGNAL_CAPACITY: usize = 256;
 
 impl<N> NotificationController<N> {
     pub fn new(notifier: N) -> Self {
@@ -238,6 +262,8 @@ impl<N, F> NotificationController<N, F> {
             focus_state,
             preferences,
             notification_service: NotificationService,
+            recent_hook_signals: VecDeque::new(),
+            seen_hook_signals: HashSet::new(),
         }
     }
 
@@ -263,7 +289,7 @@ impl<N, F> NotificationController<N, F> {
 }
 
 impl<N: NotificationSink, F: AppFocusState> NotificationController<N, F> {
-    pub fn handle_hook_signal(&mut self, signal: HookSignal) -> anyhow::Result<()> {
+    pub fn handle_hook_signal(&mut self, signal: HookSignal) -> anyhow::Result<bool> {
         let context = HarnessCompletionContext::unresolved(signal.terminal_tab_id);
         self.handle_hook_signal_with_context(signal, context)
     }
@@ -272,7 +298,7 @@ impl<N: NotificationSink, F: AppFocusState> NotificationController<N, F> {
         &mut self,
         signal: HookSignal,
         context: HarnessCompletionContext,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let notification_event = notification_event(&signal);
         if self.notification_service.harness_completion_decision(
             &self.preferences,
@@ -280,25 +306,31 @@ impl<N: NotificationSink, F: AppFocusState> NotificationController<N, F> {
             self.focus_state.is_app_active(),
         ) != NotificationDecision::Allowed
         {
-            return Ok(());
+            return Ok(true);
+        }
+
+        if !self.remember_hook_signal(&signal) {
+            return Ok(false);
         }
 
         self.notifier.notify_harness_completed(
             self.notification_service
                 .build_harness_completion_event(signal, context),
-        )
+        )?;
+
+        Ok(true)
     }
 
     pub fn handle_raw_hook_payload(
         &mut self,
         provider: HookProvider,
         payload: &Value,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         if let Some(signal) = parse_hook_signal(provider, payload) {
-            self.handle_hook_signal(signal)?;
+            return self.handle_hook_signal(signal);
         }
 
-        Ok(())
+        Ok(false)
     }
 
     pub fn handle_raw_hook_payload_with_context(
@@ -306,12 +338,29 @@ impl<N: NotificationSink, F: AppFocusState> NotificationController<N, F> {
         provider: HookProvider,
         payload: &Value,
         context: HarnessCompletionContext,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         if let Some(signal) = parse_hook_signal(provider, payload) {
-            self.handle_hook_signal_with_context(signal, context)?;
+            return self.handle_hook_signal_with_context(signal, context);
         }
 
-        Ok(())
+        Ok(false)
+    }
+
+    fn remember_hook_signal(&mut self, signal: &HookSignal) -> bool {
+        let key = HookSignalKey::from(signal);
+        if self.seen_hook_signals.contains(&key) {
+            return false;
+        }
+
+        self.seen_hook_signals.insert(key);
+        self.recent_hook_signals.push_back(key);
+        while self.recent_hook_signals.len() > RECENT_HOOK_SIGNAL_CAPACITY {
+            if let Some(old_key) = self.recent_hook_signals.pop_front() {
+                self.seen_hook_signals.remove(&old_key);
+            }
+        }
+
+        true
     }
 }
 
