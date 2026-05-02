@@ -33,6 +33,12 @@ fn central_file_and_image_bodies_are_scroll_owners() {
         "generic file pane content must be a bounded scroll container"
     );
     assert!(
+        file_pane.contains(".font_family(TERMINAL_FONT_FAMILY)")
+            && file_pane.contains(".text_size(px(TERMINAL_FONT_SIZE_PX))")
+            && file_pane.contains(".line_height(px(CELL_HEIGHT_PX))"),
+        "generic file pane content must use the same text metrics as terminal/source panes"
+    );
+    assert!(
         image_view.contains(
             ".id(\"image-body\") .flex() .flex_1() .min_h(px(0.0)) .items_center() .justify_center() .overflow_scroll()"
         ),
