@@ -31,7 +31,11 @@ use crate::terminal::HarnessKind;
 
 const ACTIVATION_KIND_KEY: &str = "alas_activation_kind";
 const ACTIVATION_TOKEN_KEY: &str = "alas_activation_token";
+const ACTIVATION_REPO_ID_KEY: &str = "alas_repo_id";
+const ACTIVATION_WORKTREE_PATH_KEY: &str = "alas_worktree_path";
+const ACTIVATION_TERMINAL_TAB_ID_KEY: &str = "alas_terminal_tab_id";
 const HARNESS_COMPLETION_ACTIVATION_KIND: &str = "harness_completion";
+const ACTIVATION_REGISTRY_CAPACITY: usize = 256;
 
 static NEXT_ACTIVATION_TOKEN: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_ACTIVATION_REGISTRY: OnceLock<Mutex<NotificationActivationRegistry>> =
@@ -151,29 +155,72 @@ impl From<&str> for NotificationActivationToken {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationActivationPayload {
     pub kind: String,
-    pub token: NotificationActivationToken,
+    pub token: Option<NotificationActivationToken>,
+    pub target: Option<NotificationTabTarget>,
 }
 
 impl NotificationActivationPayload {
-    pub fn harness_completion(token: NotificationActivationToken) -> Self {
+    pub fn harness_completion(
+        token: NotificationActivationToken,
+        target: NotificationTabTarget,
+    ) -> Self {
         Self {
             kind: HARNESS_COMPLETION_ACTIVATION_KIND.to_string(),
-            token,
+            token: Some(token),
+            target: Some(target),
         }
     }
 
     pub fn from_values(kind: Option<&str>, token: Option<&str>) -> Option<Self> {
         Some(Self {
             kind: kind?.to_string(),
-            token: NotificationActivationToken::from(token?),
+            token: token.map(NotificationActivationToken::from),
+            target: None,
         })
     }
 
-    pub fn user_info_entries(&self) -> [(&'static str, &str); 2] {
-        [
-            (ACTIVATION_KIND_KEY, self.kind.as_str()),
-            (ACTIVATION_TOKEN_KEY, self.token.as_str()),
-        ]
+    pub fn from_user_info_values(
+        kind: Option<&str>,
+        token: Option<&str>,
+        repo_id: Option<&str>,
+        worktree_path: Option<&str>,
+        terminal_tab_id: Option<&str>,
+    ) -> Option<Self> {
+        let target = match (repo_id, worktree_path, terminal_tab_id) {
+            (Some(repo_id), Some(worktree_path), Some(terminal_tab_id)) => {
+                Some(NotificationTabTarget {
+                    repo_id: repo_id.to_string(),
+                    worktree_path: PathBuf::from(worktree_path),
+                    terminal_tab_id: TerminalTabId(terminal_tab_id.parse().ok()?),
+                })
+            }
+            _ => None,
+        };
+
+        Some(Self {
+            kind: kind?.to_string(),
+            token: token.map(NotificationActivationToken::from),
+            target,
+        })
+    }
+
+    pub fn user_info_entries(&self) -> Vec<(&'static str, String)> {
+        let mut entries = vec![(ACTIVATION_KIND_KEY, self.kind.clone())];
+        if let Some(token) = self.token.as_ref() {
+            entries.push((ACTIVATION_TOKEN_KEY, token.as_str().to_string()));
+        }
+        if let Some(target) = self.target.as_ref() {
+            entries.push((ACTIVATION_REPO_ID_KEY, target.repo_id.clone()));
+            entries.push((
+                ACTIVATION_WORKTREE_PATH_KEY,
+                target.worktree_path.to_string_lossy().into_owned(),
+            ));
+            entries.push((
+                ACTIVATION_TERMINAL_TAB_ID_KEY,
+                target.terminal_tab_id.0.to_string(),
+            ));
+        }
+        entries
     }
 }
 
@@ -193,6 +240,7 @@ pub enum NotificationActivationResolution {
 #[derive(Debug, Default)]
 pub struct NotificationActivationRegistry {
     entries: HashMap<NotificationActivationToken, NotificationTabTarget>,
+    insertion_order: VecDeque<NotificationActivationToken>,
 }
 
 impl NotificationActivationRegistry {
@@ -209,8 +257,17 @@ impl NotificationActivationRegistry {
         token: NotificationActivationToken,
         target: NotificationTabTarget,
     ) -> NotificationActivationPayload {
-        self.entries.insert(token.clone(), target);
-        NotificationActivationPayload::harness_completion(token)
+        self.entries.remove(&token);
+        self.insertion_order
+            .retain(|existing_token| existing_token != &token);
+        self.entries.insert(token.clone(), target.clone());
+        self.insertion_order.push_back(token.clone());
+        while self.insertion_order.len() > ACTIVATION_REGISTRY_CAPACITY {
+            if let Some(expired_token) = self.insertion_order.pop_front() {
+                self.entries.remove(&expired_token);
+            }
+        }
+        NotificationActivationPayload::harness_completion(token, target)
     }
 
     pub fn resolve(
@@ -224,8 +281,16 @@ impl NotificationActivationRegistry {
             return NotificationActivationResolution::UnsupportedKind;
         }
 
-        self.entries
-            .remove(&payload.token)
+        if let Some(token) = payload.token
+            && let Some(target) = self.entries.remove(&token)
+        {
+            self.insertion_order
+                .retain(|existing_token| existing_token != &token);
+            return NotificationActivationResolution::Resolved(target);
+        }
+
+        payload
+            .target
             .map(NotificationActivationResolution::Resolved)
             .unwrap_or(NotificationActivationResolution::UnknownToken)
     }
@@ -635,6 +700,26 @@ pub fn activation_kind_key() -> &'static str {
 pub fn activation_token_key() -> &'static str {
     ACTIVATION_TOKEN_KEY
 }
+
+pub fn activation_repo_id_key() -> &'static str {
+    ACTIVATION_REPO_ID_KEY
+}
+
+pub fn activation_worktree_path_key() -> &'static str {
+    ACTIVATION_WORKTREE_PATH_KEY
+}
+
+pub fn activation_terminal_tab_id_key() -> &'static str {
+    ACTIVATION_TERMINAL_TAB_ID_KEY
+}
+
+#[cfg(target_os = "macos")]
+pub fn install_notification_activation_handler() {
+    macos::install_delegate();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn install_notification_activation_handler() {}
 
 fn global_registry() -> &'static Mutex<NotificationActivationRegistry> {
     GLOBAL_ACTIVATION_REGISTRY.get_or_init(|| Mutex::new(NotificationActivationRegistry::default()))

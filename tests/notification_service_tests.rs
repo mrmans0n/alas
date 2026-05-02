@@ -239,9 +239,10 @@ fn activation_registry_roundtrips_harness_completion_target() {
 
     assert_eq!(
         payload,
-        NotificationActivationPayload::harness_completion(NotificationActivationToken::from(
-            "token-1"
-        ))
+        NotificationActivationPayload::harness_completion(
+            NotificationActivationToken::from("token-1"),
+            target.clone()
+        )
     );
     assert_eq!(
         registry.resolve(Some(payload)),
@@ -262,7 +263,11 @@ fn activation_registry_consumes_tokens_once() {
         NotificationActivationResolution::Resolved(_)
     ));
     assert_eq!(
-        registry.resolve(Some(payload)),
+        registry.resolve(Some(NotificationActivationPayload {
+            kind: payload.kind,
+            token: payload.token,
+            target: None,
+        })),
         NotificationActivationResolution::UnknownToken
     );
 }
@@ -278,14 +283,78 @@ fn activation_registry_handles_missing_and_unsupported_payloads() {
     assert_eq!(
         registry.resolve(Some(NotificationActivationPayload {
             kind: "unsupported".to_string(),
-            token: NotificationActivationToken::from("token-1"),
+            token: Some(NotificationActivationToken::from("token-1")),
+            target: None,
         })),
         NotificationActivationResolution::UnsupportedKind
     );
     assert_eq!(
-        registry.resolve(Some(NotificationActivationPayload::harness_completion(
-            NotificationActivationToken::from("missing")
-        ))),
+        registry.resolve(Some(NotificationActivationPayload {
+            kind: "harness_completion".to_string(),
+            token: Some(NotificationActivationToken::from("missing")),
+            target: None,
+        })),
+        NotificationActivationResolution::UnknownToken
+    );
+}
+
+#[test]
+fn activation_payload_persists_target_in_user_info_entries() {
+    let target = notification_target(7);
+    let payload = NotificationActivationPayload::harness_completion(
+        NotificationActivationToken::from("token-1"),
+        target.clone(),
+    );
+    let entries = payload.user_info_entries();
+
+    assert!(entries.contains(&("alas_activation_kind", "harness_completion".to_string())));
+    assert!(entries.contains(&("alas_activation_token", "token-1".to_string())));
+    assert!(entries.contains(&("alas_repo_id", target.repo_id)));
+    assert!(entries.contains(&(
+        "alas_worktree_path",
+        target.worktree_path.to_string_lossy().into_owned()
+    )));
+    assert!(entries.contains(&("alas_terminal_tab_id", "7".to_string())));
+}
+
+#[test]
+fn activation_resolution_falls_back_to_persisted_target() {
+    let mut registry = NotificationActivationRegistry::default();
+    let target = notification_target(7);
+
+    assert_eq!(
+        registry.resolve(NotificationActivationPayload::from_user_info_values(
+            Some("harness_completion"),
+            Some("missing"),
+            Some("repo"),
+            Some("/repo/a"),
+            Some("7"),
+        )),
+        NotificationActivationResolution::Resolved(target)
+    );
+}
+
+#[test]
+fn activation_registry_evicts_old_entries() {
+    let mut registry = NotificationActivationRegistry::default();
+    let first_payload = registry.register_harness_completion_with_token(
+        NotificationActivationToken::from("token-0"),
+        notification_target(0),
+    );
+
+    for token_id in 1..=256 {
+        registry.register_harness_completion_with_token(
+            NotificationActivationToken::from(format!("token-{token_id}")),
+            notification_target(token_id),
+        );
+    }
+
+    assert_eq!(
+        registry.resolve(Some(NotificationActivationPayload {
+            kind: first_payload.kind,
+            token: first_payload.token,
+            target: None,
+        })),
         NotificationActivationResolution::UnknownToken
     );
 }

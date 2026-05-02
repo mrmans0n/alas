@@ -18,9 +18,10 @@ use objc2_user_notifications::{
 
 use crate::notifications::{
     AppFocusState, HarnessCompletionEvent, NotificationActivation, NotificationActivationPayload,
-    NotificationActivationResolution, NotificationSink, NotificationSound, activation_kind_key,
-    activation_token_key, enqueue_notification_activation, register_harness_completion_activation,
-    resolve_notification_activation,
+    NotificationActivationResolution, NotificationActivationToken, NotificationSink,
+    NotificationSound, activation_kind_key, activation_repo_id_key, activation_terminal_tab_id_key,
+    activation_token_key, activation_worktree_path_key, enqueue_notification_activation,
+    register_harness_completion_activation, resolve_notification_activation,
 };
 
 static INSTALL_DELEGATE: Once = Once::new();
@@ -138,15 +139,18 @@ fn post_harness_completion(event: HarnessCompletionEvent) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn install_delegate() {
+pub(crate) fn install_delegate() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+
     INSTALL_DELEGATE.call_once(|| {
         autoreleasepool(|_| {
-            let Some(mtm) = MainThreadMarker::new() else {
-                return;
-            };
             let center = UNUserNotificationCenter::currentNotificationCenter();
             let delegate = NotificationDelegate::new(mtm);
             center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+            // UNUserNotificationCenter keeps a weak delegate reference, so the
+            // delegate must intentionally live for the process lifetime.
             let _leaked = Retained::into_raw(delegate);
         });
     });
@@ -162,23 +166,27 @@ fn request_authorization(center: &UNUserNotificationCenter) {
 
 fn notification_sound(sound: NotificationSound) -> Retained<UNNotificationSound> {
     match sound {
-        NotificationSound::Success | NotificationSound::Failure => {
-            UNNotificationSound::defaultSound()
+        NotificationSound::Success => UNNotificationSound::defaultSound(),
+        NotificationSound::Failure => {
+            let sound_name = NSString::from_str("Basso");
+            UNNotificationSound::soundNamed(&sound_name)
         }
     }
 }
 
 fn set_user_info(content: &UNMutableNotificationContent, payload: &NotificationActivationPayload) {
     let entries = payload.user_info_entries();
-    let keys = [
-        NSString::from_str(entries[0].0),
-        NSString::from_str(entries[1].0),
-    ];
-    let values = [
-        NSString::from_str(entries[0].1),
-        NSString::from_str(entries[1].1),
-    ];
-    let user_info = NSDictionary::from_slices(&[&*keys[0], &*keys[1]], &[&*values[0], &*values[1]]);
+    let keys = entries
+        .iter()
+        .map(|(key, _)| NSString::from_str(key))
+        .collect::<Vec<_>>();
+    let values = entries
+        .iter()
+        .map(|(_, value)| NSString::from_str(value))
+        .collect::<Vec<_>>();
+    let key_refs = keys.iter().map(|key| &**key).collect::<Vec<_>>();
+    let value_refs = values.iter().map(|value| &**value).collect::<Vec<_>>();
+    let user_info = NSDictionary::from_slices(&key_refs, &value_refs);
 
     // SAFETY: `userInfo` accepts a property-list dictionary. The dictionary only
     // contains `NSString` keys and values, which are valid property-list values.
@@ -197,12 +205,24 @@ fn activation_payload_from_response(
 
         let kind_key = NSString::from_str(activation_kind_key());
         let token_key = NSString::from_str(activation_token_key());
+        let repo_id_key = NSString::from_str(activation_repo_id_key());
+        let worktree_path_key = NSString::from_str(activation_worktree_path_key());
+        let terminal_tab_id_key = NSString::from_str(activation_terminal_tab_id_key());
         // SAFETY: Alas writes string values for these keys in `set_user_info`.
         let kind: Option<Retained<NSString>> =
             unsafe { msg_send![&*user_info, objectForKey: &*kind_key] };
         // SAFETY: Alas writes string values for these keys in `set_user_info`.
         let token: Option<Retained<NSString>> =
             unsafe { msg_send![&*user_info, objectForKey: &*token_key] };
+        // SAFETY: Alas writes string values for these keys in `set_user_info`.
+        let repo_id: Option<Retained<NSString>> =
+            unsafe { msg_send![&*user_info, objectForKey: &*repo_id_key] };
+        // SAFETY: Alas writes string values for these keys in `set_user_info`.
+        let worktree_path: Option<Retained<NSString>> =
+            unsafe { msg_send![&*user_info, objectForKey: &*worktree_path_key] };
+        // SAFETY: Alas writes string values for these keys in `set_user_info`.
+        let terminal_tab_id: Option<Retained<NSString>> =
+            unsafe { msg_send![&*user_info, objectForKey: &*terminal_tab_id_key] };
 
         let kind = kind.as_deref().map(|value| {
             // SAFETY: The returned `&str` is used only within this autorelease pool.
@@ -212,14 +232,39 @@ fn activation_payload_from_response(
             // SAFETY: The returned `&str` is used only within this autorelease pool.
             unsafe { value.to_str(pool).to_string() }
         });
+        let repo_id = repo_id.as_deref().map(|value| {
+            // SAFETY: The returned `&str` is used only within this autorelease pool.
+            unsafe { value.to_str(pool).to_string() }
+        });
+        let worktree_path = worktree_path.as_deref().map(|value| {
+            // SAFETY: The returned `&str` is used only within this autorelease pool.
+            unsafe { value.to_str(pool).to_string() }
+        });
+        let terminal_tab_id = terminal_tab_id.as_deref().map(|value| {
+            // SAFETY: The returned `&str` is used only within this autorelease pool.
+            unsafe { value.to_str(pool).to_string() }
+        });
 
-        NotificationActivationPayload::from_values(kind.as_deref(), token.as_deref())
+        NotificationActivationPayload::from_user_info_values(
+            kind.as_deref(),
+            token.as_deref(),
+            repo_id.as_deref(),
+            worktree_path.as_deref(),
+            terminal_tab_id.as_deref(),
+        )
     })
 }
 
 fn notification_identifier(payload: Option<&NotificationActivationPayload>) -> String {
     match payload {
-        Some(payload) => format!("alas-harness-completion-{}", payload.token.as_str()),
+        Some(payload) => format!(
+            "alas-harness-completion-{}",
+            payload
+                .token
+                .as_ref()
+                .map(NotificationActivationToken::as_str)
+                .unwrap_or("untokened")
+        ),
         None => format!("alas-harness-completion-{}", uuid_fallback()),
     }
 }
