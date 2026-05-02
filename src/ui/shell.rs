@@ -3461,16 +3461,6 @@ impl AlasShell {
             }
         });
 
-        let on_mouse_up = cx.listener(move |shell, event: &MouseUpEvent, _window, cx| {
-            if event.button != MouseButton::Left {
-                return;
-            }
-            if shell.finish_sidebar_resize() {
-                cx.stop_propagation();
-                cx.notify();
-            }
-        });
-
         div()
             .id(handle_id)
             .flex_shrink_0()
@@ -3481,7 +3471,6 @@ impl AlasShell {
             .hover(|el| el.bg(PANEL_BORDER))
             .on_mouse_down(MouseButton::Left, on_mouse_down)
             .on_mouse_move(on_mouse_move)
-            .on_mouse_up(MouseButton::Left, on_mouse_up)
     }
 
     fn update_sidebar_resize(&mut self, event: &MouseMoveEvent, window: &Window) -> bool {

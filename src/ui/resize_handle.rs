@@ -29,8 +29,10 @@ pub struct SidebarLayoutState {
 impl SidebarLayoutState {
     pub fn from_config(left: u32, right: u32) -> Self {
         Self {
-            left_width_px: left as f32,
-            right_width_px: right as f32,
+            left_width_px: (left as f32)
+                .clamp(LEFT_SIDEBAR_MIN_WIDTH_PX, LEFT_SIDEBAR_MAX_WIDTH_PX),
+            right_width_px: (right as f32)
+                .clamp(RIGHT_SIDEBAR_MIN_WIDTH_PX, RIGHT_SIDEBAR_MAX_WIDTH_PX),
         }
     }
 
@@ -71,7 +73,9 @@ pub fn clamp_sidebar_width(
     };
 
     // Ensure center pane keeps minimum width
-    let effective_max = (window_width - other_sidebar_width - CENTER_MIN_WIDTH_PX).max(min);
+    let handle_widths = RESIZE_HANDLE_WIDTH_PX * 2.0;
+    let effective_max =
+        (window_width - handle_widths - other_sidebar_width - CENTER_MIN_WIDTH_PX).max(min);
     requested.clamp(min, max.min(effective_max))
 }
 
@@ -124,10 +128,10 @@ mod tests {
 
     #[test]
     fn center_preserved_when_both_sidebars_expand() {
-        // Window = 1000, right = 400, center min = 300
-        // left max = 1000 - 400 - 300 = 300
+        // Window = 1000, right = 400, handles = 12, center min = 300
+        // left max = 1000 - 400 - 12 - 300 = 288
         let result = clamp_sidebar_width(SidebarResizeTarget::Left, 400.0, 400.0, 1000.0);
-        assert_eq!(result, 300.0);
+        assert_eq!(result, 288.0);
     }
 
     #[test]
@@ -138,6 +142,9 @@ mod tests {
 
         assert!(layout.left_width_px <= LEFT_SIDEBAR_MAX_WIDTH_PX);
         assert!(layout.right_width_px <= RIGHT_SIDEBAR_MAX_WIDTH_PX);
-        assert!(900.0 - layout.left_width_px - layout.right_width_px >= CENTER_MIN_WIDTH_PX);
+        assert!(
+            900.0 - (RESIZE_HANDLE_WIDTH_PX * 2.0) - layout.left_width_px - layout.right_width_px
+                >= CENTER_MIN_WIDTH_PX
+        );
     }
 }
