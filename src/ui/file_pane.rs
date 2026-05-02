@@ -1,6 +1,9 @@
 use crate::{
     app::FileTabLoadState,
-    ui::theme::{DANGER, PANEL_BG, TEXT, TEXT_MUTED},
+    ui::{
+        terminal_view::{CELL_HEIGHT_PX, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX},
+        theme::{DANGER, PANEL_BG, TEXT, TEXT_MUTED},
+    },
 };
 use gpui::{AnyElement, IntoElement, SharedString, Styled, div, prelude::*, px};
 
@@ -34,8 +37,9 @@ fn render_file_content(load_state: &FileTabLoadState) -> AnyElement {
             .p_3()
             .child(
                 div()
-                    .text_sm()
-                    .font_family("monospace")
+                    .font_family(TERMINAL_FONT_FAMILY)
+                    .text_size(px(TERMINAL_FONT_SIZE_PX))
+                    .line_height(px(CELL_HEIGHT_PX))
                     .child(SharedString::from(content.clone())),
             )
             .into_any_element(),
