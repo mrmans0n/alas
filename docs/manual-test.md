@@ -93,6 +93,17 @@
 6. For a short-lived or failed command tab, confirm the final screen remains visible with exited/failed status plus Restart or Retry controls.
 7. For startup failure, temporarily make a disposable worktree path unavailable; confirm the failed tab shows command, cwd, cause, Retry, and Edit Command, then restore the path and retry.
 
+## Harness Completion Notification Click-Through
+
+1. On macOS, start Alas with `cargo run` or from `Alas.app`.
+2. Allow notification permissions for Alas when macOS prompts. If the prompt does not appear, enable Alas in System Settings → Notifications.
+3. Select a worktree and open a Claude Code or Codex terminal tab with Alas hook integration enabled.
+4. Trigger a successful hook-backed completion that emits `terminal_tab_id` or `alas_terminal_tab_id`.
+5. Switch to another Alas worktree/tab or another app.
+6. Click the completion notification and confirm Alas comes to the foreground, selects the originating worktree, selects the originating terminal tab, and focuses the terminal pane.
+7. Trigger another hook-backed completion, close the originating tab, then click the old notification. Confirm Alas focuses without a visible error or crash.
+8. Trigger a heuristic/unsupported harness detection without a validated hook payload. Confirm it does not route to a tab through notification click-through.
+
 ## Terminal Emulator Behavior
 
 1. Shell basics: type, edit prompt, arrows/history, backspace/delete, Tab, Escape, and Ctrl-C.

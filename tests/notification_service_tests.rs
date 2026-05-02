@@ -1,12 +1,16 @@
 use alas::{
+    app::TerminalTabId,
     config::NotificationPrefs,
     notifications::{
         HarnessCompletionContext, HarnessCompletionNotificationEvent, HarnessCompletionOutcome,
         HarnessCompletionSource, HarnessNotificationSource, HookBackedHarness, HookSignal,
-        NotificationDecision, NotificationService, NotificationSound,
+        NotificationActivationPayload, NotificationActivationRegistry,
+        NotificationActivationResolution, NotificationActivationToken, NotificationDecision,
+        NotificationService, NotificationSound, NotificationTabTarget,
     },
     terminal::HarnessKind,
 };
+use std::path::PathBuf;
 
 #[test]
 fn supported_success_completion_is_allowed_by_default() {
@@ -186,6 +190,106 @@ fn unresolved_context_does_not_invent_tab_or_workspace() {
     assert_eq!(event.body, "Claude Code failed.");
 }
 
+#[test]
+fn completion_event_exposes_activation_target_from_resolved_context() {
+    let service = NotificationService;
+    let event = service.build_harness_completion_event(
+        HookSignal {
+            harness: HarnessKind::ClaudeCode,
+            source: HarnessCompletionSource::ClaudeCodeStop,
+            outcome: HarnessCompletionOutcome::Success,
+            terminal_tab_id: Some(TerminalTabId(7)),
+        },
+        HarnessCompletionContext {
+            terminal_tab_id: Some(TerminalTabId(7)),
+            tab_name: Some("Claude".to_string()),
+            repo_id: Some("repo".to_string()),
+            worktree_path: Some(PathBuf::from("/repo/a")),
+        },
+    );
+
+    assert_eq!(event.activation_target(), Some(notification_target(7)));
+}
+
+#[test]
+fn completion_event_without_resolved_context_has_no_activation_target() {
+    let service = NotificationService;
+    let event = service.build_harness_completion_event(
+        HookSignal {
+            harness: HarnessKind::ClaudeCode,
+            source: HarnessCompletionSource::ClaudeCodeStop,
+            outcome: HarnessCompletionOutcome::Success,
+            terminal_tab_id: Some(TerminalTabId(7)),
+        },
+        HarnessCompletionContext::unresolved(Some(TerminalTabId(7))),
+    );
+
+    assert_eq!(event.activation_target(), None);
+}
+
+#[test]
+fn activation_registry_roundtrips_harness_completion_target() {
+    let mut registry = NotificationActivationRegistry::default();
+    let target = notification_target(7);
+
+    let payload = registry.register_harness_completion_with_token(
+        NotificationActivationToken::from("token-1"),
+        target.clone(),
+    );
+
+    assert_eq!(
+        payload,
+        NotificationActivationPayload::harness_completion(NotificationActivationToken::from(
+            "token-1"
+        ))
+    );
+    assert_eq!(
+        registry.resolve(Some(payload)),
+        NotificationActivationResolution::Resolved(target)
+    );
+}
+
+#[test]
+fn activation_registry_consumes_tokens_once() {
+    let mut registry = NotificationActivationRegistry::default();
+    let payload = registry.register_harness_completion_with_token(
+        NotificationActivationToken::from("token-1"),
+        notification_target(7),
+    );
+
+    assert!(matches!(
+        registry.resolve(Some(payload.clone())),
+        NotificationActivationResolution::Resolved(_)
+    ));
+    assert_eq!(
+        registry.resolve(Some(payload)),
+        NotificationActivationResolution::UnknownToken
+    );
+}
+
+#[test]
+fn activation_registry_handles_missing_and_unsupported_payloads() {
+    let mut registry = NotificationActivationRegistry::default();
+
+    assert_eq!(
+        registry.resolve(None),
+        NotificationActivationResolution::MissingToken
+    );
+    assert_eq!(
+        registry.resolve(Some(NotificationActivationPayload {
+            kind: "unsupported".to_string(),
+            token: NotificationActivationToken::from("token-1"),
+        })),
+        NotificationActivationResolution::UnsupportedKind
+    );
+    assert_eq!(
+        registry.resolve(Some(NotificationActivationPayload::harness_completion(
+            NotificationActivationToken::from("missing")
+        ))),
+        NotificationActivationResolution::UnknownToken
+    );
+}
+
 fn decision(prefs: NotificationPrefs, outcome: HarnessCompletionOutcome) -> NotificationDecision {
     decision_with_focus(prefs, outcome, false)
 }
@@ -208,4 +312,12 @@ fn decision_with_focus(
         },
         app_is_active,
     )
+}
+
+fn notification_target(tab_id: u64) -> NotificationTabTarget {
+    NotificationTabTarget {
+        repo_id: "repo".to_string(),
+        worktree_path: PathBuf::from("/repo/a"),
+        terminal_tab_id: TerminalTabId(tab_id),
+    }
 }

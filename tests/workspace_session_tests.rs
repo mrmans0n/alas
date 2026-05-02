@@ -541,6 +541,110 @@ fn terminal_specific_mutation_rejects_file_tabs() {
 }
 
 #[test]
+fn terminal_tab_target_lookup_finds_existing_terminal_tab() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let tab_id = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+
+    let target = session
+        .find_terminal_tab_target(tab_id)
+        .expect("terminal target");
+
+    assert_eq!(target.repo_id, "repo");
+    assert_eq!(target.worktree_path, path);
+    assert_eq!(target.terminal_tab_id, tab_id);
+}
+
+#[test]
+fn terminal_tab_target_lookup_ignores_non_terminal_tabs() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let file = session.open_file_tab("repo", path, PathBuf::from("/repo/a/README.md"));
+
+    assert_eq!(session.find_terminal_tab_target(file), None);
+}
+
+#[test]
+fn activating_terminal_tab_target_selects_terminal_tab() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let terminal = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+    let file = session.open_file_tab("repo", path.clone(), PathBuf::from("/repo/a/README.md"));
+    let target = session
+        .find_terminal_tab_target(terminal)
+        .expect("terminal target");
+
+    assert_eq!(
+        session.active_tab("repo", &path).map(|tab| tab.id),
+        Some(file)
+    );
+    session
+        .activate_terminal_tab_target(&target)
+        .expect("activate target");
+
+    assert_eq!(
+        session.active_tab("repo", &path).map(|tab| tab.id),
+        Some(terminal)
+    );
+}
+
+#[test]
+fn activating_stale_terminal_tab_target_returns_error_without_changing_active_tab() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let terminal = session.create_terminal_tab(
+        "repo",
+        path.clone(),
+        "Shell".to_string(),
+        TerminalTabKind::Shell,
+        shell_command("/repo/a"),
+    );
+    let target = session
+        .find_terminal_tab_target(terminal)
+        .expect("terminal target");
+
+    session.remove_worktree("repo", &path);
+    let error = session
+        .activate_terminal_tab_target(&target)
+        .expect_err("stale target should fail")
+        .to_string();
+
+    assert!(error.contains("unknown terminal tab"));
+    assert!(session.active_tab("repo", &path).is_none());
+}
+
+#[test]
+fn activating_non_terminal_tab_target_returns_error() {
+    let mut session = WorkspaceSession::default();
+    let path = PathBuf::from("/repo/a");
+    let file = session.open_file_tab("repo", path.clone(), PathBuf::from("/repo/a/README.md"));
+    let target = alas::notifications::NotificationTabTarget {
+        repo_id: "repo".to_string(),
+        worktree_path: path,
+        terminal_tab_id: file,
+    };
+
+    let error = session
+        .activate_terminal_tab_target(&target)
+        .expect_err("file target should fail")
+        .to_string();
+
+    assert!(error.contains("unknown terminal tab"));
+}
+
+#[test]
 fn removing_worktree_and_repository_removes_all_tab_kinds() {
     let mut session = WorkspaceSession::default();
     let path_a = PathBuf::from("/repo/a");

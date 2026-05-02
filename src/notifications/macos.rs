@@ -1,47 +1,40 @@
-#![allow(clashing_extern_declarations)]
+use std::sync::Once;
 
-use std::ffi::{c_char, c_void};
-
-use crate::notifications::{
-    AppFocusState, HarnessCompletionEvent, NotificationSink, NotificationSound,
+use block2::RcBlock;
+use objc2::{
+    MainThreadOnly, define_class, msg_send,
+    rc::{Retained, autoreleasepool},
+    runtime::{Bool, ProtocolObject},
+};
+use objc2_app_kit::NSApplication;
+use objc2_foundation::{
+    MainThreadMarker, NSDictionary, NSError, NSObject, NSObjectProtocol, NSString,
+};
+use objc2_user_notifications::{
+    UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
+    UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
+    UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
 
-type ObjcId = *mut c_void;
-type Sel = *mut c_void;
+use crate::notifications::{
+    AppFocusState, HarnessCompletionEvent, NotificationActivation, NotificationActivationPayload,
+    NotificationActivationResolution, NotificationSink, NotificationSound, activation_kind_key,
+    activation_token_key, enqueue_notification_activation, register_harness_completion_activation,
+    resolve_notification_activation,
+};
 
-#[link(name = "objc")]
-unsafe extern "C" {
-    fn objc_getClass(name: *const c_char) -> ObjcId;
-    fn sel_registerName(name: *const c_char) -> Sel;
-
-    #[link_name = "objc_msgSend"]
-    fn msg_send_id(receiver: ObjcId, selector: Sel) -> ObjcId;
-
-    #[link_name = "objc_msgSend"]
-    fn msg_send_bool(receiver: ObjcId, selector: Sel) -> bool;
-
-    #[link_name = "objc_msgSend"]
-    fn msg_send_void_id(receiver: ObjcId, selector: Sel, value: ObjcId);
-
-    #[link_name = "objc_msgSend"]
-    fn msg_send_id_bytes(
-        receiver: ObjcId,
-        selector: Sel,
-        bytes: *const u8,
-        length: usize,
-        encoding: usize,
-    ) -> ObjcId;
-}
+static INSTALL_DELEGATE: Once = Once::new();
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MacOsAppFocusState;
 
 impl AppFocusState for MacOsAppFocusState {
     fn is_app_active(&self) -> bool {
-        unsafe {
-            let app = send_id(class("NSApplication"), selector("sharedApplication"));
-            !app.is_null() && send_bool(app, selector("isActive"))
-        }
+        let Some(mtm) = MainThreadMarker::new() else {
+            return false;
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        app.isActive()
     }
 }
 
@@ -50,110 +43,198 @@ pub struct MacOsNotificationSink;
 
 impl NotificationSink for MacOsNotificationSink {
     fn notify_harness_completed(&mut self, event: HarnessCompletionEvent) -> anyhow::Result<()> {
-        unsafe {
-            let notification = send_id(class("NSUserNotification"), selector("new"));
-            if notification.is_null() {
-                anyhow::bail!("failed to allocate NSUserNotification");
-            }
-
-            let title = ns_string(&event.title);
-            let body = ns_string(&event.body);
-            if title.is_null() || body.is_null() {
-                release_if_present(title);
-                release_if_present(body);
-                release_if_present(notification);
-                anyhow::bail!("failed to allocate notification strings");
-            }
-
-            send_void_id(notification, selector("setTitle:"), title);
-            send_void_id(notification, selector("setInformativeText:"), body);
-
-            if let Some(sound_name) = notification_sound_name(event.sound) {
-                let sound = ns_string(sound_name);
-                if !sound.is_null() {
-                    send_void_id(notification, selector("setSoundName:"), sound);
-                    release_if_present(sound);
-                }
-            }
-
-            let center = send_id(
-                class("NSUserNotificationCenter"),
-                selector("defaultUserNotificationCenter"),
-            );
-            if center.is_null() {
-                release_if_present(title);
-                release_if_present(body);
-                release_if_present(notification);
-                anyhow::bail!("failed to resolve NSUserNotificationCenter");
-            }
-
-            send_void_id(center, selector("deliverNotification:"), notification);
-            release_if_present(title);
-            release_if_present(body);
-            release_if_present(notification);
-        }
-
-        Ok(())
+        post_harness_completion(event)
     }
 }
 
-fn notification_sound_name(sound: NotificationSound) -> Option<&'static str> {
+#[derive(Debug, Default)]
+struct NotificationDelegateIvars;
+
+define_class!(
+    // SAFETY:
+    // - `NSObject` has no subclassing requirements.
+    // - `NotificationDelegate` does not implement `Drop`.
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = NotificationDelegateIvars]
+    struct NotificationDelegate;
+
+    // SAFETY: `NSObjectProtocol` has no safety requirements.
+    unsafe impl NSObjectProtocol for NotificationDelegate {}
+
+    // SAFETY: Method signatures match `UNUserNotificationCenterDelegate`.
+    unsafe impl UNUserNotificationCenterDelegate for NotificationDelegate {
+        #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+        fn will_present(
+            &self,
+            _center: &UNUserNotificationCenter,
+            _notification: &UNNotification,
+            completion_handler: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
+        ) {
+            completion_handler.call((UNNotificationPresentationOptions::Banner
+                | UNNotificationPresentationOptions::List
+                | UNNotificationPresentationOptions::Sound,));
+        }
+
+        #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+        fn did_receive(
+            &self,
+            _center: &UNUserNotificationCenter,
+            response: &UNNotificationResponse,
+            completion_handler: &block2::DynBlock<dyn Fn()>,
+        ) {
+            activate_app();
+
+            if let Some(payload) = activation_payload_from_response(response)
+                && let NotificationActivationResolution::Resolved(target) =
+                    resolve_notification_activation(Some(payload))
+            {
+                enqueue_notification_activation(NotificationActivation::HarnessCompletion(target));
+            }
+
+            completion_handler.call(());
+        }
+    }
+);
+
+impl NotificationDelegate {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(NotificationDelegateIvars);
+        // SAFETY: `NSObject`'s `init` signature is correct.
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn post_harness_completion(event: HarnessCompletionEvent) -> anyhow::Result<()> {
+    install_delegate();
+
+    let payload = event
+        .activation_target()
+        .map(register_harness_completion_activation);
+
+    autoreleasepool(|_| {
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        request_authorization(&center);
+
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(&event.title));
+        content.setBody(&NSString::from_str(&event.body));
+        content.setSound(Some(&notification_sound(event.sound)));
+
+        if let Some(payload) = payload.as_ref() {
+            set_user_info(&content, payload);
+        }
+
+        let identifier = NSString::from_str(&notification_identifier(payload.as_ref()));
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+            &identifier,
+            &content,
+            None,
+        );
+
+        center.addNotificationRequest_withCompletionHandler(&request, None);
+    });
+
+    Ok(())
+}
+
+fn install_delegate() {
+    INSTALL_DELEGATE.call_once(|| {
+        autoreleasepool(|_| {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let center = UNUserNotificationCenter::currentNotificationCenter();
+            let delegate = NotificationDelegate::new(mtm);
+            center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+            let _leaked = Retained::into_raw(delegate);
+        });
+    });
+}
+
+fn request_authorization(center: &UNUserNotificationCenter) {
+    let completion = RcBlock::new(|_granted: Bool, _error: *mut NSError| {});
+    center.requestAuthorizationWithOptions_completionHandler(
+        UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+        &completion,
+    );
+}
+
+fn notification_sound(sound: NotificationSound) -> Retained<UNNotificationSound> {
     match sound {
-        NotificationSound::Success => Some("Glass"),
-        NotificationSound::Failure => Some("Basso"),
-    }
-}
-
-unsafe fn class(name: &str) -> ObjcId {
-    let name = nul_terminated(name);
-    unsafe { objc_getClass(name.as_ptr().cast()) }
-}
-
-unsafe fn selector(name: &str) -> Sel {
-    let name = nul_terminated(name);
-    unsafe { sel_registerName(name.as_ptr().cast()) }
-}
-
-unsafe fn send_id(receiver: ObjcId, selector: Sel) -> ObjcId {
-    unsafe { msg_send_id(receiver, selector) }
-}
-
-unsafe fn send_bool(receiver: ObjcId, selector: Sel) -> bool {
-    unsafe { msg_send_bool(receiver, selector) }
-}
-
-unsafe fn send_void_id(receiver: ObjcId, selector: Sel, value: ObjcId) {
-    unsafe { msg_send_void_id(receiver, selector, value) }
-}
-
-unsafe fn ns_string(value: &str) -> ObjcId {
-    let string = unsafe { send_id(class("NSString"), selector("alloc")) };
-    if string.is_null() {
-        return string;
-    }
-
-    unsafe {
-        msg_send_id_bytes(
-            string,
-            selector("initWithBytes:length:encoding:"),
-            value.as_ptr(),
-            value.len(),
-            4,
-        )
-    }
-}
-
-unsafe fn release_if_present(object: ObjcId) {
-    if !object.is_null() {
-        unsafe {
-            send_id(object, selector("release"));
+        NotificationSound::Success | NotificationSound::Failure => {
+            UNNotificationSound::defaultSound()
         }
     }
 }
 
-fn nul_terminated(value: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(value.len() + 1);
-    bytes.extend_from_slice(value.as_bytes());
-    bytes.push(0);
-    bytes
+fn set_user_info(content: &UNMutableNotificationContent, payload: &NotificationActivationPayload) {
+    let entries = payload.user_info_entries();
+    let keys = [
+        NSString::from_str(entries[0].0),
+        NSString::from_str(entries[1].0),
+    ];
+    let values = [
+        NSString::from_str(entries[0].1),
+        NSString::from_str(entries[1].1),
+    ];
+    let user_info = NSDictionary::from_slices(&[&*keys[0], &*keys[1]], &[&*values[0], &*values[1]]);
+
+    // SAFETY: `userInfo` accepts a property-list dictionary. The dictionary only
+    // contains `NSString` keys and values, which are valid property-list values.
+    unsafe {
+        let _: () = msg_send![content, setUserInfo: &*user_info];
+    }
+}
+
+fn activation_payload_from_response(
+    response: &UNNotificationResponse,
+) -> Option<NotificationActivationPayload> {
+    autoreleasepool(|pool| {
+        let notification = response.notification();
+        let content = notification.request().content();
+        let user_info = content.userInfo();
+
+        let kind_key = NSString::from_str(activation_kind_key());
+        let token_key = NSString::from_str(activation_token_key());
+        // SAFETY: Alas writes string values for these keys in `set_user_info`.
+        let kind: Option<Retained<NSString>> =
+            unsafe { msg_send![&*user_info, objectForKey: &*kind_key] };
+        // SAFETY: Alas writes string values for these keys in `set_user_info`.
+        let token: Option<Retained<NSString>> =
+            unsafe { msg_send![&*user_info, objectForKey: &*token_key] };
+
+        let kind = kind.as_deref().map(|value| {
+            // SAFETY: The returned `&str` is used only within this autorelease pool.
+            unsafe { value.to_str(pool).to_string() }
+        });
+        let token = token.as_deref().map(|value| {
+            // SAFETY: The returned `&str` is used only within this autorelease pool.
+            unsafe { value.to_str(pool).to_string() }
+        });
+
+        NotificationActivationPayload::from_values(kind.as_deref(), token.as_deref())
+    })
+}
+
+fn notification_identifier(payload: Option<&NotificationActivationPayload>) -> String {
+    match payload {
+        Some(payload) => format!("alas-harness-completion-{}", payload.token.as_str()),
+        None => format!("alas-harness-completion-{}", uuid_fallback()),
+    }
+}
+
+fn uuid_fallback() -> String {
+    static NEXT_NOTIFICATION_ID: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT_NOTIFICATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{id}", std::process::id())
+}
+
+fn activate_app() {
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    }
 }

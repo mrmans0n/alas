@@ -25,7 +25,10 @@ use crate::{
         ResolvedRepoConfig, repository_id_for_path,
     },
     git::{GitInspectorService, GitRunner, GitWorktreeService},
-    notifications::{DefaultAppFocusState, DefaultNotificationSink, NotificationController},
+    notifications::{
+        DefaultAppFocusState, DefaultNotificationSink, NotificationActivation,
+        NotificationController, NotificationTabTarget, drain_notification_activations,
+    },
     project::FileTreeService,
     terminal::{
         CommandSpec, GhosttyRenderFrame, GhosttyTerminalBackend, TerminalBackend, TerminalKeyInput,
@@ -1328,6 +1331,40 @@ impl AlasShell {
             self.terminal_scroll_offset_rows = 0;
             self.terminal_error = None;
         }
+    }
+
+    fn drain_notification_activations(&mut self, window: &mut gpui::Window) {
+        for activation in drain_notification_activations() {
+            match activation {
+                NotificationActivation::HarnessCompletion(target) => {
+                    self.activate_harness_notification(target, window);
+                }
+            }
+        }
+    }
+
+    fn activate_harness_notification(
+        &mut self,
+        target: NotificationTabTarget,
+        window: &mut gpui::Window,
+    ) {
+        if self
+            .workspace_session
+            .activate_terminal_tab_target(&target)
+            .is_err()
+        {
+            window.focus(&self.terminal_focus);
+            return;
+        }
+
+        self.model
+            .select_worktree(target.repo_id.clone(), target.worktree_path.clone());
+        self.start_or_reuse_terminal_tab(
+            target.repo_id,
+            target.worktree_path,
+            target.terminal_tab_id,
+        );
+        window.focus(&self.terminal_focus);
     }
 
     fn active_workspace_tab_kind(&self) -> Option<WorkspaceTabKind> {
@@ -3859,6 +3896,8 @@ fn render_agent_provider_picker(
 
 impl Render for AlasShell {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.drain_notification_activations(window);
+
         let measured_metrics =
             measure_terminal_metrics(window, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE_PX);
         if self.terminal_metrics != measured_metrics {
