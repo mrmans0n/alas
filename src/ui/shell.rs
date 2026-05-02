@@ -51,6 +51,10 @@ use crate::{
         provider_settings::{
             ProviderSettingsField, ProviderSettingsHandlers, render_provider_settings,
         },
+        resize_handle::{
+            RESIZE_HANDLE_WIDTH_PX, SidebarLayoutState, SidebarResizeDrag, SidebarResizeTarget,
+            clamp_sidebar_width,
+        },
         sidebar::{SidebarMenuState, render_sidebar},
         source_viewer::render_source_viewer,
         terminal_canvas::measure_terminal_metrics,
@@ -70,7 +74,7 @@ use gpui::{
     App, Application, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels,
     PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Task, Window, div,
-    prelude::*, px, rgb,
+    prelude::*, px, rgb, transparent_black,
 };
 use indexmap::IndexMap;
 use std::{
@@ -194,6 +198,8 @@ pub struct AlasShell {
     inspector_state: InspectorPaneState,
     inspector_request_generation: u64,
     file_tree_expansion: TreeExpansionState,
+    sidebar_layout: SidebarLayoutState,
+    active_sidebar_resize: Option<SidebarResizeDrag>,
     agent_runtimes: HashMap<WorkspaceTabId, AgentRuntime<AcpProcessConnection>>,
     agent_cancel_handles: HashMap<WorkspaceTabId, AcpCancelHandle>,
     agent_thread_store: AgentThreadStore,
@@ -212,6 +218,10 @@ impl AlasShell {
             AppConfigStore::default_store().expect("failed to resolve app config store");
         let mut config = app_config_store.load().unwrap_or_default();
         let notification_preferences = config.notifications.clone();
+        let sidebar_layout = SidebarLayoutState::from_config(
+            config.layout.left_sidebar_width_px,
+            config.layout.right_sidebar_width_px,
+        );
         let provider_discovery = discover_agent_providers();
         let provider_discovery_startup =
             apply_provider_discovery_to_config(&mut config, &provider_discovery, |config| {
@@ -270,6 +280,8 @@ impl AlasShell {
             inspector_state: InspectorPaneState::default(),
             inspector_request_generation: 0,
             file_tree_expansion: TreeExpansionState::default(),
+            sidebar_layout,
+            active_sidebar_resize: None,
             agent_runtimes: HashMap::new(),
             agent_cancel_handles: HashMap::new(),
             agent_thread_store,
@@ -3409,6 +3421,95 @@ impl AlasShell {
             .as_ref()
             .and_then(|dialog| dialog.error.as_deref())
     }
+
+    fn render_resize_handle(
+        &self,
+        target: SidebarResizeTarget,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_active = self
+            .active_sidebar_resize
+            .as_ref()
+            .is_some_and(|drag| drag.target == target);
+
+        let handle_id = match target {
+            SidebarResizeTarget::Left => "resize-handle-left",
+            SidebarResizeTarget::Right => "resize-handle-right",
+        };
+
+        let on_mouse_down = cx.listener(move |shell, event: &MouseDownEvent, _window, cx| {
+            if event.button != MouseButton::Left {
+                return;
+            }
+            let start_width = match target {
+                SidebarResizeTarget::Left => shell.sidebar_layout.left_width_px,
+                SidebarResizeTarget::Right => shell.sidebar_layout.right_width_px,
+            };
+            shell.active_sidebar_resize = Some(SidebarResizeDrag {
+                target,
+                start_x: f32::from(event.position.x),
+                start_width,
+            });
+            cx.stop_propagation();
+            cx.notify();
+        });
+
+        let on_mouse_move = cx.listener(move |shell, event: &MouseMoveEvent, window, cx| {
+            if shell.update_sidebar_resize(event, window) {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
+
+        div()
+            .id(handle_id)
+            .flex_shrink_0()
+            .w(px(RESIZE_HANDLE_WIDTH_PX))
+            .h_full()
+            .cursor_col_resize()
+            .when(is_active, |el| el.bg(PANEL_BORDER))
+            .hover(|el| el.bg(PANEL_BORDER))
+            .on_mouse_down(MouseButton::Left, on_mouse_down)
+            .on_mouse_move(on_mouse_move)
+    }
+
+    fn update_sidebar_resize(&mut self, event: &MouseMoveEvent, window: &Window) -> bool {
+        let Some(drag) = self.active_sidebar_resize else {
+            return false;
+        };
+
+        if event.pressed_button != Some(MouseButton::Left) {
+            return self.finish_sidebar_resize();
+        }
+
+        let delta = f32::from(event.position.x) - drag.start_x;
+        let requested = match drag.target {
+            SidebarResizeTarget::Left => drag.start_width + delta,
+            SidebarResizeTarget::Right => drag.start_width - delta,
+        };
+        let other_width = match drag.target {
+            SidebarResizeTarget::Left => self.sidebar_layout.right_width_px,
+            SidebarResizeTarget::Right => self.sidebar_layout.left_width_px,
+        };
+        let window_width = f32::from(window.bounds().size.width);
+        let clamped = clamp_sidebar_width(drag.target, requested, other_width, window_width);
+        match drag.target {
+            SidebarResizeTarget::Left => self.sidebar_layout.left_width_px = clamped,
+            SidebarResizeTarget::Right => self.sidebar_layout.right_width_px = clamped,
+        }
+        true
+    }
+
+    fn finish_sidebar_resize(&mut self) -> bool {
+        if self.active_sidebar_resize.take().is_none() {
+            return false;
+        }
+
+        self.config.layout.left_sidebar_width_px = self.sidebar_layout.left_width_px as u32;
+        self.config.layout.right_sidebar_width_px = self.sidebar_layout.right_width_px as u32;
+        let _ = self.app_config_store.save(&self.config);
+        true
+    }
 }
 
 fn terminal_status_from_tab_status(status: &TerminalTabStatus) -> Option<TerminalStatus> {
@@ -3762,6 +3863,8 @@ impl Render for AlasShell {
         if self.terminal_metrics != measured_metrics {
             self.terminal_metrics = measured_metrics;
         }
+        self.sidebar_layout
+            .clamp_for_window(f32::from(window.bounds().size.width));
 
         let terminal_size = self.current_terminal_size();
         self.resize_active_terminal(terminal_size);
@@ -4435,6 +4538,22 @@ impl Render for AlasShell {
                 },
             )
         };
+        let on_sidebar_resize_mouse_move =
+            cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
+                if shell.update_sidebar_resize(event, window) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
+        let on_sidebar_resize_mouse_up = cx.listener(|shell, event: &MouseUpEvent, _window, cx| {
+            if event.button != MouseButton::Left {
+                return;
+            }
+            if shell.finish_sidebar_resize() {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
         let workspace_body = match active_tab.map(|tab| &tab.content) {
             Some(WorkspaceTabContent::File(state)) => render_source_viewer(state),
             Some(WorkspaceTabContent::Markdown(state)) => render_markdown_pane(
@@ -4513,7 +4632,9 @@ impl Render for AlasShell {
                 on_select_worktree,
                 on_sidebar_menu_action,
                 self.add_repository_error(),
+                self.sidebar_layout.left_width_px,
             ))
+            .child(self.render_resize_handle(SidebarResizeTarget::Left, cx))
             .child(
                 div()
                     .flex()
@@ -4927,12 +5048,14 @@ impl Render for AlasShell {
                             )),
                     ),
                             )
+                            .child(self.render_resize_handle(SidebarResizeTarget::Right, cx))
                             .child(render_project_inspector(
                                 self.model.selected_worktree(),
                                 &self.inspector_state,
                                 &self.file_tree_expansion,
                                 on_toggle_file_tree_node,
                                 on_open_file_from_inspector,
+                                self.sidebar_layout.right_width_px,
                             )),
                     )
                     .child(render_status_bar(
@@ -4942,6 +5065,17 @@ impl Render for AlasShell {
                         active_tab.map(|tab| tab.kind),
                     )),
             )
+            .when(self.active_sidebar_resize.is_some(), |element| {
+                element.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .cursor_col_resize()
+                        .bg(transparent_black())
+                        .on_mouse_move(on_sidebar_resize_mouse_move)
+                        .capture_any_mouse_up(on_sidebar_resize_mouse_up),
+                )
+            })
     }
 }
 

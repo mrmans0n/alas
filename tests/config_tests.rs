@@ -428,3 +428,48 @@ fn command_settings_dialog_rejects_blank_fields() {
         "Command value for claude cannot be empty"
     );
 }
+
+#[test]
+fn app_config_default_includes_layout_widths() {
+    let config = AppConfig::default();
+    assert_eq!(config.layout.left_sidebar_width_px, 280);
+    assert_eq!(config.layout.right_sidebar_width_px, 320);
+}
+
+#[test]
+fn app_config_loads_layout_defaults_from_existing_toml() {
+    let toml = r#"
+        [[repositories]]
+        id = "repo-1"
+        path = "/tmp/repo-1"
+    "#;
+
+    let config: AppConfig = toml::from_str(toml).unwrap();
+    assert_eq!(config.layout.left_sidebar_width_px, 280);
+    assert_eq!(config.layout.right_sidebar_width_px, 320);
+}
+
+#[test]
+fn app_config_loads_partial_layout_with_defaults() {
+    let toml = r#"
+        [layout]
+        left_sidebar_width_px = 350
+    "#;
+
+    let config: AppConfig = toml::from_str(toml).unwrap();
+    assert_eq!(config.layout.left_sidebar_width_px, 350);
+    assert_eq!(config.layout.right_sidebar_width_px, 320);
+}
+
+#[test]
+fn app_config_round_trips_layout_preferences() {
+    let temp = tempdir().unwrap();
+    let store = AppConfigStore::new(temp.path().join("config.toml"));
+    let mut config = AppConfig::default();
+    config.layout.left_sidebar_width_px = 400;
+    config.layout.right_sidebar_width_px = 250;
+
+    store.save(&config).unwrap();
+
+    assert_eq!(store.load().unwrap(), config);
+}
