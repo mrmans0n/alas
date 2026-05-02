@@ -74,7 +74,7 @@ use gpui::{
     App, Application, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels,
     PromptLevel, Render, ScrollDelta, ScrollWheelEvent, SharedString, Task, Window, div,
-    prelude::*, px, rgb,
+    prelude::*, px, rgb, transparent_black,
 };
 use indexmap::IndexMap;
 use std::{
@@ -3455,45 +3455,17 @@ impl AlasShell {
         });
 
         let on_mouse_move = cx.listener(move |shell, event: &MouseMoveEvent, window, cx| {
-            let Some(drag) = shell.active_sidebar_resize else {
-                return;
-            };
-            if drag.target != target {
-                return;
+            if shell.update_sidebar_resize(event, window) {
+                cx.stop_propagation();
+                cx.notify();
             }
-            let delta = f32::from(event.position.x) - drag.start_x;
-            let requested = match drag.target {
-                SidebarResizeTarget::Left => drag.start_width + delta,
-                SidebarResizeTarget::Right => drag.start_width - delta,
-            };
-            let other_width = match drag.target {
-                SidebarResizeTarget::Left => shell.sidebar_layout.right_width_px,
-                SidebarResizeTarget::Right => shell.sidebar_layout.left_width_px,
-            };
-            let window_width = f32::from(window.bounds().size.width);
-            let clamped = clamp_sidebar_width(drag.target, requested, other_width, window_width);
-            match drag.target {
-                SidebarResizeTarget::Left => shell.sidebar_layout.left_width_px = clamped,
-                SidebarResizeTarget::Right => shell.sidebar_layout.right_width_px = clamped,
-            }
-            cx.stop_propagation();
-            cx.notify();
         });
 
         let on_mouse_up = cx.listener(move |shell, event: &MouseUpEvent, _window, cx| {
             if event.button != MouseButton::Left {
                 return;
             }
-            if shell
-                .active_sidebar_resize
-                .is_some_and(|d| d.target == target)
-            {
-                shell.config.layout.left_sidebar_width_px =
-                    shell.sidebar_layout.left_width_px as u32;
-                shell.config.layout.right_sidebar_width_px =
-                    shell.sidebar_layout.right_width_px as u32;
-                let _ = shell.app_config_store.save(&shell.config);
-                shell.active_sidebar_resize = None;
+            if shell.finish_sidebar_resize() {
                 cx.stop_propagation();
                 cx.notify();
             }
@@ -3510,6 +3482,44 @@ impl AlasShell {
             .on_mouse_down(MouseButton::Left, on_mouse_down)
             .on_mouse_move(on_mouse_move)
             .on_mouse_up(MouseButton::Left, on_mouse_up)
+    }
+
+    fn update_sidebar_resize(&mut self, event: &MouseMoveEvent, window: &Window) -> bool {
+        let Some(drag) = self.active_sidebar_resize else {
+            return false;
+        };
+
+        if event.pressed_button != Some(MouseButton::Left) {
+            return self.finish_sidebar_resize();
+        }
+
+        let delta = f32::from(event.position.x) - drag.start_x;
+        let requested = match drag.target {
+            SidebarResizeTarget::Left => drag.start_width + delta,
+            SidebarResizeTarget::Right => drag.start_width - delta,
+        };
+        let other_width = match drag.target {
+            SidebarResizeTarget::Left => self.sidebar_layout.right_width_px,
+            SidebarResizeTarget::Right => self.sidebar_layout.left_width_px,
+        };
+        let window_width = f32::from(window.bounds().size.width);
+        let clamped = clamp_sidebar_width(drag.target, requested, other_width, window_width);
+        match drag.target {
+            SidebarResizeTarget::Left => self.sidebar_layout.left_width_px = clamped,
+            SidebarResizeTarget::Right => self.sidebar_layout.right_width_px = clamped,
+        }
+        true
+    }
+
+    fn finish_sidebar_resize(&mut self) -> bool {
+        if self.active_sidebar_resize.take().is_none() {
+            return false;
+        }
+
+        self.config.layout.left_sidebar_width_px = self.sidebar_layout.left_width_px as u32;
+        self.config.layout.right_sidebar_width_px = self.sidebar_layout.right_width_px as u32;
+        let _ = self.app_config_store.save(&self.config);
+        true
     }
 }
 
@@ -3864,6 +3874,8 @@ impl Render for AlasShell {
         if self.terminal_metrics != measured_metrics {
             self.terminal_metrics = measured_metrics;
         }
+        self.sidebar_layout
+            .clamp_for_window(f32::from(window.bounds().size.width));
 
         let terminal_size = self.current_terminal_size();
         self.resize_active_terminal(terminal_size);
@@ -4537,6 +4549,22 @@ impl Render for AlasShell {
                 },
             )
         };
+        let on_sidebar_resize_mouse_move =
+            cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
+                if shell.update_sidebar_resize(event, window) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
+        let on_sidebar_resize_mouse_up = cx.listener(|shell, event: &MouseUpEvent, _window, cx| {
+            if event.button != MouseButton::Left {
+                return;
+            }
+            if shell.finish_sidebar_resize() {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        });
         let workspace_body = match active_tab.map(|tab| &tab.content) {
             Some(WorkspaceTabContent::File(state)) => render_source_viewer(state),
             Some(WorkspaceTabContent::Markdown(state)) => render_markdown_pane(
@@ -5048,6 +5076,17 @@ impl Render for AlasShell {
                         active_tab.map(|tab| tab.kind),
                     )),
             )
+            .when(self.active_sidebar_resize.is_some(), |element| {
+                element.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .cursor_col_resize()
+                        .bg(transparent_black())
+                        .on_mouse_move(on_sidebar_resize_mouse_move)
+                        .capture_any_mouse_up(on_sidebar_resize_mouse_up),
+                )
+            })
     }
 }
 

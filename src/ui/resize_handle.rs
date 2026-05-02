@@ -34,6 +34,21 @@ impl SidebarLayoutState {
         }
     }
 
+    pub fn clamp_for_window(&mut self, window_width: f32) {
+        self.left_width_px = clamp_sidebar_width(
+            SidebarResizeTarget::Left,
+            self.left_width_px,
+            self.right_width_px,
+            window_width,
+        );
+        self.right_width_px = clamp_sidebar_width(
+            SidebarResizeTarget::Right,
+            self.right_width_px,
+            self.left_width_px,
+            window_width,
+        );
+    }
+
     pub fn left_width(&self) -> Pixels {
         px(self.left_width_px)
     }
@@ -113,5 +128,16 @@ mod tests {
         // left max = 1000 - 400 - 300 = 300
         let result = clamp_sidebar_width(SidebarResizeTarget::Left, 400.0, 400.0, 1000.0);
         assert_eq!(result, 300.0);
+    }
+
+    #[test]
+    fn layout_state_clamps_saved_widths_for_window() {
+        let mut layout = SidebarLayoutState::from_config(900, 900);
+
+        layout.clamp_for_window(900.0);
+
+        assert!(layout.left_width_px <= LEFT_SIDEBAR_MAX_WIDTH_PX);
+        assert!(layout.right_width_px <= RIGHT_SIDEBAR_MAX_WIDTH_PX);
+        assert!(900.0 - layout.left_width_px - layout.right_width_px >= CENTER_MIN_WIDTH_PX);
     }
 }
