@@ -7,74 +7,36 @@ on:
 permissions:
   contents: write
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   macos-app:
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
 
-      - name: Build macOS app bundle
-        run: cargo xtask dist macos
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen
+
+      - name: Build release app
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -configuration Release \
+            -derivedDataPath build \
+            -destination 'platform=macOS' \
+            -quiet build
+
+      - name: Zip the .app
+        run: |
+          cd build/Build/Products/Release
+          zip -r Alas.app.zip Alas.app
 
       - name: Upload macOS artifact to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/macos/*.zip
-
-  linux-packages:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Linux build and packaging dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libfontconfig1-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            pkg-config \
-            dpkg-dev \
-            wget \
-            file \
-            fuse
-
-      - name: Install pinned appimagetool
-        env:
-          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
-        run: |
-          wget -O appimagetool "$APPIMAGETOOL_URL"
-          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
-          chmod +x appimagetool
-          sudo mv appimagetool /usr/local/bin/appimagetool
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-
-      - name: Build AppImage
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: 1
-        run: cargo xtask dist linux-appimage
-
-      - name: Build Debian package
-        run: cargo xtask dist linux-deb
-
-      - name: Upload Linux artifacts to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/linux/appimage/*.AppImage
-            dist/linux/deb/*.deb
+          files: build/Build/Products/Release/Alas.app.zip
