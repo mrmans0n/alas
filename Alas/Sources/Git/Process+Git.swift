@@ -8,7 +8,6 @@ struct ProcessResult {
 
 enum ProcessError: Error {
     case launchFailed(String)
-    case nonZeroExit(Int32, String)
 }
 
 extension Process {
@@ -18,35 +17,35 @@ extension Process {
         cwd: URL? = nil,
         env: [String: String]? = nil
     ) async throws -> ProcessResult {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ProcessResult, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = args
-            if let cwd { process.currentDirectoryURL = cwd }
-            if let env { process.environment = env }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        if let cwd { process.currentDirectoryURL = cwd }
+        if let env { process.environment = env }
 
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            process.standardOutput = outPipe
-            process.standardError = errPipe
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
 
-            process.terminationHandler = { proc in
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let result = ProcessResult(
-                    exitCode: proc.terminationStatus,
-                    stdout: String(data: outData, encoding: .utf8) ?? "",
-                    stderr: String(data: errData, encoding: .utf8) ?? ""
-                )
-                continuation.resume(returning: result)
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: ProcessError.launchFailed(error.localizedDescription))
-            }
+        do {
+            try process.run()
+        } catch {
+            throw ProcessError.launchFailed(error.localizedDescription)
         }
+
+        async let outData = Task.detached { outPipe.fileHandleForReading.readDataToEndOfFile() }.value
+        async let errData = Task.detached { errPipe.fileHandleForReading.readDataToEndOfFile() }.value
+
+        let out = await outData
+        let err = await errData
+        process.waitUntilExit()
+
+        return ProcessResult(
+            exitCode: process.terminationStatus,
+            stdout: String(data: out, encoding: .utf8) ?? "",
+            stderr: String(data: err, encoding: .utf8) ?? ""
+        )
     }
 
     /// Convenience wrapper that always uses `/usr/bin/env git`.

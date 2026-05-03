@@ -19,4 +19,10 @@ struct ProcessGitTests {
         #expect(result.exitCode == 0)
         #expect(result.stdout.contains("git version"))
     }
+
+    @Test func largeStdoutDoesNotDeadlock() async throws {
+        let result = try await Process.run("/bin/sh", args: ["-c", "yes hello | head -c 200000"])
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.count >= 200000)
+    }
 }
