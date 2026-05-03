@@ -21,9 +21,16 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
+		A6926DACD1903E1AAAF66F48 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		B65018D176CD2E52A3999CF0 /* AlasTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AlasTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		D5BAC2BE2CEAFDD462D9116F /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		E63FA8816D43E1A08AE8164B /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		EBBBF87CC508451B2C0F3A66 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		FE32DF98AE56D11E01F00CEF /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -34,6 +41,14 @@
 			path = AlasTests;
 			sourceTree = "<group>";
 		};
+		1B7FB431695F35CED973CDD2 /* Dialogs */ = {
+			isa = PBXGroup;
+			children = (
+				413CE0B0BBC96D412D048B1D /* .gitkeep */,
+			);
+			path = Dialogs;
+			sourceTree = "<group>";
+		};
 		1FFE2F486B5DB90050685166 /* Alas */ = {
 			isa = PBXGroup;
 			children = (
@@ -42,12 +57,43 @@
 			path = Alas;
 			sourceTree = "<group>";
 		};
+		2DC32361E466DA20E974D106 /* Git */ = {
+			isa = PBXGroup;
+			children = (
+				EBBBF87CC508451B2C0F3A66 /* .gitkeep */,
+			);
+			path = Git;
+			sourceTree = "<group>";
+		};
+		35407CBFC8CDF3C3395FE123 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				CA554728676F9D3B5E2C05FA /* .gitkeep */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
 		3DBEFD99DD9256C01CA72F64 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
 				FAE46B7EB9FF647CE1B2E166 /* App */,
+				1B7FB431695F35CED973CDD2 /* Dialogs */,
+				2DC32361E466DA20E974D106 /* Git */,
+				B4091CAB7D0E176C8D1E112C /* Harness */,
+				F96AD5C7794128224DD2020B /* Icons */,
+				59E804284C70FCAD77A09774 /* Settings */,
+				F556D34B5B6FE20EA80F892A /* Terminal */,
+				35407CBFC8CDF3C3395FE123 /* UI */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		59E804284C70FCAD77A09774 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				E63FA8816D43E1A08AE8164B /* .gitkeep */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 		848F1B301BB31A69DEB82615 = {
@@ -59,6 +105,14 @@
 			);
 			sourceTree = "<group>";
 		};
+		B4091CAB7D0E176C8D1E112C /* Harness */ = {
+			isa = PBXGroup;
+			children = (
+				A6926DACD1903E1AAAF66F48 /* .gitkeep */,
+			);
+			path = Harness;
+			sourceTree = "<group>";
+		};
 		C86FE0D59F990939C552C7E2 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -66,6 +120,22 @@
 				B65018D176CD2E52A3999CF0 /* AlasTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		F556D34B5B6FE20EA80F892A /* Terminal */ = {
+			isa = PBXGroup;
+			children = (
+				FE32DF98AE56D11E01F00CEF /* .gitkeep */,
+			);
+			path = Terminal;
+			sourceTree = "<group>";
+		};
+		F96AD5C7794128224DD2020B /* Icons */ = {
+			isa = PBXGroup;
+			children = (
+				D5BAC2BE2CEAFDD462D9116F /* .gitkeep */,
+			);
+			path = Icons;
 			sourceTree = "<group>";
 		};
 		FAE46B7EB9FF647CE1B2E166 /* App */ = {
