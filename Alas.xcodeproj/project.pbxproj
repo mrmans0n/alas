@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		115C50272D2037FB24B8536F /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EC619ECA68DC50B9C56CC33 /* SidebarView.swift */; };
 		12035048B950CE0197604F89 /* GitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CE7B4DAFDB65A79308FB63 /* GitService.swift */; };
 		190FA1E53291D6D94CC0086C /* SidebarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */; };
 		1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */; };
@@ -110,6 +111,7 @@
 		821B8D5125CB96997889D3B4 /* warm-amber.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "warm-amber.json"; sourceTree = "<group>"; };
 		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
 		8DEB85132B767DB3B253620C /* cool-slate.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cool-slate.json"; sourceTree = "<group>"; };
+		8EC619ECA68DC50B9C56CC33 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		92F098D716B9944308FEF5FA /* RightPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPlaceholder.swift; sourceTree = "<group>"; };
 		A6926DACD1903E1AAAF66F48 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		A8A34DFE7017B5C07D52EE05 /* SidebarPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarPlaceholder.swift; sourceTree = "<group>"; };
@@ -259,6 +261,7 @@
 				768D12909DD5233659AC4E03 /* RepoGroupView.swift */,
 				B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */,
 				A8A34DFE7017B5C07D52EE05 /* SidebarPlaceholder.swift */,
+				8EC619ECA68DC50B9C56CC33 /* SidebarView.swift */,
 				C995611A6313FABE30508248 /* WorktreeRowView.swift */,
 			);
 			path = Sidebar;
@@ -485,6 +488,7 @@
 				D05BDEF0D8651A9C2BD8C857 /* Seg.swift in Sources */,
 				190FA1E53291D6D94CC0086C /* SidebarHeaderView.swift in Sources */,
 				759D150F6F511DD870FB4A66 /* SidebarPlaceholder.swift in Sources */,
+				115C50272D2037FB24B8536F /* SidebarView.swift in Sources */,
 				A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */,
 				32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */,
 				D7D45D387EEF0436834DF7AD /* ThemeStore.swift in Sources */,
