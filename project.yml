@@ -1,0 +1,50 @@
+name: Alas
+options:
+  bundleIdPrefix: io.nlopez
+  deploymentTarget:
+    macOS: "14.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    GENERATE_INFOPLIST_FILE: NO
+
+targets:
+  Alas:
+    type: application
+    platform: macOS
+    sources:
+      - path: Alas/Sources
+    resources:
+      - path: Alas/Resources/Themes
+      - path: Alas/Resources/Assets.xcassets
+    info:
+      path: Alas/Resources/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas
+        PRODUCT_NAME: Alas
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+    entitlements:
+      path: Alas/Resources/Alas.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.files.user-selected.read-write: true
+
+  AlasTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: AlasTests
+    dependencies:
+      - target: Alas
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.tests
