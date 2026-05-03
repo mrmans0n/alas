@@ -48,3 +48,4 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.tests
+        GENERATE_INFOPLIST_FILE: YES
