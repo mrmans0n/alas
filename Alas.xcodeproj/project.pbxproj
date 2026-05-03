@@ -18,7 +18,9 @@
 		59AFC96BD543D2520DBE7BB0 /* ThemeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */; };
 		5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE58EF9CF8EC461667D9430 /* AppConfig.swift */; };
 		671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A17A797374500E1FDD2382C /* PersistenceStore.swift */; };
+		6BF6FE50DAC473322005A036 /* ProjectsManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */; };
 		6C800C9827E75F9F07C67DB9 /* AppConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */; };
+		6E69D87B57B23223A48AB6F7 /* ProjectsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FFC9539E615699AC90A7412 /* ProjectsManager.swift */; };
 		74E1B2C42F77908AA597EF45 /* OKLCH.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73A34259DE8E978943E8BE16 /* OKLCH.swift */; };
 		759D150F6F511DD870FB4A66 /* SidebarPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8A34DFE7017B5C07D52EE05 /* SidebarPlaceholder.swift */; };
 		78CDC0F114D60E839D03281C /* CenterPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA54A18F2099F715DBE73500 /* CenterPlaceholder.swift */; };
@@ -73,6 +75,7 @@
 		3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitlelessWindow.swift; sourceTree = "<group>"; };
 		364213292935A05F3B52F51F /* Paths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Paths.swift; sourceTree = "<group>"; };
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerTests.swift; sourceTree = "<group>"; };
 		4FE58EF9CF8EC461667D9430 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessGitTests.swift; sourceTree = "<group>"; };
@@ -85,6 +88,7 @@
 		7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandle.swift; sourceTree = "<group>"; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
 		7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
+		7FFC9539E615699AC90A7412 /* ProjectsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManager.swift; sourceTree = "<group>"; };
 		821B8D5125CB96997889D3B4 /* warm-amber.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "warm-amber.json"; sourceTree = "<group>"; };
 		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
 		8DEB85132B767DB3B253620C /* cool-slate.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cool-slate.json"; sourceTree = "<group>"; };
@@ -119,6 +123,7 @@
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
 				7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */,
 				5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */,
+				4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */,
 				1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */,
 				88379ACE40F42BE4A3257659 /* ThemeTests.swift */,
 				D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */,
@@ -323,6 +328,7 @@
 			children = (
 				7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */,
 				17C2AC0F8B3A1B75239995AC /* AppState.swift */,
+				7FFC9539E615699AC90A7412 /* ProjectsManager.swift */,
 				69024633944E9FFF6DA76FAE /* RootView.swift */,
 				F211897D927000B71316F28A /* WindowChrome */,
 			);
@@ -433,6 +439,7 @@
 				671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */,
 				C618DE3EE2A7CA06876D6C68 /* Process+Git.swift in Sources */,
 				1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */,
+				6E69D87B57B23223A48AB6F7 /* ProjectsManager.swift in Sources */,
 				5589181884CDA238D3D0F9A0 /* RightPlaceholder.swift in Sources */,
 				7B85B033B476943E77867BA3 /* RootView.swift in Sources */,
 				759D150F6F511DD870FB4A66 /* SidebarPlaceholder.swift in Sources */,
@@ -459,6 +466,7 @@
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
 				EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */,
 				7FC2A96DE87638A594DD8B61 /* ProcessGitTests.swift in Sources */,
+				6BF6FE50DAC473322005A036 /* ProjectsManagerTests.swift in Sources */,
 				59AFC96BD543D2520DBE7BB0 /* ThemeStoreTests.swift in Sources */,
 				BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */,
 				CB549B27BB0E578776AA7ED0 /* WorktreeServiceTests.swift in Sources */,
