@@ -1,0 +1,26 @@
+{
+  "id": "cool-slate",
+  "name": "Cool Slate",
+  "tokens": {
+    "bg-0": "oklch(0.22 0.018 220)",
+    "bg-1": "oklch(0.245 0.018 220)",
+    "bg-2": "oklch(0.275 0.020 220)",
+    "bg-3": "oklch(0.305 0.022 220)",
+    "bg-4": "oklch(0.345 0.024 220)",
+    "bg-5": "oklch(0.39 0.026 220)",
+    "line": "oklch(0.32 0.020 220 / 0.6)",
+    "line-soft": "oklch(0.32 0.020 220 / 0.35)",
+    "fg": "oklch(0.94 0.012 220)",
+    "fg-muted": "oklch(0.78 0.014 220)",
+    "fg-dim": "oklch(0.62 0.014 220)",
+    "fg-faint": "oklch(0.50 0.014 220)",
+    "accent": "oklch(0.74 0.11 195)",
+    "accent-2": "oklch(0.74 0.11 165)",
+    "accent-soft": "oklch(0.74 0.11 195 / 0.18)",
+    "add": "oklch(0.78 0.14 155)",
+    "del": "oklch(0.72 0.16 25)",
+    "mod": "oklch(0.80 0.13 85)",
+    "info": "oklch(0.76 0.11 230)",
+    "warn": "oklch(0.80 0.13 65)"
+  }
+}
