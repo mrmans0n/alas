@@ -8,8 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		497D21A67A062CE6282008CD /* PathsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295319DB8544C170DDD6328D /* PathsTests.swift */; };
+		671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A17A797374500E1FDD2382C /* PersistenceStore.swift */; };
 		78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364213292935A05F3B52F51F /* Paths.swift */; };
 		A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */; };
+		EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -23,11 +25,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		1A17A797374500E1FDD2382C /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		295319DB8544C170DDD6328D /* PathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathsTests.swift; sourceTree = "<group>"; };
 		364213292935A05F3B52F51F /* Paths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Paths.swift; sourceTree = "<group>"; };
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
+		7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
 		A6926DACD1903E1AAAF66F48 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		B65018D176CD2E52A3999CF0 /* AlasTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AlasTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
@@ -42,6 +46,7 @@
 			isa = PBXGroup;
 			children = (
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
+				7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */,
 			);
 			path = AlasTests;
 			sourceTree = "<group>";
@@ -115,6 +120,7 @@
 			isa = PBXGroup;
 			children = (
 				364213292935A05F3B52F51F /* Paths.swift */,
+				1A17A797374500E1FDD2382C /* PersistenceStore.swift */,
 			);
 			path = Persistence;
 			sourceTree = "<group>";
@@ -239,6 +245,7 @@
 			files = (
 				A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */,
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
+				671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -247,6 +254,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
+				EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
