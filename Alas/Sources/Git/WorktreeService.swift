@@ -1,16 +1,16 @@
 import Foundation
 
 struct WorktreeService {
-    enum WorktreeError: Error { case parseFailed(String); case gitFailed(String) }
+    enum WorktreeError: Error { case gitFailed(String) }
 
     /// Parse `git worktree list --porcelain` into Worktree records.
     func list(repoPath: URL, projectId: String) async throws -> [Worktree] {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        return try Self.parsePorcelain(result.stdout, projectId: projectId)
+        return Self.parsePorcelain(result.stdout, projectId: projectId)
     }
 
-    static func parsePorcelain(_ out: String, projectId: String) throws -> [Worktree] {
+    static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {
         var result: [Worktree] = []
         var currentPath: URL?
         var currentBranch: String?

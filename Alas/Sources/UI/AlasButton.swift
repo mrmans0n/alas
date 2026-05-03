@@ -12,7 +12,7 @@ struct AlasButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let icon { Image(systemName: icon).font(.system(size: 11)) }
+                if let icon { Icon(name: icon, size: 11, color: foreground) }
                 Text(title).font(.system(size: 12, weight: .medium))
             }
             .padding(.horizontal, 12)
