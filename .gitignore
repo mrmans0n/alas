@@ -13,6 +13,12 @@ xcuserdata/
 # Local agent/worktree state
 /.superpowers/
 /.worktrees/
+/.claude/
 
 # Let's ignore superpower docs
 docs/superpowers
+
+# Ghostty submodule build artifacts
+ThirdParty/ghostty/zig-out/
+ThirdParty/ghostty/macos/build/
+ThirdParty/ghostty/macos/GhosttyKit.xcframework/

@@ -12,56 +12,78 @@
 		11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 711F3E7BD099EDADEA0802FD /* NewWorktreeDialog.swift */; };
 		12035048B950CE0197604F89 /* GitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CE7B4DAFDB65A79308FB63 /* GitService.swift */; };
 		190FA1E53291D6D94CC0086C /* SidebarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */; };
+		1B2666410D799A605A38A95C /* Cursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 913F3D809398E32B4CD3FAB2 /* Cursor.swift */; };
 		1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */; };
 		1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */; };
 		24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E6D61B213F3378243B4A26 /* AlasField.swift */; };
 		2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768D12909DD5233659AC4E03 /* RepoGroupView.swift */; };
 		32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */; };
+		3A5FBEBC7AF8AE8A5A5B4399 /* Ghostty.Inspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3A8C45A54440FEB4A83DBA0 /* Ghostty.Inspector.swift */; };
+		3B0B559A24324A248C42E83B /* Ghostty.Action.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3612FBC0A693710681FAB26 /* Ghostty.Action.swift */; };
 		43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */; };
+		47EE61D6634A22125BD899B3 /* GhosttyPackageMeta.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB187B1C416E7AFF7E8088BD /* GhosttyPackageMeta.swift */; };
+		48E0B43B698544C1C4524242 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */; };
 		497D21A67A062CE6282008CD /* PathsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295319DB8544C170DDD6328D /* PathsTests.swift */; };
 		4ECFD27396367A9A81D52A0D /* WorktreeRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C995611A6313FABE30508248 /* WorktreeRowView.swift */; };
 		5589181884CDA238D3D0F9A0 /* RightPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92F098D716B9944308FEF5FA /* RightPlaceholder.swift */; };
 		5685074AFE30889AAC69EB8D /* ThreePaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */; };
 		59AFC96BD543D2520DBE7BB0 /* ThemeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */; };
 		5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C486F9097A2B145D101E2C /* AlasButton.swift */; };
+		5E1D4050B788F9FD3AE86701 /* Ghostty.Shell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 681542BB0A5534E20A5FFB25 /* Ghostty.Shell.swift */; };
 		5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE58EF9CF8EC461667D9430 /* AppConfig.swift */; };
 		671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A17A797374500E1FDD2382C /* PersistenceStore.swift */; };
 		6BF6FE50DAC473322005A036 /* ProjectsManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */; };
 		6C800C9827E75F9F07C67DB9 /* AppConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */; };
 		6E69D87B57B23223A48AB6F7 /* ProjectsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FFC9539E615699AC90A7412 /* ProjectsManager.swift */; };
 		6EFCC2646A708D0938485654 /* TrafficLights.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CDC00065CA8839DA1AD0E0F /* TrafficLights.swift */; };
+		718B6D46B277A505DC03B1BB /* Ghostty.Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735D6F2546F1AD85E205E3EB /* Ghostty.Event.swift */; };
+		73F223960A65B82144665F58 /* Ghostty.Input.swift in Sources */ = {isa = PBXBuildFile; fileRef = 776E154D7D86395836825333 /* Ghostty.Input.swift */; };
 		74E1B2C42F77908AA597EF45 /* OKLCH.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73A34259DE8E978943E8BE16 /* OKLCH.swift */; };
 		78CDC0F114D60E839D03281C /* CenterPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA54A18F2099F715DBE73500 /* CenterPlaceholder.swift */; };
 		78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364213292935A05F3B52F51F /* Paths.swift */; };
+		79E850EF576DBDF9D2BB42B2 /* NSEvent+Extension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74AF9D1C54D6E2AC4C477D1A /* NSEvent+Extension.swift */; };
 		7B85B033B476943E77867BA3 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69024633944E9FFF6DA76FAE /* RootView.swift */; };
 		7CDFA95F095090FF242B8248 /* EmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B24ABE96ED3C62146A3CED62 /* EmptyState.swift */; };
 		7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A92711BC1D9A78D8A80561 /* GitTypes.swift */; };
 		7FC2A96DE87638A594DD8B61 /* ProcessGitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */; };
+		8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8DD66F449B380BC74B373647 /* Carbon.framework */; };
+		8F0B1C9FED034C1C3F3F0C6B /* Ghostty.ConfigTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2935FD862FA0C502406E1767 /* Ghostty.ConfigTypes.swift */; };
 		8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C2AC0F8B3A1B75239995AC /* AppState.swift */; };
 		9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */; };
 		9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */; };
 		9FD539228216762192A02C69 /* DialogChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEDACEB27E6AF219054496E /* DialogChrome.swift */; };
 		A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */; };
 		A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */; };
+		A4CDFE0D43DC61DA95E5401F /* Ghostty.Command.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31580B65344D786984D20A9A /* Ghostty.Command.swift */; };
 		A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CA3930F30444A51FB2393D /* Theme.swift */; };
 		A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 563B664D082A9523260AA2EF /* RepoDot.swift */; };
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
+		B32C52A74B746017665FF371 /* EventModifiers+Extension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10904FEB5A6AA77D2D1E26A0 /* EventModifiers+Extension.swift */; };
 		B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DEB85132B767DB3B253620C /* cool-slate.json */; };
 		B7D79703ABCAFBC04A0091E5 /* VisualEffectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D97EF761C70A3AF83C00879A /* VisualEffectView.swift */; };
 		BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88379ACE40F42BE4A3257659 /* ThemeTests.swift */; };
+		C20CEBF30592E2D34074B043 /* OSColor+Extension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F16AA32383E0E263D767610B /* OSColor+Extension.swift */; };
 		C618DE3EE2A7CA06876D6C68 /* Process+Git.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79DDEA496740F5B0B5EE808B /* Process+Git.swift */; };
+		C8384632577C2CFDF7500847 /* Weak.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FF0124E7CDE27E29D217337 /* Weak.swift */; };
 		C893CA3167A5CC6637FCD8C8 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 1688AB1B49758FAB5BF0AF2F /* light.json */; };
 		CB549B27BB0E578776AA7ED0 /* WorktreeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */; };
 		CCA4B9F1FFBE1CAC99839A07 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010B026A6251DEC1BD1961C0 /* WindowConfigurator.swift */; };
 		CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29313DDC46A0CCA2FA42CDE9 /* Icon.swift */; };
+		CDF96D820EFC693753C3DF94 /* Array+Extension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54675C317800E0937B402C0F /* Array+Extension.swift */; };
 		CFDD9978240DAFEC7B0CD230 /* warm-amber.json in Resources */ = {isa = PBXBuildFile; fileRef = 821B8D5125CB96997889D3B4 /* warm-amber.json */; };
 		D05BDEF0D8651A9C2BD8C857 /* Seg.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489C9B383554D7DAB170C2F8 /* Seg.swift */; };
+		D385A0D065F29B66F5FA5758 /* Transferable+Extension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 117A78F539A39CEC86D0D5EB /* Transferable+Extension.swift */; };
 		D7D45D387EEF0436834DF7AD /* ThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05EE713DD3CACF29F206553C /* ThemeStore.swift */; };
+		D90962FAD546D67B30FC430D /* GhosttyPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 304E1E76CB18AA49E82A2EAD /* GhosttyPackage.swift */; };
+		D98AD1CD0209615C11515B40 /* CrossKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F0C9CD05EAD4E5E60F82DE /* CrossKit.swift */; };
 		E433BB79E6D79DAF4532172A /* Kbd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16CA8FEE64D73BDEBAF74878 /* Kbd.swift */; };
+		E5A7838AC395E3C8094C0268 /* SplitTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DE9C7C657D42F26252A8F95 /* SplitTree.swift */; };
 		E8CCFE313DFCCA35BE8F93D7 /* GitServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 039741E1CCAEF9770D5DEE08 /* GitServiceTests.swift */; };
 		EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */; };
 		F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1841997CCBDB9611576B930C /* AlasToggle.swift */; };
 		F40727225EA3797436F5722B /* neutral.json in Resources */ = {isa = PBXBuildFile; fileRef = C1BE92AB2BD3552CC87670C4 /* neutral.json */; };
+		F61FFA324218BE7B38C953E3 /* SurfaceProgressBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F866605023D8D65862757C1 /* SurfaceProgressBar.swift */; };
+		F7B2436EF9844B13A82EDA46 /* Ghostty.Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EB2E935C5E89E4B83935C1C /* Ghostty.Surface.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -80,6 +102,8 @@
 		05EE713DD3CACF29F206553C /* ThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStore.swift; sourceTree = "<group>"; };
 		0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCHTests.swift; sourceTree = "<group>"; };
 		1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStoreTests.swift; sourceTree = "<group>"; };
+		10904FEB5A6AA77D2D1E26A0 /* EventModifiers+Extension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EventModifiers+Extension.swift"; sourceTree = "<group>"; };
+		117A78F539A39CEC86D0D5EB /* Transferable+Extension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Transferable+Extension.swift"; sourceTree = "<group>"; };
 		1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandleTests.swift; sourceTree = "<group>"; };
 		1688AB1B49758FAB5BF0AF2F /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
 		16CA8FEE64D73BDEBAF74878 /* Kbd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Kbd.swift; sourceTree = "<group>"; };
@@ -89,10 +113,14 @@
 		271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypesTests.swift; sourceTree = "<group>"; };
 		27A92711BC1D9A78D8A80561 /* GitTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypes.swift; sourceTree = "<group>"; };
 		29313DDC46A0CCA2FA42CDE9 /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
+		2935FD862FA0C502406E1767 /* Ghostty.ConfigTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.ConfigTypes.swift; sourceTree = "<group>"; };
 		295319DB8544C170DDD6328D /* PathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathsTests.swift; sourceTree = "<group>"; };
 		2CDC00065CA8839DA1AD0E0F /* TrafficLights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrafficLights.swift; sourceTree = "<group>"; };
+		304E1E76CB18AA49E82A2EAD /* GhosttyPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyPackage.swift; sourceTree = "<group>"; };
+		31580B65344D786984D20A9A /* Ghostty.Command.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.Command.swift; sourceTree = "<group>"; };
 		3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitlelessWindow.swift; sourceTree = "<group>"; };
 		364213292935A05F3B52F51F /* Paths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Paths.swift; sourceTree = "<group>"; };
+		3DE9C7C657D42F26252A8F95 /* SplitTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitTree.swift; sourceTree = "<group>"; };
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		489C9B383554D7DAB170C2F8 /* Seg.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Seg.swift; sourceTree = "<group>"; };
 		4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerTests.swift; sourceTree = "<group>"; };
@@ -100,22 +128,34 @@
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessGitTests.swift; sourceTree = "<group>"; };
 		5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneLayout.swift; sourceTree = "<group>"; };
+		54675C317800E0937B402C0F /* Array+Extension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Array+Extension.swift"; sourceTree = "<group>"; };
 		563B664D082A9523260AA2EF /* RepoDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoDot.swift; sourceTree = "<group>"; };
+		681542BB0A5534E20A5FFB25 /* Ghostty.Shell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.Shell.swift; sourceTree = "<group>"; };
 		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeService.swift; sourceTree = "<group>"; };
 		711F3E7BD099EDADEA0802FD /* NewWorktreeDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWorktreeDialog.swift; sourceTree = "<group>"; };
+		735D6F2546F1AD85E205E3EB /* Ghostty.Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.Event.swift; sourceTree = "<group>"; };
 		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
+		74AF9D1C54D6E2AC4C477D1A /* NSEvent+Extension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSEvent+Extension.swift"; sourceTree = "<group>"; };
 		768D12909DD5233659AC4E03 /* RepoGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoGroupView.swift; sourceTree = "<group>"; };
+		776E154D7D86395836825333 /* Ghostty.Input.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.Input.swift; sourceTree = "<group>"; };
+		7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = .build/ghostty/GhosttyKit.xcframework; sourceTree = "<group>"; };
 		79DDEA496740F5B0B5EE808B /* Process+Git.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Process+Git.swift"; sourceTree = "<group>"; };
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandle.swift; sourceTree = "<group>"; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
 		7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
+		7F866605023D8D65862757C1 /* SurfaceProgressBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceProgressBar.swift; sourceTree = "<group>"; };
+		7FF0124E7CDE27E29D217337 /* Weak.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Weak.swift; sourceTree = "<group>"; };
 		7FFC9539E615699AC90A7412 /* ProjectsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManager.swift; sourceTree = "<group>"; };
+		80F0C9CD05EAD4E5E60F82DE /* CrossKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossKit.swift; sourceTree = "<group>"; };
 		821B8D5125CB96997889D3B4 /* warm-amber.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "warm-amber.json"; sourceTree = "<group>"; };
 		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
+		8DD66F449B380BC74B373647 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
 		8DEB85132B767DB3B253620C /* cool-slate.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cool-slate.json"; sourceTree = "<group>"; };
+		8EB2E935C5E89E4B83935C1C /* Ghostty.Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.Surface.swift; sourceTree = "<group>"; };
 		8EC619ECA68DC50B9C56CC33 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		913F3D809398E32B4CD3FAB2 /* Cursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cursor.swift; sourceTree = "<group>"; };
 		92F098D716B9944308FEF5FA /* RightPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPlaceholder.swift; sourceTree = "<group>"; };
 		A6926DACD1903E1AAAF66F48 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		AA54A18F2099F715DBE73500 /* CenterPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterPlaceholder.swift; sourceTree = "<group>"; };
@@ -128,9 +168,12 @@
 		B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarHeaderView.swift; sourceTree = "<group>"; };
 		BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfig.swift; sourceTree = "<group>"; };
 		C1BE92AB2BD3552CC87670C4 /* neutral.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = neutral.json; sourceTree = "<group>"; };
+		C3612FBC0A693710681FAB26 /* Ghostty.Action.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.Action.swift; sourceTree = "<group>"; };
 		C995611A6313FABE30508248 /* WorktreeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRowView.swift; sourceTree = "<group>"; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		CB187B1C416E7AFF7E8088BD /* GhosttyPackageMeta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyPackageMeta.swift; sourceTree = "<group>"; };
 		D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeServiceTests.swift; sourceTree = "<group>"; };
+		D3A8C45A54440FEB4A83DBA0 /* Ghostty.Inspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ghostty.Inspector.swift; sourceTree = "<group>"; };
 		D5BAC2BE2CEAFDD462D9116F /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		D97EF761C70A3AF83C00879A /* VisualEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectView.swift; sourceTree = "<group>"; };
 		D9E6D61B213F3378243B4A26 /* AlasField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasField.swift; sourceTree = "<group>"; };
@@ -138,8 +181,20 @@
 		E6CA3930F30444A51FB2393D /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		EBBBF87CC508451B2C0F3A66 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		EC6599EB47850D1E13ACF0EB /* NewProjectDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewProjectDialog.swift; sourceTree = "<group>"; };
-		FE32DF98AE56D11E01F00CEF /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		F16AA32383E0E263D767610B /* OSColor+Extension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OSColor+Extension.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		65B162623B36E39612A379EA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				48E0B43B698544C1C4524242 /* GhosttyKit.xcframework in Frameworks */,
+				8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		1A6B0ED8FD355C82542D35C4 /* AlasTests */ = {
@@ -180,6 +235,17 @@
 				3DBEFD99DD9256C01CA72F64 /* Sources */,
 			);
 			path = Alas;
+			sourceTree = "<group>";
+		};
+		214B9687DB5DE9978ED357C4 /* Extensions */ = {
+			isa = PBXGroup;
+			children = (
+				54675C317800E0937B402C0F /* Array+Extension.swift */,
+				10904FEB5A6AA77D2D1E26A0 /* EventModifiers+Extension.swift */,
+				F16AA32383E0E263D767610B /* OSColor+Extension.swift */,
+				117A78F539A39CEC86D0D5EB /* Transferable+Extension.swift */,
+			);
+			path = Extensions;
 			sourceTree = "<group>";
 		};
 		2DC32361E466DA20E974D106 /* Git */ = {
@@ -227,6 +293,15 @@
 				35407CBFC8CDF3C3395FE123 /* UI */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		40C7F06C7176E479491B0228 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				8DD66F449B380BC74B373647 /* Carbon.framework */,
+				7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		413E432DDAAAE618029482C3 /* Right */ = {
@@ -292,6 +367,7 @@
 			children = (
 				1FFE2F486B5DB90050685166 /* Alas */,
 				1A6B0ED8FD355C82542D35C4 /* AlasTests */,
+				40C7F06C7176E479491B0228 /* Frameworks */,
 				C86FE0D59F990939C552C7E2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -305,6 +381,34 @@
 				BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */,
 			);
 			path = Persistence;
+			sourceTree = "<group>";
+		};
+		A0A1E056B0744173632FDB4F /* Surface View */ = {
+			isa = PBXGroup;
+			children = (
+				7F866605023D8D65862757C1 /* SurfaceProgressBar.swift */,
+			);
+			path = "Surface View";
+			sourceTree = "<group>";
+		};
+		A79B23DE77D9512D04B58860 /* Ghostty */ = {
+			isa = PBXGroup;
+			children = (
+				C3612FBC0A693710681FAB26 /* Ghostty.Action.swift */,
+				31580B65344D786984D20A9A /* Ghostty.Command.swift */,
+				2935FD862FA0C502406E1767 /* Ghostty.ConfigTypes.swift */,
+				735D6F2546F1AD85E205E3EB /* Ghostty.Event.swift */,
+				776E154D7D86395836825333 /* Ghostty.Input.swift */,
+				D3A8C45A54440FEB4A83DBA0 /* Ghostty.Inspector.swift */,
+				681542BB0A5534E20A5FFB25 /* Ghostty.Shell.swift */,
+				8EB2E935C5E89E4B83935C1C /* Ghostty.Surface.swift */,
+				304E1E76CB18AA49E82A2EAD /* GhosttyPackage.swift */,
+				CB187B1C416E7AFF7E8088BD /* GhosttyPackageMeta.swift */,
+				74AF9D1C54D6E2AC4C477D1A /* NSEvent+Extension.swift */,
+				F7202FB3ADD716A638418D14 /* Helpers */,
+				A0A1E056B0744173632FDB4F /* Surface View */,
+			);
+			path = Ghostty;
 			sourceTree = "<group>";
 		};
 		B4091CAB7D0E176C8D1E112C /* Harness */ = {
@@ -354,9 +458,21 @@
 		F556D34B5B6FE20EA80F892A /* Terminal */ = {
 			isa = PBXGroup;
 			children = (
-				FE32DF98AE56D11E01F00CEF /* .gitkeep */,
+				A79B23DE77D9512D04B58860 /* Ghostty */,
 			);
 			path = Terminal;
+			sourceTree = "<group>";
+		};
+		F7202FB3ADD716A638418D14 /* Helpers */ = {
+			isa = PBXGroup;
+			children = (
+				80F0C9CD05EAD4E5E60F82DE /* CrossKit.swift */,
+				913F3D809398E32B4CD3FAB2 /* Cursor.swift */,
+				3DE9C7C657D42F26252A8F95 /* SplitTree.swift */,
+				7FF0124E7CDE27E29D217337 /* Weak.swift */,
+				214B9687DB5DE9978ED357C4 /* Extensions */,
+			);
+			path = Helpers;
 			sourceTree = "<group>";
 		};
 		F96AD5C7794128224DD2020B /* Icons */ = {
@@ -405,8 +521,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = D92629B7CBC438AA40C308D4 /* Build configuration list for PBXNativeTarget "Alas" */;
 			buildPhases = (
+				A6E0A5F2849F1349828C2EEF /* Build GhosttyKit */,
 				16AE5D200CA779AE0410E1B1 /* Sources */,
 				BD47E15DBE895A60942DDB48 /* Resources */,
+				65B162623B36E39612A379EA /* Frameworks */,
+				3B94E98F09B4EBB141FF6D87 /* Embed Ghostty Resources */,
 			);
 			buildRules = (
 			);
@@ -467,6 +586,47 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		3B94E98F09B4EBB141FF6D87 /* Embed Ghostty Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Ghostty Resources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/embed-ghostty-resources.sh\"";
+		};
+		A6E0A5F2849F1349828C2EEF /* Build GhosttyKit */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build GhosttyKit";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/build-ghostty.sh\"";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		16AE5D200CA779AE0410E1B1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -478,17 +638,33 @@
 				F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */,
 				5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */,
 				8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */,
+				CDF96D820EFC693753C3DF94 /* Array+Extension.swift in Sources */,
 				78CDC0F114D60E839D03281C /* CenterPlaceholder.swift in Sources */,
+				D98AD1CD0209615C11515B40 /* CrossKit.swift in Sources */,
+				1B2666410D799A605A38A95C /* Cursor.swift in Sources */,
 				9FD539228216762192A02C69 /* DialogChrome.swift in Sources */,
 				1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */,
 				7CDFA95F095090FF242B8248 /* EmptyState.swift in Sources */,
+				B32C52A74B746017665FF371 /* EventModifiers+Extension.swift in Sources */,
+				3B0B559A24324A248C42E83B /* Ghostty.Action.swift in Sources */,
+				A4CDFE0D43DC61DA95E5401F /* Ghostty.Command.swift in Sources */,
+				8F0B1C9FED034C1C3F3F0C6B /* Ghostty.ConfigTypes.swift in Sources */,
+				718B6D46B277A505DC03B1BB /* Ghostty.Event.swift in Sources */,
+				73F223960A65B82144665F58 /* Ghostty.Input.swift in Sources */,
+				3A5FBEBC7AF8AE8A5A5B4399 /* Ghostty.Inspector.swift in Sources */,
+				5E1D4050B788F9FD3AE86701 /* Ghostty.Shell.swift in Sources */,
+				F7B2436EF9844B13A82EDA46 /* Ghostty.Surface.swift in Sources */,
+				D90962FAD546D67B30FC430D /* GhosttyPackage.swift in Sources */,
+				47EE61D6634A22125BD899B3 /* GhosttyPackageMeta.swift in Sources */,
 				12035048B950CE0197604F89 /* GitService.swift in Sources */,
 				7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */,
 				CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */,
 				E433BB79E6D79DAF4532172A /* Kbd.swift in Sources */,
+				79E850EF576DBDF9D2BB42B2 /* NSEvent+Extension.swift in Sources */,
 				02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */,
 				11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */,
 				74E1B2C42F77908AA597EF45 /* OKLCH.swift in Sources */,
+				C20CEBF30592E2D34074B043 /* OSColor+Extension.swift in Sources */,
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
 				671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */,
 				C618DE3EE2A7CA06876D6C68 /* Process+Git.swift in Sources */,
@@ -501,13 +677,17 @@
 				D05BDEF0D8651A9C2BD8C857 /* Seg.swift in Sources */,
 				190FA1E53291D6D94CC0086C /* SidebarHeaderView.swift in Sources */,
 				115C50272D2037FB24B8536F /* SidebarView.swift in Sources */,
+				E5A7838AC395E3C8094C0268 /* SplitTree.swift in Sources */,
+				F61FFA324218BE7B38C953E3 /* SurfaceProgressBar.swift in Sources */,
 				A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */,
 				32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */,
 				D7D45D387EEF0436834DF7AD /* ThemeStore.swift in Sources */,
 				5685074AFE30889AAC69EB8D /* ThreePaneLayout.swift in Sources */,
 				AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */,
 				6EFCC2646A708D0938485654 /* TrafficLights.swift in Sources */,
+				D385A0D065F29B66F5FA5758 /* Transferable+Extension.swift in Sources */,
 				B7D79703ABCAFBC04A0091E5 /* VisualEffectView.swift in Sources */,
+				C8384632577C2CFDF7500847 /* Weak.swift in Sources */,
 				CCA4B9F1FFBE1CAC99839A07 /* WindowConfigurator.swift in Sources */,
 				4ECFD27396367A9A81D52A0D /* WorktreeRowView.swift in Sources */,
 				9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */,
@@ -678,11 +858,16 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".build/ghostty\"",
+				);
 				INFOPLIST_FILE = Alas/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				OTHER_LDFLAGS = "$(inherited) -lc++";
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas;
 				PRODUCT_NAME = Alas;
 				SDKROOT = macosx;
@@ -715,11 +900,16 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".build/ghostty\"",
+				);
 				INFOPLIST_FILE = Alas/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				OTHER_LDFLAGS = "$(inherited) -lc++";
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas;
 				PRODUCT_NAME = Alas;
 				SDKROOT = macosx;

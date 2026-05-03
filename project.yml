@@ -34,6 +34,12 @@ targets:
         NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.developer-tools
+    dependencies:
+      - framework: .build/ghostty/GhosttyKit.xcframework
+        embed: false
+        link: true
+        codeSign: false
+      - sdk: Carbon.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas
@@ -41,6 +47,15 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
+        OTHER_LDFLAGS: $(inherited) -lc++
+    preBuildScripts:
+      - name: Build GhosttyKit
+        script: '"${SRCROOT}/scripts/build-ghostty.sh"'
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Embed Ghostty Resources
+        script: '"${SRCROOT}/scripts/embed-ghostty-resources.sh"'
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Alas/Resources/Alas.entitlements
       properties:
