@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		12035048B950CE0197604F89 /* GitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CE7B4DAFDB65A79308FB63 /* GitService.swift */; };
 		1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */; };
 		1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */; };
 		32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */; };
@@ -39,6 +40,7 @@
 		CCA4B9F1FFBE1CAC99839A07 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010B026A6251DEC1BD1961C0 /* WindowConfigurator.swift */; };
 		CFDD9978240DAFEC7B0CD230 /* warm-amber.json in Resources */ = {isa = PBXBuildFile; fileRef = 821B8D5125CB96997889D3B4 /* warm-amber.json */; };
 		D7D45D387EEF0436834DF7AD /* ThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05EE713DD3CACF29F206553C /* ThemeStore.swift */; };
+		E8CCFE313DFCCA35BE8F93D7 /* GitServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 039741E1CCAEF9770D5DEE08 /* GitServiceTests.swift */; };
 		EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */; };
 		F40727225EA3797436F5722B /* neutral.json in Resources */ = {isa = PBXBuildFile; fileRef = C1BE92AB2BD3552CC87670C4 /* neutral.json */; };
 /* End PBXBuildFile section */
@@ -55,6 +57,7 @@
 
 /* Begin PBXFileReference section */
 		010B026A6251DEC1BD1961C0 /* WindowConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowConfigurator.swift; sourceTree = "<group>"; };
+		039741E1CCAEF9770D5DEE08 /* GitServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceTests.swift; sourceTree = "<group>"; };
 		05EE713DD3CACF29F206553C /* ThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStore.swift; sourceTree = "<group>"; };
 		0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCHTests.swift; sourceTree = "<group>"; };
 		1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStoreTests.swift; sourceTree = "<group>"; };
@@ -88,6 +91,7 @@
 		AA54A18F2099F715DBE73500 /* CenterPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterPlaceholder.swift; sourceTree = "<group>"; };
 		B65018D176CD2E52A3999CF0 /* AlasTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AlasTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigTests.swift; sourceTree = "<group>"; };
+		B7CE7B4DAFDB65A79308FB63 /* GitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitService.swift; sourceTree = "<group>"; };
 		BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfig.swift; sourceTree = "<group>"; };
 		C1BE92AB2BD3552CC87670C4 /* neutral.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = neutral.json; sourceTree = "<group>"; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
@@ -105,6 +109,7 @@
 			children = (
 				B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */,
 				1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */,
+				039741E1CCAEF9770D5DEE08 /* GitServiceTests.swift */,
 				271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */,
 				0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */,
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
@@ -137,6 +142,7 @@
 			isa = PBXGroup;
 			children = (
 				EBBBF87CC508451B2C0F3A66 /* .gitkeep */,
+				B7CE7B4DAFDB65A79308FB63 /* GitService.swift */,
 				27A92711BC1D9A78D8A80561 /* GitTypes.swift */,
 				79DDEA496740F5B0B5EE808B /* Process+Git.swift */,
 			);
@@ -414,6 +420,7 @@
 				8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */,
 				78CDC0F114D60E839D03281C /* CenterPlaceholder.swift in Sources */,
 				1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */,
+				12035048B950CE0197604F89 /* GitService.swift in Sources */,
 				7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */,
 				74E1B2C42F77908AA597EF45 /* OKLCH.swift in Sources */,
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
@@ -439,6 +446,7 @@
 			files = (
 				6C800C9827E75F9F07C67DB9 /* AppConfigTests.swift in Sources */,
 				A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */,
+				E8CCFE313DFCCA35BE8F93D7 /* GitServiceTests.swift in Sources */,
 				9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */,
 				43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */,
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
