@@ -22,6 +22,7 @@
 		759D150F6F511DD870FB4A66 /* SidebarPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8A34DFE7017B5C07D52EE05 /* SidebarPlaceholder.swift */; };
 		78CDC0F114D60E839D03281C /* CenterPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA54A18F2099F715DBE73500 /* CenterPlaceholder.swift */; };
 		78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364213292935A05F3B52F51F /* Paths.swift */; };
+		7B85B033B476943E77867BA3 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69024633944E9FFF6DA76FAE /* RootView.swift */; };
 		8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C2AC0F8B3A1B75239995AC /* AppState.swift */; };
 		A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */; };
 		A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */; };
@@ -64,6 +65,7 @@
 		4FE58EF9CF8EC461667D9430 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneLayout.swift; sourceTree = "<group>"; };
+		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandle.swift; sourceTree = "<group>"; };
@@ -297,6 +299,7 @@
 			children = (
 				7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */,
 				17C2AC0F8B3A1B75239995AC /* AppState.swift */,
+				69024633944E9FFF6DA76FAE /* RootView.swift */,
 				F211897D927000B71316F28A /* WindowChrome */,
 			);
 			path = App;
@@ -404,6 +407,7 @@
 				671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */,
 				1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */,
 				5589181884CDA238D3D0F9A0 /* RightPlaceholder.swift in Sources */,
+				7B85B033B476943E77867BA3 /* RootView.swift in Sources */,
 				759D150F6F511DD870FB4A66 /* SidebarPlaceholder.swift in Sources */,
 				A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */,
 				32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */,
