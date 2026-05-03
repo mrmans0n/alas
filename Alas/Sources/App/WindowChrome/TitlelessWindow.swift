@@ -10,7 +10,10 @@ final class TitlelessWindow: NSWindow {
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
+        // isMovableByWindowBackground swallows SwiftUI gestures on transparent
+        // areas (like split dividers). Keep it off; window drag still works
+        // from the (invisible) titlebar zone at the top.
+        window.isMovableByWindowBackground = false
         window.backgroundColor = .clear
         window.isOpaque = false
         // Hide the native titlebar separator
