@@ -20,8 +20,9 @@ targets:
     platform: macOS
     sources:
       - path: Alas/Sources
-    resources:
       - path: Alas/Resources/Themes
+        buildPhase: resources
+    resources:
       - path: Alas/Resources/Assets.xcassets
     info:
       path: Alas/Resources/Info.plist
@@ -49,3 +50,5 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.tests
         GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Alas.app/Contents/MacOS/Alas
+        BUNDLE_LOADER: $(TEST_HOST)

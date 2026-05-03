@@ -7,11 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */; };
 		497D21A67A062CE6282008CD /* PathsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295319DB8544C170DDD6328D /* PathsTests.swift */; };
 		671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A17A797374500E1FDD2382C /* PersistenceStore.swift */; };
+		74E1B2C42F77908AA597EF45 /* OKLCH.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73A34259DE8E978943E8BE16 /* OKLCH.swift */; };
 		78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364213292935A05F3B52F51F /* Paths.swift */; };
 		A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */; };
+		A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CA3930F30444A51FB2393D /* Theme.swift */; };
+		B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DEB85132B767DB3B253620C /* cool-slate.json */; };
+		BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88379ACE40F42BE4A3257659 /* ThemeTests.swift */; };
+		C893CA3167A5CC6637FCD8C8 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 1688AB1B49758FAB5BF0AF2F /* light.json */; };
+		CFDD9978240DAFEC7B0CD230 /* warm-amber.json in Resources */ = {isa = PBXBuildFile; fileRef = 821B8D5125CB96997889D3B4 /* warm-amber.json */; };
 		EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */; };
+		F40727225EA3797436F5722B /* neutral.json in Resources */ = {isa = PBXBuildFile; fileRef = C1BE92AB2BD3552CC87670C4 /* neutral.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -25,18 +33,26 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCHTests.swift; sourceTree = "<group>"; };
+		1688AB1B49758FAB5BF0AF2F /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
 		1A17A797374500E1FDD2382C /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		295319DB8544C170DDD6328D /* PathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathsTests.swift; sourceTree = "<group>"; };
 		364213292935A05F3B52F51F /* Paths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Paths.swift; sourceTree = "<group>"; };
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
 		7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
+		821B8D5125CB96997889D3B4 /* warm-amber.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "warm-amber.json"; sourceTree = "<group>"; };
+		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
+		8DEB85132B767DB3B253620C /* cool-slate.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cool-slate.json"; sourceTree = "<group>"; };
 		A6926DACD1903E1AAAF66F48 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		B65018D176CD2E52A3999CF0 /* AlasTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AlasTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1BE92AB2BD3552CC87670C4 /* neutral.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = neutral.json; sourceTree = "<group>"; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		D5BAC2BE2CEAFDD462D9116F /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		E63FA8816D43E1A08AE8164B /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		E6CA3930F30444A51FB2393D /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		EBBBF87CC508451B2C0F3A66 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		FE32DF98AE56D11E01F00CEF /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -45,8 +61,10 @@
 		1A6B0ED8FD355C82542D35C4 /* AlasTests */ = {
 			isa = PBXGroup;
 			children = (
+				0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */,
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
 				7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */,
+				88379ACE40F42BE4A3257659 /* ThemeTests.swift */,
 			);
 			path = AlasTests;
 			sourceTree = "<group>";
@@ -62,6 +80,7 @@
 		1FFE2F486B5DB90050685166 /* Alas */ = {
 			isa = PBXGroup;
 			children = (
+				E64B0D7392DAB820993B29F5 /* Resources */,
 				3DBEFD99DD9256C01CA72F64 /* Sources */,
 			);
 			path = Alas;
@@ -94,9 +113,21 @@
 				8637544952A5E268387998D1 /* Persistence */,
 				59E804284C70FCAD77A09774 /* Settings */,
 				F556D34B5B6FE20EA80F892A /* Terminal */,
+				7592B5DE2FBCFC47DB6F481D /* Theme */,
 				35407CBFC8CDF3C3395FE123 /* UI */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		4A546C28E4A7690D621C99E0 /* Themes */ = {
+			isa = PBXGroup;
+			children = (
+				8DEB85132B767DB3B253620C /* cool-slate.json */,
+				1688AB1B49758FAB5BF0AF2F /* light.json */,
+				C1BE92AB2BD3552CC87670C4 /* neutral.json */,
+				821B8D5125CB96997889D3B4 /* warm-amber.json */,
+			);
+			path = Themes;
 			sourceTree = "<group>";
 		};
 		59E804284C70FCAD77A09774 /* Settings */ = {
@@ -105,6 +136,15 @@
 				E63FA8816D43E1A08AE8164B /* .gitkeep */,
 			);
 			path = Settings;
+			sourceTree = "<group>";
+		};
+		7592B5DE2FBCFC47DB6F481D /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				73A34259DE8E978943E8BE16 /* OKLCH.swift */,
+				E6CA3930F30444A51FB2393D /* Theme.swift */,
+			);
+			path = Theme;
 			sourceTree = "<group>";
 		};
 		848F1B301BB31A69DEB82615 = {
@@ -140,6 +180,14 @@
 				B65018D176CD2E52A3999CF0 /* AlasTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E64B0D7392DAB820993B29F5 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				4A546C28E4A7690D621C99E0 /* Themes */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		F556D34B5B6FE20EA80F892A /* Terminal */ = {
@@ -192,6 +240,7 @@
 			buildConfigurationList = D92629B7CBC438AA40C308D4 /* Build configuration list for PBXNativeTarget "Alas" */;
 			buildPhases = (
 				16AE5D200CA779AE0410E1B1 /* Sources */,
+				BD47E15DBE895A60942DDB48 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -238,14 +287,30 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		BD47E15DBE895A60942DDB48 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */,
+				C893CA3167A5CC6637FCD8C8 /* light.json in Resources */,
+				F40727225EA3797436F5722B /* neutral.json in Resources */,
+				CFDD9978240DAFEC7B0CD230 /* warm-amber.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		16AE5D200CA779AE0410E1B1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */,
+				74E1B2C42F77908AA597EF45 /* OKLCH.swift in Sources */,
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
 				671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */,
+				A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,8 +318,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */,
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
 				EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */,
+				BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
