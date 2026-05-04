@@ -13,7 +13,8 @@ import Foundation
 /// suite filtering, so we disable in-source.
 @MainActor
 struct AlasGhosttySmokeTests {
-    @Test func canCreateConfigFromGeneratedFile() throws {
+    @Test(.disabled("hangs in headless CI — see file header"))
+    func canCreateConfigFromGeneratedFile() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-ghostty-test-\(UUID().uuidString).config")
         try """
