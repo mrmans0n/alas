@@ -65,6 +65,9 @@ struct AppearancePane: View {
                                 Button {
                                     state.config.accent = id
                                     state.saveConfig()
+                                    // Push the accent override into the live
+                                    // theme so the chrome updates immediately.
+                                    state.themeStore.setAccent(id)
                                 } label: {
                                     Circle().fill(color).frame(width: 24, height: 24)
                                         .overlay(

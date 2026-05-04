@@ -39,9 +39,16 @@ final class HookWatcher {
         guard let entries = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
         for entry in entries where entry.pathExtension == "json" {
             if seenFiles.contains(entry.lastPathComponent) { continue }
-            seenFiles.insert(entry.lastPathComponent)
+            // Don't mark as seen until we've successfully decoded the file —
+            // hook scripts write in place (`> file`) so directory write events
+            // can fire while the file is still partial. If we marked it seen
+            // first, a single failed decode would permanently skip the file
+            // and we'd lose the harness completion event. Now decode failures
+            // simply leave the entry unprocessed; the next FSEvent (or scan)
+            // will retry once the writer finishes.
             guard let data = try? Data(contentsOf: entry) else { continue }
             guard let event = try? HookEvent.decode(data) else { continue }
+            seenFiles.insert(entry.lastPathComponent)
             DispatchQueue.main.async { self.onEvent?(event) }
             // Move processed file aside
             let processed = dir.appendingPathComponent("processed").appendingPathComponent(entry.lastPathComponent)

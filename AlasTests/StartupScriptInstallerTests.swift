@@ -55,8 +55,9 @@ struct StartupScriptInstallerTests {
         )
         #expect(plan.executable == "/bin/bash")
         #expect(plan.args.contains("--rcfile"))
-        // Login + interactive — preserves $HOME/.bash_profile semantics.
-        #expect(plan.args.contains("-l"))
+        // Bash silently ignores --rcfile in login mode, so we deliberately
+        // omit -l here and let the rcfile source the login chain instead.
+        #expect(!plan.args.contains("-l"))
         #expect(plan.args.contains("-i"))
         // No ZDOTDIR for bash.
         #expect(plan.envOverrides["ZDOTDIR"] == nil)

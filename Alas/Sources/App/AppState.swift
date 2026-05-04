@@ -21,7 +21,12 @@ final class AppState {
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         self.config = config
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
-        self.themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
+        let themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
+        // Apply the persisted accent override so the picker's selection
+        // survives relaunches; otherwise launches always show the theme's
+        // built-in accent until the user re-clicks the picker.
+        themeStore.setAccent(config.accent)
+        self.themeStore = themeStore
         // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
         // happens async in RootView.task), so worktreesByProject is empty and
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after

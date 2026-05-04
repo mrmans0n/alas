@@ -74,7 +74,6 @@ struct DiffTabView: View {
 
     private func stageHunk() {
         Task {
-            // Build a patch from the first hunk + apply --cached
             guard let hunk = diff.hunks.first else { return }
             let patchLines = hunk.lines.map { line -> String in
                 switch line.kind {
@@ -83,12 +82,33 @@ struct DiffTabView: View {
                 case .context: return " \(line.text)"
                 }
             }
-            let patch = [
-                "diff --git a/\(relativePath) b/\(relativePath)",
-                "--- a/\(relativePath)",
-                "+++ b/\(relativePath)",
-                hunk.header
-            ].joined(separator: "\n") + "\n" + patchLines.joined(separator: "\n") + "\n"
+            // For untracked files the diff base is /dev/null; the patch header
+            // must reflect that or `git apply --cached` rejects it with
+            // "does not exist in index". For tracked files the conventional
+            // a/<path> b/<path> headers work.
+            let tracked = (try? await Process.git(
+                ["ls-files", "--error-unmatch", "--", relativePath],
+                cwd: worktreePath
+            ))?.exitCode == 0
+            let header: [String]
+            if tracked {
+                header = [
+                    "diff --git a/\(relativePath) b/\(relativePath)",
+                    "--- a/\(relativePath)",
+                    "+++ b/\(relativePath)",
+                    hunk.header,
+                ]
+            } else {
+                header = [
+                    "diff --git a/\(relativePath) b/\(relativePath)",
+                    "new file mode 100644",
+                    "--- /dev/null",
+                    "+++ b/\(relativePath)",
+                    hunk.header,
+                ]
+            }
+            let patch = header.joined(separator: "\n") + "\n"
+                + patchLines.joined(separator: "\n") + "\n"
             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
             try? patch.write(to: tmp, atomically: true, encoding: .utf8)
             _ = try? await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)

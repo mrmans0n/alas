@@ -75,10 +75,14 @@ enum StartupScriptInstaller {
             )
 
         case "bash":
-            // bash + --rcfile only sources the named file (skipping
-            // ~/.bash_profile / ~/.profile etc.). Pre-source the standard
-            // login + interactive chain inside the rcfile, and pass `-l -i`
-            // so the shell still reports as a login shell.
+            // bash quirks: `--rcfile <file>` is only honored in non-login
+            // interactive mode. Adding `-l` makes it a login shell and bash
+            // ignores --rcfile entirely (sourcing /etc/profile + ~/.bash_profile
+            // / ~/.bash_login / ~/.profile instead) — which would skip the
+            // user's custom startup snippet. So we DON'T pass `-l`. Instead our
+            // generated rcfile manually sources the login init chain so the
+            // user's PATH/toolchains/etc. still load. Net behavior: same files
+            // are sourced as a login shell + the user snippet runs.
             let dir = Paths.appSupportRoot
                 .appendingPathComponent("rcfiles", isDirectory: true)
             try Paths.ensureDirectoryExists(dir)
@@ -98,7 +102,7 @@ enum StartupScriptInstaller {
             try body.write(to: rcfile, atomically: true, encoding: .utf8)
             return Plan(
                 executable: shell,
-                args: ["--rcfile", rcfile.path, "-l", "-i"],
+                args: ["--rcfile", rcfile.path, "-i"],
                 envOverrides: [:]
             )
 
