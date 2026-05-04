@@ -37,3 +37,45 @@ struct GitService {
         return nil
     }
 }
+
+extension GitService {
+    func status(worktreePath: URL) async throws -> [ChangedFile] {
+        async let statusResult = Process.git(["status", "--porcelain=v2", "-z"], cwd: worktreePath)
+        async let numstatResult = Process.git(["diff", "--numstat", "HEAD"], cwd: worktreePath)
+        let (s, n) = try await (statusResult, numstatResult)
+        guard s.exitCode == 0 else { return [] }
+        var entries = try StatusParser.parse(s.stdout)
+        let counts = NumstatParser.parse(n.stdout)
+        for i in entries.indices {
+            if let c = counts[entries[i].path] {
+                entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status,
+                                          add: c.add, del: c.del, renameFrom: entries[i].renameFrom)
+            }
+        }
+        return entries
+    }
+
+    func diff(worktreePath: URL, file: String, staged: Bool = false) async throws -> ParsedDiff {
+        var args = ["diff", "--no-color"]
+        if staged { args.append("--cached") }
+        args.append("HEAD")
+        args.append("--")
+        args.append(file)
+        let result = try await Process.git(args, cwd: worktreePath)
+        return DiffParser.parse(result.stdout)
+    }
+
+    func fileTree(worktreePath: URL, statusEntries: [ChangedFile]) async throws -> [FileTreeNode] {
+        let result = try await Process.git(
+            ["ls-files", "--cached", "--others", "--exclude-standard"],
+            cwd: worktreePath
+        )
+        let paths = result.stdout
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        var badges: [String: String] = [:]
+        for entry in statusEntries { badges[entry.path] = entry.status }
+        return FileTreeBuilder.build(paths: paths, badges: badges)
+    }
+}
