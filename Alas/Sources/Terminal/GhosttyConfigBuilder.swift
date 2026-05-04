@@ -51,16 +51,15 @@ enum GhosttyConfigBuilder {
         lines.append("cursor-style = \(ghosttyCursorStyleString(cfg.cursorStyle))")
         lines.append("cursor-style-blink = \(cfg.cursorBlink)")
         lines.append("scrollback-limit = \(cfg.scrollbackLines)")
+        // bell-features takes a comma-separated list (system|audio|attention|title|border).
+        // Prefix any token with "no-" to disable.
         switch cfg.bell {
         case "off":
-            lines.append("audible-bell = false")
-            lines.append("visual-bell = false")
+            lines.append("bell-features = no-system,no-audio,no-attention,no-title,no-border")
         case "visual":
-            lines.append("audible-bell = false")
-            lines.append("visual-bell = true")
+            lines.append("bell-features = no-system,no-audio,attention,title,border")
         case "sound":
-            lines.append("audible-bell = true")
-            lines.append("visual-bell = false")
+            lines.append("bell-features = system,audio,no-attention,no-title,no-border")
         default: break
         }
         lines.append("background = \(bg)")

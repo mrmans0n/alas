@@ -64,6 +64,7 @@
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
 		B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DEB85132B767DB3B253620C /* cool-slate.json */; };
 		B7D79703ABCAFBC04A0091E5 /* VisualEffectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D97EF761C70A3AF83C00879A /* VisualEffectView.swift */; };
+		B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */; };
 		B8B0B60C8096F691F8401D31 /* TabBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC7CCBF8463A95EAAE9EBCE /* TabBarView.swift */; };
 		BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88379ACE40F42BE4A3257659 /* ThemeTests.swift */; };
 		C4D640619C91B2668340B04E /* EnvBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */; };
@@ -135,6 +136,7 @@
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
 		64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvBuilderTests.swift; sourceTree = "<group>"; };
 		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhosttySmokeTests.swift; sourceTree = "<group>"; };
 		6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeService.swift; sourceTree = "<group>"; };
 		711F3E7BD099EDADEA0802FD /* NewWorktreeDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWorktreeDialog.swift; sourceTree = "<group>"; };
 		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
@@ -201,6 +203,7 @@
 		1A6B0ED8FD355C82542D35C4 /* AlasTests */ = {
 			isa = PBXGroup;
 			children = (
+				69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */,
 				B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */,
 				1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */,
 				64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */,
@@ -673,6 +676,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */,
 				6C800C9827E75F9F07C67DB9 /* AppConfigTests.swift in Sources */,
 				A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */,
 				C4D640619C91B2668340B04E /* EnvBuilderTests.swift in Sources */,
