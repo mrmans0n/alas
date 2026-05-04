@@ -205,6 +205,16 @@ extension AlasGhostty {
 
         // MARK: - Public API
 
+        /// Foreground process pid in the surface's PTY (or nil if surface or pid unavailable).
+        /// `cSurface` is nonisolated(unsafe) — Ghostty's foreground-pid read is a safe
+        /// atomic query and does not mutate surface state, so we can call it off-main.
+        nonisolated var foregroundPid: pid_t? {
+            guard let surface = cSurface else { return nil }
+            let pid = ghostty_surface_foreground_pid(surface)
+            guard pid > 0 else { return nil }
+            return pid_t(truncatingIfNeeded: pid)
+        }
+
         /// Inject text directly into the PTY (e.g. for paste or synthetic input).
         func sendText(_ text: String) {
             guard let surface = cSurface else { return }
