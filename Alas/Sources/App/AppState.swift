@@ -10,6 +10,7 @@ final class AppState {
     var selectedWorktreeId: String?
     let tabs = TabsManager()
     let terminal = TerminalService()
+    let rightPaneStore = RightPaneStore()
 
     private let store = PersistenceStore()
 
