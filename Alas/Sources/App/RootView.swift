@@ -42,7 +42,22 @@ struct RootView: View {
                             EmptyTabView(onNewTerminal: {})
                         }
                     },
-                    right: { Color.clear }
+                    right: {
+                        if let wt = selectedWorktree() {
+                            RightPaneView(
+                                state: state,
+                                worktree: wt,
+                                onSelectChangedFile: { file in
+                                    openOrFocusDiff(worktree: wt, path: file.path)
+                                },
+                                onSelectTreeFile: { node in
+                                    openOrFocusEditor(worktree: wt, path: node.path)
+                                }
+                            )
+                        } else {
+                            EmptyView()
+                        }
+                    }
                 )
             }
         }
@@ -50,6 +65,10 @@ struct RootView: View {
         .background(WindowConfigurator())
         .frame(minWidth: 900, minHeight: 600)
         .ignoresSafeArea()
+        .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
+            state.config.rightPaneVisible.toggle()
+            state.saveConfig()
+        }
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
         }
@@ -75,4 +94,40 @@ struct RootView: View {
         }
         return nil
     }
+
+    private func openOrFocusDiff(worktree: Worktree, path: String) {
+        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .diff(let s) = tab { return s.relativePath == path } else { return false }
+        }
+        if let existing {
+            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+        } else {
+            let tab = state.tabs.appendDiff(
+                worktreeId: worktree.id,
+                title: (path as NSString).lastPathComponent,
+                relativePath: path
+            )
+            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
+    }
+
+    private func openOrFocusEditor(worktree: Worktree, path: String) {
+        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .editor(let s) = tab { return s.relativePath == path } else { return false }
+        }
+        if let existing {
+            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+        } else {
+            let tab = state.tabs.appendEditor(
+                worktreeId: worktree.id,
+                title: (path as NSString).lastPathComponent,
+                relativePath: path
+            )
+            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let alasToggleRightPane = Notification.Name("AlasToggleRightPane")
 }
