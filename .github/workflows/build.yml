@@ -130,7 +130,13 @@ jobs:
             -only-testing AlasTests/DebounceTimerTests \
             test-without-building
 
+      # Per-step timeout (8min): each suite passed alone in <3min in
+      # earlier bisects. If one is slow it should be obvious. Caps WAY
+      # below the 60min job timeout so a flake doesn't burn the whole
+      # budget — failed step short-circuits the rest, the other suites
+      # already ran above.
       - name: Test — ProcessGitTests
+        timeout-minutes: 8
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
@@ -138,6 +144,7 @@ jobs:
             test-without-building
 
       - name: Test — GitServiceTests
+        timeout-minutes: 8
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
@@ -145,6 +152,7 @@ jobs:
             test-without-building
 
       - name: Test — WorktreeServiceTests
+        timeout-minutes: 8
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
@@ -152,6 +160,7 @@ jobs:
             test-without-building
 
       - name: Test — ProjectsManagerTests
+        timeout-minutes: 8
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
