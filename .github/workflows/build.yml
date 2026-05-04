@@ -97,16 +97,63 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — only the 4 subprocess suites, parallel off)
-        # Each of these passes alone. Run all 4 together with parallel
-        # testing disabled to see if the combination is the issue or if
-        # something else from the full suite is involved.
+      # Each xcodebuild test invocation gets its own LaunchServices /
+      # CoreServices teardown cycle. Combining 4+ subprocess-heavy suites
+      # in one invocation hangs on macos-26 even with parallel testing
+      # disabled (each suite passes individually). Split into multiple
+      # invocations, batched by behavior class. Smoke suite skipped
+      # (libghostty runtime hangs in headless CI).
+      - name: Test — pure & light-IO suites
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS' \
+            -only-testing AlasTests/AppConfigTests \
+            -only-testing AlasTests/OKLCHTests \
+            -only-testing AlasTests/ThemeTests \
+            -only-testing AlasTests/PathsTests \
+            -only-testing AlasTests/EnvBuilderTests \
+            -only-testing AlasTests/HookEventTests \
+            -only-testing AlasTests/StatusParserTests \
+            -only-testing AlasTests/NumstatParserTests \
+            -only-testing AlasTests/DiffParserTests \
+            -only-testing AlasTests/FileTreeBuilderTests \
+            -only-testing AlasTests/SimpleHighlighterTests \
+            -only-testing AlasTests/HarnessDetectorTests \
+            -only-testing AlasTests/GhosttyConfigBuilderTests \
+            -only-testing AlasTests/GitTypesTests \
+            -only-testing AlasTests/StartupScriptInstallerTests \
+            -only-testing AlasTests/DragHandleTests \
+            -only-testing AlasTests/PersistenceStoreTests \
+            -only-testing AlasTests/ThemeStoreTests \
+            -only-testing AlasTests/HookInstallerTests \
+            -only-testing AlasTests/TabsManagerTests \
+            -only-testing AlasTests/DebounceTimerTests \
+            test-without-building
+
+      - name: Test — ProcessGitTests
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
             -only-testing AlasTests/ProcessGitTests \
+            test-without-building
+
+      - name: Test — GitServiceTests
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS' \
             -only-testing AlasTests/GitServiceTests \
+            test-without-building
+
+      - name: Test — WorktreeServiceTests
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS' \
             -only-testing AlasTests/WorktreeServiceTests \
+            test-without-building
+
+      - name: Test — ProjectsManagerTests
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS' \
             -only-testing AlasTests/ProjectsManagerTests \
-            -parallel-testing-enabled NO \
             test-without-building
