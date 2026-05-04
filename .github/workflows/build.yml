@@ -97,13 +97,11 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — only WorktreeServiceTests)
-        # Git-identity fix didn't unblock the hang. Isolate to one of the
-        # 3 git-using suites at a time. Try WorktreeServiceTests first
-        # because it does the most: `git init`, `commit --allow-empty`,
-        # `worktree add` (creates child dirs), `worktree remove`.
+      - name: Test (bisect — only GitServiceTests)
+        # WorktreeServiceTests passes alone (1m52s). Try GitServiceTests
+        # next.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -only-testing AlasTests/WorktreeServiceTests \
+            -only-testing AlasTests/GitServiceTests \
             test-without-building
