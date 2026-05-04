@@ -85,13 +85,32 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — StartupScriptInstallerTests)
-        # CI hung on c6172dd despite -skip-testing AlasGhosttySmokeTests,
-        # which previously got commit 1aef7bf to pass in 1m40s. Touching
-        # StartupScriptInstaller is the only meaningful diff between those
-        # commits' tests, so isolate that suite first.
+      - name: Test (bisect — pure + light-IO suites)
+        # 91a2d11 confirmed StartupScriptInstallerTests passes alone (2m12s).
+        # Run a batch that excludes anything running real `git`, FSEventStream,
+        # DispatchSource, libghostty, or NSPasteboard — i.e. anything that
+        # might block on macOS daemons in headless CI.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
+            -only-testing AlasTests/AppConfigTests \
+            -only-testing AlasTests/OKLCHTests \
+            -only-testing AlasTests/ThemeTests \
+            -only-testing AlasTests/PathsTests \
+            -only-testing AlasTests/EnvBuilderTests \
+            -only-testing AlasTests/HookEventTests \
+            -only-testing AlasTests/StatusParserTests \
+            -only-testing AlasTests/NumstatParserTests \
+            -only-testing AlasTests/DiffParserTests \
+            -only-testing AlasTests/FileTreeBuilderTests \
+            -only-testing AlasTests/SimpleHighlighterTests \
+            -only-testing AlasTests/HarnessDetectorTests \
+            -only-testing AlasTests/GhosttyConfigBuilderTests \
+            -only-testing AlasTests/GitTypesTests \
             -only-testing AlasTests/StartupScriptInstallerTests \
+            -only-testing AlasTests/DragHandleTests \
+            -only-testing AlasTests/PersistenceStoreTests \
+            -only-testing AlasTests/ThemeStoreTests \
+            -only-testing AlasTests/HookInstallerTests \
+            -only-testing AlasTests/TabsManagerTests \
             test-without-building
