@@ -33,30 +33,16 @@ struct WorktreesPane: View {
                             ("main", "main"), ("develop", "develop"), ("origin/HEAD", "origin/HEAD")
                         ])
                     }
-                    SettingsRow(name: "Track upstream",
-                                desc: "Set upstream to origin on first push.") {
-                        AlasToggle(on: bind(\.worktrees.trackUpstream))
-                    }
                 }
+                // trackUpstream / autoFetch / fetchIntervalMinutes / pruneStale
+                // are persisted in AppConfig but no creation or background-sync
+                // path consumes them yet. They'll come back here when the
+                // worktree automation lands; rendering them now would mislead
+                // users into thinking the toggles do anything.
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(name: "Delete branch on remove",
                                 desc: "When removing a worktree, also delete its local branch if merged.") {
                         AlasToggle(on: bind(\.worktrees.deleteBranchOnRemove))
-                    }
-                    SettingsRow(name: "Auto fetch",
-                                desc: "Periodically fetch from remote in the background.") {
-                        AlasToggle(on: bind(\.worktrees.autoFetch))
-                    }
-                    SettingsRow(name: "Fetch interval (minutes)") {
-                        AlasField(text: Binding(
-                            get: { String(state.config.worktrees.fetchIntervalMinutes) },
-                            set: { state.config.worktrees.fetchIntervalMinutes = Int($0) ?? 5; state.saveConfig() }
-                        ), monospaced: true)
-                        .frame(width: 80)
-                    }
-                    SettingsRow(name: "Prune stale worktrees",
-                                desc: "Show a warning when a worktree's branch no longer exists upstream.") {
-                        AlasToggle(on: bind(\.worktrees.pruneStale))
                     }
                 }
             }

@@ -18,11 +18,14 @@ struct TerminalPane: View {
                     SettingsRow(name: "Default shell", desc: "Path to the shell executable.") {
                         AlasField(text: bind(\.terminal.shell), monospaced: true)
                     }
+                    // "Last used" intentionally omitted: TerminalService
+                    // doesn't track per-session cwd yet (resolveWorkingDirectory
+                    // would silently fall through to the worktree root). It'll
+                    // come back here once that tracking lands.
                     SettingsRow(name: "Working directory") {
                         Seg(value: bind(\.terminal.workingDirectory), options: [
                             ("worktreeRoot", "Worktree root"),
                             ("repoRoot", "Repo root"),
-                            ("lastUsed", "Last used"),
                         ])
                     }
                 }

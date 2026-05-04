@@ -90,8 +90,10 @@ final class TerminalService {
     }
 
     /// Resolve the per-session cwd from the user's preference. v1 supports
-    /// `worktreeRoot` (default), `repoRoot`, and `lastUsed`; the last falls
-    /// back to the worktree root because we don't yet track per-session cwd.
+    /// `worktreeRoot` (default) and `repoRoot`; "lastUsed" was a previously-
+    /// exposed option that always silently fell through to worktreeRoot, so
+    /// it was dropped from the settings UI. It'll return when we actually
+    /// persist per-session cwd.
     private func resolveWorkingDirectory(
         preference: String,
         worktree: Worktree,
@@ -100,9 +102,6 @@ final class TerminalService {
         switch preference {
         case "repoRoot":
             return URL(fileURLWithPath: project.path)
-        case "lastUsed":
-            // No persisted last-cwd yet — fall through to worktree root.
-            return worktree.path
         default:
             return worktree.path
         }

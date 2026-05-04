@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct SidebarHeaderView: View {
-    let onSearch: () -> Void
     let onSettings: () -> Void
     let onNewWorktree: () -> Void
     @Environment(\.theme) var theme
@@ -18,8 +17,10 @@ struct SidebarHeaderView: View {
                     .foregroundColor(theme.color("fg"))
             }
             Spacer()
+            // Search will return here when there's an actual search handler.
+            // Previously rendered as a no-op ToolbarBtn(action: {}) which
+            // codex flagged correctly as misleading.
             HStack(spacing: 2) {
-                ToolbarBtn(icon: "search", action: onSearch)
                 ToolbarBtn(icon: "gear", action: onSettings)
                 ToolbarBtn(icon: "plus", action: onNewWorktree)
             }

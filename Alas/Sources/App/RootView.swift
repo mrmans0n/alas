@@ -31,7 +31,6 @@ struct RootView: View {
                         SidebarView(
                             state: state,
                             collapsedProjects: $collapsedProjects,
-                            onSearch: {},
                             onSettings: { openSettingsWindow() },
                             onNewWorktree: { showNewWorktree = true }
                         )

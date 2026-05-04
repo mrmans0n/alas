@@ -70,6 +70,22 @@ extension GitService {
             if let c = counts[entries[i].path] {
                 entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status,
                                           add: c.add, del: c.del, renameFrom: entries[i].renameFrom)
+            } else if entries[i].add == 0 && entries[i].del == 0 {
+                // Numstat doesn't include unstaged untracked files, so they'd
+                // show 0/0 in the Changes pane and the totals would
+                // under-report. Count the file's lines as adds when it exists
+                // on disk; deleted files (no longer present) stay at 0/0.
+                let url = worktreePath.appendingPathComponent(entries[i].path)
+                if let data = try? Data(contentsOf: url),
+                   let text = String(data: data, encoding: .utf8) {
+                    let lines = text.isEmpty
+                        ? 0
+                        : text.split(separator: "\n", omittingEmptySubsequences: false).count
+                    entries[i] = ChangedFile(path: entries[i].path,
+                                             status: entries[i].status,
+                                             add: lines, del: 0,
+                                             renameFrom: entries[i].renameFrom)
+                }
             }
         }
         return entries
@@ -96,12 +112,22 @@ extension GitService {
             return DiffParser.parse(result.stdout)
         }
 
-        // For tracked files, fall back to `--cached` when HEAD doesn't exist
-        // (unborn branch) — `git diff HEAD` fails with `bad revision`.
+        // Two distinct views, never combine HEAD and worktree:
+        //   staged: false → unstaged delta (worktree vs index): `git diff`.
+        //     Works as-is on unborn HEAD (index may be empty tree). This is
+        //     the patch shape `git apply --cached` expects when staging
+        //     hunks, and it correctly surfaces AM-state worktree edits even
+        //     on unborn branches.
+        //   staged: true  → staged delta (index vs HEAD): `git diff --cached
+        //     HEAD` when HEAD exists, otherwise `git diff --cached` (index
+        //     vs empty tree) so initial-commit workflows still render the
+        //     staged side.
         let head = try await hasHead(worktreePath: worktreePath)
         var args = ["diff", "--no-color"]
-        if staged || !head { args.append("--cached") }
-        if head { args.append("HEAD") }
+        if staged {
+            args.append("--cached")
+            if head { args.append("HEAD") }
+        }
         args.append("--")
         args.append(file)
         let result = try await Process.git(args, cwd: worktreePath)

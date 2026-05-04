@@ -3,7 +3,6 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var state: AppState
     @Binding var collapsedProjects: Set<String>
-    let onSearch: () -> Void
     let onSettings: () -> Void
     let onNewWorktree: () -> Void
     @Environment(\.theme) var theme
@@ -13,7 +12,6 @@ struct SidebarView: View {
             VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
             VStack(spacing: 0) {
                 SidebarHeaderView(
-                    onSearch: onSearch,
                     onSettings: onSettings,
                     onNewWorktree: onNewWorktree
                 )
