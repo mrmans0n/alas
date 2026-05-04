@@ -2,6 +2,9 @@ import Testing
 import Foundation
 @testable import Alas
 
+// Serialize: each test creates an ephemeral repo and shells out to git.
+// Concurrent git invocations on macos-26 CI have produced flaky hangs.
+@Suite(.serialized)
 struct ProjectsManagerTests {
     private func makeRepo(name: String) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory

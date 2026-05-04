@@ -39,13 +39,33 @@ struct GitService {
 }
 
 extension GitService {
+    /// Whether the repo has any commits yet. `git diff HEAD` and friends
+    /// fail with `bad revision 'HEAD'` on unborn branches; callers swap to
+    /// index-based diffs in that case.
+    func hasHead(worktreePath: URL) async throws -> Bool {
+        let result = try await Process.git(
+            ["rev-parse", "--verify", "--quiet", "HEAD"],
+            cwd: worktreePath
+        )
+        return result.exitCode == 0
+    }
+
     func status(worktreePath: URL) async throws -> [ChangedFile] {
         async let statusResult = Process.git(["status", "--porcelain=v2", "-z"], cwd: worktreePath)
-        async let numstatResult = Process.git(["diff", "--numstat", "HEAD"], cwd: worktreePath)
-        let (s, n) = try await (statusResult, numstatResult)
+        let s = try await statusResult
         guard s.exitCode == 0 else { return [] }
         var entries = try StatusParser.parse(s.stdout)
-        let counts = NumstatParser.parse(n.stdout)
+
+        // Numstat needs a base revision. Use HEAD if one exists; on unborn
+        // branches diff `--cached` (index vs empty tree) so initial-commit
+        // workflows still see real add/del counts in the Changes pane.
+        let head = try await hasHead(worktreePath: worktreePath)
+        let numstatArgs: [String] = head
+            ? ["diff", "--numstat", "HEAD"]
+            : ["diff", "--numstat", "--cached"]
+        let numstat = try await Process.git(numstatArgs, cwd: worktreePath)
+        let counts = NumstatParser.parse(numstat.stdout)
+
         for i in entries.indices {
             if let c = counts[entries[i].path] {
                 entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status,
@@ -75,9 +95,13 @@ extension GitService {
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return DiffParser.parse(result.stdout)
         }
+
+        // For tracked files, fall back to `--cached` when HEAD doesn't exist
+        // (unborn branch) — `git diff HEAD` fails with `bad revision`.
+        let head = try await hasHead(worktreePath: worktreePath)
         var args = ["diff", "--no-color"]
-        if staged { args.append("--cached") }
-        args.append("HEAD")
+        if staged || !head { args.append("--cached") }
+        if head { args.append("HEAD") }
         args.append("--")
         args.append(file)
         let result = try await Process.git(args, cwd: worktreePath)

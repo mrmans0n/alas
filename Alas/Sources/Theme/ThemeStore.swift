@@ -26,9 +26,11 @@ final class ThemeStore {
     init(initialId: String = "cool-slate") throws {
         self.userPickedId = initialId
         self.current = try Theme.loadBundled(id: initialId)
-        // Listen for system-appearance changes so we can swap themes
-        // automatically when `matchSystem` is on.
-        NotificationCenter.default.addObserver(
+        // `AppleInterfaceThemeChangedNotification` is delivered on the
+        // *distributed* notification center (macOS broadcasts it across
+        // process boundaries). Observing the in-process default center
+        // would silently never fire.
+        DistributedNotificationCenter.default().addObserver(
             self,
             selector: #selector(systemAppearanceDidChange),
             name: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
@@ -37,7 +39,7 @@ final class ThemeStore {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
     }
 
     func activate(id: String) throws {

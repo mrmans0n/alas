@@ -9,7 +9,10 @@ if [ -z "${ALAS_SESSION_ID:-}" ]; then exit 0; fi
 INPUT=$(cat || true)
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-OUT_FILE="$ALAS_HOOK_DIR/$(date -u +%s)-$ALAS_SESSION_ID.json"
+# Microsecond precision: BSD `date +%s` collides on same-second events,
+# which then race in FSEventStream and cause one hook to overwrite another.
+TS_US=$(python3 -c 'import time; print(int(time.time()*1_000_000))')
+OUT_FILE="$ALAS_HOOK_DIR/$TS_US-$ALAS_SESSION_ID.json"
 mkdir -p "$ALAS_HOOK_DIR"
 
 # Serialize via python3's json module so summaries with quotes / backslashes /

@@ -6,7 +6,9 @@ set -eu
 if [ -z "${ALAS_HOOK_DIR:-}" ] || [ -z "${ALAS_SESSION_ID:-}" ]; then exit 0; fi
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 mkdir -p "$ALAS_HOOK_DIR"
-OUT="$ALAS_HOOK_DIR/$(date -u +%s)-$ALAS_SESSION_ID.json"
+# Microsecond precision: BSD `date +%s` collides on same-second events.
+TS_US=$(python3 -c 'import time; print(int(time.time()*1_000_000))')
+OUT="$ALAS_HOOK_DIR/$TS_US-$ALAS_SESSION_ID.json"
 SUMMARY="Aider finished" \
 SESSION_ID="$ALAS_SESSION_ID" \
 TS="$TS" \

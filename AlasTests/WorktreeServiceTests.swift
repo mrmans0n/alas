@@ -2,6 +2,13 @@ import Testing
 import Foundation
 @testable import Alas
 
+// Swift Testing parallelizes tests within a suite by default, and
+// `-parallel-testing-enabled NO` only disables xctest-level parallelism.
+// Each test here spins up an ephemeral repo and shells out to git; running
+// four of those concurrently on macos-26 has reproducibly hung at
+// `git branch --list` after `git branch -d` (presumably git/dyld/codesign
+// contention). Force-serialize so each git invocation runs cleanly.
+@Suite(.serialized)
 struct WorktreeServiceTests {
     private func makeRepo() async throws -> URL {
         let dir = FileManager.default.temporaryDirectory

@@ -7,6 +7,12 @@ on:
       - master
   pull_request:
 
+# Cancel superseded runs on the same ref (e.g. force-push to a PR branch).
+# Saves CI minutes and frees the macos-26 queue when iterating fast.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
@@ -24,6 +30,11 @@ jobs:
       GIT_ASKPASS: "/usr/bin/true"
       SSH_ASKPASS: "/usr/bin/true"
       DISPLAY: ":0"
+      # Disable git pager. macos-26's git misdetects "no tty" in some
+      # subprocess contexts and tries to spawn `less`, which then blocks
+      # forever waiting for stdin. Observed hanging WorktreeServiceTests'
+      # `git branch --list` after `git branch -d`.
+      GIT_PAGER: "cat"
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v6
@@ -106,7 +117,19 @@ jobs:
         # when xcodebuild's `test` action re-validates the build description and
         # registers the test host with LaunchServices. Same artifacts, no
         # mid-test re-link.
-        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
+        # `-skipMacroValidation` skips the first-run "trust this Swift macro"
+        # prompt that on macos-26 stalls headless builds. CODE_SIGNING_*=NO and
+        # empty CODE_SIGN_IDENTITY drop the codesign step from the build graph
+        # — codesign on macos-26 has occasionally blocked on keychain access in
+        # CI with no signing identity present (per supacode's CI workflow).
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS' \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build-for-testing
 
       # Each xcodebuild test invocation gets its own LaunchServices /
       # CoreServices teardown cycle. Combining 4+ subprocess-heavy suites
@@ -139,6 +162,8 @@ jobs:
             -only-testing AlasTests/HookInstallerTests \
             -only-testing AlasTests/TabsManagerTests \
             -only-testing AlasTests/DebounceTimerTests \
+            -skipMacroValidation \
+            -parallel-testing-enabled NO \
             test-without-building
 
       # Per-step timeout (8min): each suite passed alone in <3min in
@@ -152,6 +177,8 @@ jobs:
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
             -only-testing AlasTests/ProcessGitTests \
+            -skipMacroValidation \
+            -parallel-testing-enabled NO \
             test-without-building
 
       - name: Test — GitServiceTests
@@ -160,6 +187,8 @@ jobs:
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
             -only-testing AlasTests/GitServiceTests \
+            -skipMacroValidation \
+            -parallel-testing-enabled NO \
             test-without-building
 
       - name: Test — WorktreeServiceTests
@@ -168,6 +197,8 @@ jobs:
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
             -only-testing AlasTests/WorktreeServiceTests \
+            -skipMacroValidation \
+            -parallel-testing-enabled NO \
             test-without-building
 
       - name: Test — ProjectsManagerTests
@@ -176,4 +207,6 @@ jobs:
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
             -only-testing AlasTests/ProjectsManagerTests \
+            -skipMacroValidation \
+            -parallel-testing-enabled NO \
             test-without-building

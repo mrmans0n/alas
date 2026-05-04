@@ -34,6 +34,13 @@ struct AppearancePane: View {
                             ForEach(themes, id: \.0) { (id, name, c1, c2) in
                                 Button {
                                     state.config.themeId = id
+                                    // Manually picking a theme implicitly turns
+                                    // off match-system mode (themeStore.activate
+                                    // already does this in-memory) — also clear
+                                    // the persisted flag so the toggle reflects
+                                    // reality + relaunches don't re-enter
+                                    // match-system mode.
+                                    state.config.matchSystemTheme = false
                                     try? state.themeStore.activate(id: id)
                                     state.saveConfig()
                                 } label: {
