@@ -85,14 +85,17 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — only AppConfigTests)
-        # CI was hanging on the Test step for 17min+ even with all
-        # AlasGhosttySmokeTests disabled. Bisecting: run only one trivial
-        # pure-data suite to see if the test runner itself is functional.
-        # If this passes we'll add more classes back; if it hangs the test
-        # runner / lsregister / launch is the issue, not any specific test.
+      - name: Test
+        # Skip AlasGhosttySmokeTests at the xcodebuild flag level rather than
+        # via @Test(.disabled(...)) traits. The trait approach loaded the
+        # smoke-test class at bundle-init time which somehow triggered a
+        # multi-minute hang on macos-26 (commits b18af24 / 26b9174 / 6731b23
+        # all hit it; switching back to -skip-testing made commit 1aef7bf
+        # pass in 1m40s). The smoke tests are best-effort regression checks
+        # exercised by manually launching Alas.app; the other ~60 unit tests
+        # still run.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -only-testing AlasTests/AppConfigTests \
+            -skip-testing AlasTests/AlasGhosttySmokeTests \
             test-without-building

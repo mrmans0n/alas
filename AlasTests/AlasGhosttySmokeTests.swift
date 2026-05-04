@@ -2,19 +2,15 @@ import Testing
 import Foundation
 @testable import Alas
 
-/// Smoke tests for the AlasGhostty wrapper. The Config-only test runs fine
-/// in any environment (no libghostty runtime). The App + SurfaceView tests
-/// spin up the libghostty runtime (`ghostty_app_new` registers
-/// NSNotification observers, runloop hooks) and hang for >10min during
-/// teardown on headless macOS runners (observed on macos-26 CI on commits
-/// 1aef7bf, d3d7a3b). We skip those two via `.disabled` and rely on
-/// manually launching `Alas.app` to exercise the full surface code path.
-/// The `-skip-testing` xcodebuild flag isn't reliable for Swift-Testing
-/// suite filtering, so we disable in-source.
+/// Smoke tests for the AlasGhostty wrapper. They spin up the libghostty
+/// runtime which hangs the test runner on headless macOS CI (no real
+/// display) for many minutes during teardown. The whole suite is excluded
+/// from CI via `-skip-testing AlasTests/AlasGhosttySmokeTests` in
+/// `.github/workflows/build.yml`. Manual smoke (launch Alas.app) is the
+/// real coverage for these code paths.
 @MainActor
 struct AlasGhosttySmokeTests {
-    @Test(.disabled("hangs in headless CI — see file header"))
-    func canCreateConfigFromGeneratedFile() throws {
+    @Test func canCreateConfigFromGeneratedFile() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-ghostty-test-\(UUID().uuidString).config")
         try """
@@ -35,8 +31,7 @@ struct AlasGhosttySmokeTests {
         _ = config
     }
 
-    @Test(.disabled("hangs in headless CI — see file header"))
-    func canCreateAppFromGeneratedFile() throws {
+    @Test func canCreateAppFromGeneratedFile() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-ghostty-test-\(UUID().uuidString).config")
         try """
@@ -53,8 +48,7 @@ struct AlasGhosttySmokeTests {
         _ = app
     }
 
-    @Test(.disabled("hangs in headless CI — see file header"))
-    func canCreateSurfaceView() throws {
+    @Test func canCreateSurfaceView() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-ghostty-test-\(UUID().uuidString).config")
         try """
