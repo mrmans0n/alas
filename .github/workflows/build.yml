@@ -30,6 +30,16 @@ jobs:
         # linker bug Ghostty's HACKING.md describes. Vanilla Zig 0.15.2 does not.
         run: brew install xcodegen zig@0.15
 
+      - name: Compute Ghostty cache key inputs
+        # Submodules track their HEAD via .git/modules/... in the parent repo, so
+        # `ThirdParty/ghostty/.git` is a *file* (not a dir) and hashFiles can't
+        # follow it. Dump the submodule SHA + script hash into a small file we
+        # can feed to hashFiles. Re-runs whenever the pinned commit moves.
+        run: |
+          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
+          shasum scripts/build-ghostty.sh >> .ghostty-pin
+          cat .ghostty-pin
+
       - name: Cache Ghostty build outputs
         # Cold zig builds are ~20–30 minutes. Cache the xcframework + zig caches
         # keyed by the submodule commit + the build script so we only rebuild
@@ -38,7 +48,7 @@ jobs:
         with:
           path: |
             .build/ghostty
-          key: ghostty-${{ runner.os }}-${{ hashFiles('ThirdParty/ghostty/.git/HEAD', 'scripts/build-ghostty.sh') }}
+          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
 
       - name: Generate Xcode project
         run: xcodegen
