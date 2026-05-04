@@ -7,6 +7,7 @@ final class AppState {
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
     var selectedWorktreeId: String?
+    let tabs = TabsManager()
 
     private let store = PersistenceStore()
 
@@ -16,6 +17,10 @@ final class AppState {
         self.config = config
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
         self.themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
+        let allWorktreeIds = projectsManager.projects.flatMap {
+            projectsManager.worktrees(projectId: $0.id).map(\.id)
+        }
+        tabs.loadAll(worktreeIds: allWorktreeIds)
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
