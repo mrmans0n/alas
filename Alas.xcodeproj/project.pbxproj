@@ -25,6 +25,7 @@
 		2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */; };
 		32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */; };
 		3A866AA94C2B50FA00805875 /* SettingsGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3678A2904CBBFAC939C9275 /* SettingsGroup.swift */; };
+		3B0629E55CC38A713F763AA8 /* AppearancePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B450918CC98255AD9170586 /* AppearancePane.swift */; };
 		3C57603EA801D8994B0B5525 /* RightPaneState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C1705E68E97111E85D83F3 /* RightPaneState.swift */; };
 		3CD81DD1B1FF8C1EA849237C /* TerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C45A26ADB0D1CCFBB5BEAE8 /* TerminalSession.swift */; };
 		41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA505FF2E6CFA8278C95C6E /* GhosttyConfigBuilder.swift */; };
@@ -158,6 +159,7 @@
 		3BE23A4881B60D7F16A4ACA5 /* GhosttyConfigBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyConfigBuilderTests.swift; sourceTree = "<group>"; };
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		489C9B383554D7DAB170C2F8 /* Seg.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Seg.swift; sourceTree = "<group>"; };
+		4B450918CC98255AD9170586 /* AppearancePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePane.swift; sourceTree = "<group>"; };
 		4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParserTests.swift; sourceTree = "<group>"; };
 		4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerTests.swift; sourceTree = "<group>"; };
 		4FE58EF9CF8EC461667D9430 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
@@ -386,6 +388,7 @@
 			isa = PBXGroup;
 			children = (
 				E63FA8816D43E1A08AE8164B /* .gitkeep */,
+				4B450918CC98255AD9170586 /* AppearancePane.swift */,
 				0240C5961343C3042D865570 /* GeneralPane.swift */,
 				F3678A2904CBBFAC939C9275 /* SettingsGroup.swift */,
 				515B67124EA11DDCC29B6E36 /* SettingsNavView.swift */,
@@ -704,6 +707,7 @@
 				F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */,
 				5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */,
 				8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */,
+				3B0629E55CC38A713F763AA8 /* AppearancePane.swift in Sources */,
 				139F45EE390C27342C5DD734 /* CenterPaneView.swift in Sources */,
 				8622E85C972946E5411CAC48 /* ChangesSectionView.swift in Sources */,
 				49C8C4C8B34444953FBA1809 /* DebounceTimer.swift in Sources */,
