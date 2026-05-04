@@ -101,6 +101,10 @@ final class AppState {
         if let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
            case .terminal(let s) = tab {
             harness.detector.unregister(sessionId: s.sessionId)
+            // HarnessService keeps the kind across detector clears (so hooks
+            // arriving after process exit still attribute correctly). Now
+            // that the session is going away for good, drop it.
+            harness.forgetSession(s.sessionId)
             terminal.closeSession(id: s.sessionId)
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)

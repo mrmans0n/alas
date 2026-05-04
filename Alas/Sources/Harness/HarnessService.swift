@@ -7,9 +7,15 @@ final class HarnessService {
     let watcher: HookWatcher
     let notifications = NotificationService()
 
-    /// session id → harness kind (set by detector)
+    /// session id → last-known harness kind for this session. NEVER cleared
+    /// when the detector reports "no longer running" because the stop hook
+    /// often races process exit: harness exits → detector reports nil →
+    /// THEN the hook file lands and we'd have nothing to attribute it to.
+    /// Preserve the kind through the session so notifications fire reliably.
     private(set) var harnessBySession: [String: HarnessKind] = [:]
-    /// session id → harness state ("running" | "awaiting" | "done")
+    /// session id → live state ("running" | "awaiting" | "done"). Cleared
+    /// only when the detector reports nil AND we're not awaiting a hook
+    /// outcome, so the tab badge dot disappears naturally.
     private(set) var stateBySession: [String: String] = [:]
 
     var onClickThrough: ((String, String, String) -> Void)?
@@ -27,10 +33,11 @@ final class HarnessService {
                     self.stateBySession[sid] = "running"
                 }
             } else {
-                if self.harnessBySession[sid] != nil {
-                    self.harnessBySession.removeValue(forKey: sid)
-                    self.stateBySession.removeValue(forKey: sid)
-                }
+                // Process exited but the stop-hook event may still be in
+                // flight. Drop the running-state badge so the UI reflects
+                // "not actively running", but KEEP harnessBySession so the
+                // upcoming hook can attribute its kind.
+                self.stateBySession.removeValue(forKey: sid)
             }
         }
         detector.start()
@@ -56,5 +63,12 @@ final class HarnessService {
     func stop() {
         detector.stop()
         watcher.stop()
+    }
+
+    /// Drop all per-session harness state. Call when the terminal session is
+    /// closed so we don't leak entries forever in `harnessBySession`.
+    func forgetSession(_ sessionId: String) {
+        harnessBySession.removeValue(forKey: sessionId)
+        stateBySession.removeValue(forKey: sessionId)
     }
 }
