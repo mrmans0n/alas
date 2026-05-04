@@ -8,10 +8,24 @@ if [ -z "${ALAS_SESSION_ID:-}" ]; then exit 0; fi
 
 INPUT=$(cat || true)
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-SUMMARY=$(printf '%s' "$INPUT" | head -c 500 | sed 's/"/\\"/g' | tr -d '\n')
 
 OUT_FILE="$ALAS_HOOK_DIR/$(date -u +%s)-$ALAS_SESSION_ID.json"
 mkdir -p "$ALAS_HOOK_DIR"
-cat > "$OUT_FILE" <<EOF
-{"session_id":"$ALAS_SESSION_ID","kind":"stop","timestamp":"$TS","summary":"$SUMMARY"}
-EOF
+
+# Serialize via python3's json module so summaries with quotes / backslashes /
+# newlines / control chars don't produce invalid JSON. The previous
+# `sed 's/"/\\"/g' | tr -d '\n'` left backslashes, tabs, etc. unescaped, which
+# made HookEvent.decode silently drop those events. python3 is preinstalled on
+# every supported macOS.
+SUMMARY="${INPUT:0:500}" \
+SESSION_ID="$ALAS_SESSION_ID" \
+TS="$TS" \
+python3 -c '
+import json, os
+print(json.dumps({
+    "session_id": os.environ["SESSION_ID"],
+    "kind": "stop",
+    "timestamp": os.environ["TS"],
+    "summary": os.environ["SUMMARY"],
+}))
+' > "$OUT_FILE"

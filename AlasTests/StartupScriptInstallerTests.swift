@@ -31,13 +31,18 @@ struct StartupScriptInstallerTests {
         #expect(plan.executable == "/bin/zsh")
         // zsh has no `--rcfile` flag — must NOT appear here.
         #expect(!plan.args.contains("--rcfile"))
-        #expect(plan.args == ["-i"])
+        // Login + interactive — preserves $HOME/.zprofile semantics.
+        #expect(plan.args == ["-l", "-i"])
         // ZDOTDIR must be set to a real directory containing `.zshrc`.
         let zdotdir = try #require(plan.envOverrides["ZDOTDIR"])
         let rcfile = URL(fileURLWithPath: zdotdir).appendingPathComponent(".zshrc")
         #expect(FileManager.default.fileExists(atPath: rcfile.path))
         let body = try String(contentsOf: rcfile, encoding: .utf8)
+        // Sources the full user init chain.
+        #expect(body.contains("source \"$HOME/.zshenv\""))
+        #expect(body.contains("source \"$HOME/.zprofile\""))
         #expect(body.contains("source \"$HOME/.zshrc\""))
+        #expect(body.contains("source \"$HOME/.zlogin\""))
         #expect(body.contains("echo hi from alas"))
     }
 
@@ -50,6 +55,8 @@ struct StartupScriptInstallerTests {
         )
         #expect(plan.executable == "/bin/bash")
         #expect(plan.args.contains("--rcfile"))
+        // Login + interactive — preserves $HOME/.bash_profile semantics.
+        #expect(plan.args.contains("-l"))
         #expect(plan.args.contains("-i"))
         // No ZDOTDIR for bash.
         #expect(plan.envOverrides["ZDOTDIR"] == nil)
@@ -60,6 +67,8 @@ struct StartupScriptInstallerTests {
         }
         let rcPath = plan.args[idx + 1]
         let body = try String(contentsOf: URL(fileURLWithPath: rcPath), encoding: .utf8)
+        // Sources the full user init chain.
+        #expect(body.contains("source \"$HOME/.bash_profile\""))
         #expect(body.contains("source \"$HOME/.bashrc\""))
         #expect(body.contains("alias ll='ls -la'"))
     }

@@ -98,8 +98,30 @@ struct DiffTabView: View {
     }
 
     private func discard() {
+        // `git checkout -- <path>` only restores a TRACKED file's worktree
+        // copy from the index. It silently no-ops for untracked files (still
+        // there) and doesn't unstage staged changes. Discard from the diff
+        // view is opened from `git status --porcelain=v2` entries which
+        // include both — handle each case explicitly:
+        //
+        //   tracked   → `git restore --staged --worktree --source=HEAD --` so
+        //               both the index and the worktree go back to HEAD,
+        //               covering staged-only, unstaged-only, and mixed states.
+        //   untracked → `rm -f` since git won't touch it.
         Task {
-            _ = try? await Process.git(["checkout", "--", relativePath], cwd: worktreePath)
+            let tracked = (try? await Process.git(
+                ["ls-files", "--error-unmatch", "--", relativePath],
+                cwd: worktreePath
+            ))?.exitCode == 0
+            if tracked {
+                _ = try? await Process.git(
+                    ["restore", "--staged", "--worktree", "--source=HEAD", "--", relativePath],
+                    cwd: worktreePath
+                )
+            } else {
+                let absolute = worktreePath.appendingPathComponent(relativePath)
+                try? FileManager.default.removeItem(at: absolute)
+            }
             await load()
         }
     }

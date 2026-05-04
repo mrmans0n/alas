@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
+# Alas hook for Aider completion. Hardcoded summary today; switch to python3
+# JSON serialization for consistency with the other hooks (and to ensure any
+# future caller-provided summary is escaped correctly).
 set -eu
 if [ -z "${ALAS_HOOK_DIR:-}" ] || [ -z "${ALAS_SESSION_ID:-}" ]; then exit 0; fi
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 mkdir -p "$ALAS_HOOK_DIR"
 OUT="$ALAS_HOOK_DIR/$(date -u +%s)-$ALAS_SESSION_ID.json"
-printf '{"session_id":"%s","kind":"stop","timestamp":"%s","summary":"Aider finished"}\n' \
-    "$ALAS_SESSION_ID" "$TS" > "$OUT"
+SUMMARY="Aider finished" \
+SESSION_ID="$ALAS_SESSION_ID" \
+TS="$TS" \
+python3 -c '
+import json, os
+print(json.dumps({
+    "session_id": os.environ["SESSION_ID"],
+    "kind": "stop",
+    "timestamp": os.environ["TS"],
+    "summary": os.environ["SUMMARY"],
+}))
+' > "$OUT"
