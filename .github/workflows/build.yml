@@ -97,11 +97,11 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — only GitServiceTests)
-        # WorktreeServiceTests passes alone (1m52s). Try GitServiceTests
-        # next.
+      - name: Test (bisect — only ProjectsManagerTests)
+        # WorktreeService + GitService pass alone. Confirm the hang is in
+        # ProjectsManagerTests.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -only-testing AlasTests/GitServiceTests \
+            -only-testing AlasTests/ProjectsManagerTests \
             test-without-building
