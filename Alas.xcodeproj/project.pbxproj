@@ -55,6 +55,7 @@
 		7CDFA95F095090FF242B8248 /* EmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B24ABE96ED3C62146A3CED62 /* EmptyState.swift */; };
 		7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A92711BC1D9A78D8A80561 /* GitTypes.swift */; };
 		7FC2A96DE87638A594DD8B61 /* ProcessGitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */; };
+		8622E85C972946E5411CAC48 /* ChangesSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E947E110B003FB519DAD1B3 /* ChangesSectionView.swift */; };
 		8744A1DB40A1EC0D01D4C895 /* AlasGhostty.Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F696636690652C48CE87D9 /* AlasGhostty.Config.swift */; };
 		8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8DD66F449B380BC74B373647 /* Carbon.framework */; };
 		8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C2AC0F8B3A1B75239995AC /* AppState.swift */; };
@@ -128,6 +129,7 @@
 		1841997CCBDB9611576B930C /* AlasToggle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasToggle.swift; sourceTree = "<group>"; };
 		1A17A797374500E1FDD2382C /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		1AFC62A30044F71F0F16C3FB /* TerminalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalService.swift; sourceTree = "<group>"; };
+		1E947E110B003FB519DAD1B3 /* ChangesSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesSectionView.swift; sourceTree = "<group>"; };
 		2119507B66D09AF3DF347280 /* AlasGhostty.App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.App.swift; sourceTree = "<group>"; };
 		215C9AE9FBCB1FD9F6D030FE /* GhosttyHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyHost.swift; sourceTree = "<group>"; };
 		271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypesTests.swift; sourceTree = "<group>"; };
@@ -339,6 +341,7 @@
 		413E432DDAAAE618029482C3 /* Right */ = {
 			isa = PBXGroup;
 			children = (
+				1E947E110B003FB519DAD1B3 /* ChangesSectionView.swift */,
 				91C1705E68E97111E85D83F3 /* RightPaneState.swift */,
 				795056B6AD803D2B555FC866 /* RightPaneStore.swift */,
 				92F098D716B9944308FEF5FA /* RightPlaceholder.swift */,
@@ -672,6 +675,7 @@
 				5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */,
 				8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */,
 				139F45EE390C27342C5DD734 /* CenterPaneView.swift in Sources */,
+				8622E85C972946E5411CAC48 /* ChangesSectionView.swift in Sources */,
 				49C8C4C8B34444953FBA1809 /* DebounceTimer.swift in Sources */,
 				9FD539228216762192A02C69 /* DialogChrome.swift in Sources */,
 				02425EBF61592A01B1FCC7D0 /* DiffParser.swift in Sources */,
