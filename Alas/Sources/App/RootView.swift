@@ -42,7 +42,7 @@ struct RootView: View {
                             EmptyTabView(onNewTerminal: {})
                         }
                     },
-                    right: { RightPlaceholder() }
+                    right: { Color.clear }
                 )
             }
         }
