@@ -9,12 +9,9 @@ on:
 
 jobs:
   build-test:
-    # macos-15 ships Xcode 16.x by default; Ghostty's main HEAD officially
-    # requires Xcode 26 (per ThirdParty/ghostty/HACKING.md), so this CI may
-    # fail at the zig-build step until GitHub-hosted runners ship Xcode 26
-    # or we move to self-hosted. Keeping the workflow honest about what it
-    # actually runs rather than pinning Xcode 15.
-    runs-on: macos-15
+    # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
+    # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout (with submodules)

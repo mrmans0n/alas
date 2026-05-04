@@ -43,20 +43,23 @@ final class TerminalService {
 
         let sessionId = UUID().uuidString
         try Paths.ensureDirectoryExists(Paths.hookDir)
-        let env = EnvBuilder.build(
+        var env = EnvBuilder.build(
             project: project, worktree: worktree, sessionId: sessionId,
             hookDir: Paths.hookDir, inheritParent: cfg.inheritParentEnv
         )
-        let argv = try StartupScriptInstaller.shellArgv(
+        let plan = try StartupScriptInstaller.plan(
             shell: cfg.shell,
             startupScript: cfg.startupScript,
             sessionId: sessionId
         )
+        // Plan-supplied env overrides (e.g. ZDOTDIR for zsh startup scripts)
+        // win over inherited env.
+        for (k, v) in plan.envOverrides { env[k] = v }
         let surfaceConfig = GhosttyConfigBuilder.makeSurfaceConfiguration(
             cwd: worktree.path,
             env: env,
-            executable: argv.executable,
-            args: argv.args
+            executable: plan.executable,
+            args: plan.args
         )
         let surface = AlasGhostty.SurfaceView(
             app: app,
@@ -67,8 +70,8 @@ final class TerminalService {
             worktreeId: worktree.id,
             projectId: project.id,
             surface: surface,
-            executable: argv.executable,
-            args: argv.args
+            executable: plan.executable,
+            args: plan.args
         )
         registry.register(session)
         return session

@@ -22,6 +22,15 @@ final class AppState {
         self.config = config
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
         self.themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
+        // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
+        // happens async in RootView.task), so worktreesByProject is empty and
+        // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
+        // refreshAll() returns.
+    }
+
+    /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
+    /// after `projectsManager.refreshAll()` so worktrees actually exist.
+    func reloadTabs() {
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }

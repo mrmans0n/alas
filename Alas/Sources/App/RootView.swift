@@ -93,6 +93,9 @@ struct RootView: View {
         .task {
             state.startHarness()
             await state.projectsManager.refreshAll()
+            // Worktrees now exist — load any persisted tab files for them. Init
+            // can't do this because refreshAll runs async after init.
+            state.reloadTabs()
             if state.selectedWorktreeId == nil {
                 state.selectedWorktreeId = state.projects
                     .flatMap { state.projectsManager.worktrees(projectId: $0.id) }
