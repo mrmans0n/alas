@@ -13,6 +13,17 @@ jobs:
     # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
     timeout-minutes: 60
+    # Block any git operation from prompting (credential helper, SSH key
+    # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
+    # — which sets a `git@github.com:...` remote — hung indefinitely on
+    # macos-26 (CI has no SSH key configured; git/ssh blocks waiting for
+    # one). Setting GIT_TERMINAL_PROMPT=0 + a no-op GIT_ASKPASS makes any
+    # interactive request return immediately.
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      GIT_ASKPASS: "/usr/bin/true"
+      SSH_ASKPASS: "/usr/bin/true"
+      DISPLAY: ":0"
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v6
