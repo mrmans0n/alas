@@ -11,6 +11,7 @@
 		02425EBF61592A01B1FCC7D0 /* DiffParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1703FC5CD7DF16F4450E274 /* DiffParser.swift */; };
 		02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6599EB47850D1E13ACF0EB /* NewProjectDialog.swift */; };
 		0CF488290CC525EA7C11A43C /* DiffParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE26221DC8E8837FFEB87474 /* DiffParserTests.swift */; };
+		1066AF44E2FCA9B1B2DDE9D7 /* EditorTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8B52175A7F6144B4C52010 /* EditorTabView.swift */; };
 		115C50272D2037FB24B8536F /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EC619ECA68DC50B9C56CC33 /* SidebarView.swift */; };
 		11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 711F3E7BD099EDADEA0802FD /* NewWorktreeDialog.swift */; };
 		12035048B950CE0197604F89 /* GitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CE7B4DAFDB65A79308FB63 /* GitService.swift */; };
@@ -162,6 +163,7 @@
 		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhosttySmokeTests.swift; sourceTree = "<group>"; };
 		6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeService.swift; sourceTree = "<group>"; };
+		6E8B52175A7F6144B4C52010 /* EditorTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTabView.swift; sourceTree = "<group>"; };
 		711F3E7BD099EDADEA0802FD /* NewWorktreeDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWorktreeDialog.swift; sourceTree = "<group>"; };
 		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
 		768D12909DD5233659AC4E03 /* RepoGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoGroupView.swift; sourceTree = "<group>"; };
@@ -380,6 +382,7 @@
 			isa = PBXGroup;
 			children = (
 				F8685E5E5AC7A77D6D27A847 /* CenterPaneView.swift */,
+				6E8B52175A7F6144B4C52010 /* EditorTabView.swift */,
 				008E982C8526670670425AB8 /* EmptyTabView.swift */,
 				5AE97A0C5978403F40820B7C /* SimpleHighlighter.swift */,
 				B27595490B7D883CF5D9FFD5 /* Tab.swift */,
@@ -689,6 +692,7 @@
 				9FD539228216762192A02C69 /* DialogChrome.swift in Sources */,
 				02425EBF61592A01B1FCC7D0 /* DiffParser.swift in Sources */,
 				1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */,
+				1066AF44E2FCA9B1B2DDE9D7 /* EditorTabView.swift in Sources */,
 				7CDFA95F095090FF242B8248 /* EmptyState.swift in Sources */,
 				950C937884477417569DC20B /* EmptyTabView.swift in Sources */,
 				7A0D3E122F34EF1A2A04984F /* EnvBuilder.swift in Sources */,
