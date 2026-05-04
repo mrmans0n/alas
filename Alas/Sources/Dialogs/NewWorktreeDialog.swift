@@ -5,8 +5,11 @@ struct NewWorktreeDialog: View {
     @Binding var presented: Bool
 
     @State private var projectId: String = ""
-    @State private var base: String = "main"
-    @State private var branch: String = "feat/"
+    // Defaults are seeded from the persisted Worktrees settings in .onAppear
+    // (these literals are placeholders only — the real defaults come from
+    // state.config.worktrees.{baseBranch,branchPrefix}).
+    @State private var base: String = ""
+    @State private var branch: String = ""
     @State private var pathOverride: String = ""
     @State private var runStartup: Bool = true
     @State private var openTerminal: Bool = true
@@ -67,6 +70,12 @@ struct NewWorktreeDialog: View {
         .onAppear {
             if projectId.isEmpty {
                 projectId = state.projects.first?.id ?? ""
+            }
+            if base.isEmpty {
+                base = state.config.worktrees.baseBranch
+            }
+            if branch.isEmpty {
+                branch = state.config.worktrees.branchPrefix
             }
         }
     }

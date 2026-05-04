@@ -56,6 +56,25 @@ extension GitService {
     }
 
     func diff(worktreePath: URL, file: String, staged: Bool = false) async throws -> ParsedDiff {
+        // Untracked files have no HEAD entry, so `git diff HEAD -- <path>`
+        // returns nothing. Detect via `git ls-files --error-unmatch` (exit 0
+        // iff tracked) and fall back to comparing against /dev/null so the
+        // user sees the file's contents as a single all-add hunk.
+        let tracked = try await Process.git(
+            ["ls-files", "--error-unmatch", "--", file],
+            cwd: worktreePath
+        )
+        if tracked.exitCode != 0 && !staged {
+            let result = try await Process.git(
+                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
+                cwd: worktreePath
+            )
+            // `git diff --no-index` exits non-zero (1) when there ARE differences
+            // — that's the normal case for an untracked file. Only treat exit
+            // codes >= 2 as real failures.
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            return DiffParser.parse(result.stdout)
+        }
         var args = ["diff", "--no-color"]
         if staged { args.append("--cached") }
         args.append("HEAD")

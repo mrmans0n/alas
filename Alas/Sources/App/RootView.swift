@@ -32,7 +32,7 @@ struct RootView: View {
                             state: state,
                             collapsedProjects: $collapsedProjects,
                             onSearch: {},
-                            onSettings: {},
+                            onSettings: { openSettingsWindow() },
                             onNewWorktree: { showNewWorktree = true }
                         )
                     },
