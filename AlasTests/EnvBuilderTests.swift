@@ -32,4 +32,28 @@ struct EnvBuilderTests {
         #expect(env["HOME"] == "/h")
         #expect(env["ALAS_REPO"] == "x/y")
     }
+
+    @Test func stripsTerminalVarsFromInheritedParent() {
+        let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "s",
+            hookDir: URL(fileURLWithPath: "/h"),
+            inheritParent: true,
+            parent: [
+                "PATH": "/x",
+                "TERM": "dumb",
+                "TERM_PROGRAM": "MyIDE",
+                "COLORTERM": "truecolor",
+                "TERMINFO": "/some/path",
+            ]
+        )
+        #expect(env["PATH"] == "/x")
+        #expect(env["TERM"] == nil)
+        #expect(env["TERM_PROGRAM"] == nil)
+        #expect(env["COLORTERM"] == nil)
+        #expect(env["TERMINFO"] == nil)
+    }
 }
