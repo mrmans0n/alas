@@ -85,14 +85,12 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — only ProcessGitTests)
-        # 55/20 pure+light-IO suites passed in 89ms on a09a31d. Suspect set:
-        # ProcessGitTests, GitServiceTests, WorktreeServiceTests,
-        # ProjectsManagerTests, DebounceTimerTests. Start with ProcessGitTests
-        # because of the largeStdoutDoesNotDeadlock test — if subprocess
-        # SIGPIPE handling is slow on macos-26 we'll see it here.
+      - name: Test (bisect — DebounceTimerTests)
+        # ProcessGitTests passes. Down to DebounceTimerTests / GitServiceTests
+        # / WorktreeServiceTests / ProjectsManagerTests. Try the cheap one
+        # first — DebounceTimer uses DispatchQueue.main + 500ms sleep.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -only-testing AlasTests/ProcessGitTests \
+            -only-testing AlasTests/DebounceTimerTests \
             test-without-building
