@@ -69,16 +69,19 @@ struct WorktreeService {
         )
     }
 
-    func remove(repoPath: URL, worktreePath: URL, deleteBranchIfMerged: Bool) async throws {
+    /// Remove a worktree. Pass the full `Worktree` (not just a path) so we can
+    /// reliably resolve the branch name when `deleteBranchIfMerged` is true —
+    /// path basenames diverge from branch names whenever the path template
+    /// substitutes `/` (e.g. branch `feat/x` lives at dir basename `feat-x`).
+    func remove(repoPath: URL, worktree: Worktree, deleteBranchIfMerged: Bool) async throws {
         let result = try await Process.git(
-            ["worktree", "remove", worktreePath.path],
+            ["worktree", "remove", worktree.path.path],
             cwd: repoPath
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        if deleteBranchIfMerged {
+        if deleteBranchIfMerged && worktree.branch != "(detached)" {
             // Best-effort delete. -d only succeeds if merged; ignore failures.
-            let branchName = worktreePath.lastPathComponent
-            _ = try? await Process.git(["branch", "-d", branchName], cwd: repoPath)
+            _ = try? await Process.git(["branch", "-d", worktree.branch], cwd: repoPath)
         }
     }
 

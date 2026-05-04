@@ -22,3 +22,7 @@ docs/superpowers
 ThirdParty/ghostty/zig-out/
 ThirdParty/ghostty/macos/build/
 ThirdParty/ghostty/macos/GhosttyKit.xcframework/
+zig-pkg/
+
+# Profiling artifacts
+default.profraw

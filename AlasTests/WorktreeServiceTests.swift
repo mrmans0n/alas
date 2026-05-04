@@ -43,12 +43,35 @@ struct WorktreeServiceTests {
         defer { try? FileManager.default.removeItem(at: repo) }
         let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-rm")
         let svc = WorktreeService()
-        _ = try await svc.add(
+        let wt = try await svc.add(
             repoPath: repo, base: "main", branch: "feat/rm",
             destination: dest, projectId: "p"
         )
-        try await svc.remove(repoPath: repo, worktreePath: dest, deleteBranchIfMerged: false)
+        try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
         let listed = try await svc.list(repoPath: repo, projectId: "p")
         #expect(listed.count == 1)
+    }
+
+    @Test func removeWithDeleteBranchUsesRealBranchName() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Path basename "feat-rm" differs from branch "feat/rm" — proves we use
+        // the branch name from the Worktree, not derived from the path.
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-feat-rm")
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/rm",
+            destination: dest, projectId: "p"
+        )
+        try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: true)
+        // The worktree is gone.
+        let listed = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(listed.count == 1)
+        // The branch is gone too (because git allows -d on the same branch the
+        // worktree was on once the worktree is removed). If the wrong name had
+        // been derived from the path basename ("feat-rm-..."), `git branch -d`
+        // would have silently no-op'd via try? and `feat/rm` would still exist.
+        let branches = try await Process.git(["branch", "--list", "feat/rm"], cwd: repo)
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }

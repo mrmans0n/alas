@@ -64,6 +64,12 @@ struct AlasGhosttySmokeTests {
             "ALAS_TEST": "yes",
         ]
         let view = AlasGhostty.SurfaceView(app: app, configuration: surfaceCfg)
+
+        // ghostty_surface_new can fail in headless test contexts (no Metal device
+        // attached to a real window). When that happens cSurface is nil; the
+        // wrapper logs an error and returns the view in a degraded state. We just
+        // confirm the wrapper itself didn't crash. Real surface creation is
+        // exercised by the manual smoke test (the running app).
         _ = view
     }
 }
