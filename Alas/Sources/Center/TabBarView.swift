@@ -3,6 +3,7 @@ import SwiftUI
 struct TabBarView: View {
     let tabs: [Tab]
     let activeId: TabID?
+    let harnessLookup: (TabID) -> (kind: HarnessKind, state: String)?
     let onActivate: (TabID) -> Void
     let onClose: (TabID) -> Void
     let onNewTerminal: () -> Void
@@ -17,6 +18,7 @@ struct TabBarView: View {
                     tab: tab,
                     active: tab.id == activeId,
                     showClose: tabs.count > 1,
+                    harnessInfo: harnessLookup(tab.id),
                     onActivate: { onActivate(tab.id) },
                     onClose: { onClose(tab.id) }
                 )
@@ -37,10 +39,7 @@ struct TabBarView: View {
         }
         .frame(height: 34)
         .background(theme.color("bg-2"))
-        .overlay(
-            Divider().opacity(0.5),
-            alignment: .bottom
-        )
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 }
 
@@ -48,6 +47,7 @@ private struct TabButton: View {
     let tab: Tab
     let active: Bool
     let showClose: Bool
+    let harnessInfo: (kind: HarnessKind, state: String)?
     let onActivate: () -> Void
     let onClose: () -> Void
     @Environment(\.theme) var theme
@@ -61,6 +61,10 @@ private struct TabButton: View {
                 .font(.system(size: 11.5))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
                 .lineLimit(1)
+            if let info = harnessInfo {
+                Circle().fill(stateColor(info.state)).frame(width: 6, height: 6)
+                    .opacity(info.state == "running" ? 0.85 : 1)
+            }
             if showClose {
                 Button(action: onClose) {
                     Icon(name: "x", size: 9,
@@ -83,5 +87,13 @@ private struct TabButton: View {
             alignment: .bottom
         )
         .onTapGesture(perform: onActivate)
+    }
+
+    private func stateColor(_ s: String) -> Color {
+        switch s {
+        case "running":  return theme.color("add")
+        case "awaiting": return theme.color("mod")
+        default:         return theme.color("fg-faint")
+        }
     }
 }

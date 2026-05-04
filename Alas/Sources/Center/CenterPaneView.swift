@@ -12,6 +12,14 @@ struct CenterPaneView: View {
             TabBarView(
                 tabs: tabs,
                 activeId: active,
+                harnessLookup: { tabId in
+                    if case .terminal(let s) = tabs.first(where: { $0.id == tabId }),
+                       let kind = state.harness.harnessBySession[s.sessionId] {
+                        let st = state.harness.stateBySession[s.sessionId] ?? "running"
+                        return (kind: kind, state: st)
+                    }
+                    return nil
+                },
                 onActivate: { id in state.tabs.activate(worktreeId: worktree.id, tabId: id) },
                 onClose:    { id in state.closeTab(worktreeId: worktree.id, tabId: id) },
                 onNewTerminal: openTerminal,
