@@ -45,11 +45,26 @@ extension Process {
         }
 
         // Watchdog: if the process is still running past `timeout`, SIGTERM
-        // it. Termination closes the child's pipe write ends, which unblocks
-        // the readDataToEndOfFile readers below so we can return.
+        // it AND force-close our read ends of the pipes. The pipe-close is
+        // critical: `git worktree remove` (and other commands) can spawn
+        // helpers that inherit the pipe write ends; SIGTERM on the direct
+        // child leaves those helpers alive, the kernel never delivers EOF,
+        // and `readDataToEndOfFile` blocks forever. Closing the read FD on
+        // our side makes any in-flight read unblock immediately.
         let watchdog = Task {
-            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            } catch {
+                return  // cancelled — process exited cleanly
+            }
+            // Visible marker so a CI hang past 30s is unambiguously diagnosed.
+            fputs(
+                "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                stderr
+            )
             if process.isRunning { process.terminate() }
+            try? outPipe.fileHandleForReading.close()
+            try? errPipe.fileHandleForReading.close()
         }
 
         async let outData = Task.detached { outPipe.fileHandleForReading.readDataToEndOfFile() }.value
