@@ -97,13 +97,13 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test
-        # AlasGhosttySmokeTests excluded because they spin up the libghostty
-        # runtime, which hangs in headless macOS CI during teardown. The
-        # other ~60 unit tests run, including the git suites that need the
-        # author identity configured above.
+      - name: Test (bisect — only WorktreeServiceTests)
+        # Git-identity fix didn't unblock the hang. Isolate to one of the
+        # 3 git-using suites at a time. Try WorktreeServiceTests first
+        # because it does the most: `git init`, `commit --allow-empty`,
+        # `worktree add` (creates child dirs), `worktree remove`.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -skip-testing AlasTests/AlasGhosttySmokeTests \
+            -only-testing AlasTests/WorktreeServiceTests \
             test-without-building
