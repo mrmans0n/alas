@@ -97,11 +97,16 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — only ProjectsManagerTests)
-        # WorktreeService + GitService pass alone. Confirm the hang is in
-        # ProjectsManagerTests.
+      - name: Test
+        # All four git-using suites (ProcessGit / GitService / WorktreeService
+        # / ProjectsManager) pass individually but the combination hangs on
+        # macos-26 — 4+ suites all spawning real `git` subprocesses in
+        # parallel saturate something (pipe buffers, process table). Force
+        # serial execution via `-parallel-testing-enabled NO`. Adds a few
+        # seconds vs parallel; net win because the suite actually completes.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -only-testing AlasTests/ProjectsManagerTests \
+            -skip-testing AlasTests/AlasGhosttySmokeTests \
+            -parallel-testing-enabled NO \
             test-without-building
