@@ -7,74 +7,58 @@ on:
 permissions:
   contents: write
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   macos-app:
-    runs-on: macos-latest
-    timeout-minutes: 45
+    # Same toolchain story as build.yml: macos-26 ships Xcode 26 (Ghostty's
+    # main HEAD requirement). Submodule + zig@0.15 are required for the
+    # Ghostty xcframework build.
+    runs-on: macos-26
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v6
         with:
-          version: 0.15.2
+          submodules: recursive
 
-      - name: Build macOS app bundle
-        run: cargo xtask dist macos
+      - name: Install xcodegen + zig@0.15
+        # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
+        # linker bug. See ThirdParty/ghostty/HACKING.md.
+        run: brew install xcodegen zig@0.15
+
+      - name: Compute Ghostty cache key inputs
+        run: |
+          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
+          shasum scripts/build-ghostty.sh >> .ghostty-pin
+
+      - name: Cache Ghostty build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/ghostty
+          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+
+      - name: Build Ghostty xcframework
+        # Must run before xcodebuild — Xcode validates xcframework refs at
+        # build description time, before preBuildScripts run.
+        run: ./scripts/build-ghostty.sh
+
+      - name: Generate project
+        run: xcodegen
+
+      - name: Build release app
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -configuration Release \
+            -derivedDataPath build \
+            -destination 'platform=macOS' \
+            -quiet build
+
+      - name: Zip the .app
+        run: |
+          cd build/Build/Products/Release
+          zip -r Alas.app.zip Alas.app
 
       - name: Upload macOS artifact to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/macos/*.zip
-
-  linux-packages:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Linux build and packaging dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libfontconfig1-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            pkg-config \
-            dpkg-dev \
-            wget \
-            file \
-            fuse
-
-      - name: Install pinned appimagetool
-        env:
-          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
-        run: |
-          wget -O appimagetool "$APPIMAGETOOL_URL"
-          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
-          chmod +x appimagetool
-          sudo mv appimagetool /usr/local/bin/appimagetool
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-
-      - name: Build AppImage
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: 1
-        run: cargo xtask dist linux-appimage
-
-      - name: Build Debian package
-        run: cargo xtask dist linux-deb
-
-      - name: Upload Linux artifacts to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/linux/appimage/*.AppImage
-            dist/linux/deb/*.deb
+          files: build/Build/Products/Release/Alas.app.zip

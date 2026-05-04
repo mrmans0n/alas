@@ -2,23 +2,21 @@
 
 ## Project
 - Repo: `mrmans0n/alas`
-- Stack: Rust desktop app built with GPUI
-- Purpose: native workspace for Git repos, linked worktrees, files, Git changes, and persistent terminals
+- Stack: Swift 5.9+ / SwiftUI macOS app, terminal via Ghostty Swift package
+- Purpose: native workspace for git repos, linked worktrees, files, git changes, and persistent terminals — opinionated AI harness manager
 
 ## Development rules
 - Keep code, comments, logs, and UI strings in English.
 - Prefer small, reviewable changes with tests when practical.
+- Tests use the Swift Testing framework (`import Testing`), not XCTest.
+- After editing `project.yml`, regenerate the Xcode project with `xcodegen` and commit both files.
+- `Info.plist` keys are pinned in `project.yml` under `info: properties:` — edit there, not the plist.
 - Do not introduce large architectural changes without an explicit plan.
-- Preserve the existing Rust/GPUI structure unless there is a clear reason to refactor.
 
 ## Before finishing a change
-Run the same checks documented in `README.md` when relevant:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo build --all-features
-cargo test --all-features
+xcodegen
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -quiet build
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test
 ```
-
-If Ghostty source resolution is needed locally, use `GHOSTTY_SOURCE_DIR=/path/to/ghostty` as documented in the README.

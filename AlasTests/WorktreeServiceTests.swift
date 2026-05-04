@@ -1,0 +1,84 @@
+import Testing
+import Foundation
+@testable import Alas
+
+// Swift Testing parallelizes tests within a suite by default, and
+// `-parallel-testing-enabled NO` only disables xctest-level parallelism.
+// Each test here spins up an ephemeral repo and shells out to git; running
+// four of those concurrently on macos-26 has reproducibly hung at
+// `git branch --list` after `git branch -d` (presumably git/dyld/codesign
+// contention). Force-serialize so each git invocation runs cleanly.
+@Suite(.serialized)
+struct WorktreeServiceTests {
+    private func makeRepo() async throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-wt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        return dir
+    }
+
+    @Test func listFindsMain() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let svc = WorktreeService()
+        let trees = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(trees.count == 1)
+        #expect(trees.first?.branch == "main")
+    }
+
+    @Test func addCreatesWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-feat")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/x",
+            destination: dest, projectId: "p"
+        )
+        #expect(wt.branch == "feat/x")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+
+        let listed = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(listed.count == 2)
+    }
+
+    @Test func removeDeletesWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-rm")
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/rm",
+            destination: dest, projectId: "p"
+        )
+        try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        let listed = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(listed.count == 1)
+    }
+
+    @Test func removeWithDeleteBranchUsesRealBranchName() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Path basename "feat-rm" differs from branch "feat/rm" — proves we use
+        // the branch name from the Worktree, not derived from the path.
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-feat-rm")
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/rm",
+            destination: dest, projectId: "p"
+        )
+        try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: true)
+        // The worktree is gone.
+        let listed = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(listed.count == 1)
+        // The branch is gone too (because git allows -d on the same branch the
+        // worktree was on once the worktree is removed). If the wrong name had
+        // been derived from the path basename ("feat-rm-..."), `git branch -d`
+        // would have silently no-op'd via try? and `feat/rm` would still exist.
+        let branches = try await Process.git(["branch", "--list", "feat/rm"], cwd: repo)
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+}

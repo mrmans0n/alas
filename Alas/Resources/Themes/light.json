@@ -1,0 +1,26 @@
+{
+  "id": "light",
+  "name": "Light",
+  "tokens": {
+    "bg-0": "oklch(0.99 0.005 200)",
+    "bg-1": "oklch(0.96 0.006 200)",
+    "bg-2": "oklch(0.93 0.007 200)",
+    "bg-3": "oklch(0.88 0.008 200)",
+    "bg-4": "oklch(0.82 0.010 200)",
+    "bg-5": "oklch(0.76 0.012 200)",
+    "line": "oklch(0.78 0.010 200 / 0.6)",
+    "line-soft": "oklch(0.78 0.010 200 / 0.35)",
+    "fg": "oklch(0.20 0.012 220)",
+    "fg-muted": "oklch(0.36 0.012 220)",
+    "fg-dim": "oklch(0.50 0.012 220)",
+    "fg-faint": "oklch(0.62 0.012 220)",
+    "accent": "oklch(0.55 0.10 195)",
+    "accent-2": "oklch(0.55 0.10 165)",
+    "accent-soft": "oklch(0.55 0.10 195 / 0.18)",
+    "add": "oklch(0.55 0.14 155)",
+    "del": "oklch(0.50 0.18 25)",
+    "mod": "oklch(0.60 0.14 85)",
+    "info": "oklch(0.55 0.13 230)",
+    "warn": "oklch(0.60 0.14 65)"
+  }
+}
