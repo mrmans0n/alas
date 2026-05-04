@@ -85,12 +85,14 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — DebounceTimerTests)
-        # ProcessGitTests passes. Down to DebounceTimerTests / GitServiceTests
-        # / WorktreeServiceTests / ProjectsManagerTests. Try the cheap one
-        # first — DebounceTimer uses DispatchQueue.main + 500ms sleep.
+      - name: Test (bisect — git suites)
+        # DebounceTimer + ProcessGit pass alone. Down to the 3 suites that
+        # spawn real `git` and create temp repos: GitServiceTests,
+        # WorktreeServiceTests, ProjectsManagerTests. Run all three.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -only-testing AlasTests/DebounceTimerTests \
+            -only-testing AlasTests/GitServiceTests \
+            -only-testing AlasTests/WorktreeServiceTests \
+            -only-testing AlasTests/ProjectsManagerTests \
             test-without-building
