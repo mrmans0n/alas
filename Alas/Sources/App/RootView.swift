@@ -5,6 +5,7 @@ struct RootView: View {
     @State private var showNewProject = false
     @State private var showNewWorktree = false
     @State private var collapsedProjects: Set<String> = []
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -69,6 +70,20 @@ struct RootView: View {
             state.config.rightPaneVisible.toggle()
             state.saveConfig()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .alasNewWorktree)) { _ in
+            showNewWorktree = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
+            if let wt = selectedWorktree() { try? state.openTerminalTab(for: wt) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
+            if let wt = selectedWorktree(), let active = state.tabs.activeTabId(forWorktree: wt.id) {
+                state.closeTab(worktreeId: wt.id, tabId: active)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { _ in
+            openSettingsWindow()
+        }
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
         }
@@ -76,6 +91,7 @@ struct RootView: View {
             NewWorktreeDialog(state: state, presented: $showNewWorktree)
         }
         .task {
+            state.startHarness()
             await state.projectsManager.refreshAll()
             if state.selectedWorktreeId == nil {
                 state.selectedWorktreeId = state.projects
@@ -83,6 +99,10 @@ struct RootView: View {
                     .first?.id
             }
         }
+    }
+
+    private func openSettingsWindow() {
+        openWindow(id: "settings")
     }
 
     private func selectedWorktree() -> Worktree? {
@@ -130,4 +150,8 @@ struct RootView: View {
 
 extension Notification.Name {
     static let alasToggleRightPane = Notification.Name("AlasToggleRightPane")
+    static let alasNewWorktree     = Notification.Name("AlasNewWorktree")
+    static let alasNewTerminalTab  = Notification.Name("AlasNewTerminalTab")
+    static let alasCloseTab        = Notification.Name("AlasCloseTab")
+    static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
 }
