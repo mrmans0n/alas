@@ -35,7 +35,7 @@ struct RootView: View {
                             onNewWorktree: { showNewWorktree = true }
                         )
                     },
-                    center: { CenterPlaceholder() },
+                    center: { Color.clear },
                     right: { RightPlaceholder() }
                 )
             }
