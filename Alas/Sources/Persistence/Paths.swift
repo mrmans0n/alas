@@ -20,3 +20,9 @@ enum Paths {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 }
+
+extension Paths {
+    static func tabsFile(forWorktreeId id: String) -> URL {
+        tabsDir.appendingPathComponent("\(id).json")
+    }
+}
