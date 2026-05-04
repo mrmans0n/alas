@@ -9,22 +9,45 @@ on:
 
 jobs:
   build-test:
-    runs-on: macos-14
-    timeout-minutes: 30
+    # macos-15 ships Xcode 16.x by default; Ghostty's main HEAD officially
+    # requires Xcode 26 (per ThirdParty/ghostty/HACKING.md), so this CI may
+    # fail at the zig-build step until GitHub-hosted runners ship Xcode 26
+    # or we move to self-hosted. Keeping the workflow honest about what it
+    # actually runs rather than pinning Xcode 15.
+    runs-on: macos-15
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Print toolchain versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Install xcodegen + zig@0.15
+        # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
+        # linker bug Ghostty's HACKING.md describes. Vanilla Zig 0.15.2 does not.
+        run: brew install xcodegen zig@0.15
 
-      - name: Generate project
+      - name: Cache Ghostty build outputs
+        # Cold zig builds are ~20–30 minutes. Cache the xcframework + zig caches
+        # keyed by the submodule commit + the build script so we only rebuild
+        # when anything load-bearing actually changes.
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/ghostty
+          key: ghostty-${{ runner.os }}-${{ hashFiles('ThirdParty/ghostty/.git/HEAD', 'scripts/build-ghostty.sh') }}
+
+      - name: Generate Xcode project
         run: xcodegen
 
       - name: Build
-        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -quiet build
+        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build
 
       - name: Test
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test
