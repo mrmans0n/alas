@@ -15,8 +15,8 @@ struct CenterPaneView: View {
                 onActivate: { id in state.tabs.activate(worktreeId: worktree.id, tabId: id) },
                 onClose:    { id in state.closeTab(worktreeId: worktree.id, tabId: id) },
                 onNewTerminal: openTerminal,
-                onNewEditor:   {},     // wired in Plan 4
-                onNewDiff:     {}      // wired in Plan 4
+                onNewEditor: { _ = state.tabs.appendEditor(worktreeId: worktree.id, title: "untitled", relativePath: "") },
+                onNewDiff:   { _ = state.tabs.appendDiff(worktreeId: worktree.id, title: "untitled", relativePath: "") }
             )
             Group {
                 if tabs.isEmpty {
@@ -29,10 +29,12 @@ struct CenterPaneView: View {
                                         worktreeId: worktree.id,
                                         tabId: tab.id,
                                         sessionId: s.sessionId)
-                    case .editor:
-                        Text("Editor coming in Plan 4").foregroundColor(theme.color("fg-dim"))
-                    case .diff:
-                        Text("Diff coming in Plan 4").foregroundColor(theme.color("fg-dim"))
+                    case .editor(let s):
+                        EditorTabView(worktreePath: worktree.path,
+                                      relativePath: s.relativePath)
+                    case .diff(let s):
+                        DiffTabView(worktreePath: worktree.path,
+                                    relativePath: s.relativePath)
                     }
                 }
             }
