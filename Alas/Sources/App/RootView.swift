@@ -35,7 +35,13 @@ struct RootView: View {
                             onNewWorktree: { showNewWorktree = true }
                         )
                     },
-                    center: { Color.clear },
+                    center: {
+                        if let wt = selectedWorktree() {
+                            CenterPaneView(state: state, worktree: wt)
+                        } else {
+                            EmptyTabView(onNewTerminal: {})
+                        }
+                    },
                     right: { RightPlaceholder() }
                 )
             }
@@ -52,6 +58,21 @@ struct RootView: View {
         }
         .task {
             await state.projectsManager.refreshAll()
+            if state.selectedWorktreeId == nil {
+                state.selectedWorktreeId = state.projects
+                    .flatMap { state.projectsManager.worktrees(projectId: $0.id) }
+                    .first?.id
+            }
         }
+    }
+
+    private func selectedWorktree() -> Worktree? {
+        guard let id = state.selectedWorktreeId else { return nil }
+        for project in state.projects {
+            if let wt = state.projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
+                return wt
+            }
+        }
+        return nil
     }
 }
