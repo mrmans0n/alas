@@ -58,6 +58,15 @@ jobs:
           git config --global user.name "Alas CI"
           git config --global init.defaultBranch main
           git config --global advice.detachedHead false
+          # macOS system gitconfig sets `credential.helper = osxkeychain` by
+          # default. On headless macos-26 runners the keychain isn't unlocked,
+          # so any git op against an HTTPS remote (even `git remote add`) can
+          # block waiting for the keychain agent. Observed
+          # GitServiceTests.suggestNameFromHttpsRemote hanging the suite for
+          # 8min after our SSH-prompt fixes already landed. Disable all
+          # credential helpers (system + global) for the test run.
+          git config --global --unset-all credential.helper || true
+          git config --global credential.helper ""
 
       - name: Install xcodegen + zig@0.15
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
