@@ -26,6 +26,11 @@ final class AppState {
         // survives relaunches; otherwise launches always show the theme's
         // built-in accent until the user re-clicks the picker.
         themeStore.setAccent(config.accent)
+        // Same for "Match system" — the toggle's state needs to drive the
+        // current theme on launch, not just on subsequent toggle events.
+        if config.matchSystemTheme {
+            themeStore.setMatchSystem(true)
+        }
         self.themeStore = themeStore
         // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
         // happens async in RootView.task), so worktreesByProject is empty and

@@ -79,7 +79,14 @@ struct AppearancePane: View {
                         }
                     }
                     SettingsRow(name: "Match system") {
-                        AlasToggle(on: bind(\.matchSystemTheme))
+                        AlasToggle(on: Binding(
+                            get: { state.config.matchSystemTheme },
+                            set: { newValue in
+                                state.config.matchSystemTheme = newValue
+                                state.saveConfig()
+                                state.themeStore.setMatchSystem(newValue)
+                            }
+                        ))
                     }
                 }
                 SettingsGroup(title: "Layout") {

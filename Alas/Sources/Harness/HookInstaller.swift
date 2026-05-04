@@ -37,8 +37,19 @@ enum HookInstaller {
         try FileManager.default.createDirectory(atPath: (settingsPath as NSString).deletingLastPathComponent,
                                                 withIntermediateDirectories: true)
         var json: [String: Any]
-        if let data = try? Data(contentsOf: url),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        // Distinguish "file doesn't exist yet" (start fresh) from "file
+        // exists but couldn't be parsed" (refuse to overwrite — would
+        // destroy unrelated user settings if the JSON was just transiently
+        // truncated or manually edited into something invalid).
+        if FileManager.default.fileExists(atPath: settingsPath) {
+            let data = try Data(contentsOf: url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NSError(
+                    domain: "HookInstaller", code: 2,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "~/.claude/settings.json exists but isn't a JSON object — refusing to overwrite. Fix or remove the file and try again."]
+                )
+            }
             json = obj
         } else {
             json = [:]
