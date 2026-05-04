@@ -25,6 +25,7 @@ extension AlasGhostty {
         ///   Ghostty config files are loaded (`ghostty_config_load_default_files`).
         /// - Throws: `ConfigError.diagnostics` if the config has any diagnostics after finalisation.
         init(filePath: String? = nil) throws {
+            AlasGhostty.ensureInitialized()
             guard let raw = ghostty_config_new() else {
                 throw ConfigError.allocationFailed
             }

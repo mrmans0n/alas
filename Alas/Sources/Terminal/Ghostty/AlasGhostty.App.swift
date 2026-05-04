@@ -43,6 +43,7 @@ extension AlasGhostty {
         /// - Parameter configPath: Path to a Ghostty config file, or nil for defaults.
         /// - Throws: `ConfigError` if config has diagnostics; `AppError` if app alloc fails.
         init(configPath: String? = nil) throws {
+            AlasGhostty.ensureInitialized()
             let cfg = try Config(filePath: configPath)
             self.config = cfg
 
