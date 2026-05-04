@@ -2,12 +2,14 @@ import Foundation
 import Observation
 
 @Observable
+@MainActor
 final class AppState {
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
     var selectedWorktreeId: String?
     let tabs = TabsManager()
+    let terminal = TerminalService()
 
     private let store = PersistenceStore()
 
@@ -42,5 +44,25 @@ final class AppState {
     func removeProject(id: String) {
         projectsManager.removeProject(id: id)
         saveProjects()
+    }
+
+    @discardableResult
+    func openTerminalTab(for worktree: Worktree) throws -> Tab {
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            throw NSError(domain: "AppState", code: 2)
+        }
+        let session = try terminal.openSession(
+            worktree: worktree, project: project,
+            cfg: config.terminal, theme: themeStore.current
+        )
+        return tabs.appendTerminal(worktreeId: worktree.id, title: worktree.branch, sessionId: session.id)
+    }
+
+    func closeTab(worktreeId: String, tabId: TabID) {
+        if let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+           case .terminal(let s) = tab {
+            terminal.closeSession(id: s.sessionId)
+        }
+        tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
 }
