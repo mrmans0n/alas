@@ -40,11 +40,15 @@ jobs:
           shasum scripts/build-ghostty.sh >> .ghostty-pin
           cat .ghostty-pin
 
-      - name: Cache Ghostty build outputs
-        # Cold zig builds are ~20–30 minutes. Cache the xcframework + zig caches
-        # keyed by the submodule commit + the build script so we only rebuild
-        # when anything load-bearing actually changes.
-        uses: actions/cache@v4
+      - name: Restore Ghostty cache
+        # Split restore + save (Option B): the combined `actions/cache@v4` only
+        # saves at end-of-job on success. When build/test fails or is canceled,
+        # we lose the freshly-built xcframework and the next CI run pays the
+        # full 20–30 min cold zig build again. With explicit restore + save,
+        # the xcframework is cached the instant it's produced so subsequent
+        # runs (including failed-and-retry) get a warm cache.
+        id: ghostty-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             .build/ghostty
@@ -57,6 +61,18 @@ jobs:
         # before our pre-build script ever gets a chance to produce it. So
         # we run the script as its own CI step, ahead of xcodebuild.
         run: ./scripts/build-ghostty.sh
+
+      - name: Save Ghostty cache
+        # Save immediately on success of the build script, BEFORE the rest of
+        # the job has a chance to fail. `if: always()` here would also fire
+        # on script failure (saving an incomplete tree); restrict to success.
+        # `cache-hit != 'true'` skips a no-op save when restore already hit.
+        if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build/ghostty
+          key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Generate Xcode project
         run: xcodegen
