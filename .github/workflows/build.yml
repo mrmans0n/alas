@@ -61,8 +61,13 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen
 
-      - name: Build
-        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build
+      - name: Build for testing
+        # Splitting build/test into `build-for-testing` + `test-without-building`
+        # avoids the lsregister/CoreServices hang we observed locally and on CI
+        # when xcodebuild's `test` action re-validates the build description and
+        # registers the test host with LaunchServices. Same artifacts, no
+        # mid-test re-link.
+        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
       - name: Test
-        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test
+        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test-without-building
