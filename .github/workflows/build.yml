@@ -50,6 +50,14 @@ jobs:
             .build/ghostty
           key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
 
+      - name: Build Ghostty xcframework
+        # xcodebuild validates the GhosttyKit.xcframework dependency at the
+        # "create build description" stage, BEFORE running preBuildScripts.
+        # If the xcframework doesn't already exist on disk, the build fails
+        # before our pre-build script ever gets a chance to produce it. So
+        # we run the script as its own CI step, ahead of xcodebuild.
+        run: ./scripts/build-ghostty.sh
+
       - name: Generate Xcode project
         run: xcodegen
 
