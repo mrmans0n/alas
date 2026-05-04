@@ -84,8 +84,29 @@ enum GhosttyConfigBuilder {
         var c = AlasGhostty.SurfaceConfiguration()
         c.workingDirectory = cwd.path
         c.environment = env
-        c.command = ([executable] + args).joined(separator: " ")
+        // Ghostty parses `command` as a shell command line, so any arg with a
+        // space (e.g. bash's --rcfile pointing under "Application Support") has
+        // to be POSIX-quoted before being joined. Path is the most common
+        // offender on macOS.
+        c.command = ([executable] + args)
+            .map(posixQuote)
+            .joined(separator: " ")
         return c
+    }
+
+    /// POSIX shell quoting: empty / safe-characters → bare; otherwise wrap in
+    /// single quotes, escaping internal single quotes via the standard
+    /// `'\''` close-quote / escaped-quote / re-open-quote trick.
+    static func posixQuote(_ arg: String) -> String {
+        if arg.isEmpty { return "''" }
+        let safe = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-./:=@%+"
+        )
+        if arg.unicodeScalars.allSatisfy(safe.contains) {
+            return arg
+        }
+        let escaped = arg.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
     }
 
     // MARK: - Private helpers

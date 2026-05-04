@@ -9,16 +9,38 @@ permissions:
 
 jobs:
   macos-app:
-    runs-on: macos-14
-    timeout-minutes: 45
+    # Same toolchain story as build.yml: macos-26 ships Xcode 26 (Ghostty's
+    # main HEAD requirement). Submodule + zig@0.15 are required for the
+    # Ghostty xcframework build.
+    runs-on: macos-26
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Install xcodegen + zig@0.15
+        # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
+        # linker bug. See ThirdParty/ghostty/HACKING.md.
+        run: brew install xcodegen zig@0.15
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Compute Ghostty cache key inputs
+        run: |
+          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
+          shasum scripts/build-ghostty.sh >> .ghostty-pin
+
+      - name: Cache Ghostty build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/ghostty
+          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+
+      - name: Build Ghostty xcframework
+        # Must run before xcodebuild — Xcode validates xcframework refs at
+        # build description time, before preBuildScripts run.
+        run: ./scripts/build-ghostty.sh
 
       - name: Generate project
         run: xcodegen

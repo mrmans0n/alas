@@ -93,16 +93,38 @@ struct NewWorktreeDialog: View {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         isCreating = true
         errorMessage = nil
+        let runStartupAfter = runStartup
+        let openTerminalAfter = openTerminal
         Task {
             do {
                 let svc = WorktreeService()
                 let dest = URL(fileURLWithPath: pathOverride.isEmpty ? renderedPath : pathOverride)
                 try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                _ = try await svc.add(
+                let newWorktree = try await svc.add(
                     repoPath: URL(fileURLWithPath: project.path),
                     base: base, branch: branch, destination: dest, projectId: project.id
                 )
                 try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+                // Run worktree-create script if requested. Best-effort: errors
+                // in the user-supplied script don't roll back the worktree.
+                if runStartupAfter {
+                    let script = state.config.terminal.worktreeCreateScript
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !script.isEmpty {
+                        _ = try? await Process.run(
+                            "/bin/zsh",
+                            args: ["-c", script],
+                            cwd: newWorktree.path
+                        )
+                    }
+                }
+
+                // Auto-select the new worktree + open a terminal tab if asked.
+                state.selectedWorktreeId = newWorktree.id
+                if openTerminalAfter {
+                    _ = try? state.openTerminalTab(for: newWorktree)
+                }
                 presented = false
             } catch {
                 errorMessage = error.localizedDescription

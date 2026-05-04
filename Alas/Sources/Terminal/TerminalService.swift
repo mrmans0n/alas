@@ -55,8 +55,13 @@ final class TerminalService {
         // Plan-supplied env overrides (e.g. ZDOTDIR for zsh startup scripts)
         // win over inherited env.
         for (k, v) in plan.envOverrides { env[k] = v }
+        let cwd = resolveWorkingDirectory(
+            preference: cfg.workingDirectory,
+            worktree: worktree,
+            project: project
+        )
         let surfaceConfig = GhosttyConfigBuilder.makeSurfaceConfiguration(
-            cwd: worktree.path,
+            cwd: cwd,
             env: env,
             executable: plan.executable,
             args: plan.args
@@ -82,5 +87,24 @@ final class TerminalService {
             s.surface.removeFromSuperview()
         }
         registry.unregister(id: id)
+    }
+
+    /// Resolve the per-session cwd from the user's preference. v1 supports
+    /// `worktreeRoot` (default), `repoRoot`, and `lastUsed`; the last falls
+    /// back to the worktree root because we don't yet track per-session cwd.
+    private func resolveWorkingDirectory(
+        preference: String,
+        worktree: Worktree,
+        project: ProjectConfig
+    ) -> URL {
+        switch preference {
+        case "repoRoot":
+            return URL(fileURLWithPath: project.path)
+        case "lastUsed":
+            // No persisted last-cwd yet — fall through to worktree root.
+            return worktree.path
+        default:
+            return worktree.path
+        }
     }
 }

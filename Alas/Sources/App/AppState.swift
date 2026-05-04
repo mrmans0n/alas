@@ -59,6 +59,11 @@ final class AppState {
     }
 
     func startHarness() {
+        // Sync the persisted preference into NotificationService BEFORE start —
+        // otherwise the service defaults to enabled and users who turned
+        // notifications off in a previous session get them again until they
+        // re-toggle.
+        harness.notifications.setEnabled(config.harness.notifyOnFinish)
         harness.start { [weak self] sessionId in
             guard let self else { return nil }
             for s in self.terminal.registry.all where s.id == sessionId {
