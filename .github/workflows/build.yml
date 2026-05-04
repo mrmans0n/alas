@@ -85,9 +85,14 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test
-        # The two AlasGhosttySmoke tests that spin up the libghostty runtime
-        # are tagged `@Test(.disabled(...))` in source — see the suite comment
-        # for why. Swift-Testing skips them via the trait so we don't need
-        # an xcodebuild flag.
-        run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test-without-building
+      - name: Test (bisect — only AppConfigTests)
+        # CI was hanging on the Test step for 17min+ even with all
+        # AlasGhosttySmokeTests disabled. Bisecting: run only one trivial
+        # pure-data suite to see if the test runner itself is functional.
+        # If this passes we'll add more classes back; if it hangs the test
+        # runner / lsregister / launch is the issue, not any specific test.
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS' \
+            -only-testing AlasTests/AppConfigTests \
+            test-without-building
