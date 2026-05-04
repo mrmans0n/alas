@@ -24,6 +24,7 @@ targets:
         buildPhase: resources
     resources:
       - path: Alas/Resources/Assets.xcassets
+      - path: Alas/Resources/HookScripts
     info:
       path: Alas/Resources/Info.plist
       properties:
