@@ -25,6 +25,18 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Configure git author identity for tests
+        # WorktreeServiceTests / GitServiceTests / ProjectsManagerTests run
+        # `git commit --allow-empty` against ephemeral repos. Fresh runners
+        # have no git identity, which causes commit to fail (and in a few
+        # observed cases hang interacting with the credential helper).
+        # Set throwaway values globally — only used by these tests.
+        run: |
+          git config --global user.email "ci@alas.invalid"
+          git config --global user.name "Alas CI"
+          git config --global init.defaultBranch main
+          git config --global advice.detachedHead false
+
       - name: Install xcodegen + zig@0.15
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
         # linker bug Ghostty's HACKING.md describes. Vanilla Zig 0.15.2 does not.
@@ -85,14 +97,13 @@ jobs:
         # mid-test re-link.
         run: xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build-for-testing
 
-      - name: Test (bisect — git suites)
-        # DebounceTimer + ProcessGit pass alone. Down to the 3 suites that
-        # spawn real `git` and create temp repos: GitServiceTests,
-        # WorktreeServiceTests, ProjectsManagerTests. Run all three.
+      - name: Test
+        # AlasGhosttySmokeTests excluded because they spin up the libghostty
+        # runtime, which hangs in headless macOS CI during teardown. The
+        # other ~60 unit tests run, including the git suites that need the
+        # author identity configured above.
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS' \
-            -only-testing AlasTests/GitServiceTests \
-            -only-testing AlasTests/WorktreeServiceTests \
-            -only-testing AlasTests/ProjectsManagerTests \
+            -skip-testing AlasTests/AlasGhosttySmokeTests \
             test-without-building
