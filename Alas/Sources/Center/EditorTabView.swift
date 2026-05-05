@@ -27,7 +27,11 @@ struct EditorTabView: View {
             }
         }
         .background(theme.color("bg-1"))
-        .task { await load() }
+        .task(id: loadKey) { await load() }
+    }
+
+    private var loadKey: String {
+        "\(worktreePath.path)\u{0}\(relativePath)"
     }
 
     private var breadcrumb: some View {
@@ -48,6 +52,9 @@ struct EditorTabView: View {
     }
 
     private func load() async {
+        loaded = false
+        content = ""
+
         let url = worktreePath.appendingPathComponent(relativePath)
         if let data = try? Data(contentsOf: url),
            let str = String(data: data, encoding: .utf8) {
