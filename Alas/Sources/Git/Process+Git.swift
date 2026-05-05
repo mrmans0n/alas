@@ -11,6 +11,59 @@ enum ProcessError: Error {
     case timedOut(executable: String, args: [String], seconds: TimeInterval)
 }
 
+private final class ProcessOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stdout = Data()
+    private var stderr = Data()
+    private var timedOut = false
+    private var stdoutClosed = false
+    private var stderrClosed = false
+
+    func appendStdout(_ data: Data) {
+        lock.lock()
+        stdout.append(data)
+        lock.unlock()
+    }
+
+    func appendStderr(_ data: Data) {
+        lock.lock()
+        stderr.append(data)
+        lock.unlock()
+    }
+
+    func markTimedOut() {
+        lock.lock()
+        timedOut = true
+        lock.unlock()
+    }
+
+    func markStdoutClosed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stdoutClosed else { return false }
+        stdoutClosed = true
+        return true
+    }
+
+    func markStderrClosed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stderrClosed else { return false }
+        stderrClosed = true
+        return true
+    }
+
+    func snapshot() -> (stdout: Data, stderr: Data, timedOut: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (stdout, stderr, timedOut)
+    }
+}
+
+private func waitForPipeEOF(_ group: DispatchGroup) -> DispatchTimeoutResult {
+    group.wait(timeout: .now() + 1)
+}
+
 extension Process {
     /// Hard cap on how long a child process may run before we SIGTERM it.
     /// Macos-26 CI exposed several pathological hangs in `git` (credential
@@ -38,9 +91,33 @@ extension Process {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
+        let output = ProcessOutputBuffer()
+        let eofGroup = DispatchGroup()
+        eofGroup.enter()
+        eofGroup.enter()
+
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                if output.markStdoutClosed() { eofGroup.leave() }
+                return
+            }
+            output.appendStdout(data)
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                if output.markStderrClosed() { eofGroup.leave() }
+                return
+            }
+            output.appendStderr(data)
+        }
+
         do {
             try process.run()
         } catch {
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
             throw ProcessError.launchFailed(error.localizedDescription)
         }
 
@@ -62,29 +139,33 @@ extension Process {
                 "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                 stderr
             )
+            output.markTimedOut()
             if process.isRunning { process.terminate() }
             try? outPipe.fileHandleForReading.close()
             try? errPipe.fileHandleForReading.close()
         }
 
-        async let outData = Task.detached { outPipe.fileHandleForReading.readDataToEndOfFile() }.value
-        async let errData = Task.detached { errPipe.fileHandleForReading.readDataToEndOfFile() }.value
+        await Task.detached {
+            process.waitUntilExit()
+        }.value
+        _ = await Task.detached {
+            waitForPipeEOF(eofGroup)
+        }.value
 
-        let out = await outData
-        let err = await errData
-        process.waitUntilExit()
-
-        let timedOut = !watchdog.isCancelled && process.terminationReason == .uncaughtSignal
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
         watchdog.cancel()
 
-        if timedOut {
+        let snapshot = output.snapshot()
+
+        if snapshot.timedOut {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
         }
 
         return ProcessResult(
             exitCode: process.terminationStatus,
-            stdout: String(data: out, encoding: .utf8) ?? "",
-            stderr: String(data: err, encoding: .utf8) ?? ""
+            stdout: String(data: snapshot.stdout, encoding: .utf8) ?? "",
+            stderr: String(data: snapshot.stderr, encoding: .utf8) ?? ""
         )
     }
 
