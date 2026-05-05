@@ -18,6 +18,7 @@ final class CodeEditorCoordinator {
     private var currentLanguage: String?
     private var diagnosticsTask: Task<Void, Never>?
     private let diagnosticsFeature = DiagnosticsFeature()
+    let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
 
     init(appState: AppState) {
@@ -93,6 +94,7 @@ final class CodeEditorCoordinator {
                 text: text
             )
             await self.subscribeDiagnostics(for: client, uri: "file://" + url.path, theme: theme)
+            await symbolsFeature.refresh(client: client, uri: "file://" + url.path)
         }
     }
 
