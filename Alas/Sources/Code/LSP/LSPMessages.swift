@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Envelope
 
-enum LSPID: Hashable, Codable {
+enum LSPID: Hashable, Codable, Sendable {
     case int(Int)
     case string(String)
 
@@ -21,7 +21,10 @@ enum LSPID: Hashable, Codable {
     }
 }
 
-struct AnyEncodable: Encodable {
+// Stored value is typed `Any`. Callers MUST pass only Sendable payloads;
+// the LSP client only uses Codable shapes (dictionaries of primitives,
+// integers, strings, bools), all of which are Sendable in practice.
+struct AnyEncodable: @unchecked Sendable, Encodable {
     let value: Any
     init(_ value: Any) { self.value = value }
     func encode(to encoder: Encoder) throws {
@@ -44,25 +47,25 @@ struct AnyEncodable: Encodable {
     }
 }
 
-struct LSPRequest: Encodable {
+struct LSPRequest: Encodable, Sendable {
     let jsonrpc = "2.0"
     let id: LSPID
     let method: String
     let params: AnyEncodable?
 }
 
-struct LSPNotification: Encodable {
+struct LSPNotification: Encodable, Sendable {
     let jsonrpc = "2.0"
     let method: String
     let params: AnyEncodable?
 }
 
-struct LSPResponseError: Codable {
+struct LSPResponseError: Codable, Sendable {
     let code: Int
     let message: String
 }
 
-struct LSPResponse: Decodable {
+struct LSPResponse: Decodable, Sendable {
     let id: LSPID
     let result: Data?      // raw JSON for caller-decoded shapes
     let error: LSPResponseError?
@@ -81,8 +84,11 @@ struct LSPResponse: Decodable {
     }
 }
 
-// Tiny JSON ADT used to round-trip raw `result` payloads
-indirect enum JSONValue: Codable {
+// Tiny JSON ADT used to preserve `result` payload SHAPE so callers can
+// re-decode into structured types. NOT byte-faithful: object key order
+// is undefined; whole-valued floats round-trip as integers; integers
+// outside Int's range silently downgrade to Double.
+indirect enum JSONValue: Codable, Sendable {
     case null, bool(Bool), int(Int), double(Double), string(String), array([JSONValue]), object([String: JSONValue])
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -111,22 +117,22 @@ indirect enum JSONValue: Codable {
 
 // MARK: - Common shapes
 
-struct LSPPosition: Codable, Hashable {
+struct LSPPosition: Codable, Hashable, Sendable {
     let line: Int          // 0-based
     let character: Int     // UTF-16 code units, 0-based per spec
 }
 
-struct LSPRange: Codable, Hashable {
+struct LSPRange: Codable, Hashable, Sendable {
     let start: LSPPosition
     let end: LSPPosition
 }
 
-struct LSPLocation: Codable, Hashable {
+struct LSPLocation: Codable, Hashable, Sendable {
     let uri: String
     let range: LSPRange
 }
 
-struct LSPLocationLink: Codable, Hashable {
+struct LSPLocationLink: Codable, Hashable, Sendable {
     let targetUri: String
     let targetRange: LSPRange
     let targetSelectionRange: LSPRange
@@ -134,12 +140,12 @@ struct LSPLocationLink: Codable, Hashable {
 
 // MARK: - Hover / Definition / Symbols / Diagnostics
 
-struct LSPHoverResult: Decodable {
+struct LSPHoverResult: Decodable, Sendable {
     let contents: LSPMarkup
     let range: LSPRange?
 }
 
-enum LSPMarkup: Decodable {
+enum LSPMarkup: Decodable, Sendable {
     case markupContent(kind: String, value: String)
     case plain(String)
 
@@ -156,7 +162,7 @@ enum LSPMarkup: Decodable {
     enum CodingKeys: String, CodingKey { case kind, value }
 }
 
-struct LSPDocumentSymbol: Decodable {
+struct LSPDocumentSymbol: Decodable, Sendable {
     let name: String
     let detail: String?
     let kind: Int
@@ -165,7 +171,7 @@ struct LSPDocumentSymbol: Decodable {
     let children: [LSPDocumentSymbol]?
 }
 
-struct LSPDiagnostic: Codable, Hashable {
+struct LSPDiagnostic: Codable, Hashable, Sendable {
     let range: LSPRange
     let severity: Int?       // 1=error 2=warning 3=info 4=hint
     let code: String?
@@ -193,7 +199,7 @@ struct LSPDiagnostic: Codable, Hashable {
     }
 }
 
-struct LSPPublishDiagnosticsParams: Decodable {
+struct LSPPublishDiagnosticsParams: Decodable, Sendable {
     let uri: String
     let diagnostics: [LSPDiagnostic]
 }
