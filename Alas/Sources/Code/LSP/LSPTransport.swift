@@ -95,6 +95,10 @@ final class LSPTransport {
         try process.run()
     }
 
+    /// Writes a JSON-RPC body framed with `Content-Length`. Header and body
+    /// must reach stdin contiguously; concurrent callers would interleave
+    /// the two writes and corrupt the stream. This class does not lock —
+    /// the only sender is `LSPClient` (an actor), which already serializes.
     func send(_ data: Data) throws {
         let header = "Content-Length: \(data.count)\r\n\r\n".data(using: .utf8)!
         try stdin.fileHandleForWriting.write(contentsOf: header)
