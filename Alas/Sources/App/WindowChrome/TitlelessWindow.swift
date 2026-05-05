@@ -1,7 +1,7 @@
 import AppKit
 
-/// NSWindow that hides the native titlebar but keeps traffic lights so we can
-/// inline them inside our SwiftUI sidebar header.
+/// NSWindow that hides the native titlebar and traffic lights so we can
+/// inline our own inside the SwiftUI sidebar header.
 final class TitlelessWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -18,5 +18,9 @@ final class TitlelessWindow: NSWindow {
         window.isOpaque = false
         // Hide the native titlebar separator
         window.titlebarSeparatorStyle = .none
+        // Hide the native traffic-light buttons; we inline our own in the sidebar.
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
     }
 }
