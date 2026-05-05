@@ -21,7 +21,10 @@ struct ProcessGitTests {
     }
 
     @Test func largeStdoutDoesNotDeadlock() async throws {
-        let result = try await Process.run("/bin/sh", args: ["-c", "yes hello | head -c 200000"])
+        let result = try await Process.run(
+            "/usr/bin/awk",
+            args: ["BEGIN { for (i = 0; i < 200000; i++) printf \"x\" }"]
+        )
         #expect(result.exitCode == 0)
         #expect(result.stdout.count >= 200000)
     }
