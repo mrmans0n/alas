@@ -41,9 +41,25 @@ struct LSPFrameDecoder {
     }
 }
 
+/// Abstraction over the live `LSPTransport` so tests can inject a fake.
+/// Marked `Sendable` because `LSPClient` (an actor) holds a reference and
+/// calls into it across async boundaries; the concrete `LSPTransport` is
+/// `@unchecked Sendable` because the actor is the sole owner that mutates it.
+protocol LSPTransporting: AnyObject, Sendable {
+    var incoming: AsyncStream<LSPTransport.Incoming> { get }
+    func start() throws
+    func send(_ data: Data) throws
+    func terminate()
+}
+
 /// Owns a `Process` running an LSP server and exposes async send/receive.
 /// `incoming` emits raw JSON Data per-frame; the client decodes them.
-final class LSPTransport {
+///
+/// `@unchecked Sendable`: mutable internals (Process, Pipe, decoder buffer)
+/// are not sent across threads concurrently — the owning `LSPClient` actor
+/// serializes all access; readability handlers run on the pipe queue but only
+/// touch `decoder` under `lock` and emit via the AsyncStream continuation.
+final class LSPTransport: @unchecked Sendable {
     enum Incoming: Sendable {
         case frame(Data)
         case stderr(Data)
@@ -109,3 +125,5 @@ final class LSPTransport {
         if process.isRunning { process.terminate() }
     }
 }
+
+extension LSPTransport: LSPTransporting {}
