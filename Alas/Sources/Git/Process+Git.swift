@@ -135,13 +135,14 @@ extension Process {
             } catch {
                 return  // cancelled — process exited cleanly
             }
+            guard process.isRunning else { return }
+            output.markTimedOut()
             // Visible marker so a CI hang past 30s is unambiguously diagnosed.
             fputs(
                 "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                 stderr
             )
-            output.markTimedOut()
-            if process.isRunning { process.terminate() }
+            process.terminate()
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             if process.isRunning {
                 Darwin.kill(process.processIdentifier, SIGKILL)
