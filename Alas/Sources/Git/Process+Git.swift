@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 struct ProcessResult {
@@ -10,59 +9,6 @@ struct ProcessResult {
 enum ProcessError: Error {
     case launchFailed(String)
     case timedOut(executable: String, args: [String], seconds: TimeInterval)
-}
-
-private final class ProcessOutputBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stdout = Data()
-    private var stderr = Data()
-    private var timedOut = false
-    private var stdoutClosed = false
-    private var stderrClosed = false
-
-    func appendStdout(_ data: Data) {
-        lock.lock()
-        stdout.append(data)
-        lock.unlock()
-    }
-
-    func appendStderr(_ data: Data) {
-        lock.lock()
-        stderr.append(data)
-        lock.unlock()
-    }
-
-    func markTimedOut() {
-        lock.lock()
-        timedOut = true
-        lock.unlock()
-    }
-
-    func markStdoutClosed() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !stdoutClosed else { return false }
-        stdoutClosed = true
-        return true
-    }
-
-    func markStderrClosed() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !stderrClosed else { return false }
-        stderrClosed = true
-        return true
-    }
-
-    func snapshot() -> (stdout: Data, stderr: Data, timedOut: Bool) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (stdout, stderr, timedOut)
-    }
-}
-
-private func waitForPipeEOF(_ group: DispatchGroup) -> DispatchTimeoutResult {
-    group.wait(timeout: .now() + 1)
 }
 
 extension Process {
@@ -92,33 +38,9 @@ extension Process {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        let output = ProcessOutputBuffer()
-        let eofGroup = DispatchGroup()
-        eofGroup.enter()
-        eofGroup.enter()
-
-        outPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty else {
-                if output.markStdoutClosed() { eofGroup.leave() }
-                return
-            }
-            output.appendStdout(data)
-        }
-        errPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty else {
-                if output.markStderrClosed() { eofGroup.leave() }
-                return
-            }
-            output.appendStderr(data)
-        }
-
         do {
             try process.run()
         } catch {
-            outPipe.fileHandleForReading.readabilityHandler = nil
-            errPipe.fileHandleForReading.readabilityHandler = nil
             throw ProcessError.launchFailed(error.localizedDescription)
         }
 
@@ -135,43 +57,34 @@ extension Process {
             } catch {
                 return  // cancelled — process exited cleanly
             }
-            guard process.isRunning else { return }
-            output.markTimedOut()
             // Visible marker so a CI hang past 30s is unambiguously diagnosed.
             fputs(
                 "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                 stderr
             )
-            process.terminate()
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            if process.isRunning {
-                Darwin.kill(process.processIdentifier, SIGKILL)
-            }
+            if process.isRunning { process.terminate() }
             try? outPipe.fileHandleForReading.close()
             try? errPipe.fileHandleForReading.close()
         }
 
-        await Task.detached {
-            process.waitUntilExit()
-        }.value
-        _ = await Task.detached {
-            waitForPipeEOF(eofGroup)
-        }.value
+        async let outData = Task.detached { outPipe.fileHandleForReading.readDataToEndOfFile() }.value
+        async let errData = Task.detached { errPipe.fileHandleForReading.readDataToEndOfFile() }.value
 
-        outPipe.fileHandleForReading.readabilityHandler = nil
-        errPipe.fileHandleForReading.readabilityHandler = nil
+        let out = await outData
+        let err = await errData
+        process.waitUntilExit()
+
+        let timedOut = !watchdog.isCancelled && process.terminationReason == .uncaughtSignal
         watchdog.cancel()
 
-        let snapshot = output.snapshot()
-
-        if snapshot.timedOut {
+        if timedOut {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
         }
 
         return ProcessResult(
             exitCode: process.terminationStatus,
-            stdout: String(data: snapshot.stdout, encoding: .utf8) ?? "",
-            stderr: String(data: snapshot.stderr, encoding: .utf8) ?? ""
+            stdout: String(data: out, encoding: .utf8) ?? "",
+            stderr: String(data: err, encoding: .utf8) ?? ""
         )
     }
 
