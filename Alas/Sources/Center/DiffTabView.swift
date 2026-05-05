@@ -10,6 +10,7 @@ struct DiffTabView: View {
     @State private var totalDel = 0
     @State private var loaded = false
     @State private var error: String?
+    @State private var activeLoadKey: String?
 
     private let git = GitService()
 
@@ -65,6 +66,8 @@ struct DiffTabView: View {
     }
 
     private func load() async {
+        let requestedLoadKey = loadKey
+        activeLoadKey = requestedLoadKey
         loaded = false
         diff = ParsedDiff(hunks: [])
         totalAdd = 0
@@ -72,11 +75,17 @@ struct DiffTabView: View {
         error = nil
 
         do {
-            diff = try await git.diff(worktreePath: worktreePath, file: relativePath)
-            totalAdd = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count
-            totalDel = diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count
+            let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath)
+            let loadedTotalAdd = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count
+            let loadedTotalDel = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count
+
+            guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
+            diff = loadedDiff
+            totalAdd = loadedTotalAdd
+            totalDel = loadedTotalDel
             loaded = true
         } catch {
+            guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
             self.error = error.localizedDescription
             loaded = true
         }

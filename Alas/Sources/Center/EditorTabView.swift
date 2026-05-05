@@ -7,6 +7,7 @@ struct EditorTabView: View {
 
     @State private var content: String = ""
     @State private var loaded = false
+    @State private var activeLoadKey: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,16 +53,22 @@ struct EditorTabView: View {
     }
 
     private func load() async {
+        let requestedLoadKey = loadKey
+        activeLoadKey = requestedLoadKey
         loaded = false
         content = ""
 
         let url = worktreePath.appendingPathComponent(relativePath)
+        let loadedContent: String
         if let data = try? Data(contentsOf: url),
            let str = String(data: data, encoding: .utf8) {
-            content = str
+            loadedContent = str
         } else {
-            content = "(unable to read file)"
+            loadedContent = "(unable to read file)"
         }
+
+        guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
+        content = loadedContent
         loaded = true
     }
 }
