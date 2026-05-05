@@ -8,6 +8,7 @@ import AppKit
 struct CodeEditorView: NSViewRepresentable {
     typealias Coordinator = CodeEditorCoordinator
 
+    let worktreeId: String
     let worktreeRoot: URL
     let relativePath: String
     let appState: AppState
@@ -41,6 +42,7 @@ struct CodeEditorView: NSViewRepresentable {
 
         context.coordinator.attach(
             textView: textView,
+            worktreeId: worktreeId,
             worktreeRoot: worktreeRoot,
             relativePath: relativePath,
             theme: theme
@@ -50,6 +52,7 @@ struct CodeEditorView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.updateIfNeeded(
+            worktreeId: worktreeId,
             worktreeRoot: worktreeRoot,
             relativePath: relativePath,
             theme: theme

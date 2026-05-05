@@ -13,6 +13,7 @@ final class CodeEditorCoordinator {
     let appState: AppState
     private weak var textView: CodeTextView?
 
+    private var currentWorktreeId: String?
     private var currentRoot: URL?
     private var currentRelativePath: String?
     private var currentLanguage: String?
@@ -20,13 +21,15 @@ final class CodeEditorCoordinator {
     private let diagnosticsFeature = DiagnosticsFeature()
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
+    private var definition: DefinitionFeature?
 
     init(appState: AppState) {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, worktreeRoot: URL, relativePath: String, theme: Theme) {
+    func attach(textView: CodeTextView, worktreeId: String, worktreeRoot: URL, relativePath: String, theme: Theme) {
         self.textView = textView
+        self.currentWorktreeId = worktreeId
         load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
         hover = HoverFeature(
             textView: textView,
@@ -39,11 +42,39 @@ final class CodeEditorCoordinator {
                 return "file://" + root.appendingPathComponent(rel).path
             }
         )
+        definition = DefinitionFeature(
+            textView: textView,
+            getClient: { [weak self] in
+                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
+                return self.appState.lsp.client(forWorktree: root, language: lang)
+            },
+            getURI: { [weak self] in
+                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                return "file://" + root.appendingPathComponent(rel).path
+            },
+            openTarget: { [weak self] url, line, character in
+                guard let self, let root = self.currentRoot, let wid = self.currentWorktreeId else { return }
+                // Compute path relative to the current worktree root. If the
+                // target lives outside this worktree we still route to the
+                // same TabsManager bucket — cross-worktree definitions are a
+                // v1.5 concern.
+                let abs = url.path
+                let prefix = root.path + "/"
+                let rel = abs.hasPrefix(prefix) ? String(abs.dropFirst(prefix.count)) : abs
+                self.appState.tabs.openEditor(
+                    worktreeId: wid,
+                    relativePath: rel,
+                    revealLine: line,
+                    revealCharacter: character
+                )
+            }
+        )
     }
 
-    func updateIfNeeded(worktreeRoot: URL, relativePath: String, theme: Theme) {
-        if currentRoot == worktreeRoot && currentRelativePath == relativePath { return }
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, theme: Theme) {
+        if currentRoot == worktreeRoot && currentRelativePath == relativePath && currentWorktreeId == worktreeId { return }
         Task { await closeCurrent() }
+        currentWorktreeId = worktreeId
         load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
     }
 
@@ -51,6 +82,7 @@ final class CodeEditorCoordinator {
         Task { await closeCurrent() }
         diagnosticsTask?.cancel()
         hover = nil
+        definition = nil
     }
 
     // MARK: - Load + highlight

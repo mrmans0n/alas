@@ -44,6 +44,44 @@ final class TabsManager {
         return tab
     }
 
+    /// Open or focus an editor tab for `relativePath`. If a tab for that
+    /// path already exists, its reveal hints are updated and it becomes
+    /// active. Otherwise a new tab is appended.
+    @discardableResult
+    func openEditor(
+        worktreeId: String,
+        relativePath: String,
+        revealLine: Int?,
+        revealCharacter: Int?
+    ) -> Tab {
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .editor(let s) = $0 { return s.relativePath == relativePath }
+               return false
+           }) {
+            if case .editor(var s) = file.tabs[idx] {
+                s.revealLine = revealLine
+                s.revealCharacter = revealCharacter
+                file.tabs[idx] = .editor(s)
+                file.activeTabId = s.id
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+                return .editor(s)
+            }
+        }
+        let title = (relativePath as NSString).lastPathComponent
+        let state = EditorTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: relativePath,
+            revealLine: revealLine,
+            revealCharacter: revealCharacter
+        )
+        let tab = Tab.editor(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     @discardableResult
     func appendDiff(worktreeId: String, title: String, relativePath: String) -> Tab {
         let state = DiffTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
