@@ -18,6 +18,7 @@ final class CodeEditorCoordinator {
     private var currentLanguage: String?
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnostics: [LSPDiagnostic] = []
+    private var hover: HoverFeature?
 
     init(appState: AppState) {
         self.appState = appState
@@ -26,6 +27,17 @@ final class CodeEditorCoordinator {
     func attach(textView: CodeTextView, worktreeRoot: URL, relativePath: String, theme: Theme) {
         self.textView = textView
         load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
+        hover = HoverFeature(
+            textView: textView,
+            getClient: { [weak self] in
+                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
+                return self.appState.lsp.client(forWorktree: root, language: lang)
+            },
+            getURI: { [weak self] in
+                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                return "file://" + root.appendingPathComponent(rel).path
+            }
+        )
     }
 
     func updateIfNeeded(worktreeRoot: URL, relativePath: String, theme: Theme) {
@@ -37,6 +49,7 @@ final class CodeEditorCoordinator {
     func detach() {
         Task { await closeCurrent() }
         diagnosticsTask?.cancel()
+        hover = nil
     }
 
     // MARK: - Load + highlight

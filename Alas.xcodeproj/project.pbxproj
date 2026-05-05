@@ -105,6 +105,7 @@
 		A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */; };
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
 		AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15E14D45EC3926768DE5BD1 /* DiffTabView.swift */; };
+		AD311BBE11A5A2751EA0907C /* HoverFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AF8152B18C9D6290724122F /* HoverFeature.swift */; };
 		AD3469F4745DF96ED3D0E06E /* codex-cli.sh in Resources */ = {isa = PBXBuildFile; fileRef = F1524DAA94E33D2938853810 /* codex-cli.sh */; };
 		B1A6F39D02409339072EC164 /* HarnessDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9F85B92952C963DCF136315 /* HarnessDetector.swift */; };
 		B2644AC4562CED419A172C95 /* SimpleHighlighterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38EF20C75A1143BADFB29EC6 /* SimpleHighlighterTests.swift */; };
@@ -170,6 +171,7 @@
 		05EE713DD3CACF29F206553C /* ThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStore.swift; sourceTree = "<group>"; };
 		08ACB3B79B74153668DA29D8 /* LSPTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPTransportTests.swift; sourceTree = "<group>"; };
 		09D238B1262EB2BC6AFCF621 /* LanguageServerRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerRegistry.swift; sourceTree = "<group>"; };
+		0AF8152B18C9D6290724122F /* HoverFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverFeature.swift; sourceTree = "<group>"; };
 		0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCHTests.swift; sourceTree = "<group>"; };
 		0F68A9692F85197ED9E16262 /* WorktreesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesPane.swift; sourceTree = "<group>"; };
 		1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStoreTests.swift; sourceTree = "<group>"; };
@@ -583,6 +585,7 @@
 				F5C6A07D7C67D02C8638D8C1 /* LSPMessages.swift */,
 				38499AFE31188908546EE222 /* LSPTransport.swift */,
 				BE809DBC1E614321EE793D00 /* WorkspaceLSPManager.swift */,
+				BF7999E71D2618AC30DF14E4 /* Features */,
 			);
 			path = LSP;
 			sourceTree = "<group>";
@@ -633,6 +636,14 @@
 				C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */,
 			);
 			path = Editor;
+			sourceTree = "<group>";
+		};
+		BF7999E71D2618AC30DF14E4 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				0AF8152B18C9D6290724122F /* HoverFeature.swift */,
+			);
+			path = Features;
 			sourceTree = "<group>";
 		};
 		C86FE0D59F990939C552C7E2 /* Products */ = {
@@ -927,6 +938,7 @@
 				4BE29AA0D4CBFF3FF4B61C9F /* HookEvent.swift in Sources */,
 				EC1B515505AEC98FB199B02A /* HookInstaller.swift in Sources */,
 				043B6662FCBEC5969946D61A /* HookWatcher.swift in Sources */,
+				AD311BBE11A5A2751EA0907C /* HoverFeature.swift in Sources */,
 				CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */,
 				E433BB79E6D79DAF4532172A /* Kbd.swift in Sources */,
 				C1EBF68A32C7C1D61ECC89AC /* LSPClient.swift in Sources */,
