@@ -3,20 +3,26 @@ import SwiftUI
 struct SettingsWindow: View {
     @Bindable var state: AppState
     @State private var section: SettingsSection = .general
-    @Environment(\.theme) var theme
 
     var body: some View {
+        let theme = state.themeStore.current
+
         VStack(spacing: 0) {
             ZStack {
                 LinearGradient(
                     colors: [theme.color("bg-3"), theme.color("bg-2")],
                     startPoint: .top, endPoint: .bottom
                 )
-                .frame(height: 38)
+                HStack {
+                    TrafficLights()
+                    Spacer()
+                }
+                .padding(.leading, 16)
                 Text("Settings")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(theme.color("fg-muted"))
             }
+            .frame(height: 44)
             .overlay(Divider().opacity(0.5), alignment: .bottom)
 
             HStack(spacing: 0) {
@@ -29,7 +35,10 @@ struct SettingsWindow: View {
                     case .appearance: AppearancePane(state: state)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: 680)
+                .frame(maxHeight: .infinity)
+                .background(theme.color("bg-1"))
+                .clipped()
             }
 
             HStack(spacing: 8) {
@@ -42,7 +51,10 @@ struct SettingsWindow: View {
             .overlay(Divider().opacity(0.5), alignment: .top)
         }
         .frame(width: 880, height: 580)
-        .environment(\.theme, state.themeStore.current)
+        .background(theme.color("bg-1"))
+        .background(WindowConfigurator())
+        .environment(\.theme, theme)
+        .ignoresSafeArea()
     }
 
     private func closeWindow() {

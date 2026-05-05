@@ -41,6 +41,7 @@ struct AlasApp: App {
         Window("Settings", id: "settings") {
             SettingsWindow(state: state)
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultSize(width: 880, height: 580)
     }

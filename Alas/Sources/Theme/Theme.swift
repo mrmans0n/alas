@@ -37,8 +37,13 @@ struct Theme: Codable, Equatable {
     func color(_ token: String) -> Color {
         // Accent override wins over the theme JSON when set (so the
         // settings-pane picker actually changes the chrome).
-        if token == "accent", let hex = accentOverrideHex {
-            return Color(hex: hex)
+        if let hex = accentOverrideHex {
+            if token == "accent" {
+                return Color(hex: hex)
+            }
+            if token == "accent-soft" {
+                return Color(hex: hex).opacity(0.18)
+            }
         }
         guard let raw = tokens[token],
               let parsed = try? OKLCH.parse(raw) else {

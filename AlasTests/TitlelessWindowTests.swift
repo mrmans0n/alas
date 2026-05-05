@@ -2,6 +2,7 @@ import Testing
 import AppKit
 @testable import Alas
 
+@MainActor
 struct TitlelessWindowTests {
     @Test func hidesStandardWindowButtons() {
         let window = NSWindow(
