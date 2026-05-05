@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct ProcessResult {
@@ -141,6 +142,10 @@ extension Process {
             )
             output.markTimedOut()
             if process.isRunning { process.terminate() }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+            }
             try? outPipe.fileHandleForReading.close()
             try? errPipe.fileHandleForReading.close()
         }
