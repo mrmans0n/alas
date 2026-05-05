@@ -69,10 +69,11 @@ extension Process {
 
         async let outData = Task.detached { outPipe.fileHandleForReading.readDataToEndOfFile() }.value
         async let errData = Task.detached { errPipe.fileHandleForReading.readDataToEndOfFile() }.value
+        async let termination: Void = Task.detached { process.waitUntilExit() }.value
 
         let out = await outData
         let err = await errData
-        process.waitUntilExit()
+        await termination
 
         let timedOut = !watchdog.isCancelled && process.terminationReason == .uncaughtSignal
         watchdog.cancel()
