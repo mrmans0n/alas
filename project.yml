@@ -20,7 +20,10 @@ packages:
     from: 0.9.0
   TreeSitterSwift:
     url: https://github.com/alex-pinkus/tree-sitter-swift
-    branch: with-generated-files
+    # tag 0.7.2-with-generated-files; this fork's `main` branch
+    # gitignores generated parser files, so SPM consumers must
+    # pin to a `*-with-generated-files` revision.
+    revision: 7b7909f2f6b9414be0958275f4c8e5d69c3bca43
 
 targets:
   Alas:

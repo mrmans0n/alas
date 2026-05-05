@@ -1154,8 +1154,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/alex-pinkus/tree-sitter-swift";
 			requirement = {
-				branch = "with-generated-files";
-				kind = branch;
+				kind = revision;
+				revision = 7b7909f2f6b9414be0958275f4c8e5d69c3bca43;
 			};
 		};
 		CF72A36467D20A160E653761 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */ = {
