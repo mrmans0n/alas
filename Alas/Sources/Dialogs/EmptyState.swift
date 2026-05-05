@@ -7,6 +7,7 @@ struct EmptyState: View {
     @Environment(\.theme) var theme
 
     var body: some View {
+        ZStack(alignment: .topLeading) {
         VStack(spacing: 18) {
             ZStack {
                 LinearGradient(colors: [theme.color("bg-3"), theme.color("bg-2")],
@@ -43,5 +44,9 @@ struct EmptyState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
+            TrafficLights()
+                .padding(.leading, 12)
+                .padding(.top, 10)
+        }
     }
 }
