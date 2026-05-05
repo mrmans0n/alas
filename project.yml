@@ -14,6 +14,14 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
 
+packages:
+  SwiftTreeSitter:
+    url: https://github.com/tree-sitter/swift-tree-sitter
+    from: 0.9.0
+  TreeSitterSwift:
+    url: https://github.com/alex-pinkus/tree-sitter-swift
+    branch: with-generated-files
+
 targets:
   Alas:
     type: application
@@ -47,6 +55,10 @@ targets:
         link: true
         codeSign: false
       - sdk: Carbon.framework
+      - package: SwiftTreeSitter
+        product: SwiftTreeSitter
+      - package: TreeSitterSwift
+        product: TreeSitterSwift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas
