@@ -1,7 +1,7 @@
 import AppKit
 
-/// NSWindow that hides the native titlebar and traffic lights so we can
-/// inline our own inside the SwiftUI sidebar header.
+/// NSWindow that hides the native titlebar and its standard traffic-light
+/// buttons. Custom `TrafficLights` views replace them in SwiftUI.
 final class TitlelessWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
