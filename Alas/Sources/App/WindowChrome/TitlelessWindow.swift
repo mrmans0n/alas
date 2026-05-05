@@ -18,7 +18,7 @@ final class TitlelessWindow: NSWindow {
         window.isOpaque = false
         // Hide the native titlebar separator
         window.titlebarSeparatorStyle = .none
-        // Hide the native traffic-light buttons; we inline our own in the sidebar.
+        // Hide the native traffic-light buttons; custom TrafficLights views replace them.
         window.standardWindowButton(.closeButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
