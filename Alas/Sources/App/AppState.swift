@@ -13,6 +13,7 @@ final class AppState {
     let terminal = TerminalService()
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
+    let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
 
     private let store = PersistenceStore()
 
