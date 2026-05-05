@@ -35,6 +35,8 @@ struct TerminalPane: View {
                                 desc: "Executed in every new terminal pane after the shell starts.") {
                         TextEditor(text: bind(\.terminal.startupScript))
                             .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(theme.color("fg"))
+                            .scrollContentBackground(.hidden)
                             .frame(minHeight: 80)
                             .padding(8)
                             .background(theme.color("bg-0"))
@@ -44,6 +46,8 @@ struct TerminalPane: View {
                                 desc: "Executed once after a worktree is created.") {
                         TextEditor(text: bind(\.terminal.worktreeCreateScript))
                             .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(theme.color("fg"))
+                            .scrollContentBackground(.hidden)
                             .frame(minHeight: 60)
                             .padding(8)
                             .background(theme.color("bg-0"))

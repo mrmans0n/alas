@@ -32,6 +32,7 @@ struct SettingsNavView: View {
                     HStack(spacing: 9) {
                         Icon(name: section.icon, size: 14,
                              color: selection == section ? theme.color("accent") : theme.color("fg-dim"))
+                            .frame(width: 16, height: 16)
                         Text(section.label).font(.system(size: 12.5))
                             .foregroundColor(selection == section ? theme.color("fg") : theme.color("fg-muted"))
                         Spacer()

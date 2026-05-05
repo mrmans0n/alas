@@ -46,7 +46,7 @@ struct AppearancePane: View {
                                 } label: {
                                     VStack(spacing: 4) {
                                         ZStack(alignment: .topLeading) {
-                                            Rectangle().fill(c1).frame(width: 80, height: 50)
+                                            Rectangle().fill(c1).frame(width: 72, height: 46)
                                             Rectangle().fill(c2).frame(width: 16, height: 4).padding(4)
                                         }
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
