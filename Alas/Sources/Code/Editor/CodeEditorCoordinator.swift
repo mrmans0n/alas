@@ -17,7 +17,7 @@ final class CodeEditorCoordinator {
     private var currentRelativePath: String?
     private var currentLanguage: String?
     private var diagnosticsTask: Task<Void, Never>?
-    private var diagnostics: [LSPDiagnostic] = []
+    private let diagnosticsFeature = DiagnosticsFeature()
     private var hover: HoverFeature?
 
     init(appState: AppState) {
@@ -110,40 +110,8 @@ final class CodeEditorCoordinator {
     }
 
     private func applyDiagnostics(_ diagnostics: [LSPDiagnostic], theme: Theme) {
-        guard let textView, let storage = textView.textStorage else { return }
-        let editorTheme = EditorTheme(theme: theme)
-        // Clear prior squiggle attributes
-        let full = NSRange(location: 0, length: storage.length)
-        storage.removeAttribute(.underlineStyle, range: full)
-        storage.removeAttribute(.underlineColor, range: full)
-        for d in diagnostics {
-            guard let nsRange = nsRange(for: d.range, in: storage.string) else { continue }
-            storage.addAttributes(editorTheme.diagnosticAttributes(severity: d.severity), range: nsRange)
-        }
-        self.diagnostics = diagnostics
-    }
-
-    private func nsRange(for range: LSPRange, in source: String) -> NSRange? {
-        guard
-            let start = utf16Index(line: range.start.line, character: range.start.character, in: source),
-            let end = utf16Index(line: range.end.line, character: range.end.character, in: source),
-            end >= start
-        else { return nil }
-        return NSRange(location: start, length: end - start)
-    }
-
-    private func utf16Index(line: Int, character: Int, in source: String) -> Int? {
-        var lineNumber = 0
-        var idx = source.startIndex
-        while lineNumber < line, let nl = source[idx...].firstIndex(of: "\n") {
-            idx = source.index(after: nl)
-            lineNumber += 1
-        }
-        guard lineNumber == line else { return nil }
-        // Move forward `character` UTF-16 code units within this line.
-        let lineStart = idx
-        let utf16Start = source.utf16.distance(from: source.startIndex, to: lineStart)
-        return utf16Start + character
+        guard let storage = textView?.textStorage else { return }
+        diagnosticsFeature.apply(diagnostics, to: storage, theme: theme)
     }
 
     private func closeCurrent() async {
