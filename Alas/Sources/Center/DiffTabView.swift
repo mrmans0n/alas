@@ -185,18 +185,29 @@ private struct HunkView: View {
                     Text(lineMarker(line))
                         .frame(width: 44, alignment: .trailing)
                         .foregroundColor(markerColor(line))
-                    HStack(spacing: 0) {
-                        ForEach(Array(renderedSpans(line.text, ext: fileExtension).enumerated()), id: \.offset) { (_, span) in
-                            Text(span.0).foregroundColor(color(for: span.1))
-                        }
-                    }
-                    Spacer()
+                    Text(highlightedLine(line.text, ext: fileExtension))
+                    Spacer(minLength: 0)
                 }
                 .font(.system(size: 12.5, design: .monospaced))
                 .padding(.horizontal, 14)
                 .background(rowBg(line))
             }
         }
+    }
+
+    /// Compose a single `AttributedString` for `line` with per-token
+    /// foreground colors. Rendering as a single SwiftUI `Text` (rather
+    /// than an HStack of per-token Texts) lets SwiftUI lay the line out
+    /// as one run of text — without it, long lines collapse into a
+    /// vertical stack of one-token columns under width pressure.
+    private func highlightedLine(_ line: String, ext: String) -> AttributedString {
+        var attr = AttributedString()
+        for (text, capture) in renderedSpans(line, ext: ext) {
+            var part = AttributedString(text)
+            part.foregroundColor = color(for: capture)
+            attr.append(part)
+        }
+        return attr
     }
 
     /// Build a sequence of `(text, capture)` pairs covering the entire
