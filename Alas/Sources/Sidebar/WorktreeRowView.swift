@@ -47,6 +47,8 @@ struct WorktreeRowView: View {
                 .padding(.trailing, 10)
                 .padding(.vertical, 7)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: .leading)

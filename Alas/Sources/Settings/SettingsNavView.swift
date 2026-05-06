@@ -40,8 +40,10 @@ struct SettingsNavView: View {
                         Spacer()
                     }
                     .padding(.horizontal, 10).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(selection == section ? theme.color("accent-soft") : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

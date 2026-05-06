@@ -23,6 +23,8 @@ struct RepoGroupView: View {
                         .foregroundColor(theme.color("fg-faint"))
                 }
                 .padding(.horizontal, 12).padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if !collapsed {
