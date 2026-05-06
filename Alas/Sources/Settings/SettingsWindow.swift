@@ -41,6 +41,7 @@ struct SettingsWindow: View {
                 .background(theme.color("bg-1"))
                 .clipped()
             }
+            .frame(maxHeight: .infinity)
 
             HStack(spacing: 8) {
                 Spacer()
