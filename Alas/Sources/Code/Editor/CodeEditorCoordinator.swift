@@ -90,25 +90,44 @@ final class CodeEditorCoordinator {
     private func load(worktreeRoot: URL, relativePath: String, theme: Theme) {
         guard let textView else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
-        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? "(unable to read file)"
         let editorTheme = EditorTheme(theme: theme)
-        let attr = NSMutableAttributedString(
-            string: text,
-            attributes: [
-                .font: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
-                .foregroundColor: editorTheme.defaultFG
-            ]
-        )
-        let ext = (relativePath as NSString).pathExtension
-        for span in TreeSitterHighlighter.highlight(source: text, fileExtension: ext) {
-            attr.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
-        }
-        textView.textStorage?.setAttributedString(attr)
+        let baseAttrs: [NSAttributedString.Key: Any] = [
+            .font: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
+            .foregroundColor: editorTheme.defaultFG
+        ]
+
+        // Stage 1 — immediate. Read the file synchronously and paint plain
+        // text so the user sees content right away. Tree-sitter parsing and
+        // LSP startup follow asynchronously below.
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? "(unable to read file)"
+        textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: baseAttrs))
 
         currentRoot = worktreeRoot
         currentRelativePath = relativePath
 
-        // Spin up LSP for the file's language
+        let ext = (relativePath as NSString).pathExtension
+
+        // Stage 2 — async tree-sitter highlight. Parsing a non-trivial file
+        // can take 10s of ms; doing it on the main actor freezes the
+        // first paint. Run it on a detached priority-userInitiated task and
+        // apply the spans back on the main actor. Bail if the user
+        // navigated to a different file before the parse finished.
+        let stableRoot = worktreeRoot
+        let stableRel = relativePath
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let spans = TreeSitterHighlighter.highlight(source: text, fileExtension: ext)
+            await MainActor.run {
+                guard let self = self,
+                      let storage = self.textView?.textStorage,
+                      self.currentRoot == stableRoot,
+                      self.currentRelativePath == stableRel else { return }
+                for span in spans {
+                    storage.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
+                }
+            }
+        }
+
+        // Stage 3 — async LSP setup.
         let registry = appState.lsp
         let language: String?
         switch ext.lowercased() {

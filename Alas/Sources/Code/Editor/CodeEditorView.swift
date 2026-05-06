@@ -23,9 +23,19 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.borderType = .noBorder
+        scroll.autohidesScrollers = false
+        scroll.drawsBackground = true
+        scroll.backgroundColor = NSColor(theme.color("bg-1"))
 
-        let textView = CodeTextView(frame: .zero, textContainer: makeContainer())
-        textView.autoresizingMask = [.width]
+        // Code editor pattern: textView grows in BOTH directions to fit its
+        // content, independent of the scroll view's content size. Pass a
+        // non-zero initial frame and a `nil` text container so NSTextView
+        // creates a properly-configured one for us; we then override the
+        // container's tracking + size below. `autoresizingMask = []` is
+        // intentional — if the textView tracked the scrollView's width it
+        // would soft-wrap instead of scrolling horizontally.
+        let initialFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        let textView = CodeTextView(frame: initialFrame, textContainer: nil)
         textView.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         textView.drawsBackground = true
@@ -33,11 +43,15 @@ struct CodeEditorView: NSViewRepresentable {
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = true
-        textView.textContainer?.widthTracksTextView = false
+        textView.autoresizingMask = []
+
         textView.textContainer?.containerSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.heightTracksTextView = false
+
         scroll.documentView = textView
 
         context.coordinator.attach(
@@ -61,11 +75,5 @@ struct CodeEditorView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: CodeEditorCoordinator) {
         coordinator.detach()
-    }
-
-    private func makeContainer() -> NSTextContainer {
-        let container = NSTextContainer()
-        container.widthTracksTextView = false
-        return container
     }
 }
