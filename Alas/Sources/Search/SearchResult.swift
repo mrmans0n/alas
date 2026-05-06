@@ -1,0 +1,52 @@
+import Foundation
+
+/// A file-mode result row. `worktreeId` is needed so we can route
+/// open-actions back to the correct worktree, and so SwiftUI list ids
+/// stay unique across worktrees in `.allRepos` scope.
+struct FileSearchResult: Identifiable, Equatable, Sendable {
+    let worktreeId: String
+    let projectId: String
+    /// Repo-relative path (e.g., `crates/alas-gui/src/main.rs`).
+    let relativePath: String
+    /// Filename extension without leading dot, lowercased (e.g., `rs`, `toml`).
+    let ext: String
+    /// `git status --porcelain` short code: M / A / D / R, or nil.
+    let statusBadge: GitStatusBadge?
+    /// Indices into `relativePath` of fuzzy-matched characters. Empty when
+    /// query is empty.
+    let matchIndices: [Int]
+    let score: Double
+
+    var id: String { worktreeId + ":" + relativePath }
+}
+
+enum GitStatusBadge: String, Sendable {
+    case modified = "M"
+    case added    = "A"
+    case deleted  = "D"
+    case renamed  = "R"
+}
+
+/// A single content-search hit. `groupKey` is `worktreeId + relativePath`,
+/// used to bucket hits into `ContentSearchGroup`s.
+struct ContentSearchHit: Identifiable, Equatable, Sendable {
+    let worktreeId: String
+    let projectId: String
+    let relativePath: String
+    let line: Int
+    let column: Int
+    let snippet: String
+    let matchByteRange: Range<Int>?
+
+    var id: String { "\(worktreeId):\(relativePath):\(line):\(column)" }
+    var groupKey: String { "\(worktreeId):\(relativePath)" }
+}
+
+struct ContentSearchGroup: Identifiable, Equatable, Sendable {
+    let worktreeId: String
+    let projectId: String
+    let relativePath: String
+    var hits: [ContentSearchHit]
+
+    var id: String { "\(worktreeId):\(relativePath)" }
+}

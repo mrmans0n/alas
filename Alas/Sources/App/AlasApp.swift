@@ -23,6 +23,10 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasToggleRightPane, object: nil)
                 }
                 .keyboardShortcut(.return, modifiers: [.command, .option])
+                Button("Search Files…") {
+                    NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
+                }
+                .keyboardShortcut("p", modifiers: .command)
                 Button("New Worktree…") {
                     NotificationCenter.default.post(name: .alasNewWorktree, object: nil)
                 }
