@@ -81,6 +81,16 @@ actor LSPClient {
         ])
     }
 
+    /// Full-document content sync. We don't keep a local edit history, so
+    /// every change is sent as a single replacement of the whole document.
+    /// Caller is responsible for monotonic version numbers per URI.
+    func didChange(uri: String, version: Int, text: String) throws {
+        try sendNotification(method: "textDocument/didChange", params: [
+            "textDocument": ["uri": uri, "version": version],
+            "contentChanges": [["text": text]]
+        ])
+    }
+
     func hover(uri: String, position: LSPPosition) async throws -> LSPHoverResult? {
         let raw = try await sendRequest(method: "textDocument/hover", params: [
             "textDocument": ["uri": uri],

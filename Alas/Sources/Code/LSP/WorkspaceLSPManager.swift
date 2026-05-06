@@ -29,6 +29,7 @@ final class WorkspaceLSPManager {
         let ready: Task<Bool, Never>
         var refsByURI: [String: Int]
         var openedURIs: Set<String>
+        var versions: [String: Int]   // last didChange version per URI
     }
 
     private var holders: [Key: Holder] = [:]
@@ -64,7 +65,7 @@ final class WorkspaceLSPManager {
         if let existing = holders[key] {
             var refs = existing.refsByURI
             refs[uri, default: 0] += 1
-            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs)
+            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions)
             client = existing.client
             ready = existing.ready
         } else {
@@ -74,7 +75,7 @@ final class WorkspaceLSPManager {
             let task = Task<Bool, Never> {
                 do { try await newClient.initialize(); return true } catch { return false }
             }
-            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [])
+            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:])
             client = newClient
             ready = task
         }
@@ -104,6 +105,7 @@ final class WorkspaceLSPManager {
         if !h.openedURIs.contains(uri) {
             if var holder = holders[key] {
                 holder.openedURIs.insert(uri)
+                holder.versions[uri] = 1
                 holders[key] = holder
             }
             try? await client.didOpen(
@@ -114,6 +116,26 @@ final class WorkspaceLSPManager {
             )
         }
         return client
+    }
+
+    /// Send `textDocument/didChange` with full-text content for an
+    /// already-open document. Used when the file changes externally
+    /// (e.g. edits from a terminal) — without this, language servers
+    /// treat the open document as client-owned and keep diagnostics,
+    /// hover, and definitions tied to the original snapshot.
+    func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async {
+        let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
+        let key = Key(root: lspRoot.path, language: languageId)
+        let uri = fileURL.lspURI
+        guard let holder = holders[key], holder.openedURIs.contains(uri) else { return }
+        let initOk = await holder.ready.value
+        guard initOk else { return }
+        guard var cur = holders[key], cur.openedURIs.contains(uri) else { return }
+        let nextVersion = (cur.versions[uri] ?? 1) + 1
+        cur.versions[uri] = nextVersion
+        holders[key] = cur
+        try? await cur.client.didChange(uri: uri, version: nextVersion, text: text)
     }
 
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {

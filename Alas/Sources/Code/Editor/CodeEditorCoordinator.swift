@@ -18,6 +18,7 @@ final class CodeEditorCoordinator {
     private var currentRelativePath: String?
     private var currentLanguage: String?
     private var currentTheme: Theme?
+    private var currentMtime: Date?
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
     private var diagnosticsTask: Task<Void, Never>?
     private let diagnosticsFeature = DiagnosticsFeature()
@@ -90,6 +91,14 @@ final class CodeEditorCoordinator {
             currentWorktreeId = worktreeId
             load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
             if let previous { Task { await self.close(document: previous) } }
+        } else if let root = currentRoot, let rel = currentRelativePath,
+                  let onDisk = mtime(of: root.appendingPathComponent(rel)),
+                  onDisk != currentMtime {
+            // The file changed on disk while the tab was unfocused (terminal
+            // edit, external tool, …). Re-read the content, refresh the view,
+            // and notify the language server via `didChange` so its hover /
+            // diagnostics / definitions move off the stale snapshot.
+            reloadFromDisk(theme: theme)
         } else if currentTheme != theme {
             // Theme change without file change — SwiftUI's previous
             // per-line `Text` editor recomputed colors from the environment
@@ -136,6 +145,7 @@ final class CodeEditorCoordinator {
 
         currentRoot = worktreeRoot
         currentRelativePath = relativePath
+        currentMtime = mtime(of: url)
 
         let ext = (relativePath as NSString).pathExtension
 
@@ -214,6 +224,60 @@ final class CodeEditorCoordinator {
         diagnosticsFeature.apply(diagnostics, to: storage, theme: theme)
     }
 
+    /// Re-reads the current file from disk, repaints the view, and notifies
+    /// the language server via `didChange` so its hover/diagnostics catch up
+    /// to external edits.
+    private func reloadFromDisk(theme: Theme) {
+        guard let textView, let root = currentRoot, let rel = currentRelativePath else { return }
+        let url = root.appendingPathComponent(rel)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let editorTheme = EditorTheme(theme: theme)
+        let baseAttrs: [NSAttributedString.Key: Any] = [
+            .font: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
+            .foregroundColor: editorTheme.defaultFG
+        ]
+        textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: baseAttrs))
+        currentMtime = mtime(of: url)
+
+        let ext = (rel as NSString).pathExtension
+        let stableRoot = root
+        let stableRel = rel
+        let cachedDiagnostics = diagnosticsFeature.current
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let spans = TreeSitterHighlighter.highlight(source: text, fileExtension: ext)
+            await MainActor.run {
+                guard let self = self,
+                      let s = self.textView?.textStorage,
+                      self.currentRoot == stableRoot,
+                      self.currentRelativePath == stableRel else { return }
+                s.beginEditing()
+                for span in spans {
+                    s.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
+                }
+                s.endEditing()
+                if !cachedDiagnostics.isEmpty {
+                    self.diagnosticsFeature.apply(cachedDiagnostics, to: s, theme: theme)
+                }
+            }
+        }
+
+        if let language = currentLanguage {
+            let manager = appState.lsp
+            Task {
+                await manager.didChange(
+                    worktreeRoot: stableRoot,
+                    fileURL: url,
+                    languageId: language,
+                    text: text
+                )
+            }
+        }
+    }
+
+    private func mtime(of url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
+
     /// Re-applies background, base text attributes, and tree-sitter
     /// highlights to the existing storage without re-reading the file or
     /// touching LSP state. Called when the theme changes mid-session.
@@ -233,6 +297,7 @@ final class CodeEditorCoordinator {
         let ext = (rel as NSString).pathExtension
         let stableRoot = root
         let stableRel = rel
+        let cachedDiagnostics = diagnosticsFeature.current
         Task.detached(priority: .userInitiated) { [weak self] in
             let spans = TreeSitterHighlighter.highlight(source: text, fileExtension: ext)
             await MainActor.run {
@@ -245,6 +310,14 @@ final class CodeEditorCoordinator {
                     s.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
                 }
                 s.endEditing()
+                // Reapply existing diagnostics — `setAttributes` above wiped
+                // the underline style/color for every diagnostic range, and
+                // we won't get another `publishDiagnostics` until something
+                // changes server-side. Without this, squiggles vanish on
+                // theme switch until the next batch happens to arrive.
+                if !cachedDiagnostics.isEmpty {
+                    self.diagnosticsFeature.apply(cachedDiagnostics, to: s, theme: theme)
+                }
             }
         }
     }
