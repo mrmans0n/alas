@@ -121,8 +121,18 @@ final class CodeEditorCoordinator {
                       let storage = self.textView?.textStorage,
                       self.currentRoot == stableRoot,
                       self.currentRelativePath == stableRel else { return }
+                let kwColor = editorTheme.attributes(for: .keyword)[.foregroundColor] as? NSColor
+                let fgColor = editorTheme.attributes(for: .plain)[.foregroundColor] as? NSColor
+                let firstFew = spans.prefix(5).map { "\($0.capture)@\($0.range)" }.joined(separator: ", ")
+                print("[highlight-debug] spans=\(spans.count), keyword=\(kwColor?.colorSpace.localizedName ?? "nil")/\(kwColor?.description ?? "nil"), plain=\(fgColor?.description ?? "nil"), first5=\(firstFew)")
+                storage.beginEditing()
                 for span in spans {
                     storage.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
+                }
+                storage.endEditing()
+                if let firstSpan = spans.first(where: { $0.capture == .keyword }) {
+                    let attrs = storage.attributes(at: firstSpan.range.location, effectiveRange: nil)
+                    print("[highlight-debug] readback first keyword: fg=\((attrs[.foregroundColor] as? NSColor)?.description ?? "nil")")
                 }
             }
         }

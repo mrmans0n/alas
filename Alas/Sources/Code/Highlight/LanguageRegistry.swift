@@ -3,31 +3,55 @@ import SwiftTreeSitter
 import TreeSitterSwift
 
 /// Maps a file extension to a `SwiftTreeSitter.Language` and the
-/// matching `highlights.scm` `Query`. Both lookups are cached at the
-/// call site of the highlighter (we don't cache here yet — one query
-/// per highlight call is fine for v1; if that becomes a hot path,
-/// memoize on `ext`).
+/// matching `highlights.scm` `Query`. `Language` and `Query` are immutable
+/// after construction, so we memoize them at module level — without this,
+/// `DiffTabView`'s per-line `tokenize` calls would re-scan the bundle and
+/// recompile the query thousands of times per render.
 enum LanguageRegistry {
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var languageCache: [String: Language] = [:]
+    nonisolated(unsafe) private static var queryCache: [String: Query] = [:]
+    nonisolated(unsafe) private static var queryMissCache: Set<String> = []
+
     static func language(forFileExtension ext: String) -> Language? {
-        switch ext.lowercased() {
-        case "swift":
-            return Language(language: tree_sitter_swift())
-        default:
-            return nil
+        let key = ext.lowercased()
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let cached = languageCache[key] { return cached }
+        let lang: Language?
+        switch key {
+        case "swift": lang = Language(language: tree_sitter_swift())
+        default:      lang = nil
         }
+        if let lang { languageCache[key] = lang }
+        return lang
     }
 
     /// Loads the highlight query bundled with the grammar package.
     static func highlightQuery(forExtension ext: String) -> Query? {
+        let key = ext.lowercased()
+        cacheLock.lock()
+        if let cached = queryCache[key] { cacheLock.unlock(); return cached }
+        if queryMissCache.contains(key) { cacheLock.unlock(); return nil }
+        cacheLock.unlock()
+
         guard let lang = language(forFileExtension: ext) else { return nil }
-        switch ext.lowercased() {
+        let query: Query?
+        switch key {
         case "swift":
-            return loadQuery(named: "highlights",
-                             bundleNameContains: "TreeSitterSwift",
-                             language: lang)
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterSwift",
+                              language: lang)
         default:
-            return nil
+            query = nil
         }
+
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let query {
+            queryCache[key] = query
+        } else {
+            queryMissCache.insert(key)
+        }
+        return query
     }
 
     /// The grammar packages ship pure C with no Swift symbol we can
@@ -44,8 +68,7 @@ enum LanguageRegistry {
             ?? bundle.url(forResource: name, withExtension: "scm",
                           subdirectory: "queries")
             ?? bundle.url(forResource: name, withExtension: "scm")
-        guard let url else { return nil }
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
         return try? Query(language: language, data: data)
     }
 
