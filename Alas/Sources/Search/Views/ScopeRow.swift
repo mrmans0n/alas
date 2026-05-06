@@ -16,6 +16,25 @@ struct ScopeRow: View {
                 pill(.allRepos,     enabled: true)
             }
             Spacer(minLength: 0)
+            if model.kind == .content {
+                HStack(spacing: 2) {
+                    optionToggle(
+                        glyph: "Aa",
+                        isOn: model.contentOptions.caseSensitive,
+                        onTap: { model.contentOptions.caseSensitive.toggle() }
+                    )
+                    optionToggle(
+                        glyph: "W",
+                        isOn: model.contentOptions.wholeWord,
+                        onTap: { model.contentOptions.wholeWord.toggle() }
+                    )
+                    optionToggle(
+                        glyph: ".*",
+                        isOn: model.contentOptions.regex,
+                        onTap: { model.contentOptions.regex.toggle() }
+                    )
+                }
+            }
             Text(countText)
                 .font(.system(size: 10.5).monospacedDigit())
                 .foregroundColor(theme.color("fg-faint"))
@@ -59,6 +78,28 @@ struct ScopeRow: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+    }
+
+    @ViewBuilder
+    private func optionToggle(glyph: String, isOn: Bool, onTap: @escaping () -> Void) -> some View {
+        Button(action: onTap) {
+            Text(glyph)
+                .font(.system(size: 10, design: .monospaced))
+                .frame(width: 22, height: 20)
+                .foregroundColor(isOn ? theme.color("accent") : theme.color("fg-faint"))
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(isOn ? theme.color("accent-soft") : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(
+                            isOn ? theme.color("accent").opacity(0.35) : theme.color("line"),
+                            lineWidth: 0.5
+                        )
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private var countText: String {

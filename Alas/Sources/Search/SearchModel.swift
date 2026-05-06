@@ -19,6 +19,12 @@ struct SearchEnvironment: Sendable {
     var statuses: @Sendable (SearchWorktree) async throws -> [String: GitStatusBadge]
 }
 
+struct SearchContentOptions: Equatable, Sendable {
+    var caseSensitive: Bool = false
+    var wholeWord: Bool = false
+    var regex: Bool = false
+}
+
 /// Bundle of what the dialog renders — keeps the model's published surface
 /// to one type so views observe a single property.
 struct SearchResults: Equatable, Sendable {
@@ -39,6 +45,9 @@ final class SearchModel {
     // seeding all the defaults.
     var query: String = "" {
         didSet { if isOpen { onQueryChanged() } }
+    }
+    var contentOptions: SearchContentOptions = SearchContentOptions() {
+        didSet { if kind == .content { reschedule() } }
     }
     var kind: SearchKind = .files {
         didSet { if isOpen { reschedule() } }
@@ -163,13 +172,12 @@ final class SearchModel {
         case .files:
             await runFileSearch(query: query, targets: targets)
         case .content:
-            // Phase 2 wires the Content tab visually but produces no hits;
-            // Phase 3 plugs in the ripgrep backend. For Phase 1 the Content
-            // tab isn't reachable from the UI, so this branch should be
-            // unreachable in practice — but keep results empty rather than
-            // crashing.
-            results.fileResults = []
-            results.contentGroups = []
+            // Phase 2 makes the Content tab reachable visually (via tabs,
+            // Tab key, or `> ` prefix) but produces no hits — Phase 3
+            // plugs in the ripgrep backend. Reset everything (including a
+            // stale partialFailureMessage carried over from a prior file
+            // search in `.allRepos`) so the Content tab starts clean.
+            results = SearchResults()
         }
 
         if selectedIndex >= totalResultRows {
