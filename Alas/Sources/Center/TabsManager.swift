@@ -143,6 +143,53 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    func closeOthers(worktreeId: String, keeping tabId: TabID) -> [TabID] {
+        guard var file = byWorktree[worktreeId] else { return [] }
+        let closed = file.tabs.filter { $0.id != tabId }.map(\.id)
+        guard let kept = file.tabs.first(where: { $0.id == tabId }) else { return [] }
+        file.tabs = [kept]
+        file.activeTabId = tabId
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return closed
+    }
+
+    func closeAll(worktreeId: String) -> [TabID] {
+        guard var file = byWorktree[worktreeId] else { return [] }
+        let closed = file.tabs.map(\.id)
+        file.tabs = []
+        file.activeTabId = nil
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return closed
+    }
+
+    func closeToLeft(worktreeId: String, of tabId: TabID) -> [TabID] {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return [] }
+        let closed = file.tabs[0..<idx].map(\.id)
+        if let active = file.activeTabId, closed.contains(active) {
+            file.activeTabId = tabId
+        }
+        file.tabs.removeSubrange(0..<idx)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return closed
+    }
+
+    func closeToRight(worktreeId: String, of tabId: TabID) -> [TabID] {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return [] }
+        let closed = file.tabs[(idx + 1)...].map(\.id)
+        if let active = file.activeTabId, closed.contains(active) {
+            file.activeTabId = tabId
+        }
+        file.tabs.removeSubrange((idx + 1)...)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return closed
+    }
+
     private func append(_ tab: Tab, to worktreeId: String) {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.tabs.append(tab)

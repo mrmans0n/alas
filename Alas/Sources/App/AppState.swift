@@ -125,13 +125,45 @@ final class AppState {
         if let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
            case .terminal(let s) = tab {
             harness.detector.unregister(sessionId: s.sessionId)
-            // HarnessService keeps the kind across detector clears (so hooks
-            // arriving after process exit still attribute correctly). Now
-            // that the session is going away for good, drop it.
             harness.forgetSession(s.sessionId)
             terminal.closeSession(id: s.sessionId)
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
+    }
+
+    private func cleanupTerminals(allTabs: [Tab], tabIds: [TabID]) {
+        for id in tabIds {
+            if let tab = allTabs.first(where: { $0.id == id }),
+               case .terminal(let s) = tab {
+                harness.detector.unregister(sessionId: s.sessionId)
+                harness.forgetSession(s.sessionId)
+                terminal.closeSession(id: s.sessionId)
+            }
+        }
+    }
+
+    func closeOtherTabs(worktreeId: String, keeping tabId: TabID) {
+        let allTabs = tabs.tabs(forWorktree: worktreeId)
+        let closed = tabs.closeOthers(worktreeId: worktreeId, keeping: tabId)
+        cleanupTerminals(allTabs: allTabs, tabIds: closed)
+    }
+
+    func closeAllTabs(worktreeId: String) {
+        let allTabs = tabs.tabs(forWorktree: worktreeId)
+        let closed = tabs.closeAll(worktreeId: worktreeId)
+        cleanupTerminals(allTabs: allTabs, tabIds: closed)
+    }
+
+    func closeTabsToLeft(worktreeId: String, of tabId: TabID) {
+        let allTabs = tabs.tabs(forWorktree: worktreeId)
+        let closed = tabs.closeToLeft(worktreeId: worktreeId, of: tabId)
+        cleanupTerminals(allTabs: allTabs, tabIds: closed)
+    }
+
+    func closeTabsToRight(worktreeId: String, of tabId: TabID) {
+        let allTabs = tabs.tabs(forWorktree: worktreeId)
+        let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
+        cleanupTerminals(allTabs: allTabs, tabIds: closed)
     }
 
     @discardableResult
