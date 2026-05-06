@@ -37,6 +37,19 @@ final class TabsManager {
     }
 
     @discardableResult
+    func replaceTerminalSession(worktreeId: String, tabId: TabID, sessionId: String) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx] else { return nil }
+        state.sessionId = sessionId
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func appendEditor(worktreeId: String, title: String, relativePath: String) -> Tab {
         let state = EditorTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
         let tab = Tab.editor(state)

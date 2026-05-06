@@ -35,7 +35,7 @@ enum Tab: Codable, Equatable, Identifiable {
 struct TerminalTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String       // e.g. branch name, "main", or "+ N"
-    let sessionId: String   // matches TerminalSession.id (re-attached on launch)
+    var sessionId: String   // matches TerminalSession.id (re-attached on launch)
 }
 
 struct EditorTabState: Codable, Equatable, Identifiable {

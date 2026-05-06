@@ -112,6 +112,15 @@ final class AppState {
         return tabs.appendTerminal(worktreeId: worktree.id, title: worktree.branch, sessionId: session.id)
     }
 
+    @discardableResult
+    func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID, sessionId: String) throws -> Tab? {
+        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab,
+              state.sessionId == sessionId else { return nil }
+        if terminal.registry.session(for: sessionId) != nil { return tab }
+        return try replaceMissingTerminalSession(worktreeId: worktreeId, tab: state)
+    }
+
     func closeTab(worktreeId: String, tabId: TabID) {
         if let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
            case .terminal(let s) = tab {
@@ -123,5 +132,42 @@ final class AppState {
             terminal.closeSession(id: s.sessionId)
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
+    }
+
+    @discardableResult
+    private func replaceMissingTerminalSession(worktreeId: String, tab: TerminalTabState) throws -> Tab {
+        guard let worktree = worktree(withId: worktreeId),
+              let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            throw NSError(domain: "AppState", code: 2)
+        }
+
+        let oldSessionId = tab.sessionId
+        let session = try terminal.openSession(
+            worktree: worktree, project: project,
+            cfg: config.terminal, theme: themeStore.current
+        )
+        harness.detector.unregister(sessionId: oldSessionId)
+        harness.forgetSession(oldSessionId)
+        harness.detector.register(sessionId: session.id) { [weak session] in
+            session?.surface.foregroundPid
+        }
+        guard let replacement = tabs.replaceTerminalSession(
+            worktreeId: worktreeId,
+            tabId: tab.id,
+            sessionId: session.id
+        ) else {
+            terminal.closeSession(id: session.id)
+            throw NSError(domain: "AppState", code: 3)
+        }
+        return replacement
+    }
+
+    private func worktree(withId id: String) -> Worktree? {
+        for project in projects {
+            if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
+                return worktree
+            }
+        }
+        return nil
     }
 }
