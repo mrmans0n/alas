@@ -6,6 +6,12 @@ struct TabBarView: View {
     let harnessLookup: (TabID) -> (kind: HarnessKind, state: String)?
     let onActivate: (TabID) -> Void
     let onClose: (TabID) -> Void
+    let onCloseOthers: (TabID) -> Void
+    let onCloseAll: () -> Void
+    let onCloseToLeft: (TabID) -> Void
+    let onCloseToRight: (TabID) -> Void
+    let onCopyPath: (TabID) -> Void
+    let onCopyRelativePath: (TabID) -> Void
     let onNewTerminal: () -> Void
     let onNewEditor: () -> Void
     let onNewDiff: () -> Void
@@ -13,7 +19,7 @@ struct TabBarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(tabs) { tab in
+            ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
                 TabButton(
                     tab: tab,
                     active: tab.id == activeId,
@@ -22,6 +28,21 @@ struct TabBarView: View {
                     onActivate: { onActivate(tab.id) },
                     onClose: { onClose(tab.id) }
                 )
+                .contextMenu {
+                    Button("Close") { onClose(tab.id) }
+                    Button("Close Other Tabs") { onCloseOthers(tab.id) }
+                        .disabled(tabs.count <= 1)
+                    Button("Close All Tabs") { onCloseAll() }
+                    Button("Close Tabs to the Left") { onCloseToLeft(tab.id) }
+                        .disabled(idx == 0)
+                    Button("Close Tabs to the Right") { onCloseToRight(tab.id) }
+                        .disabled(idx == tabs.count - 1)
+                    Divider()
+                    if tab.relativeFilePath != nil {
+                        Button("Copy Path") { onCopyPath(tab.id) }
+                        Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
+                    }
+                }
             }
             Spacer()
             HStack(spacing: 4) {

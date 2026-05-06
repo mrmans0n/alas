@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct CenterPaneView: View {
@@ -22,6 +23,23 @@ struct CenterPaneView: View {
                 },
                 onActivate: { id in state.tabs.activate(worktreeId: worktree.id, tabId: id) },
                 onClose:    { id in state.closeTab(worktreeId: worktree.id, tabId: id) },
+                onCloseOthers: { id in state.closeOtherTabs(worktreeId: worktree.id, keeping: id) },
+                onCloseAll: { state.closeAllTabs(worktreeId: worktree.id) },
+                onCloseToLeft: { id in state.closeTabsToLeft(worktreeId: worktree.id, of: id) },
+                onCloseToRight: { id in state.closeTabsToRight(worktreeId: worktree.id, of: id) },
+                onCopyPath: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          let rel = tab.relativeFilePath else { return }
+                    let absolute = (worktree.path as NSString).appendingPathComponent(rel)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(absolute, forType: .string)
+                },
+                onCopyRelativePath: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          let rel = tab.relativeFilePath else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(rel, forType: .string)
+                },
                 onNewTerminal: openTerminal,
                 onNewEditor: { _ = state.tabs.appendEditor(worktreeId: worktree.id, title: "untitled", relativePath: "") },
                 onNewDiff:   { _ = state.tabs.appendDiff(worktreeId: worktree.id, title: "untitled", relativePath: "") }

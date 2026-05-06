@@ -30,6 +30,13 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff:     return "diff"
         }
     }
+
+    var relativeFilePath: String? {
+        switch self {
+        case .editor(let s): return s.relativePath
+        default:             return nil
+        }
+    }
 }
 
 struct TerminalTabState: Codable, Equatable, Identifiable {
