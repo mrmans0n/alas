@@ -38,54 +38,89 @@ extension Process {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
+        // Resolve when the child exits, regardless of how — clean exit,
+        // signal, or our SIGTERM via the watchdog. Setting the handler
+        // *before* `run()` means we never miss the event.
+        let exit = ExitGate()
+        process.terminationHandler = { _ in exit.didExit() }
+
+        // Read stdout/stderr via readability handlers. We deliberately
+        // avoid `readDataToEndOfFile` on a `Task.detached` because on
+        // macos-26 CI it has been observed to hang past child exit
+        // (parent's copy of the pipe write end can keep the reader
+        // blocked, and forcing-close the read end while a syscall is in
+        // flight is racy). Handlers buffer chunks as they arrive and
+        // detach themselves on EOF, so once the child exits and the
+        // kernel delivers EOF we stop reading immediately.
+        let outAccum = ByteAccumulator()
+        let errAccum = ByteAccumulator()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+            } else {
+                outAccum.append(data)
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                errAccum.markClosed()
+            } else {
+                errAccum.append(data)
+            }
+        }
+
         do {
             try process.run()
         } catch {
             throw ProcessError.launchFailed(error.localizedDescription)
         }
 
-        // Watchdog: if the process is still running past `timeout`, SIGTERM
-        // it AND force-close our read ends of the pipes. The pipe-close is
-        // critical: `git worktree remove` (and other commands) can spawn
-        // helpers that inherit the pipe write ends; SIGTERM on the direct
-        // child leaves those helpers alive, the kernel never delivers EOF,
-        // and `readDataToEndOfFile` blocks forever. Closing the read FD on
-        // our side makes any in-flight read unblock immediately.
+        // Close the parent's copy of the pipe write ends now that the
+        // child has dup'd them. Without this, the kernel keeps reporting
+        // "writers still open" on the read side and the readability
+        // handler never sees EOF after the child exits.
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+
+        // Watchdog. If we time out, SIGTERM the process; the
+        // terminationHandler will fire and `exit.wait()` returns.
         let watchdog = Task {
-            do {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-            } catch {
-                return  // cancelled — process exited cleanly
-            }
-            // Visible marker so a CI hang past 30s is unambiguously diagnosed.
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if Task.isCancelled { return }
             fputs(
                 "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                 stderr
             )
             if process.isRunning { process.terminate() }
-            try? outPipe.fileHandleForReading.close()
-            try? errPipe.fileHandleForReading.close()
         }
 
-        async let outData = Task.detached { outPipe.fileHandleForReading.readDataToEndOfFile() }.value
-        async let errData = Task.detached { errPipe.fileHandleForReading.readDataToEndOfFile() }.value
-        async let termination: Void = Task.detached { process.waitUntilExit() }.value
-
-        let out = await outData
-        let err = await errData
-        await termination
-
-        let timedOut = !watchdog.isCancelled && process.terminationReason == .uncaughtSignal
+        await exit.wait()
         watchdog.cancel()
 
+        // Brief grace period for any in-flight readability dispatches to
+        // land before we snapshot. EOF after exit is queued in the kernel
+        // pipe immediately, but the handler dispatch has some tail
+        // latency under CI load — 50ms is enough in practice. Using a
+        // plain `Task.sleep` instead of an `NSCondition` avoids a
+        // user-initiated QoS thread waiting on a default-QoS handler
+        // (the priority inversion that prompted past CI hangs).
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+
+        let timedOut = process.terminationReason == .uncaughtSignal
         if timedOut {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
         }
 
         return ProcessResult(
             exitCode: process.terminationStatus,
-            stdout: String(data: out, encoding: .utf8) ?? "",
-            stderr: String(data: err, encoding: .utf8) ?? ""
+            stdout: String(data: outAccum.snapshot(), encoding: .utf8) ?? "",
+            stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? ""
         )
     }
 
@@ -96,5 +131,64 @@ extension Process {
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
         try await run("/usr/bin/env", args: ["git"] + args, cwd: cwd, timeout: timeout)
+    }
+}
+
+/// Resolves once `didExit()` is called. Safe to call `didExit` before any
+/// awaiter has parked (handler runs on a background queue; the awaiter
+/// arrives from the calling task).
+private final class ExitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var exited = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func didExit() {
+        lock.lock()
+        if let c = continuation {
+            continuation = nil
+            lock.unlock()
+            c.resume()
+            return
+        }
+        exited = true
+        lock.unlock()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if exited {
+                lock.unlock()
+                cont.resume()
+                return
+            }
+            continuation = cont
+            lock.unlock()
+        }
+    }
+}
+
+/// Lock-protected `Data` buffer for output collected from the readability
+/// handler.
+private final class ByteAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    func markClosed() {
+        // No-op — the snapshot path takes whatever we've accumulated.
+        // Kept for symmetry with `append` so the handler logic stays
+        // self-documenting.
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
     }
 }
