@@ -107,24 +107,9 @@ extension Process {
         // congested dispatch queue. The accumulators resolve their
         // continuation when the handler delivers an empty buffer (EOF);
         // we cap the wait at 2s to bound a worst-case stuck handler.
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await outAccum.waitForClose(); return true }
-            group.addTask { await errAccum.waitForClose(); return true }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                return false
-            }
-            var drained = 0
-            while let pipeDone = await group.next() {
-                if pipeDone {
-                    drained += 1
-                    if drained == 2 { break }
-                } else {
-                    break  // 2-second deadline hit; bail with what we have.
-                }
-            }
-            group.cancelAll()
-        }
+        async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        _ = await (outClosed, errClosed)
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
 
@@ -193,7 +178,7 @@ private final class ByteAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     private var closed = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
     func append(_ chunk: Data) {
         lock.lock()
@@ -203,24 +188,39 @@ private final class ByteAccumulator: @unchecked Sendable {
 
     func markClosed() {
         lock.lock()
-        let conts = waiters
-        waiters = []
+        let conts = Array(waiters.values)
+        waiters = [:]
         closed = true
         lock.unlock()
-        for c in conts { c.resume() }
+        for c in conts { c.resume(returning: true) }
     }
 
-    func waitForClose() async {
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+    func waitForClose(timeoutNanoseconds: UInt64) async -> Bool {
+        await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             lock.lock()
             if closed {
                 lock.unlock()
-                cont.resume()
+                cont.resume(returning: true)
                 return
             }
-            waiters.append(cont)
+            let id = UUID()
+            waiters[id] = cont
             lock.unlock()
+            Task {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                self.resumeTimedOutWaiter(id: id)
+            }
         }
+    }
+
+    private func resumeTimedOutWaiter(id: UUID) {
+        lock.lock()
+        guard let cont = waiters.removeValue(forKey: id) else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+        cont.resume(returning: false)
     }
 
     func snapshot() -> Data {

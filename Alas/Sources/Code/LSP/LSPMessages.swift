@@ -125,6 +125,13 @@ struct LSPPosition: Codable, Hashable, Sendable {
 struct LSPRange: Codable, Hashable, Sendable {
     let start: LSPPosition
     let end: LSPPosition
+
+    var json: [String: Any] {
+        [
+            "start": ["line": start.line, "character": start.character],
+            "end": ["line": end.line, "character": end.character]
+        ]
+    }
 }
 
 struct LSPLocation: Codable, Hashable, Sendable {

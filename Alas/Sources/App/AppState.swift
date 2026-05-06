@@ -13,14 +13,15 @@ final class AppState {
     let terminal = TerminalService()
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
-    // Registry is built lazily once `config` has been hydrated so user-defined
-    // language servers from disk get picked up. v1 only reloads on relaunch.
-    // @ObservationIgnored is required because `@Observable` doesn't support
-    // `lazy var` (the macro can't synthesize an init accessor for it).
     @ObservationIgnored
-    lazy var lsp: WorkspaceLSPManager = WorkspaceLSPManager(
-        registry: LanguageServerRegistry(userDefined: config.code.languageServers)
-    )
+    private var lspManager: WorkspaceLSPManager?
+
+    var lsp: WorkspaceLSPManager {
+        if let lspManager { return lspManager }
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: config.code.languageServers))
+        lspManager = manager
+        return manager
+    }
 
     private let store = PersistenceStore()
 
@@ -59,6 +60,7 @@ final class AppState {
 
     func saveConfig() {
         try? store.write(config, to: Paths.appConfigFile)
+        lspManager?.updateRegistry(LanguageServerRegistry(userDefined: config.code.languageServers))
     }
 
     func saveProjects() {

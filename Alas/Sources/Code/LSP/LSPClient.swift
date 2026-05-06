@@ -2,6 +2,7 @@ import Foundation
 
 actor LSPClient {
     enum State { case starting, initializing, ready, dead }
+    enum TextDocumentSyncKind: Int { case none = 0, full = 1, incremental = 2 }
 
     let language: String
     let rootURI: String
@@ -9,6 +10,7 @@ actor LSPClient {
     private(set) var state: State = .starting
     private var nextId: Int = 0
     private var pending: [LSPID: CheckedContinuation<Data?, Error>] = [:]
+    private var textDocumentSyncKind: TextDocumentSyncKind = .full
     // `AsyncStream` is single-consumer — values are delivered to whichever
     // iterator races to read first, not broadcast. Multiple coordinators
     // sharing one client (two tabs in the same worktree/language) used to
@@ -62,7 +64,8 @@ actor LSPClient {
                 ]
             ] as [String: Any]
         ]
-        _ = try await sendRequest(method: "initialize", params: params)
+        let rawResult = try await sendRequest(method: "initialize", params: params)
+        textDocumentSyncKind = Self.decodeTextDocumentSyncKind(from: rawResult)
         try sendNotification(method: "initialized", params: [String: Any]())
         state = .ready
     }
@@ -84,10 +87,21 @@ actor LSPClient {
     /// Full-document content sync. We don't keep a local edit history, so
     /// every change is sent as a single replacement of the whole document.
     /// Caller is responsible for monotonic version numbers per URI.
-    func didChange(uri: String, version: Int, text: String) throws {
+    func didChange(uri: String, version: Int, text: String, previousText: String?) throws {
+        guard textDocumentSyncKind != .none else { return }
+        let changes: [[String: Any]]
+        if textDocumentSyncKind == .incremental, let previousText {
+            changes = [[
+                "range": Self.fullRange(for: previousText).json,
+                "rangeLength": (previousText as NSString).length,
+                "text": text
+            ]]
+        } else {
+            changes = [["text": text]]
+        }
         try sendNotification(method: "textDocument/didChange", params: [
             "textDocument": ["uri": uri, "version": version],
-            "contentChanges": [["text": text]]
+            "contentChanges": changes
         ])
     }
 
@@ -155,6 +169,58 @@ actor LSPClient {
                 cont.resume(throwing: error)
             }
         }
+    }
+
+    private static func decodeTextDocumentSyncKind(from data: Data?) -> TextDocumentSyncKind {
+        guard let data else { return .full }
+        struct InitializeResult: Decodable {
+            let capabilities: ServerCapabilities
+        }
+        struct ServerCapabilities: Decodable {
+            let textDocumentSync: TextDocumentSync?
+        }
+        enum TextDocumentSync: Decodable {
+            case kind(TextDocumentSyncKind)
+
+            init(from decoder: Decoder) throws {
+                let single = try decoder.singleValueContainer()
+                if let raw = try? single.decode(Int.self) {
+                    self = .kind(TextDocumentSyncKind(rawValue: raw) ?? .full)
+                    return
+                }
+                let object = try decoder.container(keyedBy: CodingKeys.self)
+                let raw = try object.decodeIfPresent(Int.self, forKey: .change) ?? TextDocumentSyncKind.full.rawValue
+                self = .kind(TextDocumentSyncKind(rawValue: raw) ?? .full)
+            }
+
+            enum CodingKeys: String, CodingKey { case change }
+        }
+
+        guard let result = try? JSONDecoder().decode(InitializeResult.self, from: data),
+              let sync = result.capabilities.textDocumentSync else {
+            return .full
+        }
+        switch sync {
+        case .kind(let kind): return kind
+        }
+    }
+
+    private static func fullRange(for text: String) -> LSPRange {
+        let nsText = text as NSString
+        var line = 0
+        var lineStart = 0
+        var index = 0
+        while index < nsText.length {
+            if nsText.character(at: index) == 10 {
+                line += 1
+                lineStart = index + 1
+            }
+            index += 1
+        }
+        return LSPRange(
+            start: LSPPosition(line: 0, character: 0),
+            end: LSPPosition(line: line, character: nsText.length - lineStart)
+        )
     }
 
     private nonisolated func sendNotification(method: String, params: Any?) throws {

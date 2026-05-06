@@ -31,21 +31,34 @@ final class HoverFeature {
     }
 
     private func show(at point: NSPoint) async {
-        guard let textView, let client = getClient(), let uri = getURI() else { return }
-        guard let position = textView.lspPosition(at: point) else { return }
+        guard let textView, let client = getClient(), let uri = getURI() else {
+            closePopover()
+            return
+        }
+        guard let position = textView.lspPosition(at: point) else {
+            closePopover()
+            return
+        }
         let result: LSPHoverResult?
         do {
             result = try await client.hover(uri: uri, position: position)
         } catch {
+            closePopover()
             return
         }
-        guard let result else { return }
+        guard let result else {
+            closePopover()
+            return
+        }
         let body: String
         switch result.contents {
         case .markupContent(_, let value): body = value
         case .plain(let s):                body = s
         }
-        guard !body.isEmpty else { return }
+        guard !body.isEmpty else {
+            closePopover()
+            return
+        }
         let textRect = textView.firstRect(for: position) ?? CGRect(origin: point, size: .zero)
         await MainActor.run {
             self.presentPopover(text: body, anchor: textRect, in: textView)
@@ -63,6 +76,11 @@ final class HoverFeature {
         popover.contentViewController = host
         popover.show(relativeTo: anchor, of: view, preferredEdge: .maxY)
         self.popover = popover
+    }
+
+    private func closePopover() {
+        popover?.close()
+        popover = nil
     }
 }
 

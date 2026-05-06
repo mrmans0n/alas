@@ -69,4 +69,40 @@ struct LSPClientLifecycleTests {
         if case .plain(let s) = result?.contents { #expect(s == "hi") } else { Issue.record("wrong markup") }
         transport.finish()
     }
+
+    @Test("incremental text sync sends a ranged full replacement")
+    func incrementalTextSyncUsesRange() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":2}}}"#)
+            }
+        }
+        try await client.initialize()
+        try await client.didChange(uri: "file:///tmp/x.swift", version: 2, text: "let y = 2\n", previousText: "let x = 1\n")
+        let change = transport.sent.last ?? ""
+        #expect(change.contains(#""contentChanges":[{"#))
+        #expect(change.contains(#""range":{"#))
+        #expect(change.contains(#""rangeLength":10"#))
+        #expect(change.contains(#""text":"let y = 2\n""#))
+        transport.finish()
+    }
+
+    @Test("full text sync keeps full-document changes")
+    func fullTextSyncUsesFullDocumentPayload() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
+            }
+        }
+        try await client.initialize()
+        try await client.didChange(uri: "file:///tmp/x.swift", version: 2, text: "let y = 2\n", previousText: "let x = 1\n")
+        let change = transport.sent.last ?? ""
+        #expect(change.contains(#""contentChanges":[{"text":"let y = 2\n"}]"#))
+        #expect(!change.contains(#""range":"#))
+        transport.finish()
+    }
 }

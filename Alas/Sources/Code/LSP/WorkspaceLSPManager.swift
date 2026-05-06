@@ -32,12 +32,17 @@ final class WorkspaceLSPManager {
         var openedURIs: Set<String>
         var versions: [String: Int]   // last didChange version per URI
         var pendingOpenText: [String: String]  // latest text supplied to a not-yet-sent didOpen
+        var texts: [String: String]  // last text version sent to the server per URI
     }
 
     private var holders: [Key: Holder] = [:]
-    private let registry: LanguageServerRegistry
+    private var registry: LanguageServerRegistry
 
     init(registry: LanguageServerRegistry) {
+        self.registry = registry
+    }
+
+    func updateRegistry(_ registry: LanguageServerRegistry) {
         self.registry = registry
     }
 
@@ -80,7 +85,7 @@ final class WorkspaceLSPManager {
             // content while the server was still initializing.)
             var pending = existing.pendingOpenText
             if !existing.openedURIs.contains(uri) { pending[uri] = text }
-            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending)
+            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts)
             client = existing.client
             ready = existing.ready
             isFirstOpener = false
@@ -91,7 +96,7 @@ final class WorkspaceLSPManager {
             let task = Task<Bool, Never> {
                 do { try await newClient.initialize(); return true } catch { return false }
             }
-            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text])
+            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:])
             client = newClient
             ready = task
             isFirstOpener = true
@@ -139,6 +144,7 @@ final class WorkspaceLSPManager {
                 holder.openedURIs.insert(uri)
                 holder.versions[uri] = 1
                 holder.pendingOpenText.removeValue(forKey: uri)
+                holder.texts[uri] = openText
                 holders[key] = holder
             }
             try? await client.didOpen(
@@ -175,9 +181,11 @@ final class WorkspaceLSPManager {
         guard initOk else { return }
         guard var cur = holders[key], cur.openedURIs.contains(uri) else { return }
         let nextVersion = (cur.versions[uri] ?? 1) + 1
+        let previousText = cur.texts[uri]
         cur.versions[uri] = nextVersion
+        cur.texts[uri] = text
         holders[key] = cur
-        try? await cur.client.didChange(uri: uri, version: nextVersion, text: text)
+        try? await cur.client.didChange(uri: uri, version: nextVersion, text: text, previousText: previousText)
     }
 
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {
@@ -209,6 +217,9 @@ final class WorkspaceLSPManager {
             try? await cur.client.didClose(uri: uri)
             if var c = holders[key] {
                 c.openedURIs.remove(uri)
+                c.versions.removeValue(forKey: uri)
+                c.pendingOpenText.removeValue(forKey: uri)
+                c.texts.removeValue(forKey: uri)
                 holders[key] = c
             }
         }
