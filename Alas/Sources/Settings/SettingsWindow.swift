@@ -32,6 +32,7 @@ struct SettingsWindow: View {
                     case .general:    GeneralPane(state: state)
                     case .worktrees:  WorktreesPane(state: state)
                     case .terminal:   TerminalPane(state: state)
+                    case .code:       CodePane(state: state)
                     case .appearance: AppearancePane(state: state)
                     }
                 }

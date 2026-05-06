@@ -13,6 +13,7 @@
 		0294EF678CFA762C8B5D381B /* HookInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 954060BD47A1EFF3105F44EB /* HookInstallerTests.swift */; };
 		02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6599EB47850D1E13ACF0EB /* NewProjectDialog.swift */; };
 		043B6662FCBEC5969946D61A /* HookWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7116359F27BF0A139E0F643B /* HookWatcher.swift */; };
+		0C54356D0ACEDD5275FFB6EB /* CodeLanguageDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A727D24652E45B98C10917F8 /* CodeLanguageDetailView.swift */; };
 		0CF488290CC525EA7C11A43C /* DiffParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE26221DC8E8837FFEB87474 /* DiffParserTests.swift */; };
 		0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC01971BF41E6D0B9B317CF /* CodeTextView.swift */; };
 		1066AF44E2FCA9B1B2DDE9D7 /* EditorTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8B52175A7F6144B4C52010 /* EditorTabView.swift */; };
@@ -27,6 +28,7 @@
 		1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */; };
 		24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E6D61B213F3378243B4A26 /* AlasField.swift */; };
 		25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */; };
+		28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93CDC9895F48619E97461875 /* CodePane.swift */; };
 		2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768D12909DD5233659AC4E03 /* RepoGroupView.swift */; };
 		2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */; };
 		32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */; };
@@ -257,12 +259,14 @@
 		91C1705E68E97111E85D83F3 /* RightPaneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneState.swift; sourceTree = "<group>"; };
 		91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusParser.swift; sourceTree = "<group>"; };
 		932F0FEE5330D5B4470C1874 /* DiagnosticsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsFeature.swift; sourceTree = "<group>"; };
+		93CDC9895F48619E97461875 /* CodePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodePane.swift; sourceTree = "<group>"; };
 		954060BD47A1EFF3105F44EB /* HookInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookInstallerTests.swift; sourceTree = "<group>"; };
 		9C45A26ADB0D1CCFBB5BEAE8 /* TerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSession.swift; sourceTree = "<group>"; };
 		A218B5125FC963339E40605E /* TabsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManager.swift; sourceTree = "<group>"; };
 		A35E05B1FB7CC5229ACCB065 /* LSPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPClient.swift; sourceTree = "<group>"; };
 		A6926DACD1903E1AAAF66F48 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		A6C0DDAE33A9928438C65182 /* DebounceTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimer.swift; sourceTree = "<group>"; };
+		A727D24652E45B98C10917F8 /* CodeLanguageDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeLanguageDetailView.swift; sourceTree = "<group>"; };
 		A8820E4289EEB1ADCA9E490F /* HookEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookEventTests.swift; sourceTree = "<group>"; };
 		AAEDACEB27E6AF219054496E /* DialogChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialogChrome.swift; sourceTree = "<group>"; };
 		AE0A6F237480EE72CB8DBE28 /* TitlelessWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitlelessWindowTests.swift; sourceTree = "<group>"; };
@@ -517,6 +521,8 @@
 			children = (
 				E63FA8816D43E1A08AE8164B /* .gitkeep */,
 				4B450918CC98255AD9170586 /* AppearancePane.swift */,
+				A727D24652E45B98C10917F8 /* CodeLanguageDetailView.swift */,
+				93CDC9895F48619E97461875 /* CodePane.swift */,
 				0240C5961343C3042D865570 /* GeneralPane.swift */,
 				F3678A2904CBBFAC939C9275 /* SettingsGroup.swift */,
 				515B67124EA11DDCC29B6E36 /* SettingsNavView.swift */,
@@ -927,6 +933,8 @@
 				EF2540A211FBE06D7B30FC61 /* Code.swift in Sources */,
 				41F6712EA71CC9AF6AB7ED94 /* CodeEditorCoordinator.swift in Sources */,
 				A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */,
+				0C54356D0ACEDD5275FFB6EB /* CodeLanguageDetailView.swift in Sources */,
+				28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */,
 				0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */,
 				49C8C4C8B34444953FBA1809 /* DebounceTimer.swift in Sources */,
 				5711B2BE2D70220A4BED5B2B /* DefinitionFeature.swift in Sources */,
