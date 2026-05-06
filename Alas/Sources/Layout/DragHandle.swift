@@ -43,6 +43,11 @@ struct DragHandle: View {
                         }
                     }
             )
+            .onDisappear {
+                if cursorPushed {
+                    popCursor()
+                }
+            }
     }
 
     private func pushCursor() {
