@@ -52,7 +52,8 @@ struct SettingsWindow: View {
             .background(theme.color("bg-2"))
             .overlay(Divider().opacity(0.5), alignment: .top)
         }
-        .frame(width: 880, height: 580)
+        .frame(width: 880)
+        .frame(maxHeight: .infinity)
         .background(theme.color("bg-1"))
         .background(WindowConfigurator())
         .environment(\.theme, theme)
