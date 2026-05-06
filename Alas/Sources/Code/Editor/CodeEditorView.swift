@@ -27,15 +27,31 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(theme.color("bg-1"))
 
-        // Code editor pattern: textView grows in BOTH directions to fit its
-        // content, independent of the scroll view's content size. Pass a
-        // non-zero initial frame and a `nil` text container so NSTextView
-        // creates a properly-configured one for us; we then override the
-        // container's tracking + size below. `autoresizingMask = []` is
-        // intentional — if the textView tracked the scrollView's width it
-        // would soft-wrap instead of scrolling horizontally.
+        // Build an explicit TextKit 1 chain. On macOS 14+ NSTextView defaults
+        // to TextKit 2 (NSTextLayoutManager + NSTextContentStorage) when it
+        // creates its own container — and in that mode the legacy
+        // `textView.textStorage` returns nil, so any code that mutates it
+        // silently no-ops. We rely on `textStorage.setAttributedString(...)`
+        // and `addAttributes(_:range:)` for highlights and diagnostics, so
+        // we need TextKit 1. Wiring the chain manually (storage → layout
+        // manager → container → text view) guarantees that.
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        let textContainer = NSTextContainer(size: containerSize)
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
+        layoutManager.addTextContainer(textContainer)
+
+        // Two-direction-scroll code editor: the textView grows to fit its
+        // content (longest line = width, total lines = height); it does
+        // NOT track the scroll view's size. Hence autoresizingMask = [].
         let initialFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
-        let textView = CodeTextView(frame: initialFrame, textContainer: nil)
+        let textView = CodeTextView(frame: initialFrame, textContainer: textContainer)
         textView.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         textView.drawsBackground = true
@@ -44,13 +60,6 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = true
         textView.autoresizingMask = []
-
-        textView.textContainer?.containerSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.textContainer?.widthTracksTextView = false
-        textView.textContainer?.heightTracksTextView = false
 
         scroll.documentView = textView
 
