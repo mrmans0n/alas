@@ -47,7 +47,9 @@ final class WorkspaceLSPManager {
     /// closed before init completed).
     @discardableResult
     func openDocument(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async -> LSPClient? {
-        let key = Key(root: worktreeRoot.path, language: languageId)
+        guard let entry = registry.entry(forLanguage: languageId) else { return nil }
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, language: languageId)
         let uri = fileURL.lspURI
         let client: LSPClient
         let ready: Task<Bool, Never>
@@ -58,10 +60,9 @@ final class WorkspaceLSPManager {
             client = existing.client
             ready = existing.ready
         } else {
-            guard let entry = registry.entry(forLanguage: languageId) else { return nil }
             let spawn = Self.resolveSpawn(command: entry.command, args: entry.args)
             let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: entry.env.isEmpty ? nil : entry.env)
-            let newClient = LSPClient(transport: transport, language: languageId, rootURI: worktreeRoot.lspURI)
+            let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
             let task = Task<Bool, Never> {
                 do { try await newClient.initialize(); return true } catch { return false }
             }
@@ -108,7 +109,9 @@ final class WorkspaceLSPManager {
     }
 
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {
-        let key = Key(root: worktreeRoot.path, language: languageId)
+        let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
+        let key = Key(root: lspRoot.path, language: languageId)
         let uri = fileURL.lspURI
         guard var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else { return }
         var refs = holder.refsByURI
@@ -145,8 +148,14 @@ final class WorkspaceLSPManager {
         }
     }
 
-    func client(forWorktree root: URL, language: String) -> LSPClient? {
-        holders[Key(root: root.path, language: language)]?.client
+    /// Returns the live client serving `fileURL` for `language`, if any.
+    /// Resolves the LSP root via the configured `rootMarkers` so a nested
+    /// package's client is found correctly even when the caller only knows
+    /// the worktree root.
+    func client(forFile fileURL: URL, worktreeRoot: URL, language: String) -> LSPClient? {
+        let markers = registry.entry(forLanguage: language)?.rootMarkers ?? []
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
+        return holders[Key(root: lspRoot.path, language: language)]?.client
     }
 
     /// Maps a file extension to its configured language id, or nil if no
@@ -173,5 +182,67 @@ final class WorkspaceLSPManager {
             return Spawn(executable: URL(fileURLWithPath: command), arguments: args)
         }
         return Spawn(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: [command] + args)
+    }
+
+    // MARK: - Root resolution
+
+    /// Walks up from `fileURL`'s parent toward `worktreeRoot`, returning the
+    /// nearest ancestor directory that contains any of the `markers`. This
+    /// lets sourcekit-lsp (or any other server with `rootMarkers` set in
+    /// `LanguageServerRegistry`) initialize at the proper package/project
+    /// root for files in nested packages — `Package.swift`, `*.xcodeproj`,
+    /// `.git`, etc. Falls back to `worktreeRoot` when no marker is found.
+    /// Patterns may contain `*` for simple globs.
+    static func resolveLSPRoot(fileURL: URL, worktreeRoot: URL, markers: [String]) -> URL {
+        guard !markers.isEmpty else { return worktreeRoot }
+        let fm = FileManager.default
+        let worktreePath = worktreeRoot.standardizedFileURL.path
+        var dir = fileURL.deletingLastPathComponent().standardizedFileURL
+        // Bound the climb to the worktree — never escape upward.
+        while dir.path.hasPrefix(worktreePath) {
+            if directory(dir, contains: markers, fm: fm) {
+                return dir
+            }
+            if dir.path == worktreePath { break }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }
+            dir = parent
+        }
+        return worktreeRoot
+    }
+
+    private static func directory(_ dir: URL, contains markers: [String], fm: FileManager) -> Bool {
+        var entries: [String]?
+        for marker in markers {
+            if marker.contains("*") {
+                if entries == nil { entries = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] }
+                if let entries, entries.contains(where: { glob(marker, $0) }) { return true }
+            } else {
+                if fm.fileExists(atPath: dir.appendingPathComponent(marker).path) { return true }
+            }
+        }
+        return false
+    }
+
+    /// Minimal `*` glob — covers the realistic rootMarker shapes
+    /// (`*.xcodeproj`, `*.json`, `Package.*`) without pulling in regex or
+    /// `fnmatch(3)`. Multiple `*` are supported; `?` and character classes
+    /// are not.
+    private static func glob(_ pattern: String, _ name: String) -> Bool {
+        if !pattern.contains("*") { return pattern == name }
+        let parts = pattern.split(separator: "*", omittingEmptySubsequences: false).map(String.init)
+        var idx = name.startIndex
+        if let first = parts.first, !first.isEmpty {
+            guard name.hasPrefix(first) else { return false }
+            idx = name.index(idx, offsetBy: first.count)
+        }
+        if let last = parts.last, parts.count > 1, !last.isEmpty {
+            guard name.hasSuffix(last) else { return false }
+        }
+        for chunk in parts.dropFirst().dropLast() where !chunk.isEmpty {
+            guard let r = name.range(of: chunk, range: idx..<name.endIndex) else { return false }
+            idx = r.upperBound
+        }
+        return true
     }
 }

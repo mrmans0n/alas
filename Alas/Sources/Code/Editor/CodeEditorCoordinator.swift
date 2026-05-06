@@ -36,8 +36,8 @@ final class CodeEditorCoordinator {
         hover = HoverFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
-                return self.appState.lsp.client(forWorktree: root, language: lang)
+                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath, let lang = self.currentLanguage else { return nil }
+                return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
                 guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
@@ -47,8 +47,8 @@ final class CodeEditorCoordinator {
         definition = DefinitionFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
-                return self.appState.lsp.client(forWorktree: root, language: lang)
+                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath, let lang = self.currentLanguage else { return nil }
+                return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
                 guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
