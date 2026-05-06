@@ -31,13 +31,13 @@ final class WorkspaceLSPManager {
             let exec = URL(fileURLWithPath: entry.command)
             let transport = LSPTransport(executable: exec, arguments: entry.args, environment: entry.env.isEmpty ? nil : entry.env)
             let new = LSPClient(transport: transport, language: languageId,
-                                rootURI: "file://" + worktreeRoot.path)
+                                rootURI: worktreeRoot.lspURI)
             do { try await new.initialize() } catch { return nil }
             holders[key] = Holder(client: new, refCount: 1)
             client = new
         }
         try? await client.didOpen(
-            uri: "file://" + fileURL.path,
+            uri: fileURL.lspURI,
             languageId: languageId,
             version: 1,
             text: text
@@ -48,7 +48,7 @@ final class WorkspaceLSPManager {
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {
         let key = Key(root: worktreeRoot.path, language: languageId)
         guard let holder = holders[key] else { return }
-        try? await holder.client.didClose(uri: "file://" + fileURL.path)
+        try? await holder.client.didClose(uri: fileURL.lspURI)
         let newCount = holder.refCount - 1
         if newCount <= 0 {
             await holder.client.shutdown()
@@ -60,5 +60,12 @@ final class WorkspaceLSPManager {
 
     func client(forWorktree root: URL, language: String) -> LSPClient? {
         holders[Key(root: root.path, language: language)]?.client
+    }
+
+    /// Maps a file extension to its configured language id, or nil if no
+    /// enabled server claims that extension. Delegates to the registry so
+    /// user-defined entries (Settings → Code) are honored.
+    func language(forFileExtension ext: String) -> String? {
+        registry.language(forFileExtension: ext)
     }
 }

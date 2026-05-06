@@ -39,7 +39,7 @@ final class CodeEditorCoordinator {
             },
             getURI: { [weak self] in
                 guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return "file://" + root.appendingPathComponent(rel).path
+                return root.appendingPathComponent(rel).lspURI
             }
         )
         definition = DefinitionFeature(
@@ -50,7 +50,7 @@ final class CodeEditorCoordinator {
             },
             getURI: { [weak self] in
                 guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return "file://" + root.appendingPathComponent(rel).path
+                return root.appendingPathComponent(rel).lspURI
             },
             openTarget: { [weak self] url, line, character in
                 guard let self, let root = self.currentRoot, let wid = self.currentWorktreeId else { return }
@@ -137,25 +137,23 @@ final class CodeEditorCoordinator {
             }
         }
 
-        // Stage 3 — async LSP setup.
-        let registry = appState.lsp
-        let language: String?
-        switch ext.lowercased() {
-        case "swift": language = "swift"
-        default:      language = nil
-        }
+        // Stage 3 — async LSP setup. Resolve the language via the registry
+        // so user-defined servers (Settings → Code) are honored alongside
+        // the built-in Swift entry.
+        let manager = appState.lsp
+        let language = manager.language(forFileExtension: ext)
         currentLanguage = language
         guard let language else { return }
 
         Task {
-            let client = await registry.openDocument(
+            let client = await manager.openDocument(
                 worktreeRoot: worktreeRoot,
                 fileURL: url,
                 languageId: language,
                 text: text
             )
-            await self.subscribeDiagnostics(for: client, uri: "file://" + url.path, theme: theme)
-            await symbolsFeature.refresh(client: client, uri: "file://" + url.path)
+            await self.subscribeDiagnostics(for: client, uri: url.lspURI, theme: theme)
+            await symbolsFeature.refresh(client: client, uri: url.lspURI)
         }
     }
 

@@ -93,6 +93,7 @@
 		8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C2AC0F8B3A1B75239995AC /* AppState.swift */; };
 		90958414931FC96F766F0C46 /* DiagnosticsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 932F0FEE5330D5B4470C1874 /* DiagnosticsFeature.swift */; };
 		90B09645EB794C287B95A5AD /* HarnessService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155B35EBCCE7F2CA1A0E5DE5 /* HarnessService.swift */; };
+		91BA613AFD278AF56168EB22 /* LSPURI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C69060B922A729DD807920 /* LSPURI.swift */; };
 		9422B6F8F6C1E3E64B259712 /* LanguageServerRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345CFF4DBE5794DEBF43F996 /* LanguageServerRegistryTests.swift */; };
 		950C937884477417569DC20B /* EmptyTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008E982C8526670670425AB8 /* EmptyTabView.swift */; };
 		9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */; };
@@ -229,6 +230,7 @@
 		563B664D082A9523260AA2EF /* RepoDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoDot.swift; sourceTree = "<group>"; };
 		5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeSitterHighlighter.swift; sourceTree = "<group>"; };
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
+		61C69060B922A729DD807920 /* LSPURI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPURI.swift; sourceTree = "<group>"; };
 		642163EB929E060A878211E2 /* HookInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookInstaller.swift; sourceTree = "<group>"; };
 		64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvBuilderTests.swift; sourceTree = "<group>"; };
 		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -600,6 +602,7 @@
 				A35E05B1FB7CC5229ACCB065 /* LSPClient.swift */,
 				F5C6A07D7C67D02C8638D8C1 /* LSPMessages.swift */,
 				38499AFE31188908546EE222 /* LSPTransport.swift */,
+				61C69060B922A729DD807920 /* LSPURI.swift */,
 				BE809DBC1E614321EE793D00 /* WorkspaceLSPManager.swift */,
 				BF7999E71D2618AC30DF14E4 /* Features */,
 			);
@@ -968,6 +971,7 @@
 				C1EBF68A32C7C1D61ECC89AC /* LSPClient.swift in Sources */,
 				DC394B7740FAEBD2F8ACB61F /* LSPMessages.swift in Sources */,
 				70FCC2B12AE446728EE7CF8D /* LSPTransport.swift in Sources */,
+				91BA613AFD278AF56168EB22 /* LSPURI.swift in Sources */,
 				3388D5141427C0046BD8CCC7 /* LanguageRegistry.swift in Sources */,
 				C45F78462F404C64D02C413B /* LanguageServerRegistry.swift in Sources */,
 				02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */,

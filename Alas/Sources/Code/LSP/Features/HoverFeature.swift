@@ -86,7 +86,15 @@ extension CodeTextView {
     /// view's coordinate space. Returns nil if outside the text area.
     func lspPosition(at point: NSPoint) -> LSPPosition? {
         guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
-        let glyphIndex = layoutManager.glyphIndex(for: point, in: textContainer)
+        // Mouse points arrive in text-view coordinates, but
+        // `glyphIndex(for:in:)` expects text-container coordinates. With a
+        // non-zero `textContainerInset` (we use 12, 8) the two differ — not
+        // converting shifts hover/Cmd-click onto a different column or line.
+        let containerPoint = NSPoint(
+            x: point.x - textContainerInset.width,
+            y: point.y - textContainerInset.height
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
         let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         let nsString = storage.string as NSString
         guard charIndex < nsString.length else { return nil }
@@ -122,6 +130,8 @@ extension CodeTextView {
         guard charIndex < nsString.length else { return nil }
         let glyph = layoutManager.glyphIndexForCharacter(at: charIndex)
         let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer!)
-        return rect
+        // boundingRect is in container coords; the popover anchors against
+        // the view's bounds, so add the inset back.
+        return rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
     }
 }
