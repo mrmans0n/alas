@@ -88,14 +88,18 @@ extension Process {
 
         // Watchdog. If we time out, SIGTERM the process; the
         // terminationHandler will fire and `exit.wait()` returns.
+        let timeoutState = TimeoutState()
         let watchdog = Task {
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             if Task.isCancelled { return }
-            fputs(
-                "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                stderr
-            )
-            if process.isRunning { process.terminate() }
+            if process.isRunning {
+                timeoutState.markTimedOut()
+                fputs(
+                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                    stderr
+                )
+                process.terminate()
+            }
         }
 
         await exit.wait()
@@ -113,7 +117,7 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
 
-        let timedOut = process.terminationReason == .uncaughtSignal
+        let timedOut = timeoutState.didTimeOut
         if timedOut {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
         }
@@ -132,6 +136,23 @@ extension Process {
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
         try await run("/usr/bin/env", args: ["git"] + args, cwd: cwd, timeout: timeout)
+    }
+}
+
+private final class TimeoutState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timedOut = false
+
+    var didTimeOut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return timedOut
+    }
+
+    func markTimedOut() {
+        lock.lock()
+        timedOut = true
+        lock.unlock()
     }
 }
 
