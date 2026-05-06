@@ -5,18 +5,30 @@ import Observation
 final class WorkspaceLSPManager {
     private struct Key: Hashable { let root: String; let language: String }
 
-    /// One holder per `(worktreeRoot, language)`. The holder is inserted
-    /// **before** awaiting `initialize()` so a concurrent `closeDocument`
-    /// can still find it and decrement `refCount` — otherwise the close
-    /// would no-op and the open path would resume to insert a holder for
-    /// a document that no longer has a tab, leaving a stale server alive.
+    /// One holder per `(worktreeRoot, language)`. Inserted **before**
+    /// awaiting `initialize()` so a concurrent `closeDocument` can find it
+    /// and update state in flight.
+    ///
+    /// `refsByURI` tracks the user's open intent **per file** — the codex
+    /// scenario being: file A starts the server, file B opens during init
+    /// (sees existing holder, registers its URI), file A closes during
+    /// init. With aggregate ref counting the holder still has refCount=1
+    /// (B), so A's resumed open path would happily send `didOpen` for the
+    /// already-closed A. With per-URI counts, A's resume sees `refsByURI[A]`
+    /// is gone and skips `didOpen`, while B proceeds normally.
+    ///
+    /// `openedURIs` records URIs for which `didOpen` was actually delivered,
+    /// so `closeDocument` only sends `didClose` when there's something
+    /// matching to close on the server side.
+    ///
     /// `ready` is a one-shot Task that returns `true` when initialize
     /// succeeded and `false` on failure; both open and close await it
     /// before sending notifications.
     private struct Holder {
         let client: LSPClient
-        var refCount: Int
         let ready: Task<Bool, Never>
+        var refsByURI: [String: Int]
+        var openedURIs: Set<String>
     }
 
     private var holders: [Key: Holder] = [:]
@@ -27,21 +39,24 @@ final class WorkspaceLSPManager {
     }
 
     /// Register an open editor tab for `(worktreeRoot, fileURL)`. Spawns
-    /// the language server if needed and sends `didOpen`. Returns the
-    /// client (or nil if no server is configured for the language, the
-    /// server failed to initialize, or the document was closed before
-    /// initialization completed).
+    /// the language server if needed and sends `didOpen` once
+    /// initialization completes — unless `closeDocument` for the same
+    /// `fileURL` arrived during initialization, in which case the open is
+    /// abandoned without notifying the server. Returns the client (or nil
+    /// when no server is configured, init failed, or the document was
+    /// closed before init completed).
     @discardableResult
     func openDocument(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async -> LSPClient? {
         let key = Key(root: worktreeRoot.path, language: languageId)
+        let uri = fileURL.lspURI
         let client: LSPClient
         let ready: Task<Bool, Never>
-        let isFirstOpener: Bool
         if let existing = holders[key] {
-            holders[key] = Holder(client: existing.client, refCount: existing.refCount + 1, ready: existing.ready)
+            var refs = existing.refsByURI
+            refs[uri, default: 0] += 1
+            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs)
             client = existing.client
             ready = existing.ready
-            isFirstOpener = false
         } else {
             guard let entry = registry.entry(forLanguage: languageId) else { return nil }
             let spawn = Self.resolveSpawn(command: entry.command, args: entry.args)
@@ -50,57 +65,82 @@ final class WorkspaceLSPManager {
             let task = Task<Bool, Never> {
                 do { try await newClient.initialize(); return true } catch { return false }
             }
-            holders[key] = Holder(client: newClient, refCount: 1, ready: task)
+            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [])
             client = newClient
             ready = task
-            isFirstOpener = true
         }
+
         let initOk = await ready.value
         if !initOk {
-            // Init failed. The first opener owns the holder; remove it so a
-            // future open spawns a fresh client instead of reusing this one.
-            // Subsequent openers see the holder is already gone (or will be)
-            // and just bail.
-            if isFirstOpener { holders.removeValue(forKey: key) }
+            // Init failed — drop the dead holder. The first awaiter to wake
+            // wins; subsequent ones see it's already gone.
+            holders.removeValue(forKey: key)
             return nil
         }
-        // Init succeeded. If a close raced ahead and dropped the last ref
-        // while we were waiting, shut the server down and don't send didOpen
-        // for a document that no longer has a tab.
-        guard let holder = holders[key], holder.refCount > 0 else {
-            if isFirstOpener {
+
+        // Did this specific file's last ref get dropped while we waited?
+        guard let h = holders[key], (h.refsByURI[uri] ?? 0) > 0 else {
+            // The file was closed during init. If the *whole* holder is
+            // also refless (no other tabs), shut the server down.
+            if let cur = holders[key], cur.refsByURI.isEmpty {
                 await client.shutdown()
                 holders.removeValue(forKey: key)
             }
             return nil
         }
-        try? await client.didOpen(
-            uri: fileURL.lspURI,
-            languageId: languageId,
-            version: 1,
-            text: text
-        )
+
+        // Send `didOpen` exactly once per URI. Mark the URI as opened
+        // *before* sending so a close racing with the in-flight notification
+        // sees the marker and balances with `didClose` rather than dropping it.
+        if !h.openedURIs.contains(uri) {
+            if var holder = holders[key] {
+                holder.openedURIs.insert(uri)
+                holders[key] = holder
+            }
+            try? await client.didOpen(
+                uri: uri,
+                languageId: languageId,
+                version: 1,
+                text: text
+            )
+        }
         return client
     }
 
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {
         let key = Key(root: worktreeRoot.path, language: languageId)
-        guard let holder = holders[key] else { return }
-        let newCount = holder.refCount - 1
-        holders[key] = Holder(client: holder.client, refCount: newCount, ready: holder.ready)
-        let initOk = await holder.ready.value
-        // Re-fetch in case the open path observed refCount==0 during our
-        // await of `ready` and already shut down + removed the holder, or
-        // a new open arrived and re-incremented refCount.
-        guard let cur = holders[key] else { return }
-        if !initOk {
-            // Init failed; let the open path's failure branch own the
-            // removal so we don't double-remove.
-            return
+        let uri = fileURL.lspURI
+        guard var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else { return }
+        var refs = holder.refsByURI
+        let newRef = (refs[uri] ?? 0) - 1
+        if newRef <= 0 {
+            refs.removeValue(forKey: uri)
+        } else {
+            refs[uri] = newRef
         }
-        try? await cur.client.didClose(uri: fileURL.lspURI)
-        if cur.refCount <= 0 {
-            await cur.client.shutdown()
+        holder.refsByURI = refs
+        holders[key] = holder
+
+        let initOk = await holder.ready.value
+        guard let cur = holders[key] else { return }
+        if !initOk { return }
+
+        // Other tabs still need this file open — nothing to send.
+        if (cur.refsByURI[uri] ?? 0) > 0 { return }
+
+        // File is fully closed. Send `didClose` if the matching `didOpen`
+        // was actually delivered; otherwise the server has nothing to forget.
+        if cur.openedURIs.contains(uri) {
+            try? await cur.client.didClose(uri: uri)
+            if var c = holders[key] {
+                c.openedURIs.remove(uri)
+                holders[key] = c
+            }
+        }
+
+        // Shut down the server if no files remain on it.
+        if let c = holders[key], c.refsByURI.isEmpty {
+            await c.client.shutdown()
             holders.removeValue(forKey: key)
         }
     }

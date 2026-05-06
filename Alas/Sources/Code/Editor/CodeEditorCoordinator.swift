@@ -56,13 +56,16 @@ final class CodeEditorCoordinator {
             },
             openTarget: { [weak self] url, line, character in
                 guard let self, let root = self.currentRoot, let wid = self.currentWorktreeId else { return }
-                // Compute path relative to the current worktree root. If the
-                // target lives outside this worktree we still route to the
-                // same TabsManager bucket — cross-worktree definitions are a
-                // v1.5 concern.
+                // Targets outside the current worktree (SDK headers,
+                // DerivedData, modulemap files) are dropped on the floor for
+                // now — `appendingPathComponent` would treat the absolute
+                // path as a sub-path of the worktree and the editor would
+                // open a bogus `<worktree>/<abs>` location. v1.5 will route
+                // these via absolute URLs so they can be opened in a new tab.
                 let abs = url.path
                 let prefix = root.path + "/"
-                let rel = abs.hasPrefix(prefix) ? String(abs.dropFirst(prefix.count)) : abs
+                guard abs.hasPrefix(prefix) else { return }
+                let rel = String(abs.dropFirst(prefix.count))
                 self.appState.tabs.openEditor(
                     worktreeId: wid,
                     relativePath: rel,
@@ -101,6 +104,12 @@ final class CodeEditorCoordinator {
 
     private func load(worktreeRoot: URL, relativePath: String, theme: Theme) {
         guard let textView else { return }
+        // Cancel any in-flight diagnostics subscription from the previous
+        // file before we (potentially) early-return for a non-LSP extension —
+        // otherwise the old server can keep delivering diagnostics that get
+        // applied as squiggles on the reused text view.
+        diagnosticsTask?.cancel()
+        diagnosticsTask = nil
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let editorTheme = EditorTheme(theme: theme)
         let baseAttrs: [NSAttributedString.Key: Any] = [
