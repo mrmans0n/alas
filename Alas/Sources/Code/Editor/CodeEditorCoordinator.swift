@@ -17,6 +17,7 @@ final class CodeEditorCoordinator {
     private var currentRoot: URL?
     private var currentRelativePath: String?
     private var currentLanguage: String?
+    private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
     private var diagnosticsTask: Task<Void, Never>?
     private let diagnosticsFeature = DiagnosticsFeature()
     let symbolsFeature = SymbolsFeature()
@@ -27,10 +28,11 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, worktreeId: String, worktreeRoot: URL, relativePath: String, theme: Theme) {
+    func attach(textView: CodeTextView, worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
         self.textView = textView
         self.currentWorktreeId = worktreeId
         load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
+        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
         hover = HoverFeature(
             textView: textView,
             getClient: { [weak self] in
@@ -71,15 +73,25 @@ final class CodeEditorCoordinator {
         )
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, theme: Theme) {
-        if currentRoot == worktreeRoot && currentRelativePath == relativePath && currentWorktreeId == worktreeId { return }
-        Task { await closeCurrent() }
-        currentWorktreeId = worktreeId
-        load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
+        let fileChanged = !(currentRoot == worktreeRoot && currentRelativePath == relativePath && currentWorktreeId == worktreeId)
+        if fileChanged {
+            // Capture the previous document before `load` overwrites
+            // `currentRoot`, `currentRelativePath`, and `currentLanguage` —
+            // otherwise the fire-and-forget close races and ends up sending
+            // `didClose` for the *new* file or shutting down its
+            // freshly-spawned client.
+            let previous = takeCurrentDocument()
+            currentWorktreeId = worktreeId
+            load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
+            if let previous { Task { await self.close(document: previous) } }
+        }
+        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
 
     func detach() {
-        Task { await closeCurrent() }
+        let previous = takeCurrentDocument()
+        if let previous { Task { await self.close(document: previous) } }
         diagnosticsTask?.cancel()
         hover = nil
         definition = nil
@@ -175,12 +187,60 @@ final class CodeEditorCoordinator {
         diagnosticsFeature.apply(diagnostics, to: storage, theme: theme)
     }
 
-    private func closeCurrent() async {
-        guard let root = currentRoot, let rel = currentRelativePath, let lang = currentLanguage else { return }
-        let url = root.appendingPathComponent(rel)
-        await appState.lsp.closeDocument(worktreeRoot: root, fileURL: url, languageId: lang)
+    private struct OpenDocument {
+        let root: URL
+        let relativePath: String
+        let language: String
+    }
+
+    /// Snapshots the currently-open document and clears the coordinator's
+    /// `current*` fields so the caller can safely overwrite them with the
+    /// next file's state. The returned snapshot is later passed to
+    /// `close(document:)` which sends `didClose` against the captured URI.
+    private func takeCurrentDocument() -> OpenDocument? {
+        guard let root = currentRoot, let rel = currentRelativePath, let lang = currentLanguage else { return nil }
         currentRoot = nil
         currentRelativePath = nil
         currentLanguage = nil
+        return OpenDocument(root: root, relativePath: rel, language: lang)
+    }
+
+    private func close(document: OpenDocument) async {
+        let url = document.root.appendingPathComponent(document.relativePath)
+        await appState.lsp.closeDocument(worktreeRoot: document.root, fileURL: url, languageId: document.language)
+    }
+
+    // MARK: - Reveal (go-to-definition scroll target)
+
+    /// Scrolls the text view so the (line, character) target is visible and
+    /// places the selection there. De-duplicates by `(tabId, line, character)`
+    /// so SwiftUI re-renders that re-pass the same hints don't keep stealing
+    /// the user's scroll position. After applying, asks the TabsManager to
+    /// clear the hint so it isn't replayed on relaunch.
+    private func applyRevealIfNeeded(tabId: TabID, line: Int?, character: Int?) {
+        guard let line, let character else { return }
+        if let last = lastAppliedReveal,
+           last.tabId == tabId, last.line == line, last.character == character {
+            return
+        }
+        guard let textView, let storage = textView.textStorage else { return }
+        let nsString = storage.string as NSString
+        // Walk to the requested line, then add the UTF-16 character offset.
+        var charIndex = 0
+        var currentLine = 0
+        while currentLine < line {
+            let r = nsString.range(of: "\n", options: [], range: NSRange(location: charIndex, length: nsString.length - charIndex))
+            if r.location == NSNotFound { return }
+            charIndex = r.location + 1
+            currentLine += 1
+        }
+        let target = min(charIndex + character, nsString.length)
+        let range = NSRange(location: target, length: 0)
+        textView.setSelectedRange(range)
+        textView.scrollRangeToVisible(range)
+        lastAppliedReveal = (tabId: tabId, line: line, character: character)
+        if let wid = currentWorktreeId {
+            appState.tabs.consumeReveal(worktreeId: wid, tabId: tabId)
+        }
     }
 }

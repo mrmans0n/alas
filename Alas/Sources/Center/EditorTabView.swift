@@ -4,6 +4,9 @@ struct EditorTabView: View {
     let worktreePath: URL
     let relativePath: String
     let worktreeId: String
+    let tabId: TabID
+    let revealLine: Int?
+    let revealCharacter: Int?
     let appState: AppState
     @Environment(\.theme) var theme
 
@@ -14,6 +17,9 @@ struct EditorTabView: View {
                 worktreeId: worktreeId,
                 worktreeRoot: worktreePath,
                 relativePath: relativePath,
+                tabId: tabId,
+                revealLine: revealLine,
+                revealCharacter: revealCharacter,
                 appState: appState
             )
         }

@@ -11,6 +11,9 @@ struct CodeEditorView: NSViewRepresentable {
     let worktreeId: String
     let worktreeRoot: URL
     let relativePath: String
+    let tabId: TabID
+    let revealLine: Int?
+    let revealCharacter: Int?
     let appState: AppState
     @Environment(\.theme) var theme
 
@@ -68,6 +71,9 @@ struct CodeEditorView: NSViewRepresentable {
             worktreeId: worktreeId,
             worktreeRoot: worktreeRoot,
             relativePath: relativePath,
+            tabId: tabId,
+            revealLine: revealLine,
+            revealCharacter: revealCharacter,
             theme: theme
         )
         return scroll
@@ -78,6 +84,9 @@ struct CodeEditorView: NSViewRepresentable {
             worktreeId: worktreeId,
             worktreeRoot: worktreeRoot,
             relativePath: relativePath,
+            tabId: tabId,
+            revealLine: revealLine,
+            revealCharacter: revealCharacter,
             theme: theme
         )
     }

@@ -90,6 +90,22 @@ final class TabsManager {
         return tab
     }
 
+    /// Clears the `revealLine`/`revealCharacter` hints on an editor tab.
+    /// Called by the editor coordinator once it has scrolled to the target,
+    /// so the hint isn't replayed on the next view re-render or app
+    /// relaunch.
+    func consumeReveal(worktreeId: String, tabId: TabID) {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .editor(var s) = file.tabs[idx],
+              s.revealLine != nil || s.revealCharacter != nil else { return }
+        s.revealLine = nil
+        s.revealCharacter = nil
+        file.tabs[idx] = .editor(s)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
     func activate(worktreeId: String, tabId: TabID) {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.activeTabId = tabId

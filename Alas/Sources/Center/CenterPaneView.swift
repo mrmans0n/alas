@@ -41,6 +41,9 @@ struct CenterPaneView: View {
                         EditorTabView(worktreePath: worktree.path,
                                       relativePath: s.relativePath,
                                       worktreeId: worktree.id,
+                                      tabId: s.id,
+                                      revealLine: s.revealLine,
+                                      revealCharacter: s.revealCharacter,
                                       appState: state)
                     case .diff(let s):
                         DiffTabView(worktreePath: worktree.path,
