@@ -155,3 +155,30 @@
 4. Disable OpenCode, restart Alas, and confirm it stays disabled.
 5. Remove OpenCode, save settings, restart Alas, and confirm it is not re-added.
 6. If `claude` or `codex` are installed, confirm they appear only as suggestions unless manually configured.
+
+## Code Editor (tree-sitter + LSP)
+
+Pre-req: a Swift project, `sourcekit-lsp` available via `xcrun --find sourcekit-lsp`.
+
+### Editor pane
+
+1. Open a worktree backed by a Swift project. Open a `.swift` file in an editor tab.
+2. Confirm tree-sitter coloring is visible immediately (keywords purple, types blue, functions yellow, strings green, comments gray).
+3. Wait ~30 s on a fresh checkout for `sourcekit-lsp` to settle. Hover over a function name and confirm a popover appears with type info / docs.
+4. Cmd-click a symbol and confirm the editor jumps to its definition (same tab if same file, new tab otherwise).
+5. Introduce a syntax error (e.g. `let x =`). Save. Confirm a dotted underline appears under the offending range within ~2 s.
+6. Close all editor tabs for the worktree and confirm the language server shuts down (`pgrep sourcekit-lsp` no longer lists the worktree's instance).
+
+### Diff pane
+
+1. Stage a Swift change. Open the diff tab.
+2. Confirm hunks render with colored keywords / types / strings.
+3. Confirm hover does nothing (intentional — diff pane is highlight-only, no LSP).
+
+### Settings → Code
+
+1. Open Settings → Code. Confirm Swift is listed with a status badge.
+2. Edit the Swift entry, change the args (e.g. add `--log-level info`), Save. Restart Alas. Confirm the new args persist.
+3. Add a custom language entry (e.g. Rust → `rust-analyzer`). Save. Restart. Confirm the entry persists.
+4. Disable Swift. Reopen a `.swift` file. Confirm tree-sitter coloring still works but hover / diagnostics / go-to-def are gone.
+5. Re-enable Swift. Reopen the file. Confirm hover and diagnostics return after the server initializes.
