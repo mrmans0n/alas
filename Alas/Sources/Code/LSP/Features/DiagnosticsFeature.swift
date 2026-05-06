@@ -8,6 +8,17 @@ final class DiagnosticsFeature {
     private(set) var current: [LSPDiagnostic] = []
     var onChange: (() -> Void)?
 
+    /// Drops the cached `current` list without touching storage. Called
+    /// when switching files: `load` resets the storage anyway, but if
+    /// `repaint` (theme change) or `reloadFromDisk` (external edit) fires
+    /// before the new file's diagnostics arrive — or if the new file has
+    /// no LSP server — they would otherwise reapply the *previous* file's
+    /// diagnostic ranges to the new content and paint stale squiggles.
+    func reset() {
+        current = []
+        onChange?()
+    }
+
     func apply(_ diagnostics: [LSPDiagnostic], to storage: NSTextStorage, theme: Theme) {
         current = diagnostics
         let editorTheme = EditorTheme(theme: theme)

@@ -131,9 +131,13 @@ final class CodeEditorCoordinator {
         // Cancel any in-flight diagnostics subscription from the previous
         // file before we (potentially) early-return for a non-LSP extension —
         // otherwise the old server can keep delivering diagnostics that get
-        // applied as squiggles on the reused text view.
+        // applied as squiggles on the reused text view. Also drop the
+        // cached `current` list so a subsequent `repaint` (theme change)
+        // or `reloadFromDisk` (external edit) doesn't reapply the previous
+        // file's ranges on top of the new content.
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
+        diagnosticsFeature.reset()
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let editorTheme = EditorTheme(theme: theme)
         let baseAttrs: [NSAttributedString.Key: Any] = [
