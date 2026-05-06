@@ -30,7 +30,7 @@ struct CenterPaneView: View {
                 onCopyPath: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           let rel = tab.relativeFilePath else { return }
-                    let absolute = (worktree.path as NSString).appendingPathComponent(rel)
+                    let absolute = worktree.path.appendingPathComponent(rel).path(percentEncoded: false)
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(absolute, forType: .string)
                 },

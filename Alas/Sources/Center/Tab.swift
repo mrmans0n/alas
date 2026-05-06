@@ -34,6 +34,7 @@ enum Tab: Codable, Equatable, Identifiable {
     var relativeFilePath: String? {
         switch self {
         case .editor(let s): return s.relativePath
+        case .diff(let s):   return s.relativePath
         default:             return nil
         }
     }
