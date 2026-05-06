@@ -30,6 +30,7 @@ final class WorkspaceLSPManager {
         var refsByURI: [String: Int]
         var openedURIs: Set<String>
         var versions: [String: Int]   // last didChange version per URI
+        var pendingOpenText: [String: String]  // latest text supplied to a not-yet-sent didOpen
     }
 
     private var holders: [Key: Holder] = [:]
@@ -65,7 +66,14 @@ final class WorkspaceLSPManager {
         if let existing = holders[key] {
             var refs = existing.refsByURI
             refs[uri, default: 0] += 1
-            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions)
+            // Record this open's text as the latest pending — if `didOpen`
+            // hasn't been sent yet, whichever awaiter wakes first will read
+            // this value rather than the stale `text` captured on a prior
+            // call. (Codex case: tab closed and reopened with different
+            // content while the server was still initializing.)
+            var pending = existing.pendingOpenText
+            if !existing.openedURIs.contains(uri) { pending[uri] = text }
+            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending)
             client = existing.client
             ready = existing.ready
         } else {
@@ -75,7 +83,7 @@ final class WorkspaceLSPManager {
             let task = Task<Bool, Never> {
                 do { try await newClient.initialize(); return true } catch { return false }
             }
-            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:])
+            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text])
             client = newClient
             ready = task
         }
@@ -101,18 +109,24 @@ final class WorkspaceLSPManager {
 
         // Send `didOpen` exactly once per URI. Mark the URI as opened
         // *before* sending so a close racing with the in-flight notification
-        // sees the marker and balances with `didClose` rather than dropping it.
+        // sees the marker and balances with `didClose` rather than dropping
+        // it. We pull `text` from `pendingOpenText` (updated synchronously
+        // by every `openDocument` call before its await) so a later opener's
+        // newer content wins even if an earlier opener's continuation
+        // resumes first.
         if !h.openedURIs.contains(uri) {
+            let openText = h.pendingOpenText[uri] ?? text
             if var holder = holders[key] {
                 holder.openedURIs.insert(uri)
                 holder.versions[uri] = 1
+                holder.pendingOpenText.removeValue(forKey: uri)
                 holders[key] = holder
             }
             try? await client.didOpen(
                 uri: uri,
                 languageId: languageId,
                 version: 1,
-                text: text
+                text: openText
             )
         }
         return client
