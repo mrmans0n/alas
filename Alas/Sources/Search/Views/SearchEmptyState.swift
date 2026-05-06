@@ -35,8 +35,6 @@ struct SearchEmptyState: View {
 
     private var subtitle: String {
         if !model.trimmedQuery.isEmpty {
-            // Phase 2 special case: content search isn't backed yet.
-            if model.kind == .content { return "Content search coming soon." }
             let where_: String
             switch model.scope {
             case .thisWorktree: where_ = "this worktree"
