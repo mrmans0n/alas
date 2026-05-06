@@ -132,17 +132,26 @@ final class WorkspaceLSPManager {
         return client
     }
 
-    /// Send `textDocument/didChange` with full-text content for an
-    /// already-open document. Used when the file changes externally
-    /// (e.g. edits from a terminal) — without this, language servers
-    /// treat the open document as client-owned and keep diagnostics,
-    /// hover, and definitions tied to the original snapshot.
+    /// Apply new content for an open or pending document. If `didOpen` has
+    /// already been delivered, sends `textDocument/didChange` with a fresh
+    /// version. If the holder exists but the server is still initializing
+    /// (so no `didOpen` has gone out yet), updates `pendingOpenText` so the
+    /// delayed `didOpen` carries the latest content — otherwise we'd lose
+    /// the reload and the server would analyze the stale tab-open snapshot.
     func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async {
         let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
         let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
         let key = Key(root: lspRoot.path, language: languageId)
         let uri = fileURL.lspURI
-        guard let holder = holders[key], holder.openedURIs.contains(uri) else { return }
+        guard var holder = holders[key] else { return }
+        if !holder.openedURIs.contains(uri) {
+            // Server still in `initialize()`. Update the pending text so the
+            // suspended `openDocument` reads the new value when it resumes.
+            guard (holder.refsByURI[uri] ?? 0) > 0 else { return }
+            holder.pendingOpenText[uri] = text
+            holders[key] = holder
+            return
+        }
         let initOk = await holder.ready.value
         guard initOk else { return }
         guard var cur = holders[key], cur.openedURIs.contains(uri) else { return }

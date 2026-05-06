@@ -25,6 +25,9 @@ final class CodeEditorCoordinator {
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
+    private var fileWatcher: DispatchSourceFileSystemObject?
+    private var fileWatcherFD: Int32 = -1
+    private static let fileWatchQueue = DispatchQueue(label: "alas.editor.filewatch", qos: .utility)
 
     init(appState: AppState) {
         self.appState = appState
@@ -116,6 +119,7 @@ final class CodeEditorCoordinator {
         let previous = takeCurrentDocument()
         if let previous { Task { await self.close(document: previous) } }
         diagnosticsTask?.cancel()
+        stopWatching()
         hover = nil
         definition = nil
     }
@@ -146,6 +150,7 @@ final class CodeEditorCoordinator {
         currentRoot = worktreeRoot
         currentRelativePath = relativePath
         currentMtime = mtime(of: url)
+        startWatching(url)
 
         let ext = (relativePath as NSString).pathExtension
 
@@ -238,6 +243,10 @@ final class CodeEditorCoordinator {
         ]
         textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: baseAttrs))
         currentMtime = mtime(of: url)
+        // Atomic-save (write tempfile + rename onto target) replaces the
+        // file's inode, so our prior `O_EVTONLY` fd no longer reflects
+        // the live file. Re-arm the watcher on the current path.
+        startWatching(url)
 
         let ext = (rel as NSString).pathExtension
         let stableRoot = root
@@ -276,6 +285,45 @@ final class CodeEditorCoordinator {
 
     private func mtime(of url: URL) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
+
+    /// Watches `url` so external edits (terminal, another editor, formatters)
+    /// land in the view immediately rather than waiting for SwiftUI to
+    /// re-render. Replaces any prior watcher.
+    private func startWatching(_ url: URL) {
+        stopWatching()
+        let fd = open(url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .extend, .rename, .delete, .attrib],
+            queue: Self.fileWatchQueue
+        )
+        src.setEventHandler { [weak self] in
+            Task { @MainActor in self?.handleWatchedFileChange() }
+        }
+        src.setCancelHandler { Darwin.close(fd) }
+        src.resume()
+        fileWatcher = src
+        fileWatcherFD = fd
+    }
+
+    private func stopWatching() {
+        fileWatcher?.cancel()
+        fileWatcher = nil
+        fileWatcherFD = -1
+    }
+
+    private func handleWatchedFileChange() {
+        guard let root = currentRoot, let rel = currentRelativePath, let theme = currentTheme else { return }
+        let url = root.appendingPathComponent(rel)
+        // Compare mtime in case the kqueue event was a touch or attribute
+        // change with no real content delta. If the file went away (delete
+        // without atomic replace), bail — the next user action will surface
+        // an "unable to read" state.
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        guard let onDisk = mtime(of: url), onDisk != currentMtime else { return }
+        reloadFromDisk(theme: theme)
     }
 
     /// Re-applies background, base text attributes, and tree-sitter
