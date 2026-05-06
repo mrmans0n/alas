@@ -123,9 +123,14 @@ actor LSPClient {
     }
 
     func shutdown() async {
-        guard state == .ready else { return }
-        _ = try? await sendRequest(method: "shutdown", params: nil)
-        try? sendNotification(method: "exit", params: nil)
+        // Send the polite handshake only if we ever reached `.ready`. For
+        // clients that died during `initialize()` (or never started), the
+        // request would be pointless or hang — but we still need to kill
+        // the transport so the LSP server process doesn't leak.
+        if state == .ready {
+            _ = try? await sendRequest(method: "shutdown", params: nil)
+            try? sendNotification(method: "exit", params: nil)
+        }
         transport.terminate()
         state = .dead
     }

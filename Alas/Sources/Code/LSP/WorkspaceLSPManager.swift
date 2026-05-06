@@ -2,6 +2,7 @@ import Foundation
 import Observation
 
 @Observable
+@MainActor
 final class WorkspaceLSPManager {
     private struct Key: Hashable { let root: String; let language: String }
 
@@ -57,12 +58,18 @@ final class WorkspaceLSPManager {
         // closed) we'd otherwise reuse the dead client and silently fail to
         // deliver hover/diagnostics/definition until the user closed every
         // tab for that language. Drop the dead holder and fall through to
-        // spawn a fresh one.
-        if let existing = holders[key], await existing.client.state == .dead {
-            holders.removeValue(forKey: key)
+        // spawn a fresh one. Identity-check the dictionary entry before
+        // removing, so we don't clobber a holder another task already
+        // swapped in while we were awaiting the state read.
+        if let existing = holders[key] {
+            let dead = await existing.client.state == .dead
+            if dead, let cur = holders[key], cur.client === existing.client {
+                holders.removeValue(forKey: key)
+            }
         }
         let client: LSPClient
         let ready: Task<Bool, Never>
+        let isFirstOpener: Bool
         if let existing = holders[key] {
             var refs = existing.refsByURI
             refs[uri, default: 0] += 1
@@ -76,6 +83,7 @@ final class WorkspaceLSPManager {
             holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending)
             client = existing.client
             ready = existing.ready
+            isFirstOpener = false
         } else {
             let spawn = Self.resolveSpawn(command: entry.command, args: entry.args)
             let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: entry.env.isEmpty ? nil : entry.env)
@@ -86,21 +94,32 @@ final class WorkspaceLSPManager {
             holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text])
             client = newClient
             ready = task
+            isFirstOpener = true
         }
 
         let initOk = await ready.value
         if !initOk {
-            // Init failed — drop the dead holder. The first awaiter to wake
-            // wins; subsequent ones see it's already gone.
-            holders.removeValue(forKey: key)
+            // Init failed. The opener that spawned the client owns its
+            // teardown — if `shutdown()` only ran on `.ready` the failed
+            // `Process` would be left behind. Identity-guard the dictionary
+            // entry too, so a fresh holder swapped in by a later opener
+            // isn't removed alongside.
+            if isFirstOpener {
+                await client.shutdown()
+                if let cur = holders[key], cur.client === client {
+                    holders.removeValue(forKey: key)
+                }
+            }
             return nil
         }
 
         // Did this specific file's last ref get dropped while we waited?
-        guard let h = holders[key], (h.refsByURI[uri] ?? 0) > 0 else {
-            // The file was closed during init. If the *whole* holder is
-            // also refless (no other tabs), shut the server down.
-            if let cur = holders[key], cur.refsByURI.isEmpty {
+        guard let h = holders[key], h.client === client, (h.refsByURI[uri] ?? 0) > 0 else {
+            // The file was closed during init (or another task replaced
+            // the holder). If our spawned client is no longer the live
+            // one, just walk away. If it is and the whole holder is
+            // refless, shut it down once.
+            if let cur = holders[key], cur.client === client, cur.refsByURI.isEmpty {
                 await client.shutdown()
                 holders.removeValue(forKey: key)
             }
