@@ -37,7 +37,10 @@ struct LanguageServerRegistry {
 
     func language(forFileExtension ext: String) -> String? {
         let lower = ext.lowercased()
-        return mergedEntries.first(where: { $0.extensions.contains(lower) })?.language
+        // Skip disabled entries so a stale disabled config can't mask an
+        // enabled one that claims the same extension. The Code pane has a
+        // toggle but no delete action, so disabled entries can stick around.
+        return mergedEntries.first(where: { $0.enabled && $0.extensions.contains(lower) })?.language
     }
 
     func allEntries() -> [LanguageServerConfig] { mergedEntries }

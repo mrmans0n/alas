@@ -51,6 +51,14 @@ final class WorkspaceLSPManager {
         let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
         let key = Key(root: lspRoot.path, language: languageId)
         let uri = fileURL.lspURI
+        // If a previous holder's server died (process exited, transport
+        // closed) we'd otherwise reuse the dead client and silently fail to
+        // deliver hover/diagnostics/definition until the user closed every
+        // tab for that language. Drop the dead holder and fall through to
+        // spawn a fresh one.
+        if let existing = holders[key], await existing.client.state == .dead {
+            holders.removeValue(forKey: key)
+        }
         let client: LSPClient
         let ready: Task<Bool, Never>
         if let existing = holders[key] {

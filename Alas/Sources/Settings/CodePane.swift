@@ -37,12 +37,12 @@ struct CodePane: View {
         }
         .sheet(item: $selected) { entry in
             CodeLanguageDetailView(initial: entry,
-                                   onSave: save,
+                                   onSave: { save(originalLanguage: entry.language, $0) },
                                    onCancel: { selected = nil })
         }
         .sheet(isPresented: $creatingNew) {
             CodeLanguageDetailView(initial: blank(),
-                                   onSave: save,
+                                   onSave: { save(originalLanguage: nil, $0) },
                                    onCancel: { creatingNew = false })
         }
     }
@@ -69,9 +69,15 @@ struct CodePane: View {
         return Text(label).font(.system(size: 10.5)).foregroundColor(color)
     }
 
-    private func save(_ entry: LanguageServerConfig) {
+    private func save(originalLanguage: String?, _ entry: LanguageServerConfig) {
         var list = state.config.code.languageServers
-        if let i = list.firstIndex(where: { $0.language == entry.language }) {
+        // Look up by the original language ID so renaming an entry replaces
+        // it in place. Searching by the edited value (`entry.language`) would
+        // miss the existing config and orphan it — there's no delete action
+        // in the Code pane, so the stale entry would stick around and could
+        // keep claiming its old extensions.
+        let lookupKey = originalLanguage ?? entry.language
+        if let i = list.firstIndex(where: { $0.language == lookupKey }) {
             list[i] = entry
         } else {
             list.append(entry)

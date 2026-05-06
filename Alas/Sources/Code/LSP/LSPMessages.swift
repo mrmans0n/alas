@@ -150,16 +150,49 @@ enum LSPMarkup: Decodable, Sendable {
     case plain(String)
 
     init(from decoder: Decoder) throws {
+        // 1. Plain string.
         if let s = try? decoder.singleValueContainer().decode(String.self) {
             self = .plain(s); return
         }
+        // 2. `MarkedString[]` (legacy spec form) or any mixed array of
+        //    strings / objects. Concatenate the rendered values into one
+        //    block — the hover popover shows a single string.
+        if var arr = try? decoder.unkeyedContainer() {
+            var pieces: [String] = []
+            while !arr.isAtEnd {
+                if let s = try? arr.decode(String.self) {
+                    pieces.append(s)
+                } else if let nested = try? arr.decode(LSPMarkup.self) {
+                    switch nested {
+                    case .plain(let p):            pieces.append(p)
+                    case .markupContent(_, let v): pieces.append(v)
+                    }
+                } else {
+                    _ = try? arr.decode(JSONValue.self)  // skip unknown
+                }
+            }
+            self = .plain(pieces.joined(separator: "\n\n"))
+            return
+        }
+        // 3. Object form. `MarkupContent` is `{kind, value}`; legacy
+        //    `MarkedString` is `{language, value}`. Treat the latter as
+        //    `markupContent` with `language` standing in for `kind`.
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try c.decode(String.self, forKey: .kind)
-        let value = try c.decode(String.self, forKey: .value)
-        self = .markupContent(kind: kind, value: value)
+        if let kind = try? c.decode(String.self, forKey: .kind),
+           let value = try? c.decode(String.self, forKey: .value) {
+            self = .markupContent(kind: kind, value: value); return
+        }
+        if let lang = try? c.decode(String.self, forKey: .language),
+           let value = try? c.decode(String.self, forKey: .value) {
+            self = .markupContent(kind: lang, value: value); return
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: CodingKeys.value, in: c,
+            debugDescription: "unknown hover content shape"
+        )
     }
 
-    enum CodingKeys: String, CodingKey { case kind, value }
+    enum CodingKeys: String, CodingKey { case kind, value, language }
 }
 
 struct LSPDocumentSymbol: Decodable, Sendable {

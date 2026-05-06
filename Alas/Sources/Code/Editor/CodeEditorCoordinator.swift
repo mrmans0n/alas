@@ -17,6 +17,7 @@ final class CodeEditorCoordinator {
     private var currentRoot: URL?
     private var currentRelativePath: String?
     private var currentLanguage: String?
+    private var currentTheme: Theme?
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
     private var diagnosticsTask: Task<Void, Never>?
     private let diagnosticsFeature = DiagnosticsFeature()
@@ -31,6 +32,7 @@ final class CodeEditorCoordinator {
     func attach(textView: CodeTextView, worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
         self.textView = textView
         self.currentWorktreeId = worktreeId
+        self.currentTheme = theme
         load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
         hover = HoverFeature(
@@ -88,7 +90,16 @@ final class CodeEditorCoordinator {
             currentWorktreeId = worktreeId
             load(worktreeRoot: worktreeRoot, relativePath: relativePath, theme: theme)
             if let previous { Task { await self.close(document: previous) } }
+        } else if currentTheme != theme {
+            // Theme change without file change — SwiftUI's previous
+            // per-line `Text` editor recomputed colors from the environment
+            // every render, but the AppKit text view holds onto the old
+            // background, foreground, syntax colors, and diagnostic colors
+            // until something forces a repaint. Re-run highlight + base
+            // styling so a live theme switch takes effect immediately.
+            repaint(theme: theme)
         }
+        currentTheme = theme
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
 
@@ -201,6 +212,41 @@ final class CodeEditorCoordinator {
     private func applyDiagnostics(_ diagnostics: [LSPDiagnostic], theme: Theme) {
         guard let storage = textView?.textStorage else { return }
         diagnosticsFeature.apply(diagnostics, to: storage, theme: theme)
+    }
+
+    /// Re-applies background, base text attributes, and tree-sitter
+    /// highlights to the existing storage without re-reading the file or
+    /// touching LSP state. Called when the theme changes mid-session.
+    private func repaint(theme: Theme) {
+        guard let textView, let storage = textView.textStorage,
+              let root = currentRoot, let rel = currentRelativePath else { return }
+        let editorTheme = EditorTheme(theme: theme)
+        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        let baseAttrs: [NSAttributedString.Key: Any] = [
+            .font: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
+            .foregroundColor: editorTheme.defaultFG
+        ]
+        let text = storage.string
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.setAttributes(baseAttrs, range: fullRange)
+
+        let ext = (rel as NSString).pathExtension
+        let stableRoot = root
+        let stableRel = rel
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let spans = TreeSitterHighlighter.highlight(source: text, fileExtension: ext)
+            await MainActor.run {
+                guard let self = self,
+                      let s = self.textView?.textStorage,
+                      self.currentRoot == stableRoot,
+                      self.currentRelativePath == stableRel else { return }
+                s.beginEditing()
+                for span in spans {
+                    s.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
+                }
+                s.endEditing()
+            }
+        }
     }
 
     private struct OpenDocument {
