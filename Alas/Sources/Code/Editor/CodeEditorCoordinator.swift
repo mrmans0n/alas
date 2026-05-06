@@ -166,13 +166,20 @@ final class CodeEditorCoordinator {
         currentLanguage = language
         guard let language else { return }
 
-        Task {
+        // Snapshot the file we're loading so the async block can detect a
+        // mid-flight file switch — the manager's `openDocument` awaits
+        // `initialize()` which may take seconds; without this guard we'd
+        // subscribe diagnostics and refresh symbols for the *previous* URI,
+        // and `subscribeDiagnostics` would cancel the new file's
+        // diagnostics task on its way through.
+        Task { [stableRoot, stableRel] in
             let client = await manager.openDocument(
                 worktreeRoot: worktreeRoot,
                 fileURL: url,
                 languageId: language,
                 text: text
             )
+            guard self.currentRoot == stableRoot, self.currentRelativePath == stableRel else { return }
             await self.subscribeDiagnostics(for: client, uri: url.lspURI, theme: theme)
             await symbolsFeature.refresh(client: client, uri: url.lspURI)
         }
