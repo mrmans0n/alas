@@ -13,6 +13,15 @@ final class AppState {
     let terminal = TerminalService()
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
+    @ObservationIgnored
+    private var lspManager: WorkspaceLSPManager?
+
+    var lsp: WorkspaceLSPManager {
+        if let lspManager { return lspManager }
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: config.code.languageServers))
+        lspManager = manager
+        return manager
+    }
 
     private let store = PersistenceStore()
 
@@ -51,6 +60,7 @@ final class AppState {
 
     func saveConfig() {
         try? store.write(config, to: Paths.appConfigFile)
+        lspManager?.updateRegistry(LanguageServerRegistry(userDefined: config.code.languageServers))
     }
 
     func saveProjects() {

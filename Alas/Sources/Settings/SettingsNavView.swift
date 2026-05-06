@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, worktrees, terminal, appearance
+    case general, worktrees, terminal, code, appearance
     var id: String { rawValue }
     var label: String {
         switch self {
         case .general:    return "General"
         case .worktrees:  return "Worktrees"
         case .terminal:   return "Terminal"
+        case .code:       return "Code"
         case .appearance: return "Appearance"
         }
     }
@@ -16,6 +17,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general:    return "gear"
         case .worktrees:  return "branch"
         case .terminal:   return "terminal"
+        case .code:       return "code"
         case .appearance: return "palette"
         }
     }

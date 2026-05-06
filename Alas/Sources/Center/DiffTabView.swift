@@ -25,7 +25,7 @@ struct DiffTabView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
-                            HunkView(hunk: hunk, language: SimpleHighlighter.language(forFile: relativePath))
+                            HunkView(hunk: hunk, fileExtension: (relativePath as NSString).pathExtension)
                         }
                     }
                     .padding(.vertical, 8)
@@ -168,7 +168,7 @@ struct DiffTabView: View {
 
 private struct HunkView: View {
     let hunk: ParsedDiff.Hunk
-    let language: String
+    let fileExtension: String
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -185,17 +185,72 @@ private struct HunkView: View {
                     Text(lineMarker(line))
                         .frame(width: 44, alignment: .trailing)
                         .foregroundColor(markerColor(line))
-                    HStack(spacing: 0) {
-                        ForEach(Array(SimpleHighlighter.tokenize(line.text, language: language).enumerated()), id: \.offset) { (_, tok) in
-                            Text(tok.text).foregroundColor(theme.color("fg"))
-                        }
-                    }
-                    Spacer()
+                    Text(highlightedLine(line.text, ext: fileExtension))
+                    Spacer(minLength: 0)
                 }
                 .font(.system(size: 12.5, design: .monospaced))
                 .padding(.horizontal, 14)
                 .background(rowBg(line))
             }
+        }
+    }
+
+    /// Compose a single `AttributedString` for `line` with per-token
+    /// foreground colors. Rendering as a single SwiftUI `Text` (rather
+    /// than an HStack of per-token Texts) lets SwiftUI lay the line out
+    /// as one run of text — without it, long lines collapse into a
+    /// vertical stack of one-token columns under width pressure.
+    private func highlightedLine(_ line: String, ext: String) -> AttributedString {
+        var attr = AttributedString()
+        for (text, capture) in renderedSpans(line, ext: ext) {
+            var part = AttributedString(text)
+            part.foregroundColor = color(for: capture)
+            attr.append(part)
+        }
+        return attr
+    }
+
+    /// Build a sequence of `(text, capture)` pairs covering the entire
+    /// `line`, using `TreeSitterHighlighter`'s per-line spans. Plain
+    /// segments between captured ranges keep their text (capture = .plain).
+    private func renderedSpans(_ line: String, ext: String) -> [(String, HighlightCapture)] {
+        let ns = line as NSString
+        let total = ns.length
+        guard total > 0 else { return [] }
+        let spans = TreeSitterHighlighter.tokenize(line: line, fileExtension: ext)
+            .filter { $0.range.location >= 0 && NSMaxRange($0.range) <= total }
+            .sorted { $0.range.location < $1.range.location }
+
+        var result: [(String, HighlightCapture)] = []
+        var cursor = 0
+        for span in spans {
+            if span.range.location < cursor { continue } // skip overlapping
+            if span.range.location > cursor {
+                let plainRange = NSRange(location: cursor, length: span.range.location - cursor)
+                result.append((ns.substring(with: plainRange), .plain))
+            }
+            result.append((ns.substring(with: span.range), span.capture))
+            cursor = NSMaxRange(span.range)
+        }
+        if cursor < total {
+            let tail = NSRange(location: cursor, length: total - cursor)
+            result.append((ns.substring(with: tail), .plain))
+        }
+        if result.isEmpty {
+            result.append((line, .plain))
+        }
+        return result
+    }
+
+    private func color(for capture: HighlightCapture) -> Color {
+        switch capture {
+        case .keyword:  return theme.color("syntax-keyword")
+        case .type:     return theme.color("syntax-type")
+        case .function: return theme.color("syntax-function")
+        case .string:   return theme.color("add")
+        case .number:   return theme.color("mod")
+        case .comment:  return theme.color("fg-faint")
+        default:        return theme.color("fg")
         }
     }
 

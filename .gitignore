@@ -4,6 +4,8 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcshareddata/swiftpm/
+# Keep Package.resolved so SwiftPM resolves are reproducible across machines.
+!*.xcworkspace/xcshareddata/swiftpm/Package.resolved
 .swiftpm/
 .build/
 

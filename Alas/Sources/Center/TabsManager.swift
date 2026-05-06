@@ -44,12 +44,66 @@ final class TabsManager {
         return tab
     }
 
+    /// Open or focus an editor tab for `relativePath`. If a tab for that
+    /// path already exists, its reveal hints are updated and it becomes
+    /// active. Otherwise a new tab is appended.
+    @discardableResult
+    func openEditor(
+        worktreeId: String,
+        relativePath: String,
+        revealLine: Int?,
+        revealCharacter: Int?
+    ) -> Tab {
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .editor(let s) = $0 { return s.relativePath == relativePath }
+               return false
+           }) {
+            if case .editor(var s) = file.tabs[idx] {
+                s.revealLine = revealLine
+                s.revealCharacter = revealCharacter
+                file.tabs[idx] = .editor(s)
+                file.activeTabId = s.id
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+                return .editor(s)
+            }
+        }
+        let title = (relativePath as NSString).lastPathComponent
+        let state = EditorTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: relativePath,
+            revealLine: revealLine,
+            revealCharacter: revealCharacter
+        )
+        let tab = Tab.editor(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     @discardableResult
     func appendDiff(worktreeId: String, title: String, relativePath: String) -> Tab {
         let state = DiffTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
         let tab = Tab.diff(state)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    /// Clears the `revealLine`/`revealCharacter` hints on an editor tab.
+    /// Called by the editor coordinator once it has scrolled to the target,
+    /// so the hint isn't replayed on the next view re-render or app
+    /// relaunch.
+    func consumeReveal(worktreeId: String, tabId: TabID) {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .editor(var s) = file.tabs[idx],
+              s.revealLine != nil || s.revealCharacter != nil else { return }
+        s.revealLine = nil
+        s.revealCharacter = nil
+        file.tabs[idx] = .editor(s)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
     }
 
     func activate(worktreeId: String, tabId: TabID) {

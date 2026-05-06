@@ -42,6 +42,8 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
     var relativePath: String   // relative to worktree root
+    var revealLine: Int? = nil       // 0-based, optional reveal hint set by go-to-definition
+    var revealCharacter: Int? = nil  // 0-based UTF-16
 }
 
 struct DiffTabState: Codable, Equatable, Identifiable {

@@ -32,6 +32,7 @@ struct SettingsWindow: View {
                     case .general:    GeneralPane(state: state)
                     case .worktrees:  WorktreesPane(state: state)
                     case .terminal:   TerminalPane(state: state)
+                    case .code:       CodePane(state: state)
                     case .appearance: AppearancePane(state: state)
                     }
                 }
@@ -40,6 +41,7 @@ struct SettingsWindow: View {
                 .background(theme.color("bg-1"))
                 .clipped()
             }
+            .frame(maxHeight: .infinity)
 
             HStack(spacing: 8) {
                 Spacer()
@@ -50,7 +52,8 @@ struct SettingsWindow: View {
             .background(theme.color("bg-2"))
             .overlay(Divider().opacity(0.5), alignment: .top)
         }
-        .frame(width: 880, height: 580)
+        .frame(width: 880)
+        .frame(maxHeight: .infinity)
         .background(theme.color("bg-1"))
         .background(WindowConfigurator())
         .environment(\.theme, theme)

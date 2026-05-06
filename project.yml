@@ -14,6 +14,17 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
 
+packages:
+  SwiftTreeSitter:
+    url: https://github.com/tree-sitter/swift-tree-sitter
+    from: 0.9.0
+  TreeSitterSwift:
+    url: https://github.com/alex-pinkus/tree-sitter-swift
+    # tag 0.7.2-with-generated-files; this fork's `main` branch
+    # gitignores generated parser files, so SPM consumers must
+    # pin to a `*-with-generated-files` revision.
+    revision: 7b7909f2f6b9414be0958275f4c8e5d69c3bca43
+
 targets:
   Alas:
     type: application
@@ -47,6 +58,10 @@ targets:
         link: true
         codeSign: false
       - sdk: Carbon.framework
+      - package: SwiftTreeSitter
+        product: SwiftTreeSitter
+      - package: TreeSitterSwift
+        product: TreeSitterSwift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas

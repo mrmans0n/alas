@@ -12,6 +12,7 @@ struct AppConfig: Codable, Equatable {
     var worktrees: Worktrees
     var terminal: Terminal
     var harness: Harness
+    var code: Code
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -53,6 +54,10 @@ struct AppConfig: Codable, Equatable {
         var notifyOnFinish: Bool
     }
 
+    struct Code: Codable, Equatable {
+        var languageServers: [LanguageServerConfig]
+    }
+
     static let defaults = AppConfig(
         themeId: "cool-slate",
         accent: "teal",
@@ -90,6 +95,33 @@ struct AppConfig: Codable, Equatable {
             scrollbackLines: 10000,
             bell: "visual"
         ),
-        harness: Harness(notifyOnFinish: true)
+        harness: Harness(notifyOnFinish: true),
+        code: Code(languageServers: [])
     )
+}
+
+extension AppConfig {
+    enum CodingKeys: String, CodingKey {
+        case themeId, accent, density, matchSystemTheme,
+             sidebarWidth, rightPaneWidth, rightPaneVisible,
+             general, worktrees, terminal, harness, code
+    }
+
+    // Custom decode tolerates older config files that predate `code`.
+    // Swift still synthesizes encode(to:) automatically.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        themeId = try c.decode(String.self, forKey: .themeId)
+        accent = try c.decode(String.self, forKey: .accent)
+        density = try c.decode(String.self, forKey: .density)
+        matchSystemTheme = try c.decode(Bool.self, forKey: .matchSystemTheme)
+        sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)
+        rightPaneWidth = try c.decode(Double.self, forKey: .rightPaneWidth)
+        rightPaneVisible = try c.decode(Bool.self, forKey: .rightPaneVisible)
+        general = try c.decode(General.self, forKey: .general)
+        worktrees = try c.decode(Worktrees.self, forKey: .worktrees)
+        terminal = try c.decode(Terminal.self, forKey: .terminal)
+        harness = try c.decode(Harness.self, forKey: .harness)
+        code = (try c.decodeIfPresent(Code.self, forKey: .code)) ?? Code(languageServers: [])
+    }
 }
