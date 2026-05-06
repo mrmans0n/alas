@@ -182,7 +182,7 @@ final class CodeEditorCoordinator {
         guard let client else { return }
         diagnosticsTask?.cancel()
         diagnosticsTask = Task { [weak self] in
-            for await batch in await client.diagnosticsStream {
+            for await batch in await client.subscribeDiagnostics() {
                 if batch.uri != uri { continue }
                 await MainActor.run {
                     self?.applyDiagnostics(batch.diagnostics, theme: theme)

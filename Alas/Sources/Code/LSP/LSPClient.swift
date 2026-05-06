@@ -9,8 +9,14 @@ actor LSPClient {
     private(set) var state: State = .starting
     private var nextId: Int = 0
     private var pending: [LSPID: CheckedContinuation<Data?, Error>] = [:]
-    private var diagnostics: AsyncStream<LSPPublishDiagnosticsParams>.Continuation?
-    let diagnosticsStream: AsyncStream<LSPPublishDiagnosticsParams>
+    // `AsyncStream` is single-consumer — values are delivered to whichever
+    // iterator races to read first, not broadcast. Multiple coordinators
+    // sharing one client (two tabs in the same worktree/language) used to
+    // start their own `for await diagnosticsStream` loops and steal each
+    // other's batches, leaving one tab without squiggles. We now keep a
+    // dictionary of active subscribers and yield each batch to all of them.
+    private var diagnosticsSubscribers: [Int: AsyncStream<LSPPublishDiagnosticsParams>.Continuation] = [:]
+    private var nextDiagnosticsSubscriberId: Int = 0
 
     var isReady: Bool { state == .ready }
 
@@ -18,10 +24,27 @@ actor LSPClient {
         self.transport = transport
         self.language = language
         self.rootURI = rootURI
-        var diagCont: AsyncStream<LSPPublishDiagnosticsParams>.Continuation!
-        self.diagnosticsStream = AsyncStream { diagCont = $0 }
-        self.diagnostics = diagCont
         Task { await self.consume() }
+    }
+
+    /// Returns a fresh `AsyncStream` that receives every diagnostics batch
+    /// the server publishes. Each subscriber gets its own iterator;
+    /// terminate by breaking out of the `for await` (or cancelling the
+    /// enclosing Task) and the subscription is reaped automatically.
+    func subscribeDiagnostics() -> AsyncStream<LSPPublishDiagnosticsParams> {
+        let id = nextDiagnosticsSubscriberId
+        nextDiagnosticsSubscriberId += 1
+        return AsyncStream { cont in
+            self.diagnosticsSubscribers[id] = cont
+            cont.onTermination = { [weak self] _ in
+                guard let self else { return }
+                Task { await self.removeDiagnosticsSubscriber(id: id) }
+            }
+        }
+    }
+
+    private func removeDiagnosticsSubscriber(id: Int) {
+        diagnosticsSubscribers.removeValue(forKey: id)
     }
 
     func initialize() async throws {
@@ -138,33 +161,74 @@ actor LSPClient {
                     cont.resume(throwing: LSPError.transportClosed)
                 }
                 pending.removeAll()
-                diagnostics?.finish()
+                for (_, cont) in diagnosticsSubscribers { cont.finish() }
+                diagnosticsSubscribers.removeAll()
             }
         }
     }
 
     private func handle(frame: Data) {
-        // Try response first
-        if let resp = try? JSONDecoder().decode(LSPResponse.self, from: frame) {
+        // Classify by `(id, method)` rather than blindly trying `LSPResponse`
+        // first — server-initiated requests carry both `id` *and* `method`,
+        // and `LSPResponse`'s `result`/`error` are optional, so a naive
+        // `decode(LSPResponse...)` would happily classify them as responses
+        // and (worse) resume any pending continuation whose id collides with
+        // the server's request id by nil.
+        struct Envelope: Decodable {
+            let id: LSPID?
+            let method: String?
+        }
+        let env = (try? JSONDecoder().decode(Envelope.self, from: frame)) ?? Envelope(id: nil, method: nil)
+
+        if env.method == nil, env.id != nil {
+            // Pure response.
+            guard let resp = try? JSONDecoder().decode(LSPResponse.self, from: frame) else { return }
             if let cont = pending.removeValue(forKey: resp.id) {
                 if let err = resp.error {
                     cont.resume(throwing: LSPError.responseError(err))
                 } else {
                     cont.resume(returning: resp.result)
                 }
-                return
             }
+            return
         }
-        // Otherwise, server-initiated notification
-        struct Note: Decodable { let method: String; let params: JSONValue? }
-        if let note = try? JSONDecoder().decode(Note.self, from: frame) {
-            if note.method == "textDocument/publishDiagnostics",
+
+        guard let method = env.method else { return }
+
+        if env.id == nil {
+            // Server-initiated notification.
+            struct Note: Decodable { let params: JSONValue? }
+            guard let note = try? JSONDecoder().decode(Note.self, from: frame) else { return }
+            if method == "textDocument/publishDiagnostics",
                let raw = note.params,
                let data = try? JSONEncoder().encode(raw),
                let parsed = try? JSONDecoder().decode(LSPPublishDiagnosticsParams.self, from: data) {
-                diagnostics?.yield(parsed)
+                for (_, cont) in diagnosticsSubscribers { cont.yield(parsed) }
             }
+            return
         }
+
+        // Server-initiated request. We don't implement any of these yet
+        // (`workspace/configuration`, `client/registerCapability`, …) but we
+        // owe the server a response per JSON-RPC, otherwise it can stall
+        // waiting on us. Reply with method-not-found (-32601).
+        guard let id = env.id else { return }
+        try? sendErrorResponse(id: id, code: -32601, message: "method not implemented: \(method)")
+    }
+
+    private nonisolated func sendErrorResponse(id: LSPID, code: Int, message: String) throws {
+        let idValue: Any
+        switch id {
+        case .int(let i):    idValue = i
+        case .string(let s): idValue = s
+        }
+        let payload: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": idValue,
+            "error": ["code": code, "message": message] as [String: Any]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [])
+        try transport.send(data)
     }
 }
 

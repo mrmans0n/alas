@@ -82,7 +82,16 @@ final class LSPTransport: @unchecked Sendable {
         self.continuation = cont
         process.executableURL = executable
         process.arguments = arguments
-        if let env = environment { process.environment = env }
+        // Always inherit the parent environment, then overlay user values on
+        // top — assigning `process.environment` directly to the user's dict
+        // wipes `PATH`, `HOME`, developer-tool variables, etc., so a config
+        // that only sets one flag would also stop `/usr/bin/env` from
+        // resolving Homebrew-installed servers.
+        if let env = environment {
+            var merged = ProcessInfo.processInfo.environment
+            for (k, v) in env { merged[k] = v }
+            process.environment = merged
+        }
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr
