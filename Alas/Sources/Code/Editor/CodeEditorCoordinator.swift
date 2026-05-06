@@ -412,7 +412,10 @@ final class CodeEditorCoordinator {
     /// the user's scroll position. After applying, asks the TabsManager to
     /// clear the hint so it isn't replayed on relaunch.
     private func applyRevealIfNeeded(tabId: TabID, line: Int?, character: Int?) {
-        guard let line, let character else { return }
+        guard let line, let character else {
+            lastAppliedReveal = nil
+            return
+        }
         if let last = lastAppliedReveal,
            last.tabId == tabId, last.line == line, last.character == character {
             return
