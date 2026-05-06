@@ -197,7 +197,22 @@ final class CodeEditorCoordinator {
                 languageId: language,
                 text: text
             )
-            guard self.currentRoot == stableRoot, self.currentRelativePath == stableRel else { return }
+            let stillCurrent = self.currentRoot == stableRoot && self.currentRelativePath == stableRel
+            guard stillCurrent else {
+                // The user closed the tab or switched files while
+                // `openDocument` was in flight. If the manager opened a
+                // server for us we owe it a matching `closeDocument` —
+                // otherwise the refcount stays elevated and the server
+                // process hangs around until app shutdown.
+                if client != nil {
+                    await manager.closeDocument(
+                        worktreeRoot: stableRoot,
+                        fileURL: url,
+                        languageId: language
+                    )
+                }
+                return
+            }
             await self.subscribeDiagnostics(for: client, uri: url.lspURI, theme: theme)
             await symbolsFeature.refresh(client: client, uri: url.lspURI)
         }

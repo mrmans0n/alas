@@ -101,14 +101,30 @@ extension Process {
         await exit.wait()
         watchdog.cancel()
 
-        // Brief grace period for any in-flight readability dispatches to
-        // land before we snapshot. EOF after exit is queued in the kernel
-        // pipe immediately, but the handler dispatch has some tail
-        // latency under CI load — 50ms is enough in practice. Using a
-        // plain `Task.sleep` instead of an `NSCondition` avoids a
-        // user-initiated QoS thread waiting on a default-QoS handler
-        // (the priority inversion that prompted past CI hangs).
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        // Wait for both pipes to actually report EOF before we drop the
+        // readability handlers — a fixed grace period would truncate
+        // output for commands that emit a lot post-exit or run on a
+        // congested dispatch queue. The accumulators resolve their
+        // continuation when the handler delivers an empty buffer (EOF);
+        // we cap the wait at 2s to bound a worst-case stuck handler.
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await outAccum.waitForClose(); return true }
+            group.addTask { await errAccum.waitForClose(); return true }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                return false
+            }
+            var drained = 0
+            while let pipeDone = await group.next() {
+                if pipeDone {
+                    drained += 1
+                    if drained == 2 { break }
+                } else {
+                    break  // 2-second deadline hit; bail with what we have.
+                }
+            }
+            group.cancelAll()
+        }
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
 
@@ -168,11 +184,16 @@ private final class ExitGate: @unchecked Sendable {
     }
 }
 
-/// Lock-protected `Data` buffer for output collected from the readability
-/// handler.
+/// Lock-protected `Data` buffer with an EOF latch. The readability
+/// handler calls `markClosed` when it sees an empty buffer (EOF); a single
+/// awaiter on `waitForClose` resumes there. Latches `closed` so an
+/// awaiter that arrives *after* EOF (handler raced ahead) returns
+/// immediately.
 private final class ByteAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
+    private var closed = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func append(_ chunk: Data) {
         lock.lock()
@@ -181,9 +202,25 @@ private final class ByteAccumulator: @unchecked Sendable {
     }
 
     func markClosed() {
-        // No-op — the snapshot path takes whatever we've accumulated.
-        // Kept for symmetry with `append` so the handler logic stays
-        // self-documenting.
+        lock.lock()
+        let conts = waiters
+        waiters = []
+        closed = true
+        lock.unlock()
+        for c in conts { c.resume() }
+    }
+
+    func waitForClose() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if closed {
+                lock.unlock()
+                cont.resume()
+                return
+            }
+            waiters.append(cont)
+            lock.unlock()
+        }
     }
 
     func snapshot() -> Data {
