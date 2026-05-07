@@ -14,7 +14,7 @@ struct Theme: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey { case id, name, tokens }
 
-    static let bundledIds = ["cool-slate", "warm-amber", "neutral", "light"]
+    static let bundledIds = ["cool-slate", "light"]
 
     /// Hex strings for the 5 named accents in AppearancePane.
     /// Keep in sync with the picker's `accents` array.
@@ -25,6 +25,13 @@ struct Theme: Codable, Equatable {
         "coral": "#d77b88",
         "iris":  "#9789c7",
     ]
+
+    /// Whether this theme is a dark variant. Drives `NSApp.appearance`
+    /// so system materials (sidebar vibrancy, scrollers, focus rings)
+    /// render the right way for the in-app theme. The convention is
+    /// "everything except the explicit `light` theme is dark"; the
+    /// `light` id is the only one of its kind we ship.
+    var darkMode: Bool { id != "light" }
 
     static func loadBundled(id: String) throws -> Theme {
         guard let url = Bundle.main.url(forResource: id, withExtension: "json") else {

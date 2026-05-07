@@ -65,6 +65,9 @@ struct RootView: View {
             FileSearchDialog(appState: state)
         }
         .environment(\.theme, state.themeStore.current)
+        .onChange(of: state.themeStore.current.id) { _, _ in
+            WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
+        }
         .background(WindowConfigurator())
         .frame(minWidth: 900, minHeight: 600)
         .ignoresSafeArea()

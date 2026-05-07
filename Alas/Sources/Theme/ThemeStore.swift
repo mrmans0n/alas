@@ -93,14 +93,13 @@ final class ThemeStore {
     }
 
     private func systemIsDark() -> Bool {
-        let name = NSApp.effectiveAppearance.bestMatch(
-            from: [.aqua, .darkAqua, .vibrantDark, .vibrantLight]
-        )
-        switch name {
-        case .darkAqua?, .vibrantDark?:
-            return true
-        default:
-            return false
-        }
+        // Read the OS preference directly. We can't use
+        // `NSApp.effectiveAppearance` here: `WindowAppearance.apply`
+        // forces `NSApp.appearance` to match the in-app theme, which
+        // poisons `effectiveAppearance` so it would echo our override
+        // instead of the real OS setting. `AppleInterfaceStyle` is the
+        // canonical global default — `"Dark"` when dark, missing when
+        // light — and is unaffected by per-app overrides.
+        UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
     }
 }

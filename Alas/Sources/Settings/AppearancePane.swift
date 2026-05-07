@@ -6,8 +6,6 @@ struct AppearancePane: View {
 
     private let themes: [(String, String, Color, Color)] = [
         ("cool-slate", "Cool Slate", Color(hex: "#26323b"), Color(hex: "#5fb7c4")),
-        ("warm-amber", "Warm Amber", Color(hex: "#2c241d"), Color(hex: "#c89d6f")),
-        ("neutral",    "Neutral",    Color(hex: "#222222"), Color(hex: "#a8a8a8")),
         ("light",      "Light",      Color(hex: "#f0eee9"), Color(hex: "#5b8a91")),
     ]
 
@@ -29,7 +27,7 @@ struct AppearancePane: View {
 
                 SettingsGroup(title: "Theme") {
                     SettingsRow(name: "Color scheme",
-                                desc: "Cool Slate is the default; Alas ships 4 themes.") {
+                                desc: "Pick a light or dark theme.") {
                         HStack(spacing: 8) {
                             ForEach(themes, id: \.0) { (id, name, c1, c2) in
                                 Button {

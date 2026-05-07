@@ -9,8 +9,8 @@ struct ThemeStoreTests {
 
     @Test func switchChangesCurrent() throws {
         let store = try ThemeStore()
-        try store.activate(id: "warm-amber")
-        #expect(store.current.id == "warm-amber")
+        try store.activate(id: "light")
+        #expect(store.current.id == "light")
     }
 
     @Test func switchToUnknownThrows() throws {
@@ -18,5 +18,13 @@ struct ThemeStoreTests {
         #expect(throws: Error.self) {
             try store.activate(id: "nope")
         }
+    }
+
+    @Test func matchSystemOffRestoresUserPick() throws {
+        let store = try ThemeStore()
+        try store.activate(id: "light")
+        store.setMatchSystem(true)
+        store.setMatchSystem(false)
+        #expect(store.current.id == "light")
     }
 }
