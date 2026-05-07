@@ -114,4 +114,27 @@ struct EditorBufferTests {
         try buffer.save()
         #expect(buffer.originalMtime > oldMtime)
     }
+
+    @Test func editingFlipsDirtyAndFiresObserver() async {
+        let root = tempWorktree()
+        _ = try? writeFile(root, "a.txt", "hello\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        var fired = 0
+        let token = buffer.onEdit { fired += 1 }
+        defer { buffer.removeOnEdit(token) }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+        #expect(buffer.dirty == true)
+        #expect(fired == 1)
+    }
+
+    @Test func revertReloadsFromDiskAndClearsDirty() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "original\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "junk")
+        #expect(buffer.dirty == true)
+        buffer.revert()
+        #expect(buffer.storage.string == "original\n")
+        #expect(buffer.dirty == false)
+    }
 }

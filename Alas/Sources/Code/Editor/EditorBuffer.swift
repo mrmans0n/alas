@@ -28,6 +28,15 @@ final class EditorBuffer {
     private(set) var lineEnding: LineEnding = .lf
     private(set) var readOnly: Bool = false
 
+    @ObservationIgnored
+    private var editObservers: [UUID: () -> Void] = [:]
+    @ObservationIgnored
+    private var storageDelegate: BufferStorageDelegate!
+    @ObservationIgnored
+    private var loading = false
+
+    struct EditObserverToken { fileprivate let id: UUID }
+
     /// `true` while the in-memory text differs from the bytes last read
     /// from / written to disk. Computed from `storage.string` against
     /// `originalText` (cheap for files under ~1 MB).
@@ -40,6 +49,28 @@ final class EditorBuffer {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.storage = NSTextStorage()
+        self.storageDelegate = BufferStorageDelegate { [weak self] in self?.handleEdit() }
+        self.storage.delegate = self.storageDelegate
+        loadFromDisk()
+    }
+
+    @discardableResult
+    func onEdit(_ block: @escaping () -> Void) -> EditObserverToken {
+        let id = UUID()
+        editObservers[id] = block
+        return EditObserverToken(id: id)
+    }
+
+    func removeOnEdit(_ token: EditObserverToken) {
+        editObservers.removeValue(forKey: token.id)
+    }
+
+    private func handleEdit() {
+        guard !loading else { return }
+        for block in editObservers.values { block() }
+    }
+
+    func revert() {
         loadFromDisk()
     }
 
@@ -113,6 +144,8 @@ final class EditorBuffer {
     }
 
     private func loadFromDisk() {
+        loading = true
+        defer { loading = false }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
             storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
@@ -131,5 +164,24 @@ final class EditorBuffer {
             }
         }
         readOnly = false
+    }
+}
+
+private final class BufferStorageDelegate: NSObject, NSTextStorageDelegate {
+    private let onDidProcess: () -> Void
+    init(_ onDidProcess: @escaping () -> Void) {
+        self.onDidProcess = onDidProcess
+    }
+    func textStorage(
+        _ textStorage: NSTextStorage,
+        didProcessEditing editedMask: NSTextStorageEditActions,
+        range editedRange: NSRange,
+        changeInLength delta: Int
+    ) {
+        // We only care about character changes (typing, paste, delete).
+        // Attribute-only edits (highlighter applying colors) are ignored —
+        // otherwise re-highlighting would loop through the observer.
+        guard editedMask.contains(.editedCharacters) else { return }
+        onDidProcess()
     }
 }
