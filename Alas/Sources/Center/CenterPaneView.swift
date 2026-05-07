@@ -40,9 +40,7 @@ struct CenterPaneView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(rel, forType: .string)
                 },
-                onNewTerminal: openTerminal,
-                onNewEditor: { _ = state.tabs.appendEditor(worktreeId: worktree.id, title: "untitled", relativePath: "") },
-                onNewDiff:   { _ = state.tabs.appendDiff(worktreeId: worktree.id, title: "untitled", relativePath: "") }
+                onNewTerminal: openTerminal
             )
             Group {
                 if tabs.isEmpty {

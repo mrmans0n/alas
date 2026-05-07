@@ -14,11 +14,16 @@ struct LanguageServerConfig: Codable, Equatable, Identifiable, Sendable {
 struct LanguageServerRegistry {
     private let userDefined: [LanguageServerConfig]
 
+    // Plain command name; PATH resolves it. We used to xcrun-find sourcekit-lsp
+    // here, but that ran Process.waitUntilExit() inside the static initializer,
+    // which pumps the main runloop and let SwiftUI re-enter Self.builtIns —
+    // libdispatch traps the recursive dispatch_once. Static let initializers
+    // must not pump the runloop.
     static let builtIns: [LanguageServerConfig] = [
         LanguageServerConfig(
             language: "swift",
             extensions: ["swift"],
-            command: resolveSwiftCommand(),
+            command: "sourcekit-lsp",
             args: [],
             env: [:],
             rootMarkers: ["Package.swift", "*.xcodeproj", ".git"],
@@ -50,25 +55,5 @@ struct LanguageServerRegistry {
         for b in Self.builtIns { byLang[b.language] = b }
         for u in userDefined { byLang[u.language] = u }
         return Array(byLang.values).sorted { $0.language < $1.language }
-    }
-
-    private static func resolveSwiftCommand() -> String {
-        // Best-effort xcrun lookup; falls back to plain command name so PATH wins.
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        p.arguments = ["--find", "sourcekit-lsp"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        do {
-            try p.run()
-            p.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let s = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return s.isEmpty ? "sourcekit-lsp" : s
-        } catch {
-            return "sourcekit-lsp"
-        }
     }
 }

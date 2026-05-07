@@ -13,8 +13,6 @@ struct TabBarView: View {
     let onCopyPath: (TabID) -> Void
     let onCopyRelativePath: (TabID) -> Void
     let onNewTerminal: () -> Void
-    let onNewEditor: () -> Void
-    let onNewDiff: () -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -45,17 +43,12 @@ struct TabBarView: View {
                 }
             }
             Spacer()
-            HStack(spacing: 4) {
-                Menu {
-                    Button("New terminal", action: onNewTerminal)
-                    Button("New editor",   action: onNewEditor)
-                    Button("New diff",     action: onNewDiff)
-                } label: {
-                    Icon(name: "plus", size: 13)
-                }
-                .menuStyle(.borderlessButton)
-                .frame(width: 26, height: 22)
+            Button(action: onNewTerminal) {
+                Icon(name: "plus", size: 13)
+                    .frame(width: 26, height: 22)
             }
+            .buttonStyle(.plain)
+            .help("New terminal")
             .padding(.horizontal, 8)
         }
         .frame(height: 34)
