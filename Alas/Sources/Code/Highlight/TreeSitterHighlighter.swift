@@ -70,7 +70,7 @@ struct TreeSitterHighlighter {
         }
 
         private func apply(edits: [EditorTextEdit], oldText: String, newText: String, to tree: MutableTree) -> MutableTree? {
-            guard !edits.isEmpty else { return tree }
+            guard !edits.isEmpty else { return oldText == newText ? tree : nil }
             var rollingText = oldText
             for edit in edits {
                 guard let editedText = TextEditCoordinates.apply(edit, to: rollingText),

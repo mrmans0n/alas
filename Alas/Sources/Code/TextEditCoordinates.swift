@@ -40,9 +40,9 @@ enum TextEditCoordinates {
             startByte: edit.location * 2,
             oldEndByte: (edit.location + edit.oldLength) * 2,
             newEndByte: (edit.location + edit.newLength) * 2,
-            startPoint: Point(row: start.line, column: start.character),
-            oldEndPoint: Point(row: oldEnd.line, column: oldEnd.character),
-            newEndPoint: Point(row: newEnd.line, column: newEnd.character)
+            startPoint: Point(row: start.line, column: start.byteColumn),
+            oldEndPoint: Point(row: oldEnd.line, column: oldEnd.byteColumn),
+            newEndPoint: Point(row: newEnd.line, column: newEnd.byteColumn)
         )
     }
 
@@ -51,7 +51,7 @@ enum TextEditCoordinates {
         return LSPPosition(line: point.line, character: point.character)
     }
 
-    private static func point(utf16Offset target: Int, in text: String) -> (line: Int, character: Int)? {
+    private static func point(utf16Offset target: Int, in text: String) -> (line: Int, character: Int, byteColumn: Int)? {
         let ns = text as NSString
         guard target >= 0, target <= ns.length else { return nil }
         var line = 0
@@ -64,6 +64,7 @@ enum TextEditCoordinates {
             }
             index += 1
         }
-        return (line, target - lineStart)
+        let character = target - lineStart
+        return (line, character, character * 2)
     }
 }
