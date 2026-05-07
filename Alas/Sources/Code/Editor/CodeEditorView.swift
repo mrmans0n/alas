@@ -68,6 +68,7 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.attach(
             textView: textView,
             buffer: buffer,
+            layoutManager: layoutManager,
             worktreeId: worktreeId,
             tabId: tabId,
             revealLine: revealLine,

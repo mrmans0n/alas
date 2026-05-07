@@ -276,4 +276,33 @@ struct EditorBufferTests {
         restored.checkForConflictOnRestore()
         #expect(restored.conflict == .changedOnDisk)
     }
+
+    @Test func coordinatorDetachRemovesMountedLayoutManager() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        let layoutManager = NSLayoutManager()
+        buffer.storage.addLayoutManager(layoutManager)
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: AppState())
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            tabId: "t",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+        #expect(buffer.storage.layoutManagers.contains { $0 === layoutManager })
+
+        coordinator.detach()
+
+        #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
+    }
 }

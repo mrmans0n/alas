@@ -12,6 +12,7 @@ final class CodeEditorCoordinator {
     let appState: AppState
     private weak var textView: CodeTextView?
     private weak var buffer: EditorBuffer?
+    private var layoutManager: NSLayoutManager?
 
     private var currentTabId: TabID?
     private var currentWorktreeId: String?
@@ -29,14 +30,16 @@ final class CodeEditorCoordinator {
 
     private var editObserverToken: EditorBuffer.EditObserverToken?
     private var didChangeTask: Task<Void, Never>?
+    private var hasPendingDidChange = false
 
     init(appState: AppState) {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
         self.textView = textView
         self.buffer = buffer
+        self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentTabId = tabId
         self.currentRoot = buffer.worktreeRoot
@@ -114,10 +117,18 @@ final class CodeEditorCoordinator {
             buffer.removeOnEdit(token)
         }
         editObserverToken = nil
+        if hasPendingDidChange {
+            notifyLSPDidChange()
+            hasPendingDidChange = false
+        }
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
         didChangeTask?.cancel()
         didChangeTask = nil
+        if let buffer, let layoutManager {
+            buffer.storage.removeLayoutManager(layoutManager)
+        }
+        layoutManager = nil
         hover = nil
         definition = nil
         textView = nil
@@ -130,11 +141,13 @@ final class CodeEditorCoordinator {
 
     private func scheduleEditPropagation() {
         didChangeTask?.cancel()
+        hasPendingDidChange = true
         didChangeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard let self, !Task.isCancelled, let theme = self.currentTheme else { return }
             await MainActor.run {
                 self.runHighlight(theme: theme)
+                self.hasPendingDidChange = false
                 self.notifyLSPDidChange()
             }
         }
