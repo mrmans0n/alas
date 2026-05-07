@@ -30,17 +30,19 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(theme.color("bg-1"))
 
-        // Build an explicit TextKit 1 chain. On macOS 14+ NSTextView defaults
-        // to TextKit 2 (NSTextLayoutManager + NSTextContentStorage) when it
-        // creates its own container — and in that mode the legacy
-        // `textView.textStorage` returns nil, so any code that mutates it
-        // silently no-ops. We rely on `textStorage.setAttributedString(...)`
-        // and `addAttributes(_:range:)` for highlights and diagnostics, so
-        // we need TextKit 1. Wiring the chain manually (storage → layout
-        // manager → container → text view) guarantees that.
-        let textStorage = NSTextStorage()
+        let buffer = appState.tabs.buffer(
+            worktreeId: worktreeId,
+            tabId: tabId,
+            worktreeRoot: worktreeRoot,
+            relativePath: relativePath
+        )
+
+        // Build the TextKit 1 chain around the buffer's existing storage.
+        // We deliberately do NOT call `setAttributedString` here — that's
+        // the buffer's job (load / revert / restore). All this view does is
+        // present the storage.
         let layoutManager = NSLayoutManager()
-        textStorage.addLayoutManager(layoutManager)
+        buffer.storage.addLayoutManager(layoutManager)
         let containerSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
@@ -50,9 +52,6 @@ struct CodeEditorView: NSViewRepresentable {
         textContainer.heightTracksTextView = false
         layoutManager.addTextContainer(textContainer)
 
-        // Two-direction-scroll code editor: the textView grows to fit its
-        // content (longest line = width, total lines = height); it does
-        // NOT track the scroll view's size. Hence autoresizingMask = [].
         let initialFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
         let textView = CodeTextView(frame: initialFrame, textContainer: textContainer)
         textView.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
@@ -68,9 +67,8 @@ struct CodeEditorView: NSViewRepresentable {
 
         context.coordinator.attach(
             textView: textView,
+            buffer: buffer,
             worktreeId: worktreeId,
-            worktreeRoot: worktreeRoot,
-            relativePath: relativePath,
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
@@ -92,6 +90,8 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: CodeEditorCoordinator) {
+        // Detach the coordinator from the text view, but DO NOT close the
+        // buffer's LSP document or watcher — the buffer outlives this view.
         coordinator.detach()
     }
 }

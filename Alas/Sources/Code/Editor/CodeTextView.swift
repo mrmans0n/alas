@@ -1,22 +1,28 @@
 import AppKit
 
-/// Read-only `NSTextView` subclass that exposes mouse hover and Cmd-click
-/// callbacks. The coordinator wires the callbacks; this class itself stays
-/// dumb so it can be unit-tested in isolation if needed.
+/// Editable `NSTextView` subclass. The coordinator wires hover and
+/// Cmd-click callbacks; the storage is owned and managed by an
+/// `EditorBuffer` outside this view. Editing is enabled but undo/redo,
+/// dirty tracking, save, file-watch, and LSP `didChange` are all
+/// orchestrated by the buffer + coordinator pair.
 final class CodeTextView: NSTextView {
     var hoverHandler: ((NSPoint) -> Void)?
     var commandClickHandler: ((NSPoint) -> Void)?
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         super.init(frame: frameRect, textContainer: container)
-        self.isEditable = false
+        self.isEditable = true
         self.isSelectable = true
+        self.allowsUndo = true
         self.isRichText = false
-        self.allowsUndo = false
         self.usesFindBar = true
         self.isAutomaticQuoteSubstitutionEnabled = false
         self.isAutomaticDashSubstitutionEnabled = false
         self.isAutomaticTextReplacementEnabled = false
+        self.isAutomaticSpellingCorrectionEnabled = false
+        self.isContinuousSpellCheckingEnabled = false
+        self.isGrammarCheckingEnabled = false
+        self.smartInsertDeleteEnabled = false
         self.textContainerInset = NSSize(width: 12, height: 8)
     }
 
