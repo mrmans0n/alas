@@ -103,6 +103,17 @@ struct EditorBufferTests {
         #expect(buffer.originalText == "x")
     }
 
+    @Test func saveRecordingErrorStoresThrownSaveFailure() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "x")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "more\n")
+        try FileManager.default.removeItem(at: root)
+        #expect(throws: (any Error).self) { try buffer.saveRecordingError() }
+        #expect(buffer.lastSaveError?.isEmpty == false)
+        #expect(buffer.dirty == true)
+    }
+
     @Test func saveUpdatesMtime() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "x")

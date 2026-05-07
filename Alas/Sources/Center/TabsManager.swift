@@ -289,10 +289,9 @@ final class TabsManager {
         guard let activeId = activeTabId(forWorktree: worktreeId),
               let buffer = buffers[activeId] else { return false }
         do {
-            try buffer.save()
+            try buffer.saveRecordingError()
             return true
         } catch {
-            buffer.lastSaveError = (error as NSError).localizedDescription
             return false
         }
     }

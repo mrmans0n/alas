@@ -24,10 +24,10 @@ struct EditorConflictBanner: View {
                     message: "File was deleted on disk.",
                     primary: ("Save anyway", {
                         do {
-                            try buffer.save()
+                            try buffer.saveRecordingError()
                             buffer.resolveConflictKeepingMine()
                         } catch {
-                            // save() already set lastSaveError; leave the
+                            // saveRecordingError() already set lastSaveError; leave the
                             // conflict in place so the user can retry.
                         }
                     }),

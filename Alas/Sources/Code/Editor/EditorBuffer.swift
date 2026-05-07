@@ -281,6 +281,15 @@ final class EditorBuffer {
         }
     }
 
+    func saveRecordingError() throws {
+        do {
+            try save()
+        } catch {
+            lastSaveError = (error as NSError).localizedDescription
+            throw error
+        }
+    }
+
     // MARK: - Snapshot / restore (hot-exit)
 
     private func applySnapshot(_ snap: EditorBufferStore.Snapshot) {
