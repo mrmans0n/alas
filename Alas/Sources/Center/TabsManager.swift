@@ -253,6 +253,14 @@ final class TabsManager {
         buffers[tabId]
     }
 
+    func activeEditorContext(worktreeId: String) -> (tab: EditorTabState, buffer: EditorBuffer)? {
+        guard let activeId = activeTabId(forWorktree: worktreeId),
+              let tab = tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .editor(let state) = tab,
+              let buffer = buffers[activeId] else { return nil }
+        return (state, buffer)
+    }
+
     /// Tear down the buffer for `tabId`, close its watcher, and drop it from
     /// cache. Explicit tab removal discards hot-exit snapshots; app quit paths
     /// snapshot dirty buffers before teardown. `worktreeId` is asserted in
@@ -273,6 +281,28 @@ final class TabsManager {
         buffers.compactMap { $0.value.dirty ? $0.key : nil }
     }
 
+    @discardableResult
+    func updateEditorPath(worktreeId: String, tabId: TabID, relativePath: String) -> Bool {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .editor(var state) = file.tabs[idx] else { return false }
+        state.relativePath = relativePath
+        state.title = (relativePath as NSString).lastPathComponent
+        state.revealLine = nil
+        state.revealCharacter = nil
+        file.tabs[idx] = .editor(state)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return true
+    }
+
+    func hasEditor(worktreeId: String, relativePath: String, excluding tabId: TabID? = nil) -> Bool {
+        tabs(forWorktree: worktreeId).contains { tab in
+            guard case .editor(let state) = tab else { return false }
+            return state.id != tabId && state.relativePath == relativePath
+        }
+    }
+
     /// Walk all dirty buffers and write a final snapshot. Called by the
     /// quit handler. Errors are swallowed — failing to snapshot one buffer
     /// must not block snapshotting the rest, and quit must not be blocked.
@@ -280,6 +310,53 @@ final class TabsManager {
         for buffer in buffers.values where buffer.dirty {
             buffer.snapshotNow()
         }
+    }
+
+    @discardableResult
+    func saveAll(worktreeRoots: [String: URL] = [:]) -> [(tabId: TabID, error: Error)] {
+        var errors: [(TabID, Error)] = []
+        for (tabId, buffer) in buffers where buffer.dirty {
+            do {
+                try buffer.saveRecordingError()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
+        for (worktreeId, file) in byWorktree {
+            guard let root = worktreeRoots[worktreeId] else { continue }
+            for tab in file.tabs {
+                guard case .editor(let state) = tab,
+                      buffers[state.id] == nil,
+                      (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
+                let buffer: EditorBuffer
+                if let lsp {
+                    buffer = EditorBuffer(
+                        worktreeRoot: root,
+                        relativePath: state.relativePath,
+                        store: bufferStore,
+                        worktreeId: worktreeId,
+                        tabId: state.id,
+                        lsp: lsp
+                    )
+                } else {
+                    buffer = EditorBuffer(
+                        worktreeRoot: root,
+                        relativePath: state.relativePath,
+                        store: bufferStore,
+                        worktreeId: worktreeId,
+                        tabId: state.id
+                    )
+                }
+                do {
+                    try buffer.saveRecordingError()
+                    buffer.close(persistDirtySnapshot: false)
+                } catch {
+                    errors.append((state.id, error))
+                    buffer.close(persistDirtySnapshot: true)
+                }
+            }
+        }
+        return errors
     }
 
     /// Save the active editor tab's buffer for `worktreeId`. No-op if the
@@ -294,5 +371,13 @@ final class TabsManager {
         } catch {
             return false
         }
+    }
+
+    @discardableResult
+    func revertActive(worktreeId: String) -> Bool {
+        guard let activeId = activeTabId(forWorktree: worktreeId),
+              let buffer = buffers[activeId] else { return false }
+        buffer.revert()
+        return true
     }
 }

@@ -141,6 +141,95 @@ final class AppState {
         _ = tabs.saveActive(worktreeId: worktreeId)
     }
 
+    func saveAllTabs() {
+        var roots: [String: URL] = [:]
+        for project in projects {
+            for worktree in projectsManager.worktrees(projectId: project.id) {
+                roots[worktree.id] = roots[worktree.id] ?? worktree.path
+            }
+        }
+        let errors = tabs.saveAll(worktreeRoots: roots)
+        guard !errors.isEmpty else { return }
+        showFileActionError(
+            title: "Save All Failed",
+            message: "\(errors.count) file\(errors.count == 1 ? "" : "s") could not be saved."
+        )
+    }
+
+    func revertActiveTab(worktreeId: String) {
+        _ = tabs.revertActive(worktreeId: worktreeId)
+    }
+
+    func newFile(in worktreeId: String) {
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        let panel = NSSavePanel()
+        panel.title = "New File"
+        panel.message = "Choose where to create the new file."
+        panel.directoryURL = worktree.path
+        panel.nameFieldStringValue = "untitled.txt"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let relativePath = try relativePath(for: url, in: worktree.path)
+            if FileManager.default.fileExists(atPath: url.path) {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url, options: .withoutOverwriting)
+            openFile(relativePath: relativePath, worktreeId: worktreeId)
+        } catch {
+            showFileActionError(title: "New File Failed", message: error.localizedDescription)
+        }
+    }
+
+    func saveActiveTabAs(worktreeId: String) {
+        guard let worktree = worktree(withId: worktreeId),
+              let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
+        let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
+        let panel = NSSavePanel()
+        panel.title = "Save As"
+        panel.message = "Choose the new path for this editor buffer."
+        panel.directoryURL = currentURL.deletingLastPathComponent()
+        panel.nameFieldStringValue = currentURL.lastPathComponent
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let relativePath = try relativePath(for: url, in: worktree.path)
+            guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
+                showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
+                return
+            }
+            try context.buffer.saveAs(relativePath: relativePath)
+            _ = tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+        } catch {
+            showFileActionError(title: "Save As Failed", message: error.localizedDescription)
+        }
+    }
+
+    func renameActiveFile(worktreeId: String) {
+        guard let worktree = worktree(withId: worktreeId),
+              let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
+        let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
+        let panel = NSSavePanel()
+        panel.title = "Rename File"
+        panel.message = "Choose the new path for this file."
+        panel.directoryURL = currentURL.deletingLastPathComponent()
+        panel.nameFieldStringValue = currentURL.lastPathComponent
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let relativePath = try relativePath(for: url, in: worktree.path)
+            guard relativePath != context.tab.relativePath else { return }
+            try context.buffer.moveTo(relativePath: relativePath)
+            _ = tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+        } catch {
+            showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+        }
+    }
+
     func closeTab(worktreeId: String, tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
@@ -298,5 +387,36 @@ final class AppState {
             )
             tabs.activate(worktreeId: worktree.id, tabId: tab.id)
         }
+    }
+
+    private func relativePath(for url: URL, in worktreeRoot: URL) throws -> String {
+        let root = worktreeRoot.standardizedFileURL.path
+        let target = url.standardizedFileURL.path
+        let rootWithSlash = root.hasSuffix("/") ? root : root + "/"
+        guard target.hasPrefix(rootWithSlash) else {
+            throw NSError(
+                domain: "AppState",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "File must be inside the selected worktree."]
+            )
+        }
+        let rel = String(target.dropFirst(rootWithSlash.count))
+        guard !rel.isEmpty, !rel.split(separator: "/").contains("..") else {
+            throw NSError(
+                domain: "AppState",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid file path."]
+            )
+        }
+        return rel
+    }
+
+    private func showFileActionError(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
