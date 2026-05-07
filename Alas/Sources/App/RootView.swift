@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct RootView: View {
@@ -97,6 +98,9 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .alasOpenSearch)) { _ in
             state.search.open()
             state.isSearchOpen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            state.tabs.snapshotDirtyBuffersForQuit()
         }
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
