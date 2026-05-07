@@ -28,6 +28,13 @@ struct SearchInputRow: View {
                 }
                 .buttonStyle(.plain)
             }
+            HStack(spacing: 0) {
+                tab("Files",   .files)
+                tab("Content", .content)
+            }
+            .padding(2)
+            .background(theme.color("bg-2"))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -44,5 +51,24 @@ struct SearchInputRow: View {
         case .files:   return "Search files by name…"
         case .content: return "Search file contents…"
         }
+    }
+
+    @ViewBuilder
+    private func tab(_ label: String, _ k: SearchKind) -> some View {
+        let isOn = model.kind == k
+        Button {
+            model.kind = k
+        } label: {
+            Text(label)
+                .font(.system(size: 10.5, weight: .medium))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .foregroundColor(isOn ? theme.color("fg") : theme.color("fg-faint"))
+                .background(
+                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                        .fill(isOn ? theme.color("bg-3") : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
     }
 }

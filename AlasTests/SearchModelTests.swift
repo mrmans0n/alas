@@ -170,3 +170,28 @@ struct SearchModelTests {
         #expect(Date().timeIntervalSince(started) < 0.1)
     }
 }
+
+extension SearchModelTests {
+    @Test func contentOptionsPersistAcrossKindToggles() async {
+        let env = makeEnv(worktrees: [wt("a")])
+        let model = SearchModel(environment: env)
+        model.open()
+        model.contentOptions.caseSensitive = true
+        model.contentOptions.regex = true
+        model.toggleKind() // -> content
+        model.toggleKind() // -> files
+        #expect(model.contentOptions.caseSensitive == true)
+        #expect(model.contentOptions.regex == true)
+        #expect(model.contentOptions.wholeWord == false)
+    }
+
+    @Test func contentPrefixWorksEvenWithStubbedBackend() async {
+        let env = makeEnv(worktrees: [wt("a")])
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "> needle"
+        await model.waitForIdle()
+        #expect(model.kind == .content)
+        #expect(model.results.contentGroups.isEmpty)
+    }
+}

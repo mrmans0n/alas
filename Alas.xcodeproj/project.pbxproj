@@ -119,6 +119,7 @@
 		A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CA3930F30444A51FB2393D /* Theme.swift */; };
 		A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 563B664D082A9523260AA2EF /* RepoDot.swift */; };
 		A7BDA44A8E4364C4C335C4DA /* HookEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8820E4289EEB1ADCA9E490F /* HookEventTests.swift */; };
+		A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */; };
 		A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */; };
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
 		AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15E14D45EC3926768DE5BD1 /* DiffTabView.swift */; };
@@ -326,6 +327,7 @@
 		C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.Surface.swift; sourceTree = "<group>"; };
 		C995611A6313FABE30508248 /* WorktreeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRowView.swift; sourceTree = "<group>"; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentResultGroup.swift; sourceTree = "<group>"; };
 		CB68E9C3C8853AF7E8AB5DB4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		CE6CCD7F7273667B5D67F821 /* SearchScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchScope.swift; sourceTree = "<group>"; };
 		D2AD81E0DFE33CE4DACF0ADF /* WorktreeWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeWatcher.swift; sourceTree = "<group>"; };
@@ -678,6 +680,7 @@
 		A1CA0BEB25542A9B175DBDFE /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */,
 				3375A79ACFD3567389DA855C /* FileResultRow.swift */,
 				F97EB3FA3E3C1206D76A9668 /* FileSearchDialog.swift */,
 				66E8A2A1A02BD06F4B782D03 /* Highlighted.swift */,
@@ -1012,6 +1015,7 @@
 				0C54356D0ACEDD5275FFB6EB /* CodeLanguageDetailView.swift in Sources */,
 				28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */,
 				0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */,
+				A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */,
 				49C8C4C8B34444953FBA1809 /* DebounceTimer.swift in Sources */,
 				5711B2BE2D70220A4BED5B2B /* DefinitionFeature.swift in Sources */,
 				90958414931FC96F766F0C46 /* DiagnosticsFeature.swift in Sources */,

@@ -36,7 +36,11 @@ struct ContentSearchHit: Identifiable, Equatable, Sendable {
     let line: Int
     let column: Int
     let snippet: String
-    let matchByteRange: Range<Int>?
+    /// Character (grapheme) offsets into `snippet` of the matched run, or
+    /// nil if the offsets don't align with character boundaries. Producers
+    /// (ContentSearcher) convert from raw byte offsets up-front so views
+    /// can slice with String.Index arithmetic safely on non-ASCII content.
+    let matchCharRange: Range<Int>?
 
     var id: String { "\(worktreeId):\(relativePath):\(line):\(column)" }
     var groupKey: String { "\(worktreeId):\(relativePath)" }

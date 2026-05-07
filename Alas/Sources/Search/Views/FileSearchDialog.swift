@@ -25,7 +25,7 @@ struct FileSearchDialog: View {
                         BannerRow(text: banner)
                     }
                     resultList
-                    SearchFooter(model: appState.search, showsKindToggle: false)
+                    SearchFooter(model: appState.search, showsKindToggle: true)
                 }
                 .frame(width: 720)
                 .frame(maxHeight: 520)
@@ -56,16 +56,21 @@ struct FileSearchDialog: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(model.results.fileResults.enumerated()), id: \.element.id) { idx, r in
-                            FileResultRow(
-                                result: r,
-                                isSelected: idx == model.selectedIndex,
-                                showsRepoBadge: model.scope == .allRepos,
-                                repoName: repoName(for: r),
-                                onTap: { open(r) },
-                                onHover: { model.selectedIndex = idx }
-                            )
-                            .id(idx)
+                        switch model.kind {
+                        case .files:
+                            ForEach(Array(model.results.fileResults.enumerated()), id: \.element.id) { idx, r in
+                                FileResultRow(
+                                    result: r,
+                                    isSelected: idx == model.selectedIndex,
+                                    showsRepoBadge: model.scope == .allRepos,
+                                    repoName: repoName(for: r),
+                                    onTap: { open(r) },
+                                    onHover: { model.selectedIndex = idx }
+                                )
+                                .id(idx)
+                            }
+                        case .content:
+                            contentGroupViews(model: model)
                         }
                     }
                     .padding(.vertical, 4)
@@ -76,6 +81,45 @@ struct FileSearchDialog: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func contentGroupViews(model: SearchModel) -> some View {
+        let pairs: [(ContentSearchGroup, Int)] = {
+            var out: [(ContentSearchGroup, Int)] = []
+            var base = 0
+            for g in model.results.contentGroups {
+                out.append((g, base))
+                base += g.hits.count
+            }
+            return out
+        }()
+        ForEach(pairs, id: \.0.id) { group, baseIdx in
+            ContentResultGroupView(
+                group: group,
+                baseIndex: baseIdx,
+                selectedIndex: model.selectedIndex,
+                onTap: { hit in openContent(hit) },
+                onHover: { idx in model.selectedIndex = idx }
+            )
+        }
+    }
+
+    private func openContent(_ hit: ContentSearchHit) {
+        appState.openFile(relativePath: hit.relativePath, worktreeId: hit.worktreeId)
+        close()
+    }
+
+    /// Resolve a flat selection index to a hit by walking groups in order.
+    private func hit(at index: Int, in groups: [ContentSearchGroup]) -> ContentSearchHit? {
+        var remaining = index
+        for group in groups {
+            if remaining < group.hits.count {
+                return group.hits[remaining]
+            }
+            remaining -= group.hits.count
+        }
+        return nil
     }
 
     private func repoName(for r: FileSearchResult) -> String? {
@@ -95,9 +139,22 @@ struct FileSearchDialog: View {
             model.selectedIndex = min(max(0, model.totalResultRows - 1), model.selectedIndex + 1)
             return .handled
         case .return:
-            if let row = model.results.fileResults[safe: model.selectedIndex] {
-                open(row)
+            // Branch on kind so a Tab → Return on a stale file row from a
+            // previous mode doesn't open the wrong thing while content
+            // results haven't arrived yet.
+            switch model.kind {
+            case .files:
+                if let row = model.results.fileResults[safe: model.selectedIndex] {
+                    open(row)
+                }
+            case .content:
+                if let hit = hit(at: model.selectedIndex, in: model.results.contentGroups) {
+                    openContent(hit)
+                }
             }
+            return .handled
+        case .tab:
+            model.toggleKind()
             return .handled
         default:
             return .ignored
