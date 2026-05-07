@@ -60,7 +60,13 @@ final class EditorBuffer {
         // Write + fsync. We open with O_WRONLY|O_CREAT|O_TRUNC so a leftover
         // tmp from a crashed prior save is overwritten, not appended to.
         let fd = open(tmp.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
-        if fd < 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        if fd < 0 {
+            // Defensive: POSIX open(2) shouldn't create the file when returning
+            // -1, but some filesystem edge cases can leave a zero-byte tmp file.
+            // Clean it up so a later save attempt doesn't trip over it.
+            try? FileManager.default.removeItem(at: tmp)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         defer { Darwin.close(fd) }
         try data.withUnsafeBytes { buf in
             guard let base = buf.baseAddress else { return }
