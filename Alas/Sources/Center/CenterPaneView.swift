@@ -23,6 +23,10 @@ struct CenterPaneView: View {
                 },
                 dirtyLookup: { id in
                     let buffer = state.tabs.peekBuffer(tabId: id)
+                    // Touch editGeneration so SwiftUI's Observation tracker
+                    // re-evaluates this closure on every keystroke; without
+                    // this, `dirty` (which depends on non-observable
+                    // NSTextStorage) would only refresh on theme/tab changes.
                     _ = buffer?.editGeneration
                     return buffer?.dirty ?? false
                 },

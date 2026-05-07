@@ -172,9 +172,9 @@ final class EditorBuffer {
                 conflict = .deletedOnDisk
             }
             // If the buffer is clean and the file vanished, leave the buffer
-            // contents in place but clear original-text bookkeeping so the
-            // next save recreates the file. Don't raise a conflict — we have
-            // nothing to lose.
+            // contents in place. The next ⌘S will hit `save()`'s
+            // moveItem-when-target-missing branch and recreate the file.
+            // No conflict raised — we have nothing to lose.
             return
         }
         guard let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
