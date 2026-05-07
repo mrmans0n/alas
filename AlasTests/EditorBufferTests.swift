@@ -66,6 +66,76 @@ struct EditorBufferTests {
         #expect(buffer.originalText == "HELLO\n")
     }
 
+    @Test func saveAsWritesNewPathAndLeavesOriginalFile() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+
+        try buffer.saveAs(relativePath: "nested/b.txt")
+
+        #expect(buffer.relativePath == "nested/b.txt")
+        #expect(buffer.dirty == false)
+        #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "hello\n")
+        #expect(try String(contentsOf: root.appendingPathComponent("nested/b.txt"), encoding: .utf8) == "HELLO\n")
+    }
+
+    @Test func moveToRenamesFileAndKeepsDirtyEdits() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+
+        try buffer.moveTo(relativePath: "b.txt")
+
+        #expect(buffer.relativePath == "b.txt")
+        #expect(buffer.dirty == true)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("a.txt").path))
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "hello\n")
+    }
+
+    @Test func moveToRewritesSnapshotWhenBufferStaysDirty() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+        buffer.snapshotNow()
+
+        try buffer.moveTo(relativePath: "b.txt")
+
+        let snapshot = try store.read(worktreeId: "wt", tabId: "t")
+        #expect(snapshot?.relativePath == "b.txt")
+        #expect(snapshot?.content == "HELLO\n")
+        #expect(buffer.dirty == true)
+    }
+
+    @Test func moveToAllowsCaseOnlyRename() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "case.txt", "hello\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "case.txt")
+
+        try buffer.moveTo(relativePath: "Case.txt")
+
+        #expect(buffer.relativePath == "Case.txt")
+        #expect(try String(contentsOf: root.appendingPathComponent("Case.txt"), encoding: .utf8) == "hello\n")
+    }
+
+    @Test func moveToRejectsExistingDifferentFile() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "a\n")
+        _ = try writeFile(root, "b.txt", "b\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+
+        #expect(throws: (any Error).self) {
+            try buffer.moveTo(relativePath: "b.txt")
+        }
+
+        #expect(buffer.relativePath == "a.txt")
+        #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "a\n")
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "b\n")
+    }
+
     @Test func saveCRLFFilePreservesCRLFOnDisk() throws {
         let root = tempWorktree()
         _ = try writeFile(root, "win.txt", "a\r\nb\r\n")

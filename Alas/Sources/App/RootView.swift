@@ -72,36 +72,12 @@ struct RootView: View {
         .background(WindowConfigurator())
         .frame(minWidth: 900, minHeight: 600)
         .ignoresSafeArea()
-        .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
-            state.config.rightPaneVisible.toggle()
-            state.saveConfig()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .alasNewWorktree)) { _ in
-            showNewWorktree = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
-            if let wt = selectedWorktree() { try? state.openTerminalTab(for: wt) }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
-            if let wt = selectedWorktree(), let active = state.tabs.activeTabId(forWorktree: wt.id) {
-                state.closeTab(worktreeId: wt.id, tabId: active)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
-            if let wt = selectedWorktree() {
-                state.saveActiveTab(worktreeId: wt.id)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { _ in
-            openSettingsWindow()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .alasOpenSearch)) { _ in
-            state.search.open()
-            state.isSearchOpen = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            state.tabs.snapshotDirtyBuffersForQuit()
-        }
+        .modifier(RootCommandHandlers(
+            state: state,
+            showNewWorktree: $showNewWorktree,
+            selectedWorktree: selectedWorktree,
+            openSettings: openSettingsWindow
+        ))
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
         }
@@ -115,9 +91,7 @@ struct RootView: View {
             // can't do this because refreshAll runs async after init.
             state.reloadTabs()
             if state.selectedWorktreeId == nil {
-                state.selectedWorktreeId = state.projects
-                    .flatMap { state.projectsManager.worktrees(projectId: $0.id) }
-                    .first?.id
+                state.selectedWorktreeId = firstWorktreeId()
             }
         }
     }
@@ -131,6 +105,15 @@ struct RootView: View {
         for project in state.projects {
             if let wt = state.projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return wt
+            }
+        }
+        return nil
+    }
+
+    private func firstWorktreeId() -> String? {
+        for project in state.projects {
+            if let worktree = state.projectsManager.worktrees(projectId: project.id).first {
+                return worktree.id
             }
         }
         return nil
@@ -157,6 +140,70 @@ struct RootView: View {
     }
 }
 
+private struct RootCommandHandlers: ViewModifier {
+    @Bindable var state: AppState
+    @Binding var showNewWorktree: Bool
+    let selectedWorktree: () -> Worktree?
+    let openSettings: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
+                state.config.rightPaneVisible.toggle()
+                state.saveConfig()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasNewWorktree)) { _ in
+                showNewWorktree = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
+                if let wt = selectedWorktree() { try? state.openTerminalTab(for: wt) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
+                if let wt = selectedWorktree(), let active = state.tabs.activeTabId(forWorktree: wt.id) {
+                    state.closeTab(worktreeId: wt.id, tabId: active)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
+                if let wt = selectedWorktree() {
+                    state.saveActiveTab(worktreeId: wt.id)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTabAs)) { _ in
+                if let wt = selectedWorktree() {
+                    state.saveActiveTabAs(worktreeId: wt.id)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasSaveAllTabs)) { _ in
+                state.saveAllTabs()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasRevertActiveTab)) { _ in
+                if let wt = selectedWorktree() {
+                    state.revertActiveTab(worktreeId: wt.id)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasNewFile)) { _ in
+                if let wt = selectedWorktree() {
+                    state.newFile(in: wt.id)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasRenameActiveFile)) { _ in
+                if let wt = selectedWorktree() {
+                    state.renameActiveFile(worktreeId: wt.id)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { _ in
+                openSettings()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenSearch)) { _ in
+                state.search.open()
+                state.isSearchOpen = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                state.tabs.snapshotDirtyBuffersForQuit()
+            }
+    }
+}
+
 extension Notification.Name {
     static let alasToggleRightPane = Notification.Name("AlasToggleRightPane")
     static let alasNewWorktree     = Notification.Name("AlasNewWorktree")
@@ -165,4 +212,9 @@ extension Notification.Name {
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")
     static let alasSaveActiveTab   = Notification.Name("AlasSaveActiveTab")
+    static let alasSaveActiveTabAs = Notification.Name("AlasSaveActiveTabAs")
+    static let alasSaveAllTabs     = Notification.Name("AlasSaveAllTabs")
+    static let alasRevertActiveTab = Notification.Name("AlasRevertActiveTab")
+    static let alasNewFile         = Notification.Name("AlasNewFile")
+    static let alasRenameActiveFile = Notification.Name("AlasRenameActiveFile")
 }

@@ -15,7 +15,7 @@ import Observation
 @MainActor
 final class EditorBuffer {
     let worktreeRoot: URL
-    let relativePath: String
+    private(set) var relativePath: String
 
     /// The live AppKit text storage displayed by the text view. The
     /// reference is stable for the lifetime of the buffer; tearing down
@@ -215,8 +215,97 @@ final class EditorBuffer {
         guard !readOnly else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let canonical = storage.string
+        try write(canonical: canonical, to: url, createDirectories: false)
+        originalText = canonical
+        updateOriginalMtime(from: url)
+        startWatching()
+        discardSnapshot()
+        notifyDidSave(url: url)
+    }
+
+    func saveAs(relativePath newRelativePath: String) throws {
+        lastSaveError = nil
+        guard !readOnly else { return }
+        let oldURL = worktreeRoot.appendingPathComponent(relativePath)
+        let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
+        let oldLanguage = language
+        let canonical = storage.string
+        stopWatching()
+        do {
+            try write(canonical: canonical, to: newURL, createDirectories: true)
+            relativePath = newRelativePath
+            language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+            originalText = canonical
+            updateOriginalMtime(from: newURL)
+            discardSnapshot()
+            notifyDidClose(url: oldURL, language: oldLanguage)
+            notifyDidOpen(url: newURL, text: canonical)
+            notifyDidSave(url: newURL)
+            startWatching()
+        } catch {
+            startWatching()
+            throw error
+        }
+    }
+
+    func moveTo(relativePath newRelativePath: String) throws {
+        lastSaveError = nil
+        guard !readOnly else { return }
+        let oldURL = worktreeRoot.appendingPathComponent(relativePath)
+        let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
+        let oldLanguage = language
+        stopWatching()
+        do {
+            try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: newURL.path) {
+                guard sameExistingFile(oldURL, newURL) else {
+                    throw CocoaError(.fileWriteFileExists)
+                }
+                try renameItem(at: oldURL, to: newURL)
+            } else {
+                try FileManager.default.moveItem(at: oldURL, to: newURL)
+            }
+            relativePath = newRelativePath
+            language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+            updateOriginalMtime(from: newURL)
+            if dirty {
+                snapshotNow()
+            } else {
+                discardSnapshot()
+            }
+            notifyDidClose(url: oldURL, language: oldLanguage)
+            notifyDidOpen(url: newURL, text: storage.string)
+            startWatching()
+        } catch {
+            startWatching()
+            throw error
+        }
+    }
+
+    private func sameExistingFile(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let leftValues = try? lhs.resourceValues(forKeys: [.fileResourceIdentifierKey, .volumeIdentifierKey]),
+              let rightValues = try? rhs.resourceValues(forKeys: [.fileResourceIdentifierKey, .volumeIdentifierKey]),
+              let leftFile = leftValues.fileResourceIdentifier,
+              let rightFile = rightValues.fileResourceIdentifier,
+              let leftVolume = leftValues.volumeIdentifier,
+              let rightVolume = rightValues.volumeIdentifier else { return false }
+        return (leftFile as AnyObject).isEqual(rightFile)
+            && (leftVolume as AnyObject).isEqual(rightVolume)
+    }
+
+    private func renameItem(at oldURL: URL, to newURL: URL) throws {
+        guard oldURL.path != newURL.path else { return }
+        if Darwin.rename(oldURL.path, newURL.path) != 0 {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    private func write(canonical: String, to url: URL, createDirectories: Bool) throws {
         let onDisk = lineEnding.normalize(canonical)
         let dir = url.deletingLastPathComponent()
+        if createDirectories {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
         let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).alas-\(UUID().uuidString).tmp")
         let data = Data(onDisk.utf8)
 
@@ -268,16 +357,30 @@ final class EditorBuffer {
         // not with our preferred mode).
         try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: UInt16(permissions))], ofItemAtPath: url.path)
 
-        originalText = canonical
+    }
+
+    private func updateOriginalMtime(from url: URL) {
         if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
            let mtime = attrs[.modificationDate] as? Date {
             originalMtime = mtime
         }
-        startWatching()
-        discardSnapshot()
+    }
+
+    private func notifyDidSave(url: URL) {
         if let lsp, let language {
-            let url = worktreeRoot.appendingPathComponent(relativePath)
             Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+        }
+    }
+
+    private func notifyDidClose(url: URL, language: String?) {
+        if let lsp, let language {
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+        }
+    }
+
+    private func notifyDidOpen(url: URL, text: String) {
+        if let lsp, let language {
+            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language, text: text) }
         }
     }
 

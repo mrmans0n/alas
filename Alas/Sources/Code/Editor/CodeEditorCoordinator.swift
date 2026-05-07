@@ -23,6 +23,7 @@ final class CodeEditorCoordinator {
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
 
     private var diagnosticsTask: Task<Void, Never>?
+    private var diagnosticsSetupTask: Task<Void, Never>?
     private let diagnosticsFeature = DiagnosticsFeature()
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
@@ -101,9 +102,25 @@ final class CodeEditorCoordinator {
     }
 
     func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
-        // The view representable hands us the same parameters every render.
-        // The only thing we react to here is theme change (re-paint) and
-        // reveal hints (scroll).
+        let nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        let pathChanged = currentWorktreeId != worktreeId
+            || currentTabId != tabId
+            || currentRoot != worktreeRoot
+            || currentRelativePath != relativePath
+            || currentLanguage != nextLanguage
+
+        if pathChanged {
+            didChangeTask?.cancel()
+            hasPendingDidChange = false
+            currentWorktreeId = worktreeId
+            currentTabId = tabId
+            currentRoot = worktreeRoot
+            currentRelativePath = relativePath
+            currentLanguage = nextLanguage
+            runHighlight(theme: theme)
+            subscribeIfPossible(theme: theme)
+        }
+
         if currentTheme != theme {
             applyBaseStyle(theme: theme)
             runHighlight(theme: theme)
@@ -123,6 +140,8 @@ final class CodeEditorCoordinator {
         }
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
+        diagnosticsSetupTask?.cancel()
+        diagnosticsSetupTask = nil
         didChangeTask?.cancel()
         didChangeTask = nil
         if let buffer, let layoutManager {
@@ -221,15 +240,25 @@ final class CodeEditorCoordinator {
     /// then subscribes to diagnostics. The buffer owns open/close; the
     /// coordinator only wires the diagnostic stream.
     private func subscribeIfPossible(theme: Theme) {
-        guard let buffer, let language = currentLanguage else { return }
-        let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
-        let manager = appState.lsp
+        guard let buffer else { return }
+        diagnosticsSetupTask?.cancel()
         diagnosticsTask?.cancel()
-        diagnosticsFeature.reset()
+        diagnosticsFeature.apply([], to: buffer.storage, theme: theme)
+        guard let language = currentLanguage else { return }
+        let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
+        let root = buffer.worktreeRoot
+        let relativePath = buffer.relativePath
+        let manager = appState.lsp
         let stableTabId = currentTabId
-        Task { [weak self] in
-            let client = await manager.clientWhenReady(forFile: url, worktreeRoot: buffer.worktreeRoot, language: language)
-            guard let self, self.currentTabId == stableTabId, let client else { return }
+        diagnosticsSetupTask = Task { [weak self] in
+            let client = await manager.clientWhenReady(forFile: url, worktreeRoot: root, language: language)
+            guard let self,
+                  !Task.isCancelled,
+                  self.currentTabId == stableTabId,
+                  self.currentRoot == root,
+                  self.currentRelativePath == relativePath,
+                  self.currentLanguage == language,
+                  let client else { return }
             await self.subscribeDiagnostics(for: client, uri: url.lspURI, theme: theme)
             await self.symbolsFeature.refresh(client: client, uri: url.lspURI)
         }
