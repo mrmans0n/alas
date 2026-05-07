@@ -260,6 +260,22 @@ struct EditorBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: "t") == nil)
     }
 
+    @Test func snapshotNowDiscardsStaleSnapshotWhenBufferIsClean() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "v1\n")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        buffer.snapshotNow()
+        #expect(try store.read(worktreeId: "wt", tabId: "t") != nil)
+
+        buffer.storage.setAttributedString(NSAttributedString(string: "v1\n"))
+        buffer.snapshotNow()
+
+        #expect(buffer.dirty == false)
+        #expect(try store.read(worktreeId: "wt", tabId: "t") == nil)
+    }
+
     @Test func restoreOnDifferentMtimeRaisesConflict() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "v1\n")

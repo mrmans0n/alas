@@ -314,10 +314,14 @@ final class EditorBuffer {
 
     /// Writes an immediate snapshot if the buffer is dirty and hot-exit is
     /// enabled (store/worktreeId/tabId all set on the production init).
-    /// Safe to call from any state — a no-op when there is nothing to
-    /// persist or when the store is absent (test convenience init).
+    /// Safe to call from any state — clean buffers discard stale snapshots,
+    /// while buffers without a store remain a no-op.
     func snapshotNow() {
-        guard let store, let worktreeId, let tabId, dirty else { return }
+        guard let store, let worktreeId, let tabId else { return }
+        guard dirty else {
+            discardSnapshot()
+            return
+        }
         let snap = EditorBufferStore.Snapshot(
             relativePath: relativePath,
             content: storage.string,

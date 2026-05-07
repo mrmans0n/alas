@@ -187,6 +187,8 @@ final class CodeEditorCoordinator {
         guard let buffer else { return }
         let storage = buffer.storage
         let text = storage.string
+        let textLength = storage.length
+        let editGeneration = buffer.editGeneration
         let ext = (buffer.relativePath as NSString).pathExtension
         let editorTheme = EditorTheme(theme: theme)
         let stableTabId = currentTabId
@@ -197,9 +199,12 @@ final class CodeEditorCoordinator {
                 guard let self,
                       let b = self.buffer,
                       b.storage === storage,
-                      self.currentTabId == stableTabId else { return }
+                      self.currentTabId == stableTabId,
+                      b.editGeneration == editGeneration,
+                      storage.length == textLength else { return }
                 storage.beginEditing()
                 for span in spans {
+                    guard NSMaxRange(span.range) <= storage.length else { continue }
                     storage.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
                 }
                 storage.endEditing()
