@@ -1,0 +1,142 @@
+import SwiftUI
+
+/// Top-level overlay dialog. Renders as a full-screen translucent backdrop
+/// with a centered card that animates in. Pass `appState` for open-action
+/// routing.
+struct FileSearchDialog: View {
+    @Bindable var appState: AppState
+    @Environment(\.theme) private var theme
+    @FocusState private var inputFocused: Bool
+
+    var body: some View {
+        if appState.isSearchOpen {
+            ZStack {
+                Color.black.opacity(0.42)
+                    .ignoresSafeArea()
+                    .onTapGesture { close() }
+
+                VStack(spacing: 0) {
+                    SearchInputRow(model: appState.search, inputFocused: $inputFocused)
+                    ScopeRow(
+                        model: appState.search,
+                        isThisWorktreeAvailable: appState.selectedWorktreeId != nil
+                    )
+                    if let banner = appState.search.results.partialFailureMessage {
+                        BannerRow(text: banner)
+                    }
+                    resultList
+                    SearchFooter(model: appState.search, showsKindToggle: false)
+                }
+                .frame(width: 720)
+                .frame(maxHeight: 520)
+                .background(theme.color("bg-1").opacity(0.92))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
+                .padding(.top, 70)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .onTapGesture { /* swallow taps so backdrop doesn't close */ }
+                .onKeyPress { press in handleKey(press) }
+            }
+            .transition(.opacity.combined(with: .offset(y: -6)))
+            .onAppear { inputFocused = true }
+        }
+    }
+
+    @ViewBuilder
+    private var resultList: some View {
+        let model = appState.search
+        if model.totalResultRows == 0 {
+            SearchEmptyState(model: model)
+                .frame(minHeight: 240, maxHeight: 460)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(model.results.fileResults.enumerated()), id: \.element.id) { idx, r in
+                            FileResultRow(
+                                result: r,
+                                isSelected: idx == model.selectedIndex,
+                                showsRepoBadge: model.scope == .allRepos,
+                                repoName: repoName(for: r),
+                                onTap: { open(r) },
+                                onHover: { model.selectedIndex = idx }
+                            )
+                            .id(idx)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(minHeight: 240, maxHeight: 460)
+                .onChange(of: model.selectedIndex) { _, new in
+                    proxy.scrollTo(new, anchor: .center)
+                }
+            }
+        }
+    }
+
+    private func repoName(for r: FileSearchResult) -> String? {
+        appState.projects.first(where: { $0.id == r.projectId })?.name
+    }
+
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        let model = appState.search
+        switch press.key {
+        case .escape:
+            close()
+            return .handled
+        case .upArrow:
+            model.selectedIndex = max(0, model.selectedIndex - 1)
+            return .handled
+        case .downArrow:
+            model.selectedIndex = min(max(0, model.totalResultRows - 1), model.selectedIndex + 1)
+            return .handled
+        case .return:
+            if let row = model.results.fileResults[safe: model.selectedIndex] {
+                open(row)
+            }
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    private func open(_ r: FileSearchResult) {
+        appState.openFile(relativePath: r.relativePath, worktreeId: r.worktreeId)
+        close()
+    }
+
+    private func close() {
+        appState.search.close()
+        appState.isSearchOpen = false
+    }
+}
+
+private struct BannerRow: View {
+    let text: String
+    @Environment(\.theme) private var theme
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundColor(theme.color("warn"))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(theme.color("warn").opacity(0.10))
+            .overlay(
+                Rectangle()
+                    .fill(theme.color("line-soft"))
+                    .frame(height: 0.5),
+                alignment: .bottom
+            )
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}

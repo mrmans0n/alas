@@ -16,6 +16,14 @@ final class AppState {
     @ObservationIgnored
     private var lspManager: WorkspaceLSPManager?
 
+    var isSearchOpen: Bool = false
+    @ObservationIgnored
+    lazy var search: SearchModel = SearchModel(environment: makeSearchEnvironment())
+    @ObservationIgnored
+    private let fileIndex = FileIndex()
+    @ObservationIgnored
+    private let statusCache = GitStatusCache()
+
     var lsp: WorkspaceLSPManager {
         if let lspManager { return lspManager }
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: config.code.languageServers))
@@ -201,5 +209,62 @@ final class AppState {
             }
         }
         return nil
+    }
+
+    private func makeSearchEnvironment() -> SearchEnvironment {
+        // Invariant: the two synchronous closures below are only invoked
+        // from `SearchModel`, which is `@MainActor` — so `assumeIsolated`
+        // is sound. If a future caller invokes them off-main this will
+        // trap; keep them on main or convert to async.
+        SearchEnvironment(
+            currentWorktreeId: { [weak self] in
+                MainActor.assumeIsolated { self?.selectedWorktreeId }
+            },
+            allWorktrees: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return [] }
+                    var out: [SearchWorktree] = []
+                    for project in self.projects {
+                        for wt in self.projectsManager.worktrees(projectId: project.id) {
+                            out.append(SearchWorktree(
+                                id: wt.id,
+                                projectId: project.id,
+                                displayName: wt.branch,
+                                absolutePath: wt.path
+                            ))
+                        }
+                    }
+                    return out
+                }
+            },
+            entries: { [fileIndex] wt in
+                try await fileIndex.entries(forWorktreePath: wt.absolutePath)
+            },
+            statuses: { [statusCache] wt in
+                try await statusCache.statuses(forWorktreePath: wt.absolutePath)
+            }
+        )
+    }
+
+    /// Open a file in the right-pane code editor by routing through the
+    /// existing tabs system. Switches `selectedWorktreeId` if the file is
+    /// in a different worktree.
+    func openFile(relativePath: String, worktreeId: String) {
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        if selectedWorktreeId != worktree.id { selectedWorktreeId = worktree.id }
+
+        let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .editor(let s) = tab { return s.relativePath == relativePath } else { return false }
+        }
+        if let existing {
+            tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+        } else {
+            let tab = tabs.appendEditor(
+                worktreeId: worktree.id,
+                title: (relativePath as NSString).lastPathComponent,
+                relativePath: relativePath
+            )
+            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
     }
 }

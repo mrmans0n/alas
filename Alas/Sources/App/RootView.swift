@@ -8,58 +8,61 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Group {
-            if state.projects.isEmpty {
-                EmptyState(
-                    canCreateWorktree: false,
-                    onAddProject: { showNewProject = true },
-                    onNewWorktree: { showNewWorktree = true }
-                )
-            } else {
-                ThreePaneLayout(
-                    sidebarWidth: Binding(
-                        get: { state.config.sidebarWidth },
-                        set: { state.config.sidebarWidth = $0 }
-                    ),
-                    rightWidth: Binding(
-                        get: { state.config.rightPaneWidth },
-                        set: { state.config.rightPaneWidth = $0 }
-                    ),
-                    rightVisible: state.config.rightPaneVisible,
-                    onWidthsChanged: { state.saveConfig() },
-                    sidebar: {
-                        SidebarView(
-                            state: state,
-                            collapsedProjects: $collapsedProjects,
-                            onSettings: { openSettingsWindow() },
-                            onNewWorktree: { showNewWorktree = true }
-                        )
-                    },
-                    center: {
-                        if let wt = selectedWorktree() {
-                            CenterPaneView(state: state, worktree: wt)
-                        } else {
-                            EmptyTabView(onNewTerminal: {})
-                        }
-                    },
-                    right: {
-                        if let wt = selectedWorktree() {
-                            RightPaneView(
+        ZStack {
+            Group {
+                if state.projects.isEmpty {
+                    EmptyState(
+                        canCreateWorktree: false,
+                        onAddProject: { showNewProject = true },
+                        onNewWorktree: { showNewWorktree = true }
+                    )
+                } else {
+                    ThreePaneLayout(
+                        sidebarWidth: Binding(
+                            get: { state.config.sidebarWidth },
+                            set: { state.config.sidebarWidth = $0 }
+                        ),
+                        rightWidth: Binding(
+                            get: { state.config.rightPaneWidth },
+                            set: { state.config.rightPaneWidth = $0 }
+                        ),
+                        rightVisible: state.config.rightPaneVisible,
+                        onWidthsChanged: { state.saveConfig() },
+                        sidebar: {
+                            SidebarView(
                                 state: state,
-                                worktree: wt,
-                                onSelectChangedFile: { file in
-                                    openOrFocusDiff(worktree: wt, path: file.path)
-                                },
-                                onSelectTreeFile: { node in
-                                    openOrFocusEditor(worktree: wt, path: node.path)
-                                }
+                                collapsedProjects: $collapsedProjects,
+                                onSettings: { openSettingsWindow() },
+                                onNewWorktree: { showNewWorktree = true }
                             )
-                        } else {
-                            EmptyView()
+                        },
+                        center: {
+                            if let wt = selectedWorktree() {
+                                CenterPaneView(state: state, worktree: wt)
+                            } else {
+                                EmptyTabView(onNewTerminal: {})
+                            }
+                        },
+                        right: {
+                            if let wt = selectedWorktree() {
+                                RightPaneView(
+                                    state: state,
+                                    worktree: wt,
+                                    onSelectChangedFile: { file in
+                                        openOrFocusDiff(worktree: wt, path: file.path)
+                                    },
+                                    onSelectTreeFile: { node in
+                                        openOrFocusEditor(worktree: wt, path: node.path)
+                                    }
+                                )
+                            } else {
+                                EmptyView()
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
+            FileSearchDialog(appState: state)
         }
         .environment(\.theme, state.themeStore.current)
         .background(WindowConfigurator())
@@ -82,6 +85,10 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { _ in
             openSettingsWindow()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .alasOpenSearch)) { _ in
+            state.search.open()
+            state.isSearchOpen = true
         }
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
@@ -134,19 +141,7 @@ struct RootView: View {
     }
 
     private func openOrFocusEditor(worktree: Worktree, path: String) {
-        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .editor(let s) = tab { return s.relativePath == path } else { return false }
-        }
-        if let existing {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
-        } else {
-            let tab = state.tabs.appendEditor(
-                worktreeId: worktree.id,
-                title: (path as NSString).lastPathComponent,
-                relativePath: path
-            )
-            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
-        }
+        state.openFile(relativePath: path, worktreeId: worktree.id)
     }
 }
 
@@ -156,4 +151,5 @@ extension Notification.Name {
     static let alasNewTerminalTab  = Notification.Name("AlasNewTerminalTab")
     static let alasCloseTab        = Notification.Name("AlasCloseTab")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
+    static let alasOpenSearch      = Notification.Name("AlasOpenSearch")
 }
