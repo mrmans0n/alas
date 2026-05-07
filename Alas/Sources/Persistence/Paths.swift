@@ -26,3 +26,15 @@ extension Paths {
         tabsDir.appendingPathComponent("\(id).json")
     }
 }
+
+extension Paths {
+    static var buffersRoot: URL { appSupportRoot.appendingPathComponent("buffers", isDirectory: true) }
+
+    static func buffersDir(forWorktreeId id: String) -> URL {
+        buffersRoot.appendingPathComponent(id, isDirectory: true)
+    }
+
+    static func bufferFile(worktreeId: String, tabId: String) -> URL {
+        buffersDir(forWorktreeId: worktreeId).appendingPathComponent("\(tabId).json")
+    }
+}

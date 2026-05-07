@@ -69,6 +69,8 @@
 		524B70F03B9A934CEEA5FA61 /* LSPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8F6FBCE1218EAB74B608A /* LSPClientTests.swift */; };
 		4C02B761E19F45A799D6B6D2 /* LineEnding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278C393477D54F4E95FFF863 /* LineEnding.swift */; };
 		94F5A64AA9F740CFA5CB4611 /* LineEndingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3B75D2A7254D37A5635B57 /* LineEndingTests.swift */; };
+		11512BD57B844766B1C087A6 /* EditorBufferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E1274202FB3468A8D4B9231 /* EditorBufferStore.swift */; };
+		AA0203CF936A4A6C978501A0 /* EditorBufferStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1219FC591AAD497D989AB5D5 /* EditorBufferStoreTests.swift */; };
 		5685074AFE30889AAC69EB8D /* ThreePaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */; };
 		5711B2BE2D70220A4BED5B2B /* DefinitionFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12340A649892955245BECB7 /* DefinitionFeature.swift */; };
 		59AFC96BD543D2520DBE7BB0 /* ThemeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */; };
@@ -211,6 +213,8 @@
 		1688AB1B49758FAB5BF0AF2F /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
 		278C393477D54F4E95FFF863 /* LineEnding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineEnding.swift; sourceTree = "<group>"; };
 		4B3B75D2A7254D37A5635B57 /* LineEndingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineEndingTests.swift; sourceTree = "<group>"; };
+		6E1274202FB3468A8D4B9231 /* EditorBufferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferStore.swift; sourceTree = "<group>"; };
+		1219FC591AAD497D989AB5D5 /* EditorBufferStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferStoreTests.swift; sourceTree = "<group>"; };
 		16CA8FEE64D73BDEBAF74878 /* Kbd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Kbd.swift; sourceTree = "<group>"; };
 		179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimerTests.swift; sourceTree = "<group>"; };
 		17C2AC0F8B3A1B75239995AC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -431,6 +435,7 @@
 				AE0A6F237480EE72CB8DBE28 /* TitlelessWindowTests.swift */,
 				D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */,
 				4B3B75D2A7254D37A5635B57 /* LineEndingTests.swift */,
+				1219FC591AAD497D989AB5D5 /* EditorBufferStoreTests.swift */,
 				2ED9D6E2F4F80DC4EC282918 /* Code */,
 			);
 			path = AlasTests;
@@ -735,6 +740,7 @@
 				30CBB25BA2F2C558713FB0E4 /* CodeEditorCoordinator.swift */,
 				FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */,
 				FBC01971BF41E6D0B9B317CF /* CodeTextView.swift */,
+				6E1274202FB3468A8D4B9231 /* EditorBufferStore.swift */,
 				C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */,
 				278C393477D54F4E95FFF863 /* LineEnding.swift */,
 			);
@@ -1032,6 +1038,7 @@
 				AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */,
 				1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */,
 				1066AF44E2FCA9B1B2DDE9D7 /* EditorTabView.swift in Sources */,
+				11512BD57B844766B1C087A6 /* EditorBufferStore.swift in Sources */,
 				41F7A0E0854B545F99062BDC /* EditorTheme.swift in Sources */,
 				4C02B761E19F45A799D6B6D2 /* LineEnding.swift in Sources */,
 				7CDFA95F095090FF242B8248 /* EmptyState.swift in Sources */,
@@ -1170,6 +1177,7 @@
 				67981D1D60512503BFD901C8 /* TreeSitterHighlighterTests.swift in Sources */,
 				CB549B27BB0E578776AA7ED0 /* WorktreeServiceTests.swift in Sources */,
 				94F5A64AA9F740CFA5CB4611 /* LineEndingTests.swift in Sources */,
+				AA0203CF936A4A6C978501A0 /* EditorBufferStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
