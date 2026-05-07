@@ -137,4 +137,80 @@ struct EditorBufferTests {
         #expect(buffer.storage.string == "original\n")
         #expect(buffer.dirty == false)
     }
+
+    @Test func externalChangeWhileCleanReloadsSilently() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "v2\n".write(to: url, atomically: true, encoding: .utf8)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(buffer.storage.string == "v2\n")
+        #expect(buffer.dirty == false)
+        #expect(buffer.conflict == nil)
+    }
+
+    @Test func externalChangeWhileDirtyRaisesConflict() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        #expect(buffer.dirty == true)
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "external\n".write(to: url, atomically: true, encoding: .utf8)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(buffer.conflict == .changedOnDisk)
+        #expect(buffer.storage.string == "edited v1\n")
+        #expect(buffer.dirty == true)
+    }
+
+    @Test func resolveConflictByKeepingMineClearsConflictAdvancesMtime() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "external\n".write(to: url, atomically: true, encoding: .utf8)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let onDiskMtime = (try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+        buffer.resolveConflictKeepingMine()
+        #expect(buffer.conflict == nil)
+        #expect(buffer.originalMtime == onDiskMtime)
+        #expect(buffer.dirty == true)
+    }
+
+    @Test func resolveConflictByReloadingFromDiskReplacesContent() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "external\n".write(to: url, atomically: true, encoding: .utf8)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        buffer.resolveConflictReloadingFromDisk()
+        #expect(buffer.conflict == nil)
+        #expect(buffer.dirty == false)
+        #expect(buffer.storage.string == "external\n")
+    }
+
+    @Test func deletionOnDiskRaisesDeletedConflict() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        try FileManager.default.removeItem(at: url)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(buffer.conflict == .deletedOnDisk)
+        #expect(buffer.dirty == true)
+    }
 }

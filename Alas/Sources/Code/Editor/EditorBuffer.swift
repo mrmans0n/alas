@@ -28,12 +28,25 @@ final class EditorBuffer {
     private(set) var lineEnding: LineEnding = .lf
     private(set) var readOnly: Bool = false
 
+    enum Conflict: Equatable {
+        case changedOnDisk
+        case deletedOnDisk
+    }
+
+    private(set) var conflict: Conflict?
+
     @ObservationIgnored
     private var editObservers: [UUID: () -> Void] = [:]
     @ObservationIgnored
     private var storageDelegate: BufferStorageDelegate = .init({})
     @ObservationIgnored
     private var loading = false
+    @ObservationIgnored
+    private var watcherSource: DispatchSourceFileSystemObject?
+    @ObservationIgnored
+    private var watcherFD: Int32 = -1
+    @ObservationIgnored
+    private static let watchQueue = DispatchQueue(label: "alas.editor.buffer.watch", qos: .utility)
 
     struct EditObserverToken { fileprivate let id: UUID }
 
@@ -74,6 +87,69 @@ final class EditorBuffer {
 
     func revert() {
         loadFromDisk()
+    }
+
+    func startWatching() {
+        stopWatching()
+        let path = worktreeRoot.appendingPathComponent(relativePath).path
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .extend, .rename, .delete, .attrib],
+            queue: Self.watchQueue
+        )
+        src.setEventHandler { [weak self] in
+            Task { @MainActor in self?.handleWatcherEvent() }
+        }
+        src.setCancelHandler { Darwin.close(fd) }
+        src.resume()
+        watcherSource = src
+        watcherFD = fd
+    }
+
+    func stopWatching() {
+        watcherSource?.cancel()
+        watcherSource = nil
+        watcherFD = -1
+    }
+
+    private func handleWatcherEvent() {
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            if dirty {
+                conflict = .deletedOnDisk
+            }
+            // If the buffer is clean and the file vanished, leave the buffer
+            // contents in place but clear original-text bookkeeping so the
+            // next save recreates the file. Don't raise a conflict — we have
+            // nothing to lose.
+            return
+        }
+        guard let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
+              onDiskMtime != originalMtime else { return }
+        if dirty {
+            conflict = .changedOnDisk
+            return
+        }
+        revert()
+        // Re-arm watcher in case rename swapped the inode (atomic save by an
+        // external tool).
+        startWatching()
+    }
+
+    func resolveConflictKeepingMine() {
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        if let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date {
+            originalMtime = mtime
+        }
+        conflict = nil
+    }
+
+    func resolveConflictReloadingFromDisk() {
+        revert()
+        conflict = nil
+        startWatching()
     }
 
     /// Persist the buffer to disk atomically. Writes to a temp file in the
@@ -143,6 +219,7 @@ final class EditorBuffer {
            let mtime = attrs[.modificationDate] as? Date {
             originalMtime = mtime
         }
+        startWatching()
     }
 
     private func loadFromDisk() {
