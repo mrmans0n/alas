@@ -22,7 +22,15 @@ struct EditorConflictBanner: View {
             case .deletedOnDisk:
                 row(
                     message: "File was deleted on disk.",
-                    primary: ("Save anyway", { try? buffer.save(); buffer.resolveConflictKeepingMine() }),
+                    primary: ("Save anyway", {
+                        do {
+                            try buffer.save()
+                            buffer.resolveConflictKeepingMine()
+                        } catch {
+                            // save() already set lastSaveError; leave the
+                            // conflict in place so the user can retry.
+                        }
+                    }),
                     secondary: ("Keep mine", { buffer.resolveConflictKeepingMine() })
                 )
             }
