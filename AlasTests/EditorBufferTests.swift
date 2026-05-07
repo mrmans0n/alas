@@ -213,4 +213,48 @@ struct EditorBufferTests {
         #expect(buffer.conflict == .deletedOnDisk)
         #expect(buffer.dirty == true)
     }
+
+    @Test func snapshotRestoreRoundTrip() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "v1\n")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        buffer.snapshotNow()
+        let restored = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        #expect(restored.storage.string == "edited v1\n")
+        #expect(restored.dirty == true)
+        #expect(restored.originalText == "v1\n")
+    }
+
+    @Test func closeSnapshotsThenDiscardsOnSave() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "v1\n")
+        let storeRoot = tempWorktree()
+        let store = EditorBufferStore(rootOverride: storeRoot)
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "x")
+        buffer.close()
+        #expect(try store.read(worktreeId: "wt", tabId: "t") != nil)
+        let again = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        try again.save()
+        #expect(try store.read(worktreeId: "wt", tabId: "t") == nil)
+    }
+
+    @Test func restoreOnDifferentMtimeRaisesConflict() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let storeRoot = tempWorktree()
+        let store = EditorBufferStore(rootOverride: storeRoot)
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        buffer.snapshotNow()
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "v2\n".write(to: url, atomically: true, encoding: .utf8)
+        let restored = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        restored.startWatching()
+        defer { restored.stopWatching() }
+        restored.checkForConflictOnRestore()
+        #expect(restored.conflict == .changedOnDisk)
+    }
 }

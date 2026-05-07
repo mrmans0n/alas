@@ -47,6 +47,14 @@ final class EditorBuffer {
     private var watcherFD: Int32 = -1
     @ObservationIgnored
     private static let watchQueue = DispatchQueue(label: "alas.editor.buffer.watch", qos: .utility)
+    @ObservationIgnored
+    private let store: EditorBufferStore?
+    @ObservationIgnored
+    private let worktreeId: String?
+    @ObservationIgnored
+    private let tabId: String?
+    @ObservationIgnored
+    private var snapshotTask: Task<Void, Never>?
 
     struct EditObserverToken { fileprivate let id: UUID }
 
@@ -58,14 +66,36 @@ final class EditorBuffer {
         return storage.string != originalText
     }
 
-    init(worktreeRoot: URL, relativePath: String) {
+    /// Convenience initializer for callers that do not need hot-exit support
+    /// (tests from Tasks 3-6, and any non-persisted buffer).
+    convenience init(worktreeRoot: URL, relativePath: String) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: nil, worktreeId: nil, tabId: nil, restoreEnabled: false)
+    }
+
+    /// Production initializer that opts into hot-exit. The `store` is consulted
+    /// at init time for any persisted snapshot; if found, it overlays disk
+    /// content with `dirty = true`.
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true)
+    }
+
+    private init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.storage = NSTextStorage()
+        self.store = store
+        self.worktreeId = worktreeId
+        self.tabId = tabId
         let delegate = BufferStorageDelegate { [weak self] in self?.handleEdit() }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
         loadFromDisk()
+        if restoreEnabled,
+           let store, let worktreeId, let tabId,
+           let snap = (try? store.read(worktreeId: worktreeId, tabId: tabId)) {
+            applySnapshot(snap)
+        }
+        onEdit { [weak self] in self?.scheduleSnapshot() }
     }
 
     @discardableResult
@@ -220,6 +250,70 @@ final class EditorBuffer {
             originalMtime = mtime
         }
         startWatching()
+        discardSnapshot()
+    }
+
+    // MARK: - Snapshot / restore (hot-exit)
+
+    private func applySnapshot(_ snap: EditorBufferStore.Snapshot) {
+        loading = true
+        defer { loading = false }
+        storage.setAttributedString(NSAttributedString(string: snap.content))
+        originalText = snap.originalText
+        originalMtime = snap.originalMtime
+        lineEnding = snap.lineEnding
+        readOnly = false
+    }
+
+    private func scheduleSnapshot() {
+        guard store != nil, worktreeId != nil, tabId != nil else { return }
+        snapshotTask?.cancel()
+        snapshotTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard let self, !Task.isCancelled else { return }
+            await MainActor.run { self.snapshotNow() }
+        }
+    }
+
+    func snapshotNow() {
+        guard let store, let worktreeId, let tabId, dirty else { return }
+        let snap = EditorBufferStore.Snapshot(
+            relativePath: relativePath,
+            content: storage.string,
+            originalText: originalText,
+            originalMtime: originalMtime,
+            lineEnding: lineEnding
+        )
+        try? store.write(snap, worktreeId: worktreeId, tabId: tabId)
+    }
+
+    private func discardSnapshot() {
+        guard let store, let worktreeId, let tabId else { return }
+        store.discard(worktreeId: worktreeId, tabId: tabId)
+    }
+
+    /// Tear-down for a tab close. If dirty, writes a final snapshot
+    /// synchronously so the user sees their work on relaunch.
+    func close() {
+        snapshotTask?.cancel()
+        if dirty { snapshotNow() }
+        stopWatching()
+    }
+
+    /// Compares the snapshot's recorded original mtime to the current file's
+    /// mtime. If they differ, the file changed while we were quit and the
+    /// user's snapshot is "their version" against a moved baseline — show
+    /// the conflict banner. Called on first display after restore.
+    func checkForConflictOnRestore() {
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            if dirty { conflict = .deletedOnDisk }
+            return
+        }
+        guard let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date else { return }
+        if dirty && onDiskMtime != originalMtime {
+            conflict = .changedOnDisk
+        }
     }
 
     private func loadFromDisk() {
