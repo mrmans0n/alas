@@ -142,6 +142,9 @@ struct EditorBufferTests {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "v1\n")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        var fired = 0
+        let token = buffer.onEdit { fired += 1 }
+        defer { buffer.removeOnEdit(token) }
         buffer.startWatching()
         defer { buffer.stopWatching() }
         try await Task.sleep(nanoseconds: 1_100_000_000)
@@ -150,6 +153,7 @@ struct EditorBufferTests {
         #expect(buffer.storage.string == "v2\n")
         #expect(buffer.dirty == false)
         #expect(buffer.conflict == nil)
+        #expect(fired == 1)
     }
 
     @Test func externalChangeWhileDirtyRaisesConflict() async throws {
@@ -188,10 +192,13 @@ struct EditorBufferTests {
     @Test func resolveConflictByReloadingFromDiskReplacesContent() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "v1\n")
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
         buffer.startWatching()
         defer { buffer.stopWatching() }
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        buffer.snapshotNow()
+        #expect(try store.read(worktreeId: "wt", tabId: "t") != nil)
         try await Task.sleep(nanoseconds: 1_100_000_000)
         try "external\n".write(to: url, atomically: true, encoding: .utf8)
         try await Task.sleep(nanoseconds: 500_000_000)
@@ -199,6 +206,7 @@ struct EditorBufferTests {
         #expect(buffer.conflict == nil)
         #expect(buffer.dirty == false)
         #expect(buffer.storage.string == "external\n")
+        #expect(try store.read(worktreeId: "wt", tabId: "t") == nil)
     }
 
     @Test func deletionOnDiskRaisesDeletedConflict() async throws {

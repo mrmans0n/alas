@@ -28,15 +28,16 @@ struct TabsManagerBufferTests {
         #expect(b1 === b2)
     }
 
-    @Test func closingDirtyBufferWritesSnapshotThenDiscardsBuffer() throws {
+    @Test func closingDirtyBufferDiscardsSnapshotAndBuffer() throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, store, _) = makeManager()
         let buffer = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        buffer.snapshotNow()
         manager.discardBuffer(worktreeId: "wt", tabId: "t1")
         #expect(manager.peekBuffer(tabId: "t1") == nil)
-        #expect(try store.read(worktreeId: "wt", tabId: "t1") != nil)
+        #expect(try store.read(worktreeId: "wt", tabId: "t1") == nil)
     }
 
     @Test func dirtyTabsReportsAcrossWorktrees() throws {

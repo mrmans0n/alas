@@ -253,17 +253,19 @@ final class TabsManager {
         buffers[tabId]
     }
 
-    /// Tear down the buffer for `tabId`: snapshot if dirty, close watcher,
-    /// drop from cache. `worktreeId` is asserted in debug builds against the
-    /// recorded owner so a tab discarded from the wrong worktree context
-    /// surfaces immediately rather than silently mis-routing the snapshot.
+    /// Tear down the buffer for `tabId`, close its watcher, and drop it from
+    /// cache. Explicit tab removal discards hot-exit snapshots; app quit paths
+    /// snapshot dirty buffers before teardown. `worktreeId` is asserted in
+    /// debug builds against the recorded owner so a tab discarded from the
+    /// wrong worktree context surfaces immediately rather than silently
+    /// mis-routing the snapshot.
     func discardBuffer(worktreeId: String, tabId: TabID) {
         if let owner = bufferOwners[tabId] {
             assert(owner == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(owner)")
         }
         guard let buffer = buffers.removeValue(forKey: tabId) else { return }
         bufferOwners.removeValue(forKey: tabId)
-        buffer.close()
+        buffer.close(persistDirtySnapshot: false)
     }
 
     /// Tab IDs whose buffers are currently dirty. Order is unspecified.

@@ -138,6 +138,8 @@ final class EditorBuffer {
 
     func revert() {
         loadFromDisk()
+        discardSnapshot()
+        handleEdit()
     }
 
     func startWatching() {
@@ -322,11 +324,15 @@ final class EditorBuffer {
         store.discard(worktreeId: worktreeId, tabId: tabId)
     }
 
-    /// Tear-down for a tab close. If dirty, writes a final snapshot
-    /// synchronously so the user sees their work on relaunch.
-    func close() {
+    /// Tear-down for a buffer. App quit paths can keep a final dirty snapshot
+    /// for hot-exit restore; explicit tab removal discards it.
+    func close(persistDirtySnapshot: Bool = true) {
         snapshotTask?.cancel()
-        if dirty { snapshotNow() }
+        if persistDirtySnapshot {
+            if dirty { snapshotNow() }
+        } else {
+            discardSnapshot()
+        }
         stopWatching()
         if let lsp, let language {
             let url = worktreeRoot.appendingPathComponent(relativePath)
