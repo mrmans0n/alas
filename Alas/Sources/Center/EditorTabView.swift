@@ -11,8 +11,15 @@ struct EditorTabView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        VStack(spacing: 0) {
+        let buffer = appState.tabs.buffer(
+            worktreeId: worktreeId,
+            tabId: tabId,
+            worktreeRoot: worktreePath,
+            relativePath: relativePath
+        )
+        return VStack(spacing: 0) {
             breadcrumb
+            EditorConflictBanner(buffer: buffer)
             CodeEditorView(
                 worktreeId: worktreeId,
                 worktreeRoot: worktreePath,

@@ -8,9 +8,21 @@ struct TabsFile: Codable {
 }
 
 @Observable
+@MainActor
 final class TabsManager {
     private var byWorktree: [String: TabsFile] = [:]
     private let store = PersistenceStore()
+    private let bufferStore: EditorBufferStore
+    private var buffers: [TabID: EditorBuffer] = [:]
+    // Map tabId → worktreeId so `discardBuffer` and `snapshotDirtyBuffersForQuit`
+    // know which subtree to write to without forcing callers to pass it.
+    private var bufferOwners: [TabID: String] = [:]
+    private let lsp: WorkspaceLSPManager?
+
+    init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
+        self.bufferStore = bufferStore
+        self.lsp = lsp
+    }
 
     func tabs(forWorktree id: String) -> [Tab] {
         byWorktree[id]?.tabs ?? []
@@ -201,5 +213,86 @@ final class TabsManager {
     private func persist(_ worktreeId: String) {
         guard let file = byWorktree[worktreeId] else { return }
         try? store.write(file, to: Paths.tabsFile(forWorktreeId: worktreeId))
+    }
+
+    // MARK: - Buffer lifecycle
+
+    /// Returns the buffer for `tabId`, creating it (cold-load from disk or
+    /// hot-restore from snapshot) on first access.
+    func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
+        if let existing = buffers[tabId] { return existing }
+        let buffer: EditorBuffer
+        if let lsp {
+            buffer = EditorBuffer(
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath,
+                store: bufferStore,
+                worktreeId: worktreeId,
+                tabId: tabId,
+                lsp: lsp
+            )
+        } else {
+            buffer = EditorBuffer(
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath,
+                store: bufferStore,
+                worktreeId: worktreeId,
+                tabId: tabId
+            )
+        }
+        buffer.startWatching()
+        buffer.checkForConflictOnRestore()
+        buffers[tabId] = buffer
+        bufferOwners[tabId] = worktreeId
+        return buffer
+    }
+
+    /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
+    /// dirty-tab queries.
+    func peekBuffer(tabId: TabID) -> EditorBuffer? {
+        buffers[tabId]
+    }
+
+    /// Tear down the buffer for `tabId`, close its watcher, and drop it from
+    /// cache. Explicit tab removal discards hot-exit snapshots; app quit paths
+    /// snapshot dirty buffers before teardown. `worktreeId` is asserted in
+    /// debug builds against the recorded owner so a tab discarded from the
+    /// wrong worktree context surfaces immediately rather than silently
+    /// mis-routing the snapshot.
+    func discardBuffer(worktreeId: String, tabId: TabID) {
+        if let owner = bufferOwners[tabId] {
+            assert(owner == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(owner)")
+        }
+        guard let buffer = buffers.removeValue(forKey: tabId) else { return }
+        bufferOwners.removeValue(forKey: tabId)
+        buffer.close(persistDirtySnapshot: false)
+    }
+
+    /// Tab IDs whose buffers are currently dirty. Order is unspecified.
+    func dirtyTabIds() -> [TabID] {
+        buffers.compactMap { $0.value.dirty ? $0.key : nil }
+    }
+
+    /// Walk all dirty buffers and write a final snapshot. Called by the
+    /// quit handler. Errors are swallowed — failing to snapshot one buffer
+    /// must not block snapshotting the rest, and quit must not be blocked.
+    func snapshotDirtyBuffersForQuit() {
+        for buffer in buffers.values where buffer.dirty {
+            buffer.snapshotNow()
+        }
+    }
+
+    /// Save the active editor tab's buffer for `worktreeId`. No-op if the
+    /// active tab is not an editor or has no buffer.
+    @discardableResult
+    func saveActive(worktreeId: String) -> Bool {
+        guard let activeId = activeTabId(forWorktree: worktreeId),
+              let buffer = buffers[activeId] else { return false }
+        do {
+            try buffer.saveRecordingError()
+            return true
+        } catch {
+            return false
+        }
     }
 }

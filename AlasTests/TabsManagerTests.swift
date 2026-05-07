@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import Alas
 
+@MainActor
 struct TabsManagerTests {
     @Test func newTerminalAppendsAndActivates() {
         let worktreeId = "tabs-manager-new-terminal"

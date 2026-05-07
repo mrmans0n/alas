@@ -84,6 +84,12 @@ actor LSPClient {
         ])
     }
 
+    func didSave(uri: String) throws {
+        try sendNotification(method: "textDocument/didSave", params: [
+            "textDocument": ["uri": uri]
+        ])
+    }
+
     /// Full-document content sync. We don't keep a local edit history, so
     /// every change is sent as a single replacement of the whole document.
     /// Caller is responsible for monotonic version numbers per URI.
