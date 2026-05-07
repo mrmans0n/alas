@@ -182,3 +182,18 @@ Pre-req: a Swift project, `sourcekit-lsp` available via `xcrun --find sourcekit-
 3. Add a custom language entry (e.g. Rust → `rust-analyzer`). Save. Restart. Confirm the entry persists.
 4. Disable Swift. Reopen a `.swift` file. Confirm tree-sitter coloring still works but hover / diagnostics / go-to-def are gone.
 5. Re-enable Swift. Reopen the file. Confirm hover and diagnostics return after the server initializes.
+
+## Editor — editable files (v1)
+
+Run from a real worktree with at least one Swift file and one CRLF text file.
+
+- **Save round-trip.** Open a Swift file, type a comment, ⌘S. `git status` shows the file modified.
+- **Tab persistence.** Open a file, type, switch tabs, switch back. Content preserved.
+- **Hot exit.** Open a file, type, ⌘Q without saving. Relaunch. Tab restored, dirty dot present, content matches what you typed.
+- **External change while clean.** Open a file (do not edit). In a terminal, append a line to the file. The editor reflects the new line within ~1 s.
+- **External change while dirty.** Open a file, type a character, then in a terminal `echo z >> path`. The conflict banner appears. **Reload from disk** discards edits and shows external content. **Keep mine** keeps your buffer; subsequent ⌘S overwrites the external change.
+- **Deletion conflict.** Open a file, type, then `rm` it externally. Banner shows "File was deleted on disk." **Save anyway** recreates it; **Keep mine** leaves the buffer in place (without writing).
+- **CRLF preservation.** Drop a CRLF-encoded text file in the worktree (`printf 'a\r\nb\r\n' > win.txt`). Open it, append a line, ⌘S. `xxd win.txt` shows the new line as CRLF as well.
+- **Permissions preservation.** `chmod 755` a script file, open it, edit, ⌘S. `ls -l` still shows `-rwxr-xr-x`.
+- **Big file responsiveness.** Open a 5 k-line file, type rapidly. No visible flicker. Diagnostics catch up within ~1 s of pause.
+- **Save failure.** `chmod 555` the parent directory, edit, ⌘S. The conflict-banner area shows "Couldn't save: …". Restore perms, ⌘S succeeds.
