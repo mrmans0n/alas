@@ -31,7 +31,7 @@ final class EditorBuffer {
     @ObservationIgnored
     private var editObservers: [UUID: () -> Void] = [:]
     @ObservationIgnored
-    private var storageDelegate: BufferStorageDelegate!
+    private var storageDelegate: BufferStorageDelegate = .init({})
     @ObservationIgnored
     private var loading = false
 
@@ -49,8 +49,9 @@ final class EditorBuffer {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.storage = NSTextStorage()
-        self.storageDelegate = BufferStorageDelegate { [weak self] in self?.handleEdit() }
-        self.storage.delegate = self.storageDelegate
+        let delegate = BufferStorageDelegate { [weak self] in self?.handleEdit() }
+        self.storageDelegate = delegate
+        self.storage.delegate = delegate
         loadFromDisk()
     }
 
@@ -67,7 +68,8 @@ final class EditorBuffer {
 
     private func handleEdit() {
         guard !loading else { return }
-        for block in editObservers.values { block() }
+        let snapshot = Array(editObservers.values)
+        for block in snapshot { block() }
     }
 
     func revert() {
