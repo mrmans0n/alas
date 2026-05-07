@@ -10,7 +10,7 @@ struct RightPaneView: View {
     var body: some View {
         let rps = state.rightPaneStore.state(for: worktree)
         ZStack {
-            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+            VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
             VStack(spacing: 0) {
                 ChangesSectionView(
                     changes: rps.changes,
