@@ -38,10 +38,15 @@ final class EditorBufferStore {
         self.decoder = dec
     }
 
+    private func fileURL(worktreeId: String, tabId: String) -> URL {
+        root.appendingPathComponent(worktreeId, isDirectory: true)
+            .appendingPathComponent("\(tabId).json")
+    }
+
     func write(_ snapshot: Snapshot, worktreeId: String, tabId: String) throws {
         let dir = root.appendingPathComponent(worktreeId, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("\(tabId).json")
+        let file = fileURL(worktreeId: worktreeId, tabId: tabId)
         let data = try encoder.encode(snapshot)
         let tmp = file.appendingPathExtension("tmp")
         try data.write(to: tmp, options: .atomic)
@@ -53,9 +58,7 @@ final class EditorBufferStore {
     }
 
     func read(worktreeId: String, tabId: String) throws -> Snapshot? {
-        let file = root
-            .appendingPathComponent(worktreeId, isDirectory: true)
-            .appendingPathComponent("\(tabId).json")
+        let file = fileURL(worktreeId: worktreeId, tabId: tabId)
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         let data: Data
         do {
@@ -75,9 +78,7 @@ final class EditorBufferStore {
     }
 
     func discard(worktreeId: String, tabId: String) {
-        let file = root
-            .appendingPathComponent(worktreeId, isDirectory: true)
-            .appendingPathComponent("\(tabId).json")
+        let file = fileURL(worktreeId: worktreeId, tabId: tabId)
         try? FileManager.default.removeItem(at: file)
     }
 }

@@ -33,8 +33,4 @@ extension Paths {
     static func buffersDir(forWorktreeId id: String) -> URL {
         buffersRoot.appendingPathComponent(id, isDirectory: true)
     }
-
-    static func bufferFile(worktreeId: String, tabId: String) -> URL {
-        buffersDir(forWorktreeId: worktreeId).appendingPathComponent("\(tabId).json")
-    }
 }
