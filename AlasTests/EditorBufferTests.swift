@@ -52,4 +52,66 @@ struct EditorBufferTests {
         #expect(buffer.readOnly == true)
         #expect(buffer.dirty == false)
     }
+
+    @Test func saveWritesContentAndClearsDirty() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+        #expect(buffer.dirty == true)
+        try buffer.save()
+        #expect(buffer.dirty == false)
+        let onDisk = try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(onDisk == "HELLO\n")
+        #expect(buffer.originalText == "HELLO\n")
+    }
+
+    @Test func saveCRLFFilePreservesCRLFOnDisk() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "win.txt", "a\r\nb\r\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "win.txt")
+        // In-memory storage is canonical LF; user appends a line.
+        buffer.storage.replaceCharacters(in: NSRange(location: buffer.storage.length, length: 0), with: "c\n")
+        try buffer.save()
+        let onDisk = try Data(contentsOf: root.appendingPathComponent("win.txt"))
+        #expect(onDisk == Data("a\r\nb\r\nc\r\n".utf8))
+        #expect(buffer.dirty == false)
+    }
+
+    @Test func savePreservesPosixPermissions() throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "exe.sh", "#!/bin/sh\necho hi\n", perms: 0o755)
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "exe.sh")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "# touched\n")
+        try buffer.save()
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let perms = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        #expect(perms == 0o755)
+    }
+
+    @Test func saveOnReadOnlyDirThrowsAndKeepsBufferDirty() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "x")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "more\n")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: root.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+        }
+        #expect(throws: (any Error).self) { try buffer.save() }
+        #expect(buffer.dirty == true)
+        #expect(buffer.originalText == "x")
+    }
+
+    @Test func saveUpdatesMtime() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "x")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        let oldMtime = buffer.originalMtime
+        // Sleep a tiny bit so HFS/APFS-second-resolution mtimes actually advance.
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "y")
+        try buffer.save()
+        #expect(buffer.originalMtime > oldMtime)
+    }
 }

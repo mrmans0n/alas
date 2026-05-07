@@ -231,6 +231,20 @@ final class WorkspaceLSPManager {
         }
     }
 
+    /// Fire-and-forget `textDocument/didSave`. Skipped if the document was
+    /// never opened on the server (init still in flight, or a different
+    /// holder is in play). Mirrors `didChange`'s readiness semantics.
+    func didSave(worktreeRoot: URL, fileURL: URL, languageId: String) async {
+        let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
+        let key = Key(root: lspRoot.path, language: languageId)
+        let uri = fileURL.lspURI
+        guard let holder = holders[key], holder.openedURIs.contains(uri) else { return }
+        let initOk = await holder.ready.value
+        guard initOk, let cur = holders[key], cur.openedURIs.contains(uri) else { return }
+        try? await cur.client.didSave(uri: uri)
+    }
+
     /// Returns the live client serving `fileURL` for `language`, if any.
     /// Resolves the LSP root via the configured `rootMarkers` so a nested
     /// package's client is found correctly even when the caller only knows

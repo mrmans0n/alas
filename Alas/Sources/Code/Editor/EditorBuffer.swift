@@ -43,6 +43,69 @@ final class EditorBuffer {
         loadFromDisk()
     }
 
+    /// Persist the buffer to disk atomically. Writes to a temp file in the
+    /// same directory, fsyncs, renames onto the target, and restores the
+    /// captured POSIX permissions on the new inode. Updates `originalText`,
+    /// `originalMtime`, and clears `dirty`. Throws on any IO failure; the
+    /// buffer is left dirty so the user can retry.
+    func save() throws {
+        guard !readOnly else { return }
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let canonical = storage.string
+        let onDisk = lineEnding.normalize(canonical)
+        let dir = url.deletingLastPathComponent()
+        let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).alas-\(UUID().uuidString).tmp")
+        let data = Data(onDisk.utf8)
+
+        // Write + fsync. We open with O_WRONLY|O_CREAT|O_TRUNC so a leftover
+        // tmp from a crashed prior save is overwritten, not appended to.
+        let fd = open(tmp.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        if fd < 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(fd) }
+        try data.withUnsafeBytes { buf in
+            guard let base = buf.baseAddress else { return }
+            var remaining = buf.count
+            var ptr = base
+            while remaining > 0 {
+                let n = Darwin.write(fd, ptr, remaining)
+                if n < 0 {
+                    try? FileManager.default.removeItem(at: tmp)
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                ptr = ptr.advanced(by: n)
+                remaining -= n
+            }
+        }
+        if Darwin.fsync(fd) != 0 {
+            try? FileManager.default.removeItem(at: tmp)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+
+        // Atomic rename. `replaceItemAt` preserves the original inode's xattrs
+        // when available; if the target doesn't exist (deleted on disk), fall
+        // back to moveItem.
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+            } else {
+                try FileManager.default.moveItem(at: tmp, to: url)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw error
+        }
+
+        // Restore captured perms; failure is non-fatal (file is saved, just
+        // not with our preferred mode).
+        try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: UInt16(permissions))], ofItemAtPath: url.path)
+
+        originalText = canonical
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let mtime = attrs[.modificationDate] as? Date {
+            originalMtime = mtime
+        }
+    }
+
     private func loadFromDisk() {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
