@@ -10,9 +10,10 @@ import AppKit
 enum WindowAppearance {
     @MainActor
     static func apply(darkMode: Bool) {
+        guard let app = NSApp else { return }
         let appearance = NSAppearance(named: darkMode ? .darkAqua : .aqua)
-        NSApp.appearance = appearance
-        for window in NSApp.windows {
+        app.appearance = appearance
+        for window in app.windows {
             window.appearance = appearance
         }
     }

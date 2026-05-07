@@ -49,6 +49,7 @@ final class AppState {
             themeStore.setMatchSystem(true)
         }
         self.themeStore = themeStore
+        WindowAppearance.apply(darkMode: themeStore.current.darkMode)
         // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
         // happens async in RootView.task), so worktreesByProject is empty and
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
