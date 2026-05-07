@@ -163,7 +163,7 @@ final class WorkspaceLSPManager {
     /// (so no `didOpen` has gone out yet), updates `pendingOpenText` so the
     /// delayed `didOpen` carries the latest content — otherwise we'd lose
     /// the reload and the server would analyze the stale tab-open snapshot.
-    func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async {
+    func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]? = nil) async {
         let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
         let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
         let key = Key(root: lspRoot.path, language: languageId)
@@ -185,7 +185,7 @@ final class WorkspaceLSPManager {
         cur.versions[uri] = nextVersion
         cur.texts[uri] = text
         holders[key] = cur
-        try? await cur.client.didChange(uri: uri, version: nextVersion, text: text, previousText: previousText)
+        try? await cur.client.didChange(uri: uri, version: nextVersion, text: text, previousText: previousText, edits: edits)
     }
 
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {

@@ -40,9 +40,9 @@ final class EditorBuffer {
     private(set) var editGeneration: Int = 0
 
     @ObservationIgnored
-    private var editObservers: [UUID: () -> Void] = [:]
+    private var editObservers: [UUID: (EditorTextEdit?) -> Void] = [:]
     @ObservationIgnored
-    private var storageDelegate: BufferStorageDelegate = .init({})
+    private var storageDelegate: BufferStorageDelegate = .init { _ in }
     @ObservationIgnored
     private var loading = false
     @ObservationIgnored
@@ -101,7 +101,7 @@ final class EditorBuffer {
         self.tabId = tabId
         self.lsp = lsp
         self.language = lsp?.language(forFileExtension: (relativePath as NSString).pathExtension)
-        let delegate = BufferStorageDelegate { [weak self] in self?.handleEdit() }
+        let delegate = BufferStorageDelegate { [weak self] edit in self?.handleEdit(edit: edit) }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
         loadFromDisk()
@@ -120,6 +120,11 @@ final class EditorBuffer {
 
     @discardableResult
     func onEdit(_ block: @escaping () -> Void) -> EditObserverToken {
+        onTextEdit { _ in block() }
+    }
+
+    @discardableResult
+    func onTextEdit(_ block: @escaping (EditorTextEdit?) -> Void) -> EditObserverToken {
         let id = UUID()
         editObservers[id] = block
         return EditObserverToken(id: id)
@@ -129,17 +134,17 @@ final class EditorBuffer {
         editObservers.removeValue(forKey: token.id)
     }
 
-    private func handleEdit() {
+    private func handleEdit(edit: EditorTextEdit?) {
         guard !loading else { return }
         editGeneration &+= 1
         let snapshot = Array(editObservers.values)
-        for block in snapshot { block() }
+        for block in snapshot { block(edit) }
     }
 
     func revert() {
         loadFromDisk()
         discardSnapshot()
-        handleEdit()
+        handleEdit(edit: nil)
     }
 
     func startWatching() {
@@ -497,10 +502,12 @@ final class EditorBuffer {
 }
 
 private final class BufferStorageDelegate: NSObject, NSTextStorageDelegate {
-    private let onDidProcess: () -> Void
-    init(_ onDidProcess: @escaping () -> Void) {
+    private let onDidProcess: (EditorTextEdit) -> Void
+
+    init(_ onDidProcess: @escaping (EditorTextEdit) -> Void) {
         self.onDidProcess = onDidProcess
     }
+
     func textStorage(
         _ textStorage: NSTextStorage,
         didProcessEditing editedMask: NSTextStorageEditActions,
@@ -511,6 +518,13 @@ private final class BufferStorageDelegate: NSObject, NSTextStorageDelegate {
         // Attribute-only edits (highlighter applying colors) are ignored —
         // otherwise re-highlighting would loop through the observer.
         guard editedMask.contains(.editedCharacters) else { return }
-        onDidProcess()
+        let replacementText = (textStorage.string as NSString).substring(with: editedRange)
+        let oldLength = max(0, editedRange.length - delta)
+        let edit = EditorTextEdit(
+            location: editedRange.location,
+            oldLength: oldLength,
+            replacementText: replacementText
+        )
+        onDidProcess(edit)
     }
 }

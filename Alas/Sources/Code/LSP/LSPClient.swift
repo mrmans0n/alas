@@ -90,14 +90,15 @@ actor LSPClient {
         ])
     }
 
-    /// Full-document content sync. We don't keep a local edit history, so
-    /// every change is sent as a single replacement of the whole document.
+    /// Sends content sync using server capabilities. Incremental servers get
+    /// the concrete AppKit edit ranges when available; otherwise we fall
+    /// back to a single ranged full-document replacement.
     /// Caller is responsible for monotonic version numbers per URI.
-    func didChange(uri: String, version: Int, text: String, previousText: String?) throws {
+    func didChange(uri: String, version: Int, text: String, previousText: String?, edits: [EditorTextEdit]? = nil) throws {
         guard textDocumentSyncKind != .none else { return }
         let changes: [[String: Any]]
         if textDocumentSyncKind == .incremental, let previousText {
-            changes = [[
+            changes = Self.incrementalChanges(edits: edits, previousText: previousText, nextText: text) ?? [[
                 "range": Self.fullRange(for: previousText).json,
                 "rangeLength": (previousText as NSString).length,
                 "text": text
@@ -213,20 +214,30 @@ actor LSPClient {
 
     private static func fullRange(for text: String) -> LSPRange {
         let nsText = text as NSString
-        var line = 0
-        var lineStart = 0
-        var index = 0
-        while index < nsText.length {
-            if nsText.character(at: index) == 10 {
-                line += 1
-                lineStart = index + 1
-            }
-            index += 1
-        }
+        let end = TextEditCoordinates.lspPosition(utf16Offset: nsText.length, in: text) ?? LSPPosition(line: 0, character: 0)
         return LSPRange(
             start: LSPPosition(line: 0, character: 0),
-            end: LSPPosition(line: line, character: nsText.length - lineStart)
+            end: end
         )
+    }
+
+    private static func incrementalChanges(edits: [EditorTextEdit]?, previousText: String, nextText: String) -> [[String: Any]]? {
+        guard let edits, !edits.isEmpty else { return nil }
+        var rollingText = previousText
+        var changes: [[String: Any]] = []
+        for edit in edits {
+            guard let range = TextEditCoordinates.lspRange(for: edit.oldRange, in: rollingText),
+                  let editedText = TextEditCoordinates.apply(edit, to: rollingText) else {
+                return nil
+            }
+            changes.append([
+                "range": range.json,
+                "rangeLength": edit.oldLength,
+                "text": edit.replacementText
+            ])
+            rollingText = editedText
+        }
+        return rollingText == nextText ? changes : nil
     }
 
     private nonisolated func sendNotification(method: String, params: Any?) throws {

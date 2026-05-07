@@ -36,4 +36,27 @@ struct TreeSitterHighlighterTests {
         let captures = Set(spans.map { $0.capture })
         #expect(captures.contains(.string))
     }
+
+    @Test("session accepts incremental edits")
+    func sessionIncrementalEdit() async throws {
+        let session = TreeSitterHighlighter.Session()
+        _ = await session.highlight(source: "func foo() {}", fileExtension: "swift", edits: [])
+        let spans = await session.highlight(
+            source: "func foobar() {}",
+            fileExtension: "swift",
+            edits: [EditorTextEdit(location: 8, oldLength: 0, replacementText: "bar")]
+        )
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.keyword))
+        #expect(captures.contains(.function))
+    }
+
+    @Test("session reparses changed source when edit ranges are unavailable")
+    func sessionReparsesChangedSourceWithoutEdits() async throws {
+        let session = TreeSitterHighlighter.Session()
+        _ = await session.highlight(source: "func foo() {}", fileExtension: "swift", edits: [])
+        let spans = await session.highlight(source: #"let value = "hello""#, fileExtension: "swift", edits: [])
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.string))
+    }
 }
