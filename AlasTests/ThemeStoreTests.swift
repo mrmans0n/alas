@@ -9,8 +9,8 @@ struct ThemeStoreTests {
 
     @Test func switchChangesCurrent() throws {
         let store = try ThemeStore()
-        try store.activate(id: "warm-amber")
-        #expect(store.current.id == "warm-amber")
+        try store.activate(id: "light")
+        #expect(store.current.id == "light")
     }
 
     @Test func switchToUnknownThrows() throws {
