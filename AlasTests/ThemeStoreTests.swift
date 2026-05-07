@@ -19,4 +19,12 @@ struct ThemeStoreTests {
             try store.activate(id: "nope")
         }
     }
+
+    @Test func matchSystemOffRestoresUserPick() throws {
+        let store = try ThemeStore()
+        try store.activate(id: "light")
+        store.setMatchSystem(true)
+        store.setMatchSystem(false)
+        #expect(store.current.id == "light")
+    }
 }
