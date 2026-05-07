@@ -57,6 +57,10 @@ final class EditorBuffer {
     private let tabId: String?
     @ObservationIgnored
     private var snapshotTask: Task<Void, Never>?
+    @ObservationIgnored
+    private let lsp: WorkspaceLSPManager?
+    @ObservationIgnored
+    private(set) var language: String?
 
     struct EditObserverToken { fileprivate let id: UUID }
 
@@ -71,23 +75,30 @@ final class EditorBuffer {
     /// Convenience initializer for callers that do not need hot-exit support
     /// (tests from Tasks 3-6, and any non-persisted buffer).
     convenience init(worktreeRoot: URL, relativePath: String) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: nil, worktreeId: nil, tabId: nil, restoreEnabled: false)
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: nil, worktreeId: nil, tabId: nil, restoreEnabled: false, lsp: nil)
     }
 
-    /// Production initializer that opts into hot-exit. The `store` is consulted
-    /// at init time for any persisted snapshot; if found, it overlays disk
-    /// content with `dirty = true`.
+    /// Production initializer that opts into hot-exit (no LSP). The `store`
+    /// is consulted at init time for any persisted snapshot.
     convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true)
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil)
     }
 
-    private init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool) {
+    /// Production initializer that opts into hot-exit and opens an LSP
+    /// document. The buffer owns the LSP open/close lifecycle for this file.
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp)
+    }
+
+    private init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
         self.tabId = tabId
+        self.lsp = lsp
+        self.language = lsp?.language(forFileExtension: (relativePath as NSString).pathExtension)
         let delegate = BufferStorageDelegate { [weak self] in self?.handleEdit() }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
@@ -98,6 +109,11 @@ final class EditorBuffer {
             applySnapshot(snap)
         }
         onEdit { [weak self] in self?.scheduleSnapshot() }
+        if let lsp, let language {
+            let url = worktreeRoot.appendingPathComponent(relativePath)
+            let text = storage.string
+            Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
+        }
     }
 
     @discardableResult
@@ -254,6 +270,10 @@ final class EditorBuffer {
         }
         startWatching()
         discardSnapshot()
+        if let lsp, let language {
+            let url = worktreeRoot.appendingPathComponent(relativePath)
+            Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+        }
     }
 
     // MARK: - Snapshot / restore (hot-exit)
@@ -305,6 +325,10 @@ final class EditorBuffer {
         snapshotTask?.cancel()
         if dirty { snapshotNow() }
         stopWatching()
+        if let lsp, let language {
+            let url = worktreeRoot.appendingPathComponent(relativePath)
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+        }
     }
 
     /// Compares the snapshot's recorded original mtime to the current file's

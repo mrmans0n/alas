@@ -17,9 +17,11 @@ final class TabsManager {
     // Map tabId → worktreeId so `discardBuffer` and `snapshotDirtyBuffersForQuit`
     // know which subtree to write to without forcing callers to pass it.
     private var bufferOwners: [TabID: String] = [:]
+    private let lsp: WorkspaceLSPManager?
 
-    init(bufferStore: EditorBufferStore = EditorBufferStore()) {
+    init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
         self.bufferStore = bufferStore
+        self.lsp = lsp
     }
 
     func tabs(forWorktree id: String) -> [Tab] {
@@ -219,13 +221,25 @@ final class TabsManager {
     /// hot-restore from snapshot) on first access.
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
         if let existing = buffers[tabId] { return existing }
-        let buffer = EditorBuffer(
-            worktreeRoot: worktreeRoot,
-            relativePath: relativePath,
-            store: bufferStore,
-            worktreeId: worktreeId,
-            tabId: tabId
-        )
+        let buffer: EditorBuffer
+        if let lsp {
+            buffer = EditorBuffer(
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath,
+                store: bufferStore,
+                worktreeId: worktreeId,
+                tabId: tabId,
+                lsp: lsp
+            )
+        } else {
+            buffer = EditorBuffer(
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath,
+                store: bufferStore,
+                worktreeId: worktreeId,
+                tabId: tabId
+            )
+        }
         buffer.startWatching()
         buffer.checkForConflictOnRestore()
         buffers[tabId] = buffer

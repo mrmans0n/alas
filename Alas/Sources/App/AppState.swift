@@ -9,7 +9,14 @@ final class AppState {
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
     var selectedWorktreeId: String?
-    let tabs = TabsManager()
+    @ObservationIgnored
+    private var _tabs: TabsManager?
+    var tabs: TabsManager {
+        if let _tabs { return _tabs }
+        let manager = TabsManager(lsp: lsp)
+        _tabs = manager
+        return manager
+    }
     let terminal = TerminalService()
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()

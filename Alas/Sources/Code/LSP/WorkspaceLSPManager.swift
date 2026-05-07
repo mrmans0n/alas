@@ -245,6 +245,20 @@ final class WorkspaceLSPManager {
         try? await cur.client.didSave(uri: uri)
     }
 
+    /// Polls until the live client for `(fileURL, language)` is available
+    /// (i.e. the buffer's `openDocument` task has completed and a holder
+    /// exists), then returns it. Returns `nil` if no client appears within
+    /// `timeout` seconds or the task is cancelled.
+    func clientWhenReady(forFile fileURL: URL, worktreeRoot: URL, language: String, timeout: TimeInterval = 30) async -> LSPClient? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let c = client(forFile: fileURL, worktreeRoot: worktreeRoot, language: language) { return c }
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50 ms
+            if Task.isCancelled { return nil }
+        }
+        return nil
+    }
+
     /// Returns the live client serving `fileURL` for `language`, if any.
     /// Resolves the LSP root via the configured `rootMarkers` so a nested
     /// package's client is found correctly even when the caller only knows

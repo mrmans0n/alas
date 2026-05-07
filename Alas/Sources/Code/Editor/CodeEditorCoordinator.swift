@@ -47,7 +47,7 @@ final class CodeEditorCoordinator {
         let ext = (buffer.relativePath as NSString).pathExtension
         currentLanguage = appState.lsp.language(forFileExtension: ext)
         runHighlight(theme: theme)
-        openLSPIfNeeded(text: buffer.storage.string, theme: theme)
+        subscribeIfPossible(theme: theme)
 
         editObserverToken = buffer.onEdit { [weak self] in
             self?.scheduleEditPropagation()
@@ -197,28 +197,21 @@ final class CodeEditorCoordinator {
         }
     }
 
-    // MARK: - LSP open + diagnostics subscription
+    // MARK: - Diagnostics subscription
 
-    private func openLSPIfNeeded(text: String, theme: Theme) {
+    /// Waits for the buffer's LSP open to complete (via `clientWhenReady`),
+    /// then subscribes to diagnostics. The buffer owns open/close; the
+    /// coordinator only wires the diagnostic stream.
+    private func subscribeIfPossible(theme: Theme) {
         guard let buffer, let language = currentLanguage else { return }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         let manager = appState.lsp
         diagnosticsTask?.cancel()
         diagnosticsFeature.reset()
         let stableTabId = currentTabId
-        Task { [weak self, language] in
-            let client = await manager.openDocument(
-                worktreeRoot: buffer.worktreeRoot,
-                fileURL: url,
-                languageId: language,
-                text: text
-            )
-            guard let self, self.currentTabId == stableTabId else {
-                if client != nil {
-                    await manager.closeDocument(worktreeRoot: buffer.worktreeRoot, fileURL: url, languageId: language)
-                }
-                return
-            }
+        Task { [weak self] in
+            let client = await manager.clientWhenReady(forFile: url, worktreeRoot: buffer.worktreeRoot, language: language)
+            guard let self, self.currentTabId == stableTabId, let client else { return }
             await self.subscribeDiagnostics(for: client, uri: url.lspURI, theme: theme)
             await self.symbolsFeature.refresh(client: client, uri: url.lspURI)
         }
