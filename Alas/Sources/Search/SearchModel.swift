@@ -17,6 +17,9 @@ struct SearchEnvironment: Sendable {
     var allWorktrees: @Sendable () -> [SearchWorktree]
     var entries: @Sendable (SearchWorktree) async throws -> [FileIndex.Entry]
     var statuses: @Sendable (SearchWorktree) async throws -> [String: GitStatusBadge]
+    var contentSearch: @Sendable (
+        String, SearchContentOptions, [SearchWorktree]
+    ) -> AsyncThrowingStream<ContentSearchHit, Error>
 }
 
 struct SearchContentOptions: Equatable, Sendable {
@@ -172,12 +175,7 @@ final class SearchModel {
         case .files:
             await runFileSearch(query: query, targets: targets)
         case .content:
-            // Phase 2 makes the Content tab reachable visually (via tabs,
-            // Tab key, or `> ` prefix) but produces no hits — Phase 3
-            // plugs in the ripgrep backend. Reset everything (including a
-            // stale partialFailureMessage carried over from a prior file
-            // search in `.allRepos`) so the Content tab starts clean.
-            results = SearchResults()
+            await runContentSearch(query: query, targets: targets)
         }
 
         if selectedIndex >= totalResultRows {
@@ -264,6 +262,134 @@ final class SearchModel {
                 ? nil
                 : "Couldn't read files for \(failures.joined(separator: ", "))"
         )
+    }
+
+    private func runContentSearch(query: String, targets: [SearchWorktree]) async {
+        // Empty content queries match everything; rg would scan the whole
+        // worktree for nothing useful. Short-circuit to a clean state so the
+        // empty-state copy renders instead.
+        guard !query.isEmpty else {
+            results = SearchResults()
+            return
+        }
+
+        // Validate regex up-front when the toggle is on. rg's exit-2 covers
+        // both regex syntax errors and soft I/O errors, so the `rgFailed`
+        // catch can't tell them apart — surfacing the regex error here lets
+        // that catch stay generic for genuine I/O issues. NSRegularExpression
+        // is ICU-regex; rg uses Rust's regex crate. Most simple patterns
+        // (`[`, `(`, `\?`) are flagged identically; for exotic features
+        // they may diverge, in which case this just falls through to rg.
+        if contentOptions.regex {
+            do {
+                _ = try NSRegularExpression(pattern: query, options: [])
+            } catch {
+                results = SearchResults(
+                    fileResults: [],
+                    contentGroups: [],
+                    partialFailureMessage: "Invalid regex pattern."
+                )
+                return
+            }
+        }
+
+        // Caps
+        let maxHits  = 200
+        let maxFiles = 50
+        let partialEvery = 25
+
+        // Map from group key to index in `groups` (preserves encounter order).
+        var groupIndex: [String: Int] = [:]
+        // Accumulated groups, in encounter order.
+        var groups: [ContentSearchGroup] = []
+        var totalHits = 0
+
+        do {
+            let stream = env.contentSearch(query, contentOptions, targets)
+            for try await hit in stream {
+                if Task.isCancelled { return }
+
+                let key = hit.groupKey
+                if let idx = groupIndex[key] {
+                    groups[idx].hits.append(hit)
+                } else if groups.count < maxFiles {
+                    let newGroup = ContentSearchGroup(
+                        worktreeId: hit.worktreeId,
+                        projectId: hit.projectId,
+                        relativePath: hit.relativePath,
+                        hits: [hit]
+                    )
+                    groupIndex[key] = groups.count
+                    groups.append(newGroup)
+                }
+                // Always count toward totalHits — including hits dropped
+                // because they belong to a new file past the file cap. Without
+                // this, `maxHits` never fires for broad searches and we drain
+                // the entire rg stream after the UI is already capped.
+                totalHits += 1
+
+                // Push partial results every 25 hits so the UI animates.
+                if totalHits % partialEvery == 0 {
+                    results = SearchResults(
+                        fileResults: [],
+                        contentGroups: groups,
+                        partialFailureMessage: nil
+                    )
+                }
+
+                if totalHits >= maxHits { break }
+            }
+            // Final flush — but only if we haven't been superseded by a
+            // newer query. Otherwise the about-to-be-overwritten newer
+            // task's results would be clobbered with our stale snapshot.
+            if Task.isCancelled { return }
+            results = SearchResults(
+                fileResults: [],
+                contentGroups: groups,
+                partialFailureMessage: nil
+            )
+        } catch ContentSearcher.SearchError.rgNotFound {
+            results = SearchResults(
+                fileResults: [],
+                contentGroups: [],
+                partialFailureMessage: "Install ripgrep (`brew install ripgrep`) to enable content search."
+            )
+        } catch ContentSearcher.SearchError.regexInvalid {
+            // rg's stderr-detected regex parse error — covers patterns
+            // that the up-front NSRegularExpression preflight accepted
+            // but rg's Rust regex rejects (look-around, backrefs).
+            results = SearchResults(
+                fileResults: [],
+                contentGroups: [],
+                partialFailureMessage: "Invalid regex pattern."
+            )
+        } catch ContentSearcher.SearchError.rgFailed {
+            // ripgrep exit 2 covers both regex-syntax errors and soft I/O
+            // errors (unreadable file, permission denied, etc.) — see
+            // `rg --generate man`. Regex errors are caught up-front by the
+            // NSRegularExpression validation above, so by the time we reach
+            // here it's effectively always a soft I/O failure. Preserve any
+            // hits accumulated from earlier files.
+            let message = groups.isEmpty
+                ? "Content search failed."
+                : "Some files couldn't be searched."
+            results = SearchResults(
+                fileResults: [],
+                contentGroups: groups,
+                partialFailureMessage: message
+            )
+        } catch is CancellationError {
+            // A newer keystroke superseded this query — let the new task
+            // own `results`. Don't surface a banner.
+            return
+        } catch {
+            // Flush whatever was accumulated so far.
+            results = SearchResults(
+                fileResults: [],
+                contentGroups: groups,
+                partialFailureMessage: "Content search interrupted."
+            )
+        }
     }
 
     private func signalIdle() {

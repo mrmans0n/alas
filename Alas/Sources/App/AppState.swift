@@ -242,6 +242,9 @@ final class AppState {
             },
             statuses: { [statusCache] wt in
                 try await statusCache.statuses(forWorktreePath: wt.absolutePath)
+            },
+            contentSearch: { [contentSearcher = ContentSearcher()] query, options, targets in
+                contentSearcher.search(query: query, options: options, worktrees: targets)
             }
         )
     }
