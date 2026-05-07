@@ -21,6 +21,11 @@ struct CenterPaneView: View {
                     }
                     return nil
                 },
+                dirtyLookup: { id in
+                    let buffer = state.tabs.peekBuffer(tabId: id)
+                    _ = buffer?.editGeneration
+                    return buffer?.dirty ?? false
+                },
                 onActivate: { id in state.tabs.activate(worktreeId: worktree.id, tabId: id) },
                 onClose:    { id in state.closeTab(worktreeId: worktree.id, tabId: id) },
                 onCloseOthers: { id in state.closeOtherTabs(worktreeId: worktree.id, keeping: id) },

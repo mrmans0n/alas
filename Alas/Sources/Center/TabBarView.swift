@@ -4,6 +4,7 @@ struct TabBarView: View {
     let tabs: [Tab]
     let activeId: TabID?
     let harnessLookup: (TabID) -> (kind: HarnessKind, state: String)?
+    let dirtyLookup: (TabID) -> Bool
     let onActivate: (TabID) -> Void
     let onClose: (TabID) -> Void
     let onCloseOthers: (TabID) -> Void
@@ -23,6 +24,7 @@ struct TabBarView: View {
                     active: tab.id == activeId,
                     showClose: tabs.count > 1,
                     harnessInfo: harnessLookup(tab.id),
+                    dirty: dirtyLookup(tab.id),
                     onActivate: { onActivate(tab.id) },
                     onClose: { onClose(tab.id) }
                 )
@@ -62,6 +64,7 @@ private struct TabButton: View {
     let active: Bool
     let showClose: Bool
     let harnessInfo: (kind: HarnessKind, state: String)?
+    let dirty: Bool
     let onActivate: () -> Void
     let onClose: () -> Void
     @Environment(\.theme) var theme
@@ -81,14 +84,23 @@ private struct TabButton: View {
             }
             if showClose {
                 Button(action: onClose) {
-                    Icon(name: "x", size: 9,
-                         color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
-                        .frame(width: 14, height: 14)
-                        .background(hoveringClose ? theme.color("bg-4") : .clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                    ZStack {
+                        if dirty && !hoveringClose {
+                            Circle()
+                                .fill(theme.color("fg"))
+                                .frame(width: 7, height: 7)
+                        } else {
+                            Icon(name: "x", size: 9,
+                                 color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
+                                .background(hoveringClose ? theme.color("bg-4") : .clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        }
+                    }
+                    .frame(width: 14, height: 14)
                 }
                 .buttonStyle(.plain)
                 .onHover { hoveringClose = $0 }
+                .help(dirty ? "Unsaved changes — click to close" : "Close")
             }
         }
         .padding(.horizontal, 10)

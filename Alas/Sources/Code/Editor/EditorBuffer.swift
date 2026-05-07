@@ -37,6 +37,8 @@ final class EditorBuffer {
 
     var lastSaveError: String?
 
+    private(set) var editGeneration: Int = 0
+
     @ObservationIgnored
     private var editObservers: [UUID: () -> Void] = [:]
     @ObservationIgnored
@@ -129,6 +131,7 @@ final class EditorBuffer {
 
     private func handleEdit() {
         guard !loading else { return }
+        editGeneration &+= 1
         let snapshot = Array(editObservers.values)
         for block in snapshot { block() }
     }
