@@ -35,6 +35,8 @@ final class EditorBuffer {
 
     private(set) var conflict: Conflict?
 
+    var lastSaveError: String?
+
     @ObservationIgnored
     private var editObservers: [UUID: () -> Void] = [:]
     @ObservationIgnored
@@ -188,6 +190,7 @@ final class EditorBuffer {
     /// `originalMtime`, and clears `dirty`. Throws on any IO failure; the
     /// buffer is left dirty so the user can retry.
     func save() throws {
+        lastSaveError = nil
         guard !readOnly else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let canonical = storage.string
