@@ -89,6 +89,34 @@ struct LSPClientLifecycleTests {
         transport.finish()
     }
 
+    @Test("incremental text sync sends concrete edit ranges")
+    func incrementalTextSyncUsesConcreteEditRanges() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":2}}}"#)
+            }
+        }
+        try await client.initialize()
+        try await client.didChange(
+            uri: "file:///tmp/x.swift",
+            version: 2,
+            text: "let xy = 1\n",
+            previousText: "let x = 1\n",
+            edits: [EditorTextEdit(location: 5, oldLength: 0, replacementText: "y")]
+        )
+        let change = transport.sent.last ?? ""
+        #expect(change.contains(#""start":{"#))
+        #expect(change.contains(#""end":{"#))
+        #expect(change.contains(#""line":0"#))
+        #expect(change.contains(#""character":5"#))
+        #expect(change.contains(#""rangeLength":0"#))
+        #expect(change.contains(#""text":"y""#))
+        #expect(!change.contains(#""text":"let xy = 1\n""#))
+        transport.finish()
+    }
+
     @Test("full text sync keeps full-document changes")
     func fullTextSyncUsesFullDocumentPayload() async throws {
         let transport = FakeTransport()

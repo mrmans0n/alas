@@ -32,6 +32,8 @@ final class CodeEditorCoordinator {
     private var editObserverToken: EditorBuffer.EditObserverToken?
     private var didChangeTask: Task<Void, Never>?
     private var hasPendingDidChange = false
+    private var pendingTextEdits: [EditorTextEdit] = []
+    private let highlightSession = TreeSitterHighlighter.Session()
 
     init(appState: AppState) {
         self.appState = appState
@@ -53,8 +55,8 @@ final class CodeEditorCoordinator {
         runHighlight(theme: theme)
         subscribeIfPossible(theme: theme)
 
-        editObserverToken = buffer.onEdit { [weak self] in
-            self?.scheduleEditPropagation()
+        editObserverToken = buffer.onTextEdit { [weak self] edit in
+            self?.scheduleEditPropagation(edit: edit)
         }
 
         hover = HoverFeature(
@@ -112,6 +114,9 @@ final class CodeEditorCoordinator {
         if pathChanged {
             didChangeTask?.cancel()
             hasPendingDidChange = false
+            pendingTextEdits.removeAll()
+            let session = highlightSession
+            Task { await session.reset() }
             currentWorktreeId = worktreeId
             currentTabId = tabId
             currentRoot = worktreeRoot
@@ -135,9 +140,10 @@ final class CodeEditorCoordinator {
         }
         editObserverToken = nil
         if hasPendingDidChange {
-            notifyLSPDidChange()
+            notifyLSPDidChange(edits: pendingTextEdits)
             hasPendingDidChange = false
         }
+        pendingTextEdits.removeAll()
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
         diagnosticsSetupTask?.cancel()
@@ -158,21 +164,28 @@ final class CodeEditorCoordinator {
 
     // MARK: - Edit propagation (highlight + didChange debouncer)
 
-    private func scheduleEditPropagation() {
+    private func scheduleEditPropagation(edit: EditorTextEdit?) {
         didChangeTask?.cancel()
         hasPendingDidChange = true
+        if let edit {
+            pendingTextEdits.append(edit)
+        } else {
+            pendingTextEdits.removeAll()
+        }
         didChangeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard let self, !Task.isCancelled, let theme = self.currentTheme else { return }
             await MainActor.run {
                 self.runHighlight(theme: theme)
                 self.hasPendingDidChange = false
-                self.notifyLSPDidChange()
+                let edits = self.pendingTextEdits
+                self.pendingTextEdits.removeAll()
+                self.notifyLSPDidChange(edits: edits)
             }
         }
     }
 
-    private func notifyLSPDidChange() {
+    private func notifyLSPDidChange(edits: [EditorTextEdit]? = nil) {
         guard let buffer, let language = currentLanguage else { return }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         let text = buffer.storage.string
@@ -181,7 +194,8 @@ final class CodeEditorCoordinator {
                 worktreeRoot: buffer.worktreeRoot,
                 fileURL: url,
                 languageId: language,
-                text: text
+                text: text,
+                edits: edits
             )
         }
     }
@@ -212,24 +226,24 @@ final class CodeEditorCoordinator {
         let editorTheme = EditorTheme(theme: theme)
         let stableTabId = currentTabId
         let cachedDiagnostics = diagnosticsFeature.current
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let spans = TreeSitterHighlighter.highlight(source: text, fileExtension: ext)
-            await MainActor.run {
-                guard let self,
-                      let b = self.buffer,
-                      b.storage === storage,
-                      self.currentTabId == stableTabId,
-                      b.editGeneration == editGeneration,
-                      storage.length == textLength else { return }
-                storage.beginEditing()
-                for span in spans {
-                    guard NSMaxRange(span.range) <= storage.length else { continue }
-                    storage.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
-                }
-                storage.endEditing()
-                if !cachedDiagnostics.isEmpty {
-                    self.diagnosticsFeature.apply(cachedDiagnostics, to: storage, theme: theme)
-                }
+        let session = highlightSession
+        let edits = pendingTextEdits
+        Task(priority: .userInitiated) { [weak self] in
+            let spans = await session.highlight(source: text, fileExtension: ext, edits: edits)
+            guard let self,
+                  let b = self.buffer,
+                  b.storage === storage,
+                  self.currentTabId == stableTabId,
+                  b.editGeneration == editGeneration,
+                  storage.length == textLength else { return }
+            storage.beginEditing()
+            for span in spans {
+                guard NSMaxRange(span.range) <= storage.length else { continue }
+                storage.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
+            }
+            storage.endEditing()
+            if !cachedDiagnostics.isEmpty {
+                self.diagnosticsFeature.apply(cachedDiagnostics, to: storage, theme: theme)
             }
         }
     }

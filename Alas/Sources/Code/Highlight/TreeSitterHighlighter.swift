@@ -10,6 +10,80 @@ import SwiftTreeSitter
 /// UTF-8 byte conversion is needed. (See `SwiftTreeSitter.Parser.parse`
 /// and `Range<UInt32>.range` in `Encoding+Helpers.swift`.)
 struct TreeSitterHighlighter {
+    actor Session {
+        private var parser: Parser?
+        private var tree: MutableTree?
+        private var fileExtension: String?
+        private var previousText: String?
+
+        func reset() {
+            parser = nil
+            tree = nil
+            fileExtension = nil
+            previousText = nil
+        }
+
+        func highlight(source: String, fileExtension ext: String, edits: [EditorTextEdit]) -> [HighlightSpan] {
+            guard
+                let language = LanguageRegistry.language(forFileExtension: ext),
+                let query = LanguageRegistry.highlightQuery(forExtension: ext)
+            else {
+                reset()
+                return RegexFallbackHighlighter.highlight(source: source, fileExtension: ext)
+            }
+
+            let parser = parser(for: language, fileExtension: ext)
+            let nextTree: MutableTree?
+            if let oldText = previousText,
+               fileExtension == ext,
+               let editedTree = tree,
+               let incrementallyEditedTree = apply(edits: edits, oldText: oldText, newText: source, to: editedTree) {
+                nextTree = parser.parse(tree: incrementallyEditedTree, string: source)
+            } else {
+                nextTree = parser.parse(source)
+            }
+            guard let nextTree, let root = nextTree.rootNode else {
+                previousText = source
+                tree = nil
+                return []
+            }
+
+            tree = nextTree
+            previousText = source
+            fileExtension = ext
+            return TreeSitterHighlighter.spans(query: query, root: root, tree: nextTree)
+        }
+
+        private func parser(for language: Language, fileExtension ext: String) -> Parser {
+            if let parser, fileExtension == ext { return parser }
+            let parser = Parser()
+            do {
+                try parser.setLanguage(language)
+                self.parser = parser
+                self.tree = nil
+                self.previousText = nil
+                self.fileExtension = ext
+            } catch {
+                self.parser = nil
+            }
+            return parser
+        }
+
+        private func apply(edits: [EditorTextEdit], oldText: String, newText: String, to tree: MutableTree) -> MutableTree? {
+            guard !edits.isEmpty else { return tree }
+            var rollingText = oldText
+            for edit in edits {
+                guard let editedText = TextEditCoordinates.apply(edit, to: rollingText),
+                      let inputEdit = TextEditCoordinates.inputEdit(for: edit, oldText: rollingText, newText: editedText) else {
+                    return nil
+                }
+                tree.edit(inputEdit)
+                rollingText = editedText
+            }
+            return rollingText == newText ? tree : nil
+        }
+    }
+
     /// Tokenize a full file. Returns highlight spans against `source`.
     static func highlight(source: String, fileExtension ext: String) -> [HighlightSpan] {
         guard
@@ -26,7 +100,16 @@ struct TreeSitterHighlighter {
         }
         guard let tree = parser.parse(source) else { return [] }
         guard let root = tree.rootNode else { return [] }
+        return spans(query: query, root: root, tree: tree)
+    }
 
+    /// Per-line API used by the diff pane. Tokenizes a single line in
+    /// isolation. Returns spans with offsets local to `line`.
+    static func tokenize(line: String, fileExtension ext: String) -> [HighlightSpan] {
+        highlight(source: line, fileExtension: ext)
+    }
+
+    private static func spans(query: Query, root: Node, tree: MutableTree) -> [HighlightSpan] {
         var spans: [HighlightSpan] = []
         let cursor = query.execute(node: root, in: tree)
         while let match = cursor.next() {
@@ -39,12 +122,6 @@ struct TreeSitterHighlighter {
             }
         }
         return spans
-    }
-
-    /// Per-line API used by the diff pane. Tokenizes a single line in
-    /// isolation. Returns spans with offsets local to `line`.
-    static func tokenize(line: String, fileExtension ext: String) -> [HighlightSpan] {
-        highlight(source: line, fileExtension: ext)
     }
 }
 
