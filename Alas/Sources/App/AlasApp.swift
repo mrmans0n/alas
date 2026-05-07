@@ -35,6 +35,10 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasNewTerminalTab, object: nil)
                 }
                 .keyboardShortcut("t", modifiers: .command)
+                Button("Save") {
+                    NotificationCenter.default.post(name: .alasSaveActiveTab, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: .command)
                 Button("Close Tab") {
                     NotificationCenter.default.post(name: .alasCloseTab, object: nil)
                 }

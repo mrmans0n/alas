@@ -137,12 +137,21 @@ final class AppState {
         return try replaceMissingTerminalSession(worktreeId: worktreeId, tab: state)
     }
 
+    func saveActiveTab(worktreeId: String) {
+        _ = tabs.saveActive(worktreeId: worktreeId)
+    }
+
     func closeTab(worktreeId: String, tabId: TabID) {
-        if let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
-           case .terminal(let s) = tab {
-            harness.detector.unregister(sessionId: s.sessionId)
-            harness.forgetSession(s.sessionId)
-            terminal.closeSession(id: s.sessionId)
+        let allTabs = tabs.tabs(forWorktree: worktreeId)
+        if let tab = allTabs.first(where: { $0.id == tabId }) {
+            if case .terminal(let s) = tab {
+                harness.detector.unregister(sessionId: s.sessionId)
+                harness.forgetSession(s.sessionId)
+                terminal.closeSession(id: s.sessionId)
+            }
+            if case .editor = tab {
+                tabs.discardBuffer(worktreeId: worktreeId, tabId: tabId)
+            }
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
@@ -158,28 +167,40 @@ final class AppState {
         }
     }
 
+    private func cleanupClosedEditorBuffers(worktreeId: String, allTabs: [Tab], closedIds: [TabID]) {
+        for id in closedIds {
+            if let tab = allTabs.first(where: { $0.id == id }), case .editor = tab {
+                tabs.discardBuffer(worktreeId: worktreeId, tabId: id)
+            }
+        }
+    }
+
     func closeOtherTabs(worktreeId: String, keeping tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeOthers(worktreeId: worktreeId, keeping: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     func closeAllTabs(worktreeId: String) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     func closeTabsToLeft(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToLeft(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     func closeTabsToRight(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     @discardableResult

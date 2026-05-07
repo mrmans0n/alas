@@ -86,6 +86,11 @@ struct RootView: View {
                 state.closeTab(worktreeId: wt.id, tabId: active)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
+            if let wt = selectedWorktree() {
+                state.saveActiveTab(worktreeId: wt.id)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { _ in
             openSettingsWindow()
         }
@@ -155,4 +160,5 @@ extension Notification.Name {
     static let alasCloseTab        = Notification.Name("AlasCloseTab")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")
+    static let alasSaveActiveTab   = Notification.Name("AlasSaveActiveTab")
 }
