@@ -111,7 +111,11 @@ extension AppConfig {
     // Swift still synthesizes encode(to:) automatically.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        themeId = try c.decode(String.self, forKey: .themeId)
+        let rawThemeId = try c.decode(String.self, forKey: .themeId)
+        // Migrate stale themeIds from versions that shipped warm-amber and
+        // neutral. We now ship only cool-slate and light, so anything else
+        // collapses to the dark default.
+        themeId = (rawThemeId == "warm-amber" || rawThemeId == "neutral") ? "cool-slate" : rawThemeId
         accent = try c.decode(String.self, forKey: .accent)
         density = try c.decode(String.self, forKey: .density)
         matchSystemTheme = try c.decode(Bool.self, forKey: .matchSystemTheme)
