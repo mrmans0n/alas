@@ -389,27 +389,36 @@ final class CodeEditorCoordinator {
                   self.currentRelativePath == relativePath,
                   self.currentLanguage == language,
                   let client else { return }
-            await self.subscribeDiagnostics(for: client, uri: url.lspURI, theme: theme)
+            await self.subscribeDiagnostics(for: client, theme: theme)
             await self.symbolsFeature.refresh(client: client, uri: url.lspURI)
         }
     }
 
-    private func subscribeDiagnostics(for client: LSPClient?, uri: String, theme: Theme) async {
+    private func subscribeDiagnostics(for client: LSPClient?, theme: Theme) async {
         guard let client else { return }
         diagnosticsTask?.cancel()
         diagnosticsTask = Task { [weak self] in
             for await batch in await client.subscribeDiagnostics() {
                 await MainActor.run {
-                    guard let self else { return }
-                    // Cache every batch we see, not just the active URI's —
-                    // when a tab is rebound back to a previously-open file
-                    // we read this cache to restore its squiggles.
-                    self.lastDiagnosticsByURI[batch.uri] = batch.diagnostics
-                    guard batch.uri == uri, let buffer = self.buffer else { return }
-                    self.diagnosticsFeature.apply(batch.diagnostics, to: buffer.storage, theme: theme)
+                    self?.processDiagnosticsBatch(batch, theme: theme)
                 }
             }
         }
+    }
+
+    /// Cache every batch we see (so a rebind back to a previously-open file
+    /// can restore its squiggles), but only paint when the batch's URI
+    /// matches the *currently bound* buffer's URI. Cancelling the old
+    /// `diagnosticsTask` doesn't synchronously drain in-flight batches, so
+    /// without this active-URI check a batch from the previous subscription
+    /// could land on the new buffer's storage between cancellation and the
+    /// new subscription starting.
+    func processDiagnosticsBatch(_ batch: LSPPublishDiagnosticsParams, theme: Theme) {
+        lastDiagnosticsByURI[batch.uri] = batch.diagnostics
+        guard let buffer else { return }
+        let activeURI = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI
+        guard batch.uri == activeURI else { return }
+        diagnosticsFeature.apply(batch.diagnostics, to: buffer.storage, theme: theme)
     }
 
     // MARK: - Font size adjustments

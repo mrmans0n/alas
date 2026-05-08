@@ -672,6 +672,47 @@ struct EditorBufferTests {
         #expect(underline != nil)
     }
 
+    @Test func coordinatorIgnoresDiagnosticsBatchForNonActiveURI() throws {
+        // Regression: cancelling the old diagnostics subscription on tab
+        // switch doesn't synchronously drain in-flight batches. A batch
+        // delivered after the rebind would otherwise pass the captured-URI
+        // guard and paint onto the *new* buffer's storage. The fix checks
+        // the batch URI against the currently bound buffer's URI.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Build a batch addressed to file B but feed it to the coordinator
+        // while A is still the active buffer — simulating an in-flight
+        // batch that beat the rebind.
+        let uriB = root.appendingPathComponent("b.swift").lspURI
+        let json = #"{"uri":"\#(uriB)","diagnostics":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}},"severity":1,"message":"boom"}]}"#
+        let batch = try JSONDecoder().decode(LSPPublishDiagnosticsParams.self, from: Data(json.utf8))
+
+        coordinator.processDiagnosticsBatch(batch, theme: theme)
+
+        // Cache must be updated regardless of the active buffer …
+        #expect(coordinator.lastDiagnosticsByURI[uriB]?.count == 1)
+        // … but the batch must not paint onto A's storage.
+        #expect(bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+    }
+
     @Test func coordinatorPathChangeClearsTextViewUndoStack() throws {
         // Regression: NSTextView's undoManager survives across tab swaps
         // because CenterPaneView reuses the same text view. Without an
