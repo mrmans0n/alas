@@ -86,7 +86,7 @@ struct LanguageServerAvailabilityTests {
         #expect(spawn!.arguments == ["--flag"])
     }
 
-    @Test("spawnArguments wraps bare PATH command with env")
+    @Test("spawnArguments uses resolved absolute path from PATH")
     func spawnArgumentsPathCommand() throws {
         let dir = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -100,8 +100,17 @@ struct LanguageServerAvailabilityTests {
         let spawn = availability.spawnArguments(for: entry)
 
         #expect(spawn != nil)
-        #expect(spawn!.executable == "/usr/bin/env")
-        #expect(spawn!.arguments == ["test-lsp", "--verbose"])
+        #expect(spawn!.executable == executable.path)
+        #expect(spawn!.arguments == ["--verbose"])
+    }
+
+    @Test("spawnArguments wraps unresolvable bare command with env")
+    func spawnArgumentsEnvFallback() {
+        let entry = config(command: "missing-lsp", args: ["--flag"])
+        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in nil })
+        let spawn = availability.spawnArguments(for: entry)
+
+        #expect(spawn == nil)
     }
 
     @Test("entry.env PATH is merged for resolution")
