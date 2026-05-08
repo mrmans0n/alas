@@ -27,7 +27,9 @@ struct EditorTabView: View {
                 tabId: tabId,
                 revealLine: revealLine,
                 revealCharacter: revealCharacter,
-                appState: appState
+                appState: appState,
+                fontFamily: appState.config.code.fontFamily,
+                fontSize: appState.config.code.fontSize
             )
         }
         .background(theme.color("bg-1"))
