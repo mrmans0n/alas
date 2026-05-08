@@ -20,6 +20,8 @@ final class CodeEditorCoordinator {
     private var currentRelativePath: String?
     private var currentLanguage: String?
     private var currentTheme: Theme?
+    private var currentFontFamily: String?
+    private var currentFontSize: CGFloat?
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
 
     private var diagnosticsTask: Task<Void, Never>?
@@ -35,6 +37,13 @@ final class CodeEditorCoordinator {
     private var pendingTextEdits: [EditorTextEdit] = []
     private let highlightSession = TreeSitterHighlighter.Session()
 
+    static func resolveFont(family: String, size: CGFloat) -> NSFont {
+        if !family.isEmpty, let font = NSFont(name: family, size: size) {
+            return font
+        }
+        return .monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
     init(appState: AppState) {
         self.appState = appState
     }
@@ -48,6 +57,12 @@ final class CodeEditorCoordinator {
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
         self.currentTheme = theme
+
+        let family = appState.config.code.fontFamily
+        let size = CGFloat(appState.config.code.fontSize)
+        self.currentFontFamily = family
+        self.currentFontSize = size
+        textView.font = Self.resolveFont(family: family, size: size)
 
         applyBaseStyle(theme: theme)
         let ext = (buffer.relativePath as NSString).pathExtension
@@ -131,6 +146,20 @@ final class CodeEditorCoordinator {
             runHighlight(theme: theme)
             currentTheme = theme
         }
+
+        let family = appState.config.code.fontFamily
+        let size = CGFloat(appState.config.code.fontSize)
+        let fontChanged = currentFontFamily != family || currentFontSize != size
+        if fontChanged {
+            currentFontFamily = family
+            currentFontSize = size
+            if let textView {
+                textView.font = Self.resolveFont(family: family, size: size)
+            }
+            applyBaseStyle(theme: theme)
+            runHighlight(theme: theme)
+        }
+
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
 

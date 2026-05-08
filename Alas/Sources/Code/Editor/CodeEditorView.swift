@@ -54,7 +54,10 @@ struct CodeEditorView: NSViewRepresentable {
 
         let initialFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
         let textView = CodeTextView(frame: initialFrame, textContainer: textContainer)
-        textView.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        textView.font = CodeEditorCoordinator.resolveFont(
+            family: appState.config.code.fontFamily,
+            size: CGFloat(appState.config.code.fontSize)
+        )
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         textView.drawsBackground = true
         textView.minSize = NSSize(width: 0, height: 0)
@@ -79,6 +82,9 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        // Touch fontFamily/fontSize so SwiftUI tracks reads and re-fires updateNSView when they change.
+        _ = appState.config.code.fontFamily
+        _ = appState.config.code.fontSize
         context.coordinator.updateIfNeeded(
             worktreeId: worktreeId,
             worktreeRoot: worktreeRoot,
