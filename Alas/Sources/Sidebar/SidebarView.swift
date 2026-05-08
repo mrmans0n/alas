@@ -4,17 +4,15 @@ struct SidebarView: View {
     @Bindable var state: AppState
     @Binding var collapsedProjects: Set<String>
     let onSettings: () -> Void
-    let onNewWorktree: () -> Void
+    let onAddProject: () -> Void
+    let onNewWorktree: (_ projectId: String?) -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
         ZStack {
             VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
             VStack(spacing: 0) {
-                SidebarHeaderView(
-                    onSettings: onSettings,
-                    onNewWorktree: onNewWorktree
-                )
+                SidebarHeaderView(onSettings: onSettings)
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(state.projects) { project in
@@ -29,7 +27,8 @@ struct SidebarView: View {
                                     }
                                 ),
                                 selectedWorktreeId: state.selectedWorktreeId,
-                                onSelect: { wt in state.selectedWorktreeId = wt.id }
+                                onSelect: { wt in state.selectedWorktreeId = wt.id },
+                                onNewWorktree: { onNewWorktree(project.id) }
                             )
                         }
                     }
@@ -37,7 +36,7 @@ struct SidebarView: View {
                 }
                 Divider().opacity(0.5)
                 HStack(spacing: 6) {
-                    AlasButton(title: "New worktree", icon: "plus", style: .normal, action: onNewWorktree)
+                    AlasButton(title: "Add repository", icon: "folder-plus", style: .normal, action: onAddProject)
                         .frame(maxWidth: .infinity)
                     Button(action: onSettings) {
                         Icon(name: "gear", size: 13)

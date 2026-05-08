@@ -25,6 +25,7 @@ struct Icon: View {
         case "chev-down":  return "chevron.down"
         case "chev-right": return "chevron.right"
         case "folder":     return "folder"
+        case "folder-plus": return "folder.badge.plus"
         case "file":       return "doc"
         case "menu":       return "ellipsis"
         case "split":      return "rectangle.split.2x1"

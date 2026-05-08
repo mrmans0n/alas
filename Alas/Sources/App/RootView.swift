@@ -5,6 +5,7 @@ struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
     @State private var showNewWorktree = false
+    @State private var newWorktreePresetProjectId: String?
     @State private var collapsedProjects: Set<String> = []
     @Environment(\.openWindow) private var openWindow
 
@@ -34,7 +35,11 @@ struct RootView: View {
                                 state: state,
                                 collapsedProjects: $collapsedProjects,
                                 onSettings: { openSettingsWindow() },
-                                onNewWorktree: { showNewWorktree = true }
+                                onAddProject: { showNewProject = true },
+                                onNewWorktree: { projectId in
+                                    newWorktreePresetProjectId = projectId
+                                    showNewWorktree = true
+                                }
                             )
                         },
                         center: {
@@ -81,8 +86,12 @@ struct RootView: View {
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
         }
-        .sheet(isPresented: $showNewWorktree) {
-            NewWorktreeDialog(state: state, presented: $showNewWorktree)
+        .sheet(isPresented: $showNewWorktree, onDismiss: { newWorktreePresetProjectId = nil }) {
+            NewWorktreeDialog(
+                state: state,
+                presented: $showNewWorktree,
+                presetProjectId: newWorktreePresetProjectId
+            )
         }
         .task {
             state.startHarness()
