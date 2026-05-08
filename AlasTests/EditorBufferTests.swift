@@ -455,7 +455,6 @@ struct EditorBufferTests {
         _ = try writeFile(root, "a.txt", "v1\n")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         let layoutManager = NSLayoutManager()
-        buffer.storage.addLayoutManager(layoutManager)
         let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
         layoutManager.addTextContainer(textContainer)
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
@@ -477,5 +476,59 @@ struct EditorBufferTests {
         coordinator.detach()
 
         #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
+    }
+
+    @Test func coordinatorPathChangeRebindsLayoutManagerToNewBufferStorage() throws {
+        // Regression: when the active editor tab switched, the coordinator
+        // updated its bookkeeping but never moved the layout manager off the
+        // first buffer's NSTextStorage, so the text view kept rendering the
+        // first file's contents for every subsequent tab.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.md", "alpha\n")
+        _ = try writeFile(root, "b.swift", "let beta = 1\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-a",
+            worktreeRoot: root,
+            relativePath: "a.md"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: bufferA,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            tabId: "tab-a",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+        #expect(bufferA.storage.layoutManagers.contains { $0 === layoutManager })
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt",
+            worktreeRoot: root,
+            relativePath: "b.swift",
+            tabId: "tab-b",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+
+        let bufferB = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-b",
+            worktreeRoot: root,
+            relativePath: "b.swift"
+        )
+        #expect(!bufferA.storage.layoutManagers.contains { $0 === layoutManager })
+        #expect(bufferB.storage.layoutManagers.contains { $0 === layoutManager })
     }
 }

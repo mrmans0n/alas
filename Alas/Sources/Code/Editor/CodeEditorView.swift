@@ -44,12 +44,11 @@ struct CodeEditorView: NSViewRepresentable {
             relativePath: relativePath
         )
 
-        // Build the TextKit 1 chain around the buffer's existing storage.
-        // We deliberately do NOT call `setAttributedString` here — that's
-        // the buffer's job (load / revert / restore). All this view does is
-        // present the storage.
+        // Build the TextKit 1 chain. The coordinator owns the
+        // storage<->layoutManager binding (see `bindBuffer`) so that swapping
+        // buffers across tab switches can rebind onto the new storage; we
+        // pass an unattached layout manager here.
         let layoutManager = NSLayoutManager()
-        buffer.storage.addLayoutManager(layoutManager)
         let containerSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude

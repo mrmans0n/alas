@@ -73,12 +73,9 @@ final class CodeEditorCoordinator {
 
     func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
         self.textView = textView
-        self.buffer = buffer
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentTabId = tabId
-        self.currentRoot = buffer.worktreeRoot
-        self.currentRelativePath = buffer.relativePath
         self.currentTheme = theme
 
         let family = appState.config.code.fontFamily
@@ -90,15 +87,7 @@ final class CodeEditorCoordinator {
         textView.decreaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: -1) }
         textView.resetFontSizeHandler = { [weak self] in self?.resetFontSize() }
 
-        applyBaseStyle(theme: theme)
-        let ext = (buffer.relativePath as NSString).pathExtension
-        currentLanguage = appState.lsp.language(forFileExtension: ext)
-        runHighlight(theme: theme)
-        subscribeIfPossible(theme: theme)
-
-        editObserverToken = buffer.onTextEdit { [weak self] edit in
-            self?.scheduleEditPropagation(edit: edit)
-        }
+        bindBuffer(buffer, theme: theme)
 
         hover = HoverFeature(
             textView: textView,
@@ -160,11 +149,18 @@ final class CodeEditorCoordinator {
             Task { await session.reset() }
             currentWorktreeId = worktreeId
             currentTabId = tabId
-            currentRoot = worktreeRoot
-            currentRelativePath = relativePath
-            currentLanguage = nextLanguage
-            runHighlight(theme: theme)
-            subscribeIfPossible(theme: theme)
+            // Fetch (and if needed, create) the buffer for the new tab and
+            // re-bind the layout manager onto its storage. Without this swap
+            // the text view keeps rendering the *previous* buffer's storage,
+            // so every editor tab appears to show the file that was opened
+            // first.
+            let nextBuffer = appState.tabs.buffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath
+            )
+            bindBuffer(nextBuffer, theme: theme)
         }
 
         if currentTheme != theme {
@@ -187,6 +183,35 @@ final class CodeEditorCoordinator {
         }
 
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
+    }
+
+    /// Wire the coordinator and the text view to `buffer`. If a previous
+    /// buffer is already bound, its layout manager and edit observer are torn
+    /// down first so the text view stops rendering the old storage.
+    private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        if let previous = self.buffer {
+            if let token = editObserverToken {
+                previous.removeOnEdit(token)
+            }
+            editObserverToken = nil
+            if let layoutManager {
+                previous.storage.removeLayoutManager(layoutManager)
+            }
+        }
+        self.buffer = buffer
+        self.currentRoot = buffer.worktreeRoot
+        self.currentRelativePath = buffer.relativePath
+        let ext = (buffer.relativePath as NSString).pathExtension
+        currentLanguage = appState.lsp.language(forFileExtension: ext)
+        if let layoutManager {
+            buffer.storage.addLayoutManager(layoutManager)
+        }
+        applyBaseStyle(theme: theme)
+        runHighlight(theme: theme)
+        subscribeIfPossible(theme: theme)
+        editObserverToken = buffer.onTextEdit { [weak self] edit in
+            self?.scheduleEditPropagation(edit: edit)
+        }
     }
 
     func detach() {
