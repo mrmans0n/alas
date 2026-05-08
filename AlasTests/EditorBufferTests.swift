@@ -53,6 +53,18 @@ struct EditorBufferTests {
         #expect(buffer.dirty == false)
     }
 
+    @Test func coldLoadOnNonUTF8FileIsReadOnlyWithClearMessage() throws {
+        let root = tempWorktree()
+        let url = root.appendingPathComponent("latin1.txt")
+        try Data([0x63, 0x61, 0x66, 0xE9]).write(to: url)
+
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "latin1.txt")
+
+        #expect(buffer.storage.string == "(read-only: file is not valid UTF-8)")
+        #expect(buffer.readOnly == true)
+        #expect(buffer.dirty == false)
+    }
+
     @Test func saveWritesContentAndClearsDirty() throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "hello\n")
@@ -235,6 +247,81 @@ struct EditorBufferTests {
         #expect(buffer.dirty == false)
         #expect(buffer.conflict == nil)
         #expect(fired == 1)
+    }
+
+    @Test func externalRenameReloadsCleanBufferFromMovedFile() async throws {
+        let root = tempWorktree()
+        let oldURL = try writeFile(root, "a.txt", "v1\n")
+        let newURL = root.appendingPathComponent("nested/b.txt")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        var pathChanges: [(String, String)] = []
+        buffer.onPathChanged = { oldPath, newPath in pathChanges.append((oldPath, newPath)) }
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+
+        try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+        let handle = try FileHandle(forWritingTo: newURL)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data("v2\n".utf8))
+        try handle.close()
+        for _ in 0..<20 where buffer.relativePath != "nested/b.txt" {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        #expect(buffer.relativePath == "nested/b.txt")
+        #expect(buffer.storage.string == "v2\n")
+        #expect(buffer.originalText == "v2\n")
+        #expect(buffer.dirty == false)
+        #expect(buffer.conflict == nil)
+        #expect(pathChanges.count == 1)
+        #expect(pathChanges.first?.0 == "a.txt")
+        #expect(pathChanges.first?.1 == "nested/b.txt")
+    }
+
+    @Test func externalRenameOfDirtyBufferRaisesConflictWhenMovedFileChanged() async throws {
+        let root = tempWorktree()
+        let oldURL = try writeFile(root, "a.txt", "v1\n")
+        let newURL = root.appendingPathComponent("nested/b.txt")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 2), with: "mine")
+        #expect(buffer.dirty == true)
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+
+        try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+        let handle = try FileHandle(forWritingTo: newURL)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data("external\n".utf8))
+        try handle.close()
+        for _ in 0..<20 where buffer.relativePath != "nested/b.txt" {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        #expect(buffer.relativePath == "nested/b.txt")
+        #expect(buffer.storage.string == "mine\n")
+        #expect(buffer.originalText == "v1\n")
+        #expect(buffer.dirty == true)
+        #expect(buffer.conflict == .changedOnDisk)
+    }
+
+    @Test func externalRenameFollowsHiddenFiles() async throws {
+        let root = tempWorktree()
+        let oldURL = try writeFile(root, ".env", "TOKEN=a\n")
+        let newURL = root.appendingPathComponent(".env.local")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: ".env")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+        for _ in 0..<20 where buffer.relativePath != ".env.local" {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        #expect(buffer.relativePath == ".env.local")
+        #expect(buffer.storage.string == "TOKEN=a\n")
+        #expect(buffer.conflict == nil)
     }
 
     @Test func externalChangeWhileDirtyRaisesConflict() async throws {
