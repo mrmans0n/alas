@@ -52,10 +52,12 @@ struct CodePane: View {
         return registry.allEntries()
     }
 
+    private let availability = LanguageServerAvailability()
+
     private func statusBadge(for entry: LanguageServerConfig) -> some View {
         let label: String
         let color: Color
-        switch LanguageServerAvailability().status(for: entry) {
+        switch availability.status(for: entry) {
         case .disabled:
             label = "Disabled"; color = theme.color("fg-faint")
         case .available:

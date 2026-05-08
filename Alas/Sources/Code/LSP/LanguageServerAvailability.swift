@@ -9,12 +9,12 @@ struct LanguageServerAvailability {
 
     private let environment: [String: String]
     private let fileManager: FileManager
-    private let xcrunFind: (String) -> Bool
+    private let xcrunFind: (String) -> String?
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
-        xcrunFind: @escaping (String) -> Bool = LanguageServerAvailability.xcrunFind
+        xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.xcrunFind
     ) {
         self.environment = environment
         self.fileManager = fileManager
@@ -23,26 +23,45 @@ struct LanguageServerAvailability {
 
     func status(for entry: LanguageServerConfig) -> Status {
         guard entry.enabled else { return .disabled }
-        guard !entry.command.isEmpty else { return .notInstalled }
-
-        if entry.command.contains("/") {
-            return fileManager.isExecutableFile(atPath: entry.command) ? .available : .notInstalled
-        }
-
-        if executableNamed(entry.command) != nil {
-            return .available
-        }
-
-        if entry.language == "swift", entry.command == "sourcekit-lsp", xcrunFind("sourcekit-lsp") {
-            return .available
-        }
-
-        return .notInstalled
+        return resolvedCommand(for: entry) != nil ? .available : .notInstalled
     }
 
-    private func executableNamed(_ name: String) -> String? {
-        let path = environment["PATH"] ?? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        for dir in path.split(separator: ":", omittingEmptySubsequences: true) {
+    func resolvedCommand(for entry: LanguageServerConfig) -> String? {
+        guard entry.enabled, !entry.command.isEmpty else { return nil }
+
+        if entry.command.contains("/") {
+            return fileManager.isExecutableFile(atPath: entry.command) ? entry.command : nil
+        }
+
+        if let pathHit = executableNamed(entry.command, env: entry.env) {
+            return pathHit
+        }
+
+        if entry.language == "swift", entry.command == "sourcekit-lsp",
+           let xcrunPath = xcrunFind("sourcekit-lsp") {
+            return xcrunPath
+        }
+
+        return nil
+    }
+
+    func spawnArguments(for entry: LanguageServerConfig) -> (executable: String, arguments: [String])? {
+        guard let resolved = resolvedCommand(for: entry) else { return nil }
+        if resolved.contains("/") {
+            return (executable: resolved, arguments: entry.args)
+        }
+        return (executable: "/usr/bin/env", arguments: [resolved] + entry.args)
+    }
+
+    private func executableNamed(_ name: String, env: [String: String] = [:]) -> String? {
+        let mergedPath: String
+        if let envPath = env["PATH"], !envPath.isEmpty {
+            let basePath = environment["PATH"] ?? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            mergedPath = envPath + ":" + basePath
+        } else {
+            mergedPath = environment["PATH"] ?? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+        for dir in mergedPath.split(separator: ":", omittingEmptySubsequences: true) {
             let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(name).path
             if fileManager.isExecutableFile(atPath: candidate) {
                 return candidate
@@ -51,19 +70,23 @@ struct LanguageServerAvailability {
         return nil
     }
 
-    private static func xcrunFind(_ tool: String) -> Bool {
+    private static func xcrunFind(_ tool: String) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["--find", tool]
-        process.standardOutput = Pipe()
+        let pipe = Pipe()
+        process.standardOutput = pipe
         process.standardError = Pipe()
 
         do {
             try process.run()
             process.waitUntilExit()
-            return process.terminationStatus == 0
+            guard process.terminationStatus == 0 else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return output.isEmpty ? nil : output
         } catch {
-            return false
+            return nil
         }
     }
 }
