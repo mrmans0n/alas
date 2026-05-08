@@ -26,7 +26,13 @@ final class CodeEditorCoordinator {
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
-    private let diagnosticsFeature = DiagnosticsFeature()
+    let diagnosticsFeature = DiagnosticsFeature()
+    /// Most recent diagnostics batch the LSP server has published, keyed by
+    /// LSP URI. The server doesn't replay past batches to new subscribers,
+    /// so when a tab is rebound we restore from this cache; otherwise the
+    /// switched-to file would lose its squiggles until the server happens to
+    /// publish again. Internal so tests can seed it.
+    var lastDiagnosticsByURI: [String: [LSPDiagnostic]] = [:]
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
@@ -73,12 +79,9 @@ final class CodeEditorCoordinator {
 
     func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
         self.textView = textView
-        self.buffer = buffer
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentTabId = tabId
-        self.currentRoot = buffer.worktreeRoot
-        self.currentRelativePath = buffer.relativePath
         self.currentTheme = theme
 
         let family = appState.config.code.fontFamily
@@ -90,15 +93,7 @@ final class CodeEditorCoordinator {
         textView.decreaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: -1) }
         textView.resetFontSizeHandler = { [weak self] in self?.resetFontSize() }
 
-        applyBaseStyle(theme: theme)
-        let ext = (buffer.relativePath as NSString).pathExtension
-        currentLanguage = appState.lsp.language(forFileExtension: ext)
-        runHighlight(theme: theme)
-        subscribeIfPossible(theme: theme)
-
-        editObserverToken = buffer.onTextEdit { [weak self] edit in
-            self?.scheduleEditPropagation(edit: edit)
-        }
+        bindBuffer(buffer, theme: theme)
 
         hover = HoverFeature(
             textView: textView,
@@ -160,11 +155,18 @@ final class CodeEditorCoordinator {
             Task { await session.reset() }
             currentWorktreeId = worktreeId
             currentTabId = tabId
-            currentRoot = worktreeRoot
-            currentRelativePath = relativePath
-            currentLanguage = nextLanguage
-            runHighlight(theme: theme)
-            subscribeIfPossible(theme: theme)
+            // Fetch (and if needed, create) the buffer for the new tab and
+            // re-bind the layout manager onto its storage. Without this swap
+            // the text view keeps rendering the *previous* buffer's storage,
+            // so every editor tab appears to show the file that was opened
+            // first.
+            let nextBuffer = appState.tabs.buffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath
+            )
+            bindBuffer(nextBuffer, theme: theme)
         }
 
         if currentTheme != theme {
@@ -187,6 +189,45 @@ final class CodeEditorCoordinator {
         }
 
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
+    }
+
+    /// Wire the coordinator and the text view to `buffer`. If a previous
+    /// buffer is already bound, its layout manager and edit observer are torn
+    /// down first so the text view stops rendering the old storage.
+    private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        let isRebind = self.buffer != nil
+        if let previous = self.buffer {
+            if let token = editObserverToken {
+                previous.removeOnEdit(token)
+            }
+            editObserverToken = nil
+            if let layoutManager {
+                previous.storage.removeLayoutManager(layoutManager)
+            }
+        }
+        self.buffer = buffer
+        self.currentRoot = buffer.worktreeRoot
+        self.currentRelativePath = buffer.relativePath
+        let ext = (buffer.relativePath as NSString).pathExtension
+        currentLanguage = appState.lsp.language(forFileExtension: ext)
+        if let layoutManager {
+            buffer.storage.addLayoutManager(layoutManager)
+        }
+        if isRebind {
+            // Drop any state captured against the previous buffer before we
+            // start the highlight: stale diagnostics would otherwise be
+            // re-applied to the new storage by the async highlight task, and
+            // stale undo records would let Undo/Redo mutate the wrong tab
+            // because the NSUndoManager belongs to the (reused) NSTextView.
+            diagnosticsFeature.reset()
+            textView?.undoManager?.removeAllActions()
+        }
+        applyBaseStyle(theme: theme)
+        runHighlight(theme: theme)
+        subscribeIfPossible(theme: theme)
+        editObserverToken = buffer.onTextEdit { [weak self] edit in
+            self?.scheduleEditPropagation(edit: edit)
+        }
     }
 
     func detach() {
@@ -264,8 +305,18 @@ final class CodeEditorCoordinator {
         guard let buffer, let textView else { return }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         let editorTheme = EditorTheme(theme: theme)
+        // Resolve the font from the coordinator's tracked family/size, not
+        // from `textView.font`. The latter's getter reads `.font` from char 0
+        // of the current storage — and immediately after binding a freshly
+        // loaded buffer that attribute is unset, so it falls back to the
+        // system default (a proportional font). Reading our own state keeps
+        // the editor monospaced regardless of what the storage looks like.
+        let family = currentFontFamily ?? appState.config.code.fontFamily
+        let size = currentFontSize ?? CGFloat(appState.config.code.fontSize)
+        let font = Self.resolveFont(family: family, size: size)
+        textView.font = font
         let baseAttrs: [NSAttributedString.Key: Any] = [
-            .font: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
+            .font: font,
             .foregroundColor: editorTheme.defaultFG
         ]
         let storage = buffer.storage
@@ -315,7 +366,14 @@ final class CodeEditorCoordinator {
         guard let buffer else { return }
         diagnosticsSetupTask?.cancel()
         diagnosticsTask?.cancel()
-        diagnosticsFeature.apply([], to: buffer.storage, theme: theme)
+        // Restore from cache instead of clearing. The LSP server doesn't
+        // replay past batches to new subscribers, so without this a tab
+        // switch would lose its squiggles until the server happened to
+        // republish (typically only after an edit/save). When there's no
+        // cached batch this still acts as the clear it used to be.
+        let bufferURI = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI
+        let cached = lastDiagnosticsByURI[bufferURI] ?? []
+        diagnosticsFeature.apply(cached, to: buffer.storage, theme: theme)
         guard let language = currentLanguage else { return }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         let root = buffer.worktreeRoot
@@ -331,23 +389,36 @@ final class CodeEditorCoordinator {
                   self.currentRelativePath == relativePath,
                   self.currentLanguage == language,
                   let client else { return }
-            await self.subscribeDiagnostics(for: client, uri: url.lspURI, theme: theme)
+            await self.subscribeDiagnostics(for: client, theme: theme)
             await self.symbolsFeature.refresh(client: client, uri: url.lspURI)
         }
     }
 
-    private func subscribeDiagnostics(for client: LSPClient?, uri: String, theme: Theme) async {
+    private func subscribeDiagnostics(for client: LSPClient?, theme: Theme) async {
         guard let client else { return }
         diagnosticsTask?.cancel()
         diagnosticsTask = Task { [weak self] in
             for await batch in await client.subscribeDiagnostics() {
-                if batch.uri != uri { continue }
                 await MainActor.run {
-                    guard let self, let buffer = self.buffer else { return }
-                    self.diagnosticsFeature.apply(batch.diagnostics, to: buffer.storage, theme: theme)
+                    self?.processDiagnosticsBatch(batch, theme: theme)
                 }
             }
         }
+    }
+
+    /// Cache every batch we see (so a rebind back to a previously-open file
+    /// can restore its squiggles), but only paint when the batch's URI
+    /// matches the *currently bound* buffer's URI. Cancelling the old
+    /// `diagnosticsTask` doesn't synchronously drain in-flight batches, so
+    /// without this active-URI check a batch from the previous subscription
+    /// could land on the new buffer's storage between cancellation and the
+    /// new subscription starting.
+    func processDiagnosticsBatch(_ batch: LSPPublishDiagnosticsParams, theme: Theme) {
+        lastDiagnosticsByURI[batch.uri] = batch.diagnostics
+        guard let buffer else { return }
+        let activeURI = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI
+        guard batch.uri == activeURI else { return }
+        diagnosticsFeature.apply(batch.diagnostics, to: buffer.storage, theme: theme)
     }
 
     // MARK: - Font size adjustments

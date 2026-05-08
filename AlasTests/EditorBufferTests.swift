@@ -455,7 +455,6 @@ struct EditorBufferTests {
         _ = try writeFile(root, "a.txt", "v1\n")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
         let layoutManager = NSLayoutManager()
-        buffer.storage.addLayoutManager(layoutManager)
         let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
         layoutManager.addTextContainer(textContainer)
         let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
@@ -478,4 +477,288 @@ struct EditorBufferTests {
 
         #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
     }
+
+    @Test func coordinatorAppliesMonospacedFontToLoadedContent() throws {
+        // Regression: after rebinding, applyBaseStyle was reading
+        // `textView.font` whose getter falls back to the system default font
+        // (proportional) when the freshly bound storage has no `.font`
+        // attribute on char 0. The styled storage ended up with a
+        // proportional font for existing content while typing remained
+        // monospaced.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let answer = 42\n")
+        let appState = AppState()
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab",
+            worktreeRoot: root,
+            relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            tabId: "tab",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+
+        let appliedFont = buffer.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        #expect(appliedFont != nil)
+        #expect(appliedFont?.isFixedPitch == true)
+    }
+
+    @Test func coordinatorPathChangeRebindsLayoutManagerToNewBufferStorage() throws {
+        // Regression: when the active editor tab switched, the coordinator
+        // updated its bookkeeping but never moved the layout manager off the
+        // first buffer's NSTextStorage, so the text view kept rendering the
+        // first file's contents for every subsequent tab.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.md", "alpha\n")
+        _ = try writeFile(root, "b.swift", "let beta = 1\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-a",
+            worktreeRoot: root,
+            relativePath: "a.md"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: bufferA,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            tabId: "tab-a",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+        #expect(bufferA.storage.layoutManagers.contains { $0 === layoutManager })
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt",
+            worktreeRoot: root,
+            relativePath: "b.swift",
+            tabId: "tab-b",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+
+        let bufferB = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-b",
+            worktreeRoot: root,
+            relativePath: "b.swift"
+        )
+        #expect(!bufferA.storage.layoutManagers.contains { $0 === layoutManager })
+        #expect(bufferB.storage.layoutManagers.contains { $0 === layoutManager })
+        // The newly bound storage must come back styled monospaced. The
+        // original bug here was that applyBaseStyle resolved the font from
+        // textView.font, which after rebinding read char 0 of the new
+        // (unstyled) storage and fell back to the proportional system font.
+        let fontB = bufferB.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        #expect(fontB?.isFixedPitch == true)
+    }
+
+    @Test func coordinatorPathChangeDropsStaleDiagnostics() throws {
+        // Regression: runHighlight captures diagnosticsFeature.current at the
+        // start of its async task; if we don't reset before the rebind, the
+        // task can re-apply the previous file's diagnostics onto the newly
+        // bound storage.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // LSPDiagnostic only has a Codable init, so build via JSON.
+        let json = #"{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}},"severity":1,"message":"boom"}"#
+        let fakeDiag = try JSONDecoder().decode(LSPDiagnostic.self, from: Data(json.utf8))
+        coordinator.diagnosticsFeature.apply([fakeDiag], to: bufferA.storage, theme: theme)
+        #expect(coordinator.diagnosticsFeature.current.count == 1)
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "b.swift", tabId: "tab-b",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        #expect(coordinator.diagnosticsFeature.current.isEmpty)
+    }
+
+    @Test func coordinatorRebindRestoresCachedDiagnosticsForKnownURI() throws {
+        // Regression: the LSP server doesn't replay past publishDiagnostics
+        // batches to new subscribers. Without an in-coordinator cache, a
+        // tab switch to a previously-open file would lose its squiggles
+        // until the server happened to publish again. We cache every batch
+        // we see and restore from it on rebind.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Seed the per-URI cache as if the LSP had published diagnostics
+        // for A while we were attached.
+        let uriA = root.appendingPathComponent("a.swift").lspURI
+        let json = #"{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}},"severity":1,"message":"boom"}"#
+        let fakeDiag = try JSONDecoder().decode(LSPDiagnostic.self, from: Data(json.utf8))
+        coordinator.lastDiagnosticsByURI[uriA] = [fakeDiag]
+        coordinator.diagnosticsFeature.apply([fakeDiag], to: bufferA.storage, theme: theme)
+        #expect(bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil) != nil)
+
+        // Switch to B (no cached diagnostics for B), then back to A.
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "b.swift", tabId: "tab-b",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "a.swift", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Cached diagnostics for A should be re-applied to its storage —
+        // the underline attribute the diagnosticsFeature paints should be
+        // present again, even though no LSP server is running in this
+        // headless test.
+        let underline = bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil)
+        #expect(underline != nil)
+    }
+
+    @Test func coordinatorIgnoresDiagnosticsBatchForNonActiveURI() throws {
+        // Regression: cancelling the old diagnostics subscription on tab
+        // switch doesn't synchronously drain in-flight batches. A batch
+        // delivered after the rebind would otherwise pass the captured-URI
+        // guard and paint onto the *new* buffer's storage. The fix checks
+        // the batch URI against the currently bound buffer's URI.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Build a batch addressed to file B but feed it to the coordinator
+        // while A is still the active buffer — simulating an in-flight
+        // batch that beat the rebind.
+        let uriB = root.appendingPathComponent("b.swift").lspURI
+        let json = #"{"uri":"\#(uriB)","diagnostics":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}},"severity":1,"message":"boom"}]}"#
+        let batch = try JSONDecoder().decode(LSPPublishDiagnosticsParams.self, from: Data(json.utf8))
+
+        coordinator.processDiagnosticsBatch(batch, theme: theme)
+
+        // Cache must be updated regardless of the active buffer …
+        #expect(coordinator.lastDiagnosticsByURI[uriB]?.count == 1)
+        // … but the batch must not paint onto A's storage.
+        #expect(bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+    }
+
+    @Test func coordinatorPathChangeClearsTextViewUndoStack() throws {
+        // Regression: NSTextView's undoManager survives across tab swaps
+        // because CenterPaneView reuses the same text view. Without an
+        // explicit removeAllActions on rebind, Undo would mutate the wrong
+        // buffer's storage.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        // NSTextView's undoManager comes from the responder chain; in this
+        // headless test we don't have a window, so feed one in via a
+        // delegate so the rebind path has something concrete to clear.
+        let undoOwner = TestUndoOwner()
+        textView.delegate = undoOwner
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Stage an undoable action so canUndo flips on; payload is irrelevant.
+        textView.undoManager?.registerUndo(withTarget: bufferA) { _ in }
+        #expect(textView.undoManager?.canUndo == true)
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "b.swift", tabId: "tab-b",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        #expect(textView.undoManager?.canUndo == false)
+    }
+}
+
+@MainActor
+private final class TestUndoOwner: NSObject, NSTextViewDelegate {
+    let undoManager = UndoManager()
+    func undoManager(for view: NSTextView) -> UndoManager? { undoManager }
 }
