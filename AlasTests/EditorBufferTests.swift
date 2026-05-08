@@ -478,6 +478,45 @@ struct EditorBufferTests {
         #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
     }
 
+    @Test func coordinatorAppliesMonospacedFontToLoadedContent() throws {
+        // Regression: after rebinding, applyBaseStyle was reading
+        // `textView.font` whose getter falls back to the system default font
+        // (proportional) when the freshly bound storage has no `.font`
+        // attribute on char 0. The styled storage ended up with a
+        // proportional font for existing content while typing remained
+        // monospaced.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let answer = 42\n")
+        let appState = AppState()
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab",
+            worktreeRoot: root,
+            relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            tabId: "tab",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+
+        let appliedFont = buffer.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        #expect(appliedFont != nil)
+        #expect(appliedFont?.isFixedPitch == true)
+    }
+
     @Test func coordinatorPathChangeRebindsLayoutManagerToNewBufferStorage() throws {
         // Regression: when the active editor tab switched, the coordinator
         // updated its bookkeeping but never moved the layout manager off the
@@ -530,5 +569,11 @@ struct EditorBufferTests {
         )
         #expect(!bufferA.storage.layoutManagers.contains { $0 === layoutManager })
         #expect(bufferB.storage.layoutManagers.contains { $0 === layoutManager })
+        // The newly bound storage must come back styled monospaced. The
+        // original bug here was that applyBaseStyle resolved the font from
+        // textView.font, which after rebinding read char 0 of the new
+        // (unstyled) storage and fell back to the proportional system font.
+        let fontB = bufferB.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        #expect(fontB?.isFixedPitch == true)
     }
 }

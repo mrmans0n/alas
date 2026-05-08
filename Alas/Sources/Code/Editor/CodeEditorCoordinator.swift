@@ -289,8 +289,18 @@ final class CodeEditorCoordinator {
         guard let buffer, let textView else { return }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         let editorTheme = EditorTheme(theme: theme)
+        // Resolve the font from the coordinator's tracked family/size, not
+        // from `textView.font`. The latter's getter reads `.font` from char 0
+        // of the current storage — and immediately after binding a freshly
+        // loaded buffer that attribute is unset, so it falls back to the
+        // system default (a proportional font). Reading our own state keeps
+        // the editor monospaced regardless of what the storage looks like.
+        let family = currentFontFamily ?? appState.config.code.fontFamily
+        let size = currentFontSize ?? CGFloat(appState.config.code.fontSize)
+        let font = Self.resolveFont(family: family, size: size)
+        textView.font = font
         let baseAttrs: [NSAttributedString.Key: Any] = [
-            .font: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
+            .font: font,
             .foregroundColor: editorTheme.defaultFG
         ]
         let storage = buffer.storage
