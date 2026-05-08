@@ -63,6 +63,9 @@ final class CodeEditorCoordinator {
         self.currentFontFamily = family
         self.currentFontSize = size
         textView.font = Self.resolveFont(family: family, size: size)
+        textView.increaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: 1) }
+        textView.decreaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: -1) }
+        textView.resetFontSizeHandler = { [weak self] in self?.resetFontSize() }
 
         applyBaseStyle(theme: theme)
         let ext = (buffer.relativePath as NSString).pathExtension
@@ -185,6 +188,9 @@ final class CodeEditorCoordinator {
         layoutManager = nil
         hover = nil
         definition = nil
+        textView?.increaseFontSizeHandler = nil
+        textView?.decreaseFontSizeHandler = nil
+        textView?.resetFontSizeHandler = nil
         textView = nil
         buffer = nil
         // We deliberately do NOT close the LSP document or stop the file
@@ -318,6 +324,25 @@ final class CodeEditorCoordinator {
                     self.diagnosticsFeature.apply(batch.diagnostics, to: buffer.storage, theme: theme)
                 }
             }
+        }
+    }
+
+    // MARK: - Font size adjustments
+
+    private func adjustFontSize(by delta: Int) {
+        let current = appState.config.code.fontSize
+        let next = max(8, min(64, current + delta))
+        if next != current {
+            appState.config.code.fontSize = next
+            appState.saveConfig()
+        }
+    }
+
+    private func resetFontSize() {
+        let target = AppConfig.defaults.code.fontSize
+        if appState.config.code.fontSize != target {
+            appState.config.code.fontSize = target
+            appState.saveConfig()
         }
     }
 
