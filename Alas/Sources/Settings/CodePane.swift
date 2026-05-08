@@ -52,18 +52,17 @@ struct CodePane: View {
         return registry.allEntries()
     }
 
-    // NOTE: `isExecutableFile` returns false for bare names like "sourcekit-lsp"
-    // that rely on PATH lookup, so PATH-resolved entries currently render as
-    // "Not installed" even when they work. v1: acceptable; revisit by spawning
-    // `which` or searching PATH ourselves.
+    private let availability = LanguageServerAvailability()
+
     private func statusBadge(for entry: LanguageServerConfig) -> some View {
         let label: String
         let color: Color
-        if !entry.enabled {
+        switch availability.status(for: entry) {
+        case .disabled:
             label = "Disabled"; color = theme.color("fg-faint")
-        } else if FileManager.default.isExecutableFile(atPath: entry.command) {
+        case .available:
             label = "Available"; color = theme.color("add")
-        } else {
+        case .notInstalled:
             label = "Not installed"; color = theme.color("warn")
         }
         return Text(label).font(.system(size: 10.5)).foregroundColor(color)

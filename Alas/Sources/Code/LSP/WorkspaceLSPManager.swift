@@ -90,7 +90,7 @@ final class WorkspaceLSPManager {
             ready = existing.ready
             isFirstOpener = false
         } else {
-            let spawn = Self.resolveSpawn(command: entry.command, args: entry.args)
+            let spawn = Self.resolveSpawn(command: entry.command, args: entry.args, env: entry.env, language: entry.language)
             let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: entry.env.isEmpty ? nil : entry.env)
             let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
             let task = Task<Bool, Never> {
@@ -283,14 +283,23 @@ final class WorkspaceLSPManager {
         let arguments: [String]
     }
 
-    /// `Process.executableURL` does not search `PATH`. If `command` contains
-    /// no `/` (e.g. `rust-analyzer`, `sourcekit-lsp`), we wrap the call with
-    /// `/usr/bin/env` so the system path is searched at exec time —
-    /// otherwise users entering bare command names in Settings → Code would
-    /// silently fail unless their cwd happened to contain the binary.
-    private static func resolveSpawn(command: String, args: [String]) -> Spawn {
+    /// Resolves the spawn command for `entry`. Bare commands (no `/`) are
+    /// resolved against PATH and the Swift xcrun fallback so the badge and
+    /// launch paths stay consistent. When `xcrun --find sourcekit-lsp`
+    /// returns an absolute path, we use it directly instead of wrapping
+    /// with `/usr/bin/env` — that ensures `sourcekit-lsp` launches even
+    /// when it lives inside Xcode.app and isn't on PATH.
+    private static func resolveSpawn(command: String, args: [String], env: [String: String], language: String) -> Spawn {
         if command.contains("/") {
             return Spawn(executable: URL(fileURLWithPath: command), arguments: args)
+        }
+        let probe = LanguageServerConfig(
+            language: language, extensions: [], command: command, args: args,
+            env: env, rootMarkers: [], enabled: true
+        )
+        let availability = LanguageServerAvailability()
+        if let spawnArgs = availability.spawnArguments(for: probe) {
+            return Spawn(executable: URL(fileURLWithPath: spawnArgs.executable), arguments: spawnArgs.arguments)
         }
         return Spawn(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: [command] + args)
     }
