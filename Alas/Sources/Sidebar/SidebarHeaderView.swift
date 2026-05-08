@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarHeaderView: View {
     let onSettings: () -> Void
+    let onAddProject: () -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -20,6 +21,7 @@ struct SidebarHeaderView: View {
             // Previously rendered as a no-op ToolbarBtn(action: {}) which
             // codex flagged correctly as misleading.
             HStack(spacing: 2) {
+                ToolbarBtn(icon: "folder-plus", action: onAddProject)
                 ToolbarBtn(icon: "gear", action: onSettings)
             }
         }

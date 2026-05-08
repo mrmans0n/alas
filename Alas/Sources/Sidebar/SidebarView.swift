@@ -12,7 +12,7 @@ struct SidebarView: View {
         ZStack {
             VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
             VStack(spacing: 0) {
-                SidebarHeaderView(onSettings: onSettings)
+                SidebarHeaderView(onSettings: onSettings, onAddProject: onAddProject)
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(state.projects) { project in
@@ -34,19 +34,6 @@ struct SidebarView: View {
                     }
                     .padding(.top, 8)
                 }
-                Divider().opacity(0.5)
-                HStack(spacing: 6) {
-                    AlasButton(title: "Add repository", icon: "folder-plus", style: .normal, action: onAddProject)
-                        .frame(maxWidth: .infinity)
-                    Button(action: onSettings) {
-                        Icon(name: "gear", size: 13)
-                            .frame(width: 32, height: 26)
-                            .background(theme.color("bg-3"))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(8)
             }
         }
     }
