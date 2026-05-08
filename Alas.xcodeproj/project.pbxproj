@@ -126,6 +126,7 @@
 		A19649A790595DF4F48C3824 /* TerminalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AFC62A30044F71F0F16C3FB /* TerminalService.swift */; };
 		A2298208242B45155BA07BCD /* GitStatusCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86E7E91F81AA92ED7108D82 /* GitStatusCacheTests.swift */; };
 		A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */; };
+		E5E5E5E5E5E5E5E5E5E5E5E5 /* FontSizeCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F6F6F6F6F6F6F6F6F6F6F6 /* FontSizeCommands.swift */; };
 		A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CA3930F30444A51FB2393D /* Theme.swift */; };
 		A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 563B664D082A9523260AA2EF /* RepoDot.swift */; };
 		A77E7290FD589BC3227ADE27 /* ContentSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE7AEB9E8D83B610E291BAE1 /* ContentSearcher.swift */; };
@@ -302,6 +303,7 @@
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandle.swift; sourceTree = "<group>"; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
+		F6F6F6F6F6F6F6F6F6F6F6F6 /* FontSizeCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontSizeCommands.swift; sourceTree = "<group>"; };
 		7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
 		7FFC9539E615699AC90A7412 /* ProjectsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManager.swift; sourceTree = "<group>"; };
 		8062405A67C934905EE61D98 /* TextEditCoordinates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextEditCoordinates.swift; sourceTree = "<group>"; };
@@ -883,6 +885,7 @@
 			isa = PBXGroup;
 			children = (
 				7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */,
+				F6F6F6F6F6F6F6F6F6F6F6F6 /* FontSizeCommands.swift */,
 				17C2AC0F8B3A1B75239995AC /* AppState.swift */,
 				7FFC9539E615699AC90A7412 /* ProjectsManager.swift */,
 				69024633944E9FFF6DA76FAE /* RootView.swift */,
@@ -1036,6 +1039,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */,
+				E5E5E5E5E5E5E5E5E5E5E5E5 /* FontSizeCommands.swift in Sources */,
 				5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */,
 				24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */,
 				9CCB74669051D30EF12FE306 /* AlasGhostty.App.swift in Sources */,
