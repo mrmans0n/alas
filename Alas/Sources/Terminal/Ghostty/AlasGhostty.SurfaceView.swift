@@ -23,7 +23,7 @@ extension AlasGhostty {
 
     /// Terminal display view. Each session owns exactly one of these.
     @MainActor
-    final class SurfaceView: NSView {
+    final class SurfaceView: NSView, FontSizeResponder {
 
         // MARK: - Public callbacks
 
@@ -240,6 +240,26 @@ extension AlasGhostty {
             case GHOSTTY_MOUSE_SHAPE_N_RESIZE: NSCursor.resizeUp.set()
             case GHOSTTY_MOUSE_SHAPE_S_RESIZE: NSCursor.resizeDown.set()
             default: NSCursor.arrow.set()
+            }
+        }
+
+        // MARK: - Font size (FontSizeResponder)
+
+        // The app's menu shortcuts ⌘= / ⌘- / ⌘0 walk the responder chain via
+        // `NSApp.sendAction(...)`. Without these, the menu would intercept the
+        // keystroke before Ghostty's `performKeyEquivalent` could see it and
+        // terminal users would lose font zoom entirely. We forward each menu
+        // action straight to Ghostty's named binding action so behavior matches
+        // pressing the shortcut directly inside the surface.
+
+        @objc func increaseFontSize(_ sender: Any?) { runBindingAction("increase_font_size:1") }
+        @objc func decreaseFontSize(_ sender: Any?) { runBindingAction("decrease_font_size:1") }
+        @objc func resetFontSize(_ sender: Any?)    { runBindingAction("reset_font_size") }
+
+        private func runBindingAction(_ action: String) {
+            guard let surface = cSurface else { return }
+            action.withCString { ptr in
+                _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
             }
         }
 
