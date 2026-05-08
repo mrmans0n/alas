@@ -55,7 +55,13 @@ struct AppConfig: Codable, Equatable {
     }
 
     struct Code: Codable, Equatable {
+        var fontFamily: String      // "" = system monospaced fallback
+        var fontSize: Int           // clamped [8, 64] on decode/write
         var languageServers: [LanguageServerConfig]
+
+        enum CodingKeys: String, CodingKey {
+            case fontFamily, fontSize, languageServers
+        }
     }
 
     static let defaults = AppConfig(
@@ -96,7 +102,11 @@ struct AppConfig: Codable, Equatable {
             bell: "visual"
         ),
         harness: Harness(notifyOnFinish: true),
-        code: Code(languageServers: [])
+        code: Code(
+            fontFamily: "SF Mono",
+            fontSize: 13,
+            languageServers: []
+        )
     )
 }
 
@@ -126,6 +136,14 @@ extension AppConfig {
         worktrees = try c.decode(Worktrees.self, forKey: .worktrees)
         terminal = try c.decode(Terminal.self, forKey: .terminal)
         harness = try c.decode(Harness.self, forKey: .harness)
-        code = (try c.decodeIfPresent(Code.self, forKey: .code)) ?? Code(languageServers: [])
+        if let codeContainer = try? c.nestedContainer(keyedBy: AppConfig.Code.CodingKeys.self, forKey: .code) {
+            let fontFamily = (try? codeContainer.decode(String.self, forKey: .fontFamily)) ?? "SF Mono"
+            let rawSize = (try? codeContainer.decode(Int.self, forKey: .fontSize)) ?? 13
+            let fontSize = max(8, min(64, rawSize))
+            let servers = (try? codeContainer.decode([LanguageServerConfig].self, forKey: .languageServers)) ?? []
+            code = Code(fontFamily: fontFamily, fontSize: fontSize, languageServers: servers)
+        } else {
+            code = Code(fontFamily: "SF Mono", fontSize: 13, languageServers: [])
+        }
     }
 }
