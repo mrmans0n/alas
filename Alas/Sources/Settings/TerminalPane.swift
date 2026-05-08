@@ -61,12 +61,19 @@ struct TerminalPane: View {
 
                 SettingsGroup(title: "Appearance") {
                     SettingsRow(name: "Font family") {
-                        AlasField(text: state.bind(\.terminal.fontFamily), monospaced: true)
+                        FontFamilyPicker(
+                            family: state.bind(\.terminal.fontFamily),
+                            catalog: MonospaceFontCatalog.families()
+                        )
                     }
                     SettingsRow(name: "Font size") {
                         AlasField(text: Binding(
                             get: { String(state.config.terminal.fontSize) },
-                            set: { state.config.terminal.fontSize = Int($0) ?? 13; state.saveConfig() }
+                            set: {
+                                let raw = Int($0) ?? 13
+                                state.config.terminal.fontSize = max(8, min(64, raw))
+                                state.saveConfig()
+                            }
                         ), monospaced: true).frame(width: 80)
                     }
                     SettingsRow(name: "Cursor style") {
