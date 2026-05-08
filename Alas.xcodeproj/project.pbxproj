@@ -42,6 +42,9 @@
 		3A866AA94C2B50FA00805875 /* SettingsGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3678A2904CBBFAC939C9275 /* SettingsGroup.swift */; };
 		3AF04FB045CE3D9CAC066B27 /* HarnessKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76F2498E56CBAF84CB67166C /* HarnessKind.swift */; };
 		3B0629E55CC38A713F763AA8 /* AppearancePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B450918CC98255AD9170586 /* AppearancePane.swift */; };
+		92969E6FE10C4FE9B6D6DA05 /* FontFamilyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0AE6F654DD418497089E35 /* FontFamilyPicker.swift */; };
+		A1A1A1A1A1A1A1A1A1A1A1A1 /* MonospaceFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B2B2B2B2B2B2B2B2B2B2B2 /* MonospaceFontCatalog.swift */; };
+		C3C3C3C3C3C3C3C3C3C3C3C3 /* SettingsBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4D4D4D4D4D4D4D4D4D4D4D4 /* SettingsBinding.swift */; };
 		3B34A2725C1F6B6E29C312F1 /* SearchInputRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3519B5A28746C49C35D9DAF9 /* SearchInputRow.swift */; };
 		3B7D77B9E71C66ACB1E007D7 /* EditorBufferStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */; };
 		3B82344338BD29F6B8B6D8EC /* FileIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1D1797A096A39AE6CB5EA00 /* FileIndex.swift */; };
@@ -124,6 +127,7 @@
 		A19649A790595DF4F48C3824 /* TerminalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AFC62A30044F71F0F16C3FB /* TerminalService.swift */; };
 		A2298208242B45155BA07BCD /* GitStatusCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86E7E91F81AA92ED7108D82 /* GitStatusCacheTests.swift */; };
 		A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */; };
+		E5E5E5E5E5E5E5E5E5E5E5E5 /* FontSizeCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F6F6F6F6F6F6F6F6F6F6F6 /* FontSizeCommands.swift */; };
 		A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CA3930F30444A51FB2393D /* Theme.swift */; };
 		A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 563B664D082A9523260AA2EF /* RepoDot.swift */; };
 		A77E7290FD589BC3227ADE27 /* ContentSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE7AEB9E8D83B610E291BAE1 /* ContentSearcher.swift */; };
@@ -262,6 +266,9 @@
 		4501413979E60464DCE5602C /* claude-code.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "claude-code.sh"; sourceTree = "<group>"; };
 		489C9B383554D7DAB170C2F8 /* Seg.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Seg.swift; sourceTree = "<group>"; };
 		4B450918CC98255AD9170586 /* AppearancePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePane.swift; sourceTree = "<group>"; };
+		FF0AE6F654DD418497089E35 /* FontFamilyPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontFamilyPicker.swift; sourceTree = "<group>"; };
+		B2B2B2B2B2B2B2B2B2B2B2B2 /* MonospaceFontCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonospaceFontCatalog.swift; sourceTree = "<group>"; };
+		D4D4D4D4D4D4D4D4D4D4D4D4 /* SettingsBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBinding.swift; sourceTree = "<group>"; };
 		4D131C3F1E4BE68A850097A4 /* ScopeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeRow.swift; sourceTree = "<group>"; };
 		4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParserTests.swift; sourceTree = "<group>"; };
 		4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerTests.swift; sourceTree = "<group>"; };
@@ -298,6 +305,7 @@
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandle.swift; sourceTree = "<group>"; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
+		F6F6F6F6F6F6F6F6F6F6F6F6 /* FontSizeCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontSizeCommands.swift; sourceTree = "<group>"; };
 		7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
 		7FFC9539E615699AC90A7412 /* ProjectsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManager.swift; sourceTree = "<group>"; };
 		8062405A67C934905EE61D98 /* TextEditCoordinates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextEditCoordinates.swift; sourceTree = "<group>"; };
@@ -601,9 +609,12 @@
 				4B450918CC98255AD9170586 /* AppearancePane.swift */,
 				A727D24652E45B98C10917F8 /* CodeLanguageDetailView.swift */,
 				93CDC9895F48619E97461875 /* CodePane.swift */,
+				FF0AE6F654DD418497089E35 /* FontFamilyPicker.swift */,
 				0240C5961343C3042D865570 /* GeneralPane.swift */,
+				B2B2B2B2B2B2B2B2B2B2B2B2 /* MonospaceFontCatalog.swift */,
 				F3678A2904CBBFAC939C9275 /* SettingsGroup.swift */,
 				515B67124EA11DDCC29B6E36 /* SettingsNavView.swift */,
+				D4D4D4D4D4D4D4D4D4D4D4D4 /* SettingsBinding.swift */,
 				EE607EE1ACDE73C1DB0FCA00 /* SettingsRow.swift */,
 				FA1EC032FDD03ED4A86B96A8 /* SettingsWindow.swift */,
 				FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */,
@@ -880,6 +891,7 @@
 			isa = PBXGroup;
 			children = (
 				7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */,
+				F6F6F6F6F6F6F6F6F6F6F6F6 /* FontSizeCommands.swift */,
 				17C2AC0F8B3A1B75239995AC /* AppState.swift */,
 				7FFC9539E615699AC90A7412 /* ProjectsManager.swift */,
 				69024633944E9FFF6DA76FAE /* RootView.swift */,
@@ -1033,6 +1045,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */,
+				E5E5E5E5E5E5E5E5E5E5E5E5 /* FontSizeCommands.swift in Sources */,
 				5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */,
 				24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */,
 				9CCB74669051D30EF12FE306 /* AlasGhostty.App.swift in Sources */,
@@ -1074,6 +1087,9 @@
 				DEBB0627BD0426369D18CAD4 /* FileSearchDialog.swift in Sources */,
 				4B2031FB61782327D5279F98 /* FileTreeBuilder.swift in Sources */,
 				D59E731EE52408DDF87BABDA /* FilesSectionView.swift in Sources */,
+				92969E6FE10C4FE9B6D6DA05 /* FontFamilyPicker.swift in Sources */,
+				A1A1A1A1A1A1A1A1A1A1A1A1 /* MonospaceFontCatalog.swift in Sources */,
+				C3C3C3C3C3C3C3C3C3C3C3C3 /* SettingsBinding.swift in Sources */,
 				B064B59D40A47026CDDEB189 /* FuzzyMatch.swift in Sources */,
 				466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */,
 				41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */,

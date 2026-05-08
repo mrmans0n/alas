@@ -20,6 +20,8 @@ final class CodeEditorCoordinator {
     private var currentRelativePath: String?
     private var currentLanguage: String?
     private var currentTheme: Theme?
+    private var currentFontFamily: String?
+    private var currentFontSize: CGFloat?
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
 
     private var diagnosticsTask: Task<Void, Never>?
@@ -35,6 +37,36 @@ final class CodeEditorCoordinator {
     private var pendingTextEdits: [EditorTextEdit] = []
     private let highlightSession = TreeSitterHighlighter.Session()
 
+    static func resolveFont(family: String, size: CGFloat) -> NSFont {
+        guard !family.isEmpty else {
+            return .monospacedSystemFont(ofSize: size, weight: .regular)
+        }
+        // The picker stores family names (e.g. "JetBrains Mono"), but
+        // NSFont(name:size:) requires the PostScript name of a specific
+        // face ("JetBrainsMono-Regular"). Walk the family's members and
+        // pick the face closest to regular weight (NSFontManager weight 5)
+        // so multi-face families resolve to a real face instead of nil.
+        let members = NSFontManager.shared.availableMembers(ofFontFamily: family) ?? []
+        if !members.isEmpty {
+            let sorted = members.sorted { lhs, rhs in
+                let lw = (lhs.count > 2 ? lhs[2] as? Int : nil) ?? 5
+                let rw = (rhs.count > 2 ? rhs[2] as? Int : nil) ?? 5
+                return abs(lw - 5) < abs(rw - 5)
+            }
+            if let psName = sorted.first?.first as? String,
+               let font = NSFont(name: psName, size: size) {
+                return font
+            }
+        }
+        // Last-resort fallbacks: try the user's string verbatim (covers the
+        // case where they typed a PostScript name themselves), then a font
+        // descriptor by family, then the system default.
+        if let font = NSFont(name: family, size: size) { return font }
+        let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
+        if let font = NSFont(descriptor: descriptor, size: size) { return font }
+        return .monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
     init(appState: AppState) {
         self.appState = appState
     }
@@ -48,6 +80,15 @@ final class CodeEditorCoordinator {
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
         self.currentTheme = theme
+
+        let family = appState.config.code.fontFamily
+        let size = CGFloat(appState.config.code.fontSize)
+        self.currentFontFamily = family
+        self.currentFontSize = size
+        textView.font = Self.resolveFont(family: family, size: size)
+        textView.increaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: 1) }
+        textView.decreaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: -1) }
+        textView.resetFontSizeHandler = { [weak self] in self?.resetFontSize() }
 
         applyBaseStyle(theme: theme)
         let ext = (buffer.relativePath as NSString).pathExtension
@@ -131,6 +172,20 @@ final class CodeEditorCoordinator {
             runHighlight(theme: theme)
             currentTheme = theme
         }
+
+        let family = appState.config.code.fontFamily
+        let size = CGFloat(appState.config.code.fontSize)
+        let fontChanged = currentFontFamily != family || currentFontSize != size
+        if fontChanged {
+            currentFontFamily = family
+            currentFontSize = size
+            if let textView {
+                textView.font = Self.resolveFont(family: family, size: size)
+            }
+            applyBaseStyle(theme: theme)
+            runHighlight(theme: theme)
+        }
+
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
 
@@ -156,6 +211,9 @@ final class CodeEditorCoordinator {
         layoutManager = nil
         hover = nil
         definition = nil
+        textView?.increaseFontSizeHandler = nil
+        textView?.decreaseFontSizeHandler = nil
+        textView?.resetFontSizeHandler = nil
         textView = nil
         buffer = nil
         // We deliberately do NOT close the LSP document or stop the file
@@ -289,6 +347,25 @@ final class CodeEditorCoordinator {
                     self.diagnosticsFeature.apply(batch.diagnostics, to: buffer.storage, theme: theme)
                 }
             }
+        }
+    }
+
+    // MARK: - Font size adjustments
+
+    private func adjustFontSize(by delta: Int) {
+        let current = appState.config.code.fontSize
+        let next = max(8, min(64, current + delta))
+        if next != current {
+            appState.config.code.fontSize = next
+            appState.saveConfig()
+        }
+    }
+
+    private func resetFontSize() {
+        let target = AppConfig.defaults.code.fontSize
+        if appState.config.code.fontSize != target {
+            appState.config.code.fontSize = target
+            appState.saveConfig()
         }
     }
 

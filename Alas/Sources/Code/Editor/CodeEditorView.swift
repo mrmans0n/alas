@@ -15,6 +15,13 @@ struct CodeEditorView: NSViewRepresentable {
     let revealLine: Int?
     let revealCharacter: Int?
     let appState: AppState
+    /// Pulled from `appState.config.code.fontFamily` by the parent view's
+    /// body so SwiftUI registers the dependency. NSViewRepresentable hooks
+    /// (makeNSView/updateNSView) are not part of body evaluation, so reads
+    /// inside them are not tracked — passing the values as inputs is what
+    /// causes `updateNSView` to fire when the user changes the font.
+    let fontFamily: String
+    let fontSize: Int
     @Environment(\.theme) var theme
 
     func makeCoordinator() -> CodeEditorCoordinator {
@@ -54,7 +61,10 @@ struct CodeEditorView: NSViewRepresentable {
 
         let initialFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
         let textView = CodeTextView(frame: initialFrame, textContainer: textContainer)
-        textView.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        textView.font = CodeEditorCoordinator.resolveFont(
+            family: fontFamily,
+            size: CGFloat(fontSize)
+        )
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         textView.drawsBackground = true
         textView.minSize = NSSize(width: 0, height: 0)

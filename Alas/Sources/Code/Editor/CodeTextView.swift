@@ -5,9 +5,19 @@ import AppKit
 /// `EditorBuffer` outside this view. Editing is enabled but undo/redo,
 /// dirty tracking, save, file-watch, and LSP `didChange` are all
 /// orchestrated by the buffer + coordinator pair.
-final class CodeTextView: NSTextView {
+final class CodeTextView: NSTextView, FontSizeResponder {
     var hoverHandler: ((NSPoint) -> Void)?
     var commandClickHandler: ((NSPoint) -> Void)?
+
+    /// Set by `CodeEditorCoordinator.attach`. Each closure mutates the shared
+    /// `code.fontSize` config in response to the matching menu command.
+    var increaseFontSizeHandler: (() -> Void)?
+    var decreaseFontSizeHandler: (() -> Void)?
+    var resetFontSizeHandler: (() -> Void)?
+
+    @objc func increaseFontSize(_ sender: Any?) { increaseFontSizeHandler?() }
+    @objc func decreaseFontSize(_ sender: Any?) { decreaseFontSizeHandler?() }
+    @objc func resetFontSize(_ sender: Any?)    { resetFontSizeHandler?() }
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         super.init(frame: frameRect, textContainer: container)

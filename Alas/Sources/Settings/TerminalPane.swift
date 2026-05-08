@@ -16,14 +16,14 @@ struct TerminalPane: View {
 
                 SettingsGroup(title: "Shell") {
                     SettingsRow(name: "Default shell", desc: "Path to the shell executable.") {
-                        AlasField(text: bind(\.terminal.shell), monospaced: true)
+                        AlasField(text: state.bind(\.terminal.shell), monospaced: true)
                     }
                     // "Last used" intentionally omitted: TerminalService
                     // doesn't track per-session cwd yet (resolveWorkingDirectory
                     // would silently fall through to the worktree root). It'll
                     // come back here once that tracking lands.
                     SettingsRow(name: "Working directory") {
-                        Seg(value: bind(\.terminal.workingDirectory), options: [
+                        Seg(value: state.bind(\.terminal.workingDirectory), options: [
                             ("worktreeRoot", "Worktree root"),
                             ("repoRoot", "Repo root"),
                         ])
@@ -33,7 +33,7 @@ struct TerminalPane: View {
                 SettingsGroup(title: "Startup scripts") {
                     SettingsRow(name: "Run on session open",
                                 desc: "Executed in every new terminal pane after the shell starts.") {
-                        TextEditor(text: bind(\.terminal.startupScript))
+                        TextEditor(text: state.bind(\.terminal.startupScript))
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(theme.color("fg"))
                             .scrollContentBackground(.hidden)
@@ -44,7 +44,7 @@ struct TerminalPane: View {
                     }
                     SettingsRow(name: "Run on worktree create",
                                 desc: "Executed once after a worktree is created.") {
-                        TextEditor(text: bind(\.terminal.worktreeCreateScript))
+                        TextEditor(text: state.bind(\.terminal.worktreeCreateScript))
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(theme.color("fg"))
                             .scrollContentBackground(.hidden)
@@ -55,27 +55,34 @@ struct TerminalPane: View {
                     }
                     SettingsRow(name: "Inherit parent env",
                                 desc: "Pass environment from launching shell into terminals.") {
-                        AlasToggle(on: bind(\.terminal.inheritParentEnv))
+                        AlasToggle(on: state.bind(\.terminal.inheritParentEnv))
                     }
                 }
 
                 SettingsGroup(title: "Appearance") {
                     SettingsRow(name: "Font family") {
-                        AlasField(text: bind(\.terminal.fontFamily), monospaced: true)
+                        FontFamilyPicker(
+                            family: state.bind(\.terminal.fontFamily),
+                            catalog: MonospaceFontCatalog.families()
+                        )
                     }
                     SettingsRow(name: "Font size") {
                         AlasField(text: Binding(
                             get: { String(state.config.terminal.fontSize) },
-                            set: { state.config.terminal.fontSize = Int($0) ?? 13; state.saveConfig() }
+                            set: {
+                                let raw = Int($0) ?? 13
+                                state.config.terminal.fontSize = max(8, min(64, raw))
+                                state.saveConfig()
+                            }
                         ), monospaced: true).frame(width: 80)
                     }
                     SettingsRow(name: "Cursor style") {
-                        Seg(value: bind(\.terminal.cursorStyle), options: [
+                        Seg(value: state.bind(\.terminal.cursorStyle), options: [
                             ("block","block"), ("beam","beam"), ("underline","underline")
                         ])
                     }
                     SettingsRow(name: "Cursor blink") {
-                        AlasToggle(on: bind(\.terminal.cursorBlink))
+                        AlasToggle(on: state.bind(\.terminal.cursorBlink))
                     }
                     SettingsRow(name: "Scrollback lines") {
                         AlasField(text: Binding(
@@ -84,7 +91,7 @@ struct TerminalPane: View {
                         ), monospaced: true).frame(width: 100)
                     }
                     SettingsRow(name: "Bell") {
-                        Seg(value: bind(\.terminal.bell), options: [
+                        Seg(value: state.bind(\.terminal.bell), options: [
                             ("off","off"), ("visual","visual"), ("sound","sound")
                         ])
                     }
@@ -131,10 +138,4 @@ struct TerminalPane: View {
         }
     }
 
-    private func bind<T>(_ kp: WritableKeyPath<AppConfig, T>) -> Binding<T> {
-        Binding(
-            get: { state.config[keyPath: kp] },
-            set: { state.config[keyPath: kp] = $0; state.saveConfig() }
-        )
-    }
 }

@@ -68,6 +68,21 @@ struct AlasApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
             }
+            CommandGroup(after: .toolbar) {
+                Divider()
+                Button("Increase Font Size") {
+                    NSApp.sendAction(#selector(FontSizeResponder.increaseFontSize(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("=", modifiers: .command)
+                Button("Decrease Font Size") {
+                    NSApp.sendAction(#selector(FontSizeResponder.decreaseFontSize(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("-", modifiers: .command)
+                Button("Reset Font Size") {
+                    NSApp.sendAction(#selector(FontSizeResponder.resetFontSize(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
         }
 
         Window("Settings", id: "settings") {
