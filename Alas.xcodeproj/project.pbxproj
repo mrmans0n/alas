@@ -44,6 +44,7 @@
 		3B0629E55CC38A713F763AA8 /* AppearancePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B450918CC98255AD9170586 /* AppearancePane.swift */; };
 		92969E6FE10C4FE9B6D6DA05 /* FontFamilyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0AE6F654DD418497089E35 /* FontFamilyPicker.swift */; };
 		A1A1A1A1A1A1A1A1A1A1A1A1 /* MonospaceFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B2B2B2B2B2B2B2B2B2B2B2 /* MonospaceFontCatalog.swift */; };
+		C3C3C3C3C3C3C3C3C3C3C3C3 /* SettingsBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4D4D4D4D4D4D4D4D4D4D4D4 /* SettingsBinding.swift */; };
 		3B34A2725C1F6B6E29C312F1 /* SearchInputRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3519B5A28746C49C35D9DAF9 /* SearchInputRow.swift */; };
 		3B7D77B9E71C66ACB1E007D7 /* EditorBufferStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */; };
 		3B82344338BD29F6B8B6D8EC /* FileIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1D1797A096A39AE6CB5EA00 /* FileIndex.swift */; };
@@ -264,6 +265,7 @@
 		4B450918CC98255AD9170586 /* AppearancePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePane.swift; sourceTree = "<group>"; };
 		FF0AE6F654DD418497089E35 /* FontFamilyPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontFamilyPicker.swift; sourceTree = "<group>"; };
 		B2B2B2B2B2B2B2B2B2B2B2B2 /* MonospaceFontCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonospaceFontCatalog.swift; sourceTree = "<group>"; };
+		D4D4D4D4D4D4D4D4D4D4D4D4 /* SettingsBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBinding.swift; sourceTree = "<group>"; };
 		4D131C3F1E4BE68A850097A4 /* ScopeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeRow.swift; sourceTree = "<group>"; };
 		4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParserTests.swift; sourceTree = "<group>"; };
 		4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerTests.swift; sourceTree = "<group>"; };
@@ -606,6 +608,7 @@
 				B2B2B2B2B2B2B2B2B2B2B2B2 /* MonospaceFontCatalog.swift */,
 				F3678A2904CBBFAC939C9275 /* SettingsGroup.swift */,
 				515B67124EA11DDCC29B6E36 /* SettingsNavView.swift */,
+				D4D4D4D4D4D4D4D4D4D4D4D4 /* SettingsBinding.swift */,
 				EE607EE1ACDE73C1DB0FCA00 /* SettingsRow.swift */,
 				FA1EC032FDD03ED4A86B96A8 /* SettingsWindow.swift */,
 				FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */,
@@ -1076,6 +1079,7 @@
 				D59E731EE52408DDF87BABDA /* FilesSectionView.swift in Sources */,
 				92969E6FE10C4FE9B6D6DA05 /* FontFamilyPicker.swift in Sources */,
 				A1A1A1A1A1A1A1A1A1A1A1A1 /* MonospaceFontCatalog.swift in Sources */,
+				C3C3C3C3C3C3C3C3C3C3C3C3 /* SettingsBinding.swift in Sources */,
 				B064B59D40A47026CDDEB189 /* FuzzyMatch.swift in Sources */,
 				466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */,
 				41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */,
