@@ -576,4 +576,93 @@ struct EditorBufferTests {
         let fontB = bufferB.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         #expect(fontB?.isFixedPitch == true)
     }
+
+    @Test func coordinatorPathChangeDropsStaleDiagnostics() throws {
+        // Regression: runHighlight captures diagnosticsFeature.current at the
+        // start of its async task; if we don't reset before the rebind, the
+        // task can re-apply the previous file's diagnostics onto the newly
+        // bound storage.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // LSPDiagnostic only has a Codable init, so build via JSON.
+        let json = #"{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}},"severity":1,"message":"boom"}"#
+        let fakeDiag = try JSONDecoder().decode(LSPDiagnostic.self, from: Data(json.utf8))
+        coordinator.diagnosticsFeature.apply([fakeDiag], to: bufferA.storage, theme: theme)
+        #expect(coordinator.diagnosticsFeature.current.count == 1)
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "b.swift", tabId: "tab-b",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        #expect(coordinator.diagnosticsFeature.current.isEmpty)
+    }
+
+    @Test func coordinatorPathChangeClearsTextViewUndoStack() throws {
+        // Regression: NSTextView's undoManager survives across tab swaps
+        // because CenterPaneView reuses the same text view. Without an
+        // explicit removeAllActions on rebind, Undo would mutate the wrong
+        // buffer's storage.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        // NSTextView's undoManager comes from the responder chain; in this
+        // headless test we don't have a window, so feed one in via a
+        // delegate so the rebind path has something concrete to clear.
+        let undoOwner = TestUndoOwner()
+        textView.delegate = undoOwner
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Stage an undoable action so canUndo flips on; payload is irrelevant.
+        textView.undoManager?.registerUndo(withTarget: bufferA) { _ in }
+        #expect(textView.undoManager?.canUndo == true)
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "b.swift", tabId: "tab-b",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        #expect(textView.undoManager?.canUndo == false)
+    }
+}
+
+@MainActor
+private final class TestUndoOwner: NSObject, NSTextViewDelegate {
+    let undoManager = UndoManager()
+    func undoManager(for view: NSTextView) -> UndoManager? { undoManager }
 }

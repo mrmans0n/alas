@@ -26,7 +26,7 @@ final class CodeEditorCoordinator {
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
-    private let diagnosticsFeature = DiagnosticsFeature()
+    let diagnosticsFeature = DiagnosticsFeature()
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
@@ -189,6 +189,7 @@ final class CodeEditorCoordinator {
     /// buffer is already bound, its layout manager and edit observer are torn
     /// down first so the text view stops rendering the old storage.
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        let isRebind = self.buffer != nil
         if let previous = self.buffer {
             if let token = editObserverToken {
                 previous.removeOnEdit(token)
@@ -205,6 +206,15 @@ final class CodeEditorCoordinator {
         currentLanguage = appState.lsp.language(forFileExtension: ext)
         if let layoutManager {
             buffer.storage.addLayoutManager(layoutManager)
+        }
+        if isRebind {
+            // Drop any state captured against the previous buffer before we
+            // start the highlight: stale diagnostics would otherwise be
+            // re-applied to the new storage by the async highlight task, and
+            // stale undo records would let Undo/Redo mutate the wrong tab
+            // because the NSUndoManager belongs to the (reused) NSTextView.
+            diagnosticsFeature.reset()
+            textView?.undoManager?.removeAllActions()
         }
         applyBaseStyle(theme: theme)
         runHighlight(theme: theme)
