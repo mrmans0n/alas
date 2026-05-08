@@ -10,13 +10,16 @@ struct TabsFile: Codable {
 @Observable
 @MainActor
 final class TabsManager {
+    private struct BufferKey: Hashable {
+        var worktreeId: String
+        var relativePath: String
+    }
+
     private var byWorktree: [String: TabsFile] = [:]
     private let store = PersistenceStore()
     private let bufferStore: EditorBufferStore
-    private var buffers: [TabID: EditorBuffer] = [:]
-    // Map tabId → worktreeId so `discardBuffer` and `snapshotDirtyBuffersForQuit`
-    // know which subtree to write to without forcing callers to pass it.
-    private var bufferOwners: [TabID: String] = [:]
+    private var buffers: [BufferKey: EditorBuffer] = [:]
+    private var bufferKeys: [TabID: BufferKey] = [:]
     private let lsp: WorkspaceLSPManager?
 
     init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
@@ -220,7 +223,12 @@ final class TabsManager {
     /// Returns the buffer for `tabId`, creating it (cold-load from disk or
     /// hot-restore from snapshot) on first access.
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
-        if let existing = buffers[tabId] { return existing }
+        if let key = bufferKeys[tabId], let existing = buffers[key] { return existing }
+        let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
+        if let existing = buffers[key] {
+            bufferKeys[tabId] = key
+            return existing
+        }
         let buffer: EditorBuffer
         if let lsp {
             buffer = EditorBuffer(
@@ -242,22 +250,37 @@ final class TabsManager {
         }
         buffer.startWatching()
         buffer.checkForConflictOnRestore()
-        buffers[tabId] = buffer
-        bufferOwners[tabId] = worktreeId
+        buffer.shouldFollowPathChange = { [weak self] oldPath, newPath in
+            self?.canFollowBufferPathChange(worktreeId: worktreeId, oldPath: oldPath, newPath: newPath) ?? false
+        }
+        buffer.onPathChanged = { [weak self] oldPath, newPath in
+            self?.handleBufferPathChanged(worktreeId: worktreeId, oldPath: oldPath, newPath: newPath)
+        }
+        buffer.onSnapshotRequested = { [weak self, weak buffer] in
+            guard let buffer else { return }
+            self?.snapshotBufferForAllTabs(buffer)
+        }
+        buffer.onDiscardSnapshotsRequested = { [weak self, weak buffer] in
+            guard let buffer else { return }
+            self?.discardSnapshotsForAllTabs(buffer)
+        }
+        buffers[key] = buffer
+        bufferKeys[tabId] = key
         return buffer
     }
 
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
     /// dirty-tab queries.
     func peekBuffer(tabId: TabID) -> EditorBuffer? {
-        buffers[tabId]
+        guard let key = bufferKeys[tabId] else { return nil }
+        return buffers[key]
     }
 
     func activeEditorContext(worktreeId: String) -> (tab: EditorTabState, buffer: EditorBuffer)? {
         guard let activeId = activeTabId(forWorktree: worktreeId),
               let tab = tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .editor(let state) = tab,
-              let buffer = buffers[activeId] else { return nil }
+              let buffer = peekBuffer(tabId: activeId) else { return nil }
         return (state, buffer)
     }
 
@@ -268,17 +291,25 @@ final class TabsManager {
     /// wrong worktree context surfaces immediately rather than silently
     /// mis-routing the snapshot.
     func discardBuffer(worktreeId: String, tabId: TabID) {
-        if let owner = bufferOwners[tabId] {
-            assert(owner == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(owner)")
+        guard let key = bufferKeys.removeValue(forKey: tabId) else { return }
+        assert(key.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(key.worktreeId)")
+        bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
+        guard let buffer = buffers[key] else { return }
+        if let nextTabId = bufferKeys.first(where: { $0.value == key })?.key {
+            if buffer.persistenceTabId == tabId {
+                buffer.adoptPersistenceTabId(nextTabId)
+            }
+            return
         }
-        guard let buffer = buffers.removeValue(forKey: tabId) else { return }
-        bufferOwners.removeValue(forKey: tabId)
+        buffers.removeValue(forKey: key)
         buffer.close(persistDirtySnapshot: false)
     }
 
     /// Tab IDs whose buffers are currently dirty. Order is unspecified.
     func dirtyTabIds() -> [TabID] {
-        buffers.compactMap { $0.value.dirty ? $0.key : nil }
+        bufferKeys.compactMap { tabId, key in
+            buffers[key]?.dirty == true ? tabId : nil
+        }
     }
 
     @discardableResult
@@ -293,6 +324,13 @@ final class TabsManager {
         file.tabs[idx] = .editor(state)
         byWorktree[worktreeId] = file
         persist(worktreeId)
+        if let oldKey = bufferKeys[tabId] {
+            let newKey = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
+            bufferKeys[tabId] = newKey
+            if oldKey != newKey, let buffer = buffers.removeValue(forKey: oldKey) {
+                buffers[newKey] = buffer
+            }
+        }
         return true
     }
 
@@ -307,15 +345,21 @@ final class TabsManager {
     /// quit handler. Errors are swallowed — failing to snapshot one buffer
     /// must not block snapshotting the rest, and quit must not be blocked.
     func snapshotDirtyBuffersForQuit() {
-        for buffer in buffers.values where buffer.dirty {
-            buffer.snapshotNow()
+        for (tabId, key) in bufferKeys {
+            guard let buffer = buffers[key], buffer.dirty else { continue }
+            buffer.snapshotNow(tabId: tabId)
         }
     }
 
     @discardableResult
     func saveAll(worktreeRoots: [String: URL] = [:]) -> [(tabId: TabID, error: Error)] {
         var errors: [(TabID, Error)] = []
-        for (tabId, buffer) in buffers where buffer.dirty {
+        var saved = Set<ObjectIdentifier>()
+        for (tabId, key) in bufferKeys {
+            guard let buffer = buffers[key], buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
             do {
                 try buffer.saveRecordingError()
             } catch {
@@ -326,7 +370,7 @@ final class TabsManager {
             guard let root = worktreeRoots[worktreeId] else { continue }
             for tab in file.tabs {
                 guard case .editor(let state) = tab,
-                      buffers[state.id] == nil,
+                      peekBuffer(tabId: state.id) == nil,
                       (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
                 let buffer: EditorBuffer
                 if let lsp {
@@ -364,7 +408,7 @@ final class TabsManager {
     @discardableResult
     func saveActive(worktreeId: String) -> Bool {
         guard let activeId = activeTabId(forWorktree: worktreeId),
-              let buffer = buffers[activeId] else { return false }
+              let buffer = peekBuffer(tabId: activeId) else { return false }
         do {
             try buffer.saveRecordingError()
             return true
@@ -376,8 +420,74 @@ final class TabsManager {
     @discardableResult
     func revertActive(worktreeId: String) -> Bool {
         guard let activeId = activeTabId(forWorktree: worktreeId),
-              let buffer = buffers[activeId] else { return false }
+              let buffer = peekBuffer(tabId: activeId) else { return false }
         buffer.revert()
         return true
+    }
+
+    private func handleBufferPathChanged(worktreeId: String, oldPath: String, newPath: String) {
+        let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
+        let newKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+        let affectedTabIds = bufferKeys.compactMap { tabId, key in key == oldKey ? tabId : nil }
+        guard !affectedTabIds.isEmpty else { return }
+
+        if let buffer = buffers.removeValue(forKey: oldKey) {
+            buffers[newKey] = buffer
+        }
+        for tabId in affectedTabIds {
+            bufferKeys[tabId] = newKey
+            _ = updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
+        }
+    }
+
+    private func canFollowBufferPathChange(worktreeId: String, oldPath: String, newPath: String) -> Bool {
+        let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
+        let newKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+        guard oldKey != newKey else { return true }
+        guard buffers[newKey] == nil else { return false }
+        guard let file = byWorktree[worktreeId] else { return true }
+        return !file.tabs.contains { tab in
+            guard case .editor(let state) = tab,
+                  state.relativePath == newPath,
+                  bufferKeys[state.id] == nil,
+                  (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { return false }
+            return true
+        }
+    }
+
+    private func snapshotBufferForAllTabs(_ buffer: EditorBuffer) {
+        for (tabId, _) in tabIdsSharing(buffer: buffer) {
+            buffer.snapshotNow(tabId: tabId)
+        }
+    }
+
+    private func discardSnapshotsForAllTabs(_ buffer: EditorBuffer) {
+        for (tabId, key) in tabIdsSharing(buffer: buffer) {
+            bufferStore.discard(worktreeId: key.worktreeId, tabId: tabId)
+        }
+    }
+
+    private func tabIdsSharing(buffer: EditorBuffer) -> [(TabID, BufferKey)] {
+        var result: [(TabID, BufferKey)] = []
+        var seen = Set<TabID>()
+        let liveKeys = Set(bufferKeys.compactMap { _, key in buffers[key] === buffer ? key : nil })
+
+        for (tabId, key) in bufferKeys where liveKeys.contains(key) {
+            result.append((tabId, key))
+            seen.insert(tabId)
+        }
+
+        for key in liveKeys {
+            guard let file = byWorktree[key.worktreeId] else { continue }
+            for tab in file.tabs {
+                guard case .editor(let state) = tab,
+                      state.relativePath == key.relativePath,
+                      !seen.contains(state.id) else { continue }
+                result.append((state.id, key))
+                seen.insert(state.id)
+            }
+        }
+
+        return result
     }
 }

@@ -2,11 +2,11 @@ import AppKit
 import Foundation
 import Observation
 
-/// Per-tab editor buffer. Owns the live `NSTextStorage` displayed by
+/// Editor buffer for one open worktree file. Owns the live `NSTextStorage` displayed by
 /// `CodeTextView`, plus the original-on-disk snapshot used for dirty
 /// detection, save normalization, and conflict resolution.
 ///
-/// Buffers are stored in `TabsManager.buffers` keyed by `TabID` so they
+/// Buffers are stored in `TabsManager` by worktree-relative path so they
 /// outlive the SwiftUI view (which can be torn down and rebuilt). All
 /// state mutations happen on the main actor; storage delegate callbacks,
 /// LSP responses, and file-watch events are routed through `MainActor`
@@ -52,17 +52,30 @@ final class EditorBuffer {
     @ObservationIgnored
     private static let watchQueue = DispatchQueue(label: "alas.editor.buffer.watch", qos: .utility)
     @ObservationIgnored
+    private var originalFileIdentifier: AnyObject?
+    @ObservationIgnored
+    private var originalVolumeIdentifier: AnyObject?
+    @ObservationIgnored
     private let store: EditorBufferStore?
     @ObservationIgnored
     private let worktreeId: String?
     @ObservationIgnored
-    private let tabId: String?
+    private var tabId: String?
     @ObservationIgnored
     private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored
     private let lsp: WorkspaceLSPManager?
     @ObservationIgnored
     private(set) var language: String?
+    @ObservationIgnored
+    var shouldFollowPathChange: ((String, String) -> Bool)?
+    @ObservationIgnored
+    var onPathChanged: ((String, String) -> Void)?
+    @ObservationIgnored
+    var onSnapshotRequested: (() -> Void)?
+    @ObservationIgnored
+    var onDiscardSnapshotsRequested: (() -> Void)?
+    var persistenceTabId: String? { tabId }
 
     struct EditObserverToken { fileprivate let id: UUID }
 
@@ -134,6 +147,12 @@ final class EditorBuffer {
         editObservers.removeValue(forKey: token.id)
     }
 
+    func adoptPersistenceTabId(_ tabId: String) {
+        guard self.tabId != tabId else { return }
+        self.tabId = tabId
+        if dirty { snapshotNow() }
+    }
+
     private func handleEdit(edit: EditorTextEdit?) {
         guard !loading else { return }
         editGeneration &+= 1
@@ -175,6 +194,10 @@ final class EditorBuffer {
     private func handleWatcherEvent() {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if !FileManager.default.fileExists(atPath: url.path) {
+            if let movedPath = findMovedRelativePath() {
+                followMovedFile(to: movedPath)
+                return
+            }
             if dirty {
                 conflict = .deletedOnDisk
             }
@@ -194,6 +217,44 @@ final class EditorBuffer {
         // Re-arm watcher in case rename swapped the inode (atomic save by an
         // external tool).
         startWatching()
+    }
+
+    private func followMovedFile(to newRelativePath: String) {
+        let oldURL = worktreeRoot.appendingPathComponent(relativePath)
+        let oldRelativePath = relativePath
+        let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
+        let oldLanguage = language
+        let wasDirty = dirty
+        guard shouldFollowPathChange?(oldRelativePath, newRelativePath) ?? true else {
+            if wasDirty {
+                conflict = .deletedOnDisk
+            }
+            return
+        }
+        stopWatching()
+        relativePath = newRelativePath
+        language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+        if wasDirty {
+            updateOriginalFileIdentity(from: newURL)
+            conflict = movedFileDiffersFromOriginal(at: newURL) ? .changedOnDisk : nil
+            snapshotNow()
+        } else {
+            loadFromDisk()
+            discardSnapshot()
+            handleEdit(edit: nil)
+        }
+        notifyDidClose(url: oldURL, language: oldLanguage)
+        notifyDidOpen(url: newURL, text: storage.string)
+        onPathChanged?(oldRelativePath, newRelativePath)
+        startWatching()
+    }
+
+    private func movedFileDiffersFromOriginal(at url: URL) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let mtime = attrs[.modificationDate] as? Date else { return true }
+        if mtime != originalMtime { return true }
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return true }
+        return LineEnding.lf.normalize(raw) != originalText
     }
 
     func resolveConflictKeepingMine() {
@@ -231,6 +292,9 @@ final class EditorBuffer {
     func saveAs(relativePath newRelativePath: String) throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
+            throw CocoaError(.fileWriteFileExists)
+        }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
         let oldLanguage = language
@@ -242,10 +306,12 @@ final class EditorBuffer {
             language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
             originalText = canonical
             updateOriginalMtime(from: newURL)
+            updateOriginalFileIdentity(from: newURL)
             discardSnapshot()
             notifyDidClose(url: oldURL, language: oldLanguage)
             notifyDidOpen(url: newURL, text: canonical)
             notifyDidSave(url: newURL)
+            onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
         } catch {
             startWatching()
@@ -256,6 +322,9 @@ final class EditorBuffer {
     func moveTo(relativePath newRelativePath: String) throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
+            throw CocoaError(.fileWriteFileExists)
+        }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
         let oldLanguage = language
@@ -273,6 +342,7 @@ final class EditorBuffer {
             relativePath = newRelativePath
             language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
             updateOriginalMtime(from: newURL)
+            updateOriginalFileIdentity(from: newURL)
             if dirty {
                 snapshotNow()
             } else {
@@ -280,6 +350,7 @@ final class EditorBuffer {
             }
             notifyDidClose(url: oldURL, language: oldLanguage)
             notifyDidOpen(url: newURL, text: storage.string)
+            onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
         } catch {
             startWatching()
@@ -369,6 +440,56 @@ final class EditorBuffer {
            let mtime = attrs[.modificationDate] as? Date {
             originalMtime = mtime
         }
+        updateOriginalFileIdentity(from: url)
+    }
+
+    private func updateOriginalFileIdentity(from url: URL) {
+        guard let values = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey, .volumeIdentifierKey]),
+              let file = values.fileResourceIdentifier,
+              let volume = values.volumeIdentifier else {
+            originalFileIdentifier = nil
+            originalVolumeIdentifier = nil
+            return
+        }
+        originalFileIdentifier = file as AnyObject
+        originalVolumeIdentifier = volume as AnyObject
+    }
+
+    private func findMovedRelativePath() -> String? {
+        guard let originalFileIdentifier, let originalVolumeIdentifier else { return nil }
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .fileResourceIdentifierKey, .volumeIdentifierKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: worktreeRoot,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsPackageDescendants]
+        ) else { return nil }
+
+        for case let candidate as URL in enumerator {
+            if candidate.lastPathComponent == ".git" {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard let values = try? candidate.resourceValues(forKeys: keys),
+                  values.isRegularFile == true,
+                  let file = values.fileResourceIdentifier,
+                  let volume = values.volumeIdentifier,
+                  (file as AnyObject).isEqual(originalFileIdentifier),
+                  (volume as AnyObject).isEqual(originalVolumeIdentifier) else { continue }
+            return relativePath(for: candidate)
+        }
+        return nil
+    }
+
+    private func relativePath(for url: URL) -> String? {
+        let root = worktreeRoot.standardizedFileURL.path
+        let target = url.standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        guard target.hasPrefix(prefix) else { return nil }
+        return String(target.dropFirst(prefix.count))
+    }
+
+    private func oldURLRelativePath(from url: URL) -> String {
+        relativePath(for: url) ?? relativePath
     }
 
     private func notifyDidSave(url: URL) {
@@ -416,7 +537,13 @@ final class EditorBuffer {
         snapshotTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 750_000_000)
             guard let self, !Task.isCancelled else { return }
-            await MainActor.run { self.snapshotNow() }
+            await MainActor.run {
+                if let onSnapshotRequested = self.onSnapshotRequested {
+                    onSnapshotRequested()
+                } else {
+                    self.snapshotNow()
+                }
+            }
         }
     }
 
@@ -424,10 +551,11 @@ final class EditorBuffer {
     /// enabled (store/worktreeId/tabId all set on the production init).
     /// Safe to call from any state — clean buffers discard stale snapshots,
     /// while buffers without a store remain a no-op.
-    func snapshotNow() {
+    func snapshotNow(tabId overrideTabId: String? = nil) {
         guard let store, let worktreeId, let tabId else { return }
+        let snapshotTabId = overrideTabId ?? tabId
         guard dirty else {
-            discardSnapshot()
+            store.discard(worktreeId: worktreeId, tabId: snapshotTabId)
             return
         }
         let snap = EditorBufferStore.Snapshot(
@@ -437,10 +565,14 @@ final class EditorBuffer {
             originalMtime: originalMtime,
             lineEnding: lineEnding
         )
-        try? store.write(snap, worktreeId: worktreeId, tabId: tabId)
+        try? store.write(snap, worktreeId: worktreeId, tabId: snapshotTabId)
     }
 
     private func discardSnapshot() {
+        if let onDiscardSnapshotsRequested {
+            onDiscardSnapshotsRequested()
+            return
+        }
         guard let store, let worktreeId, let tabId else { return }
         store.discard(worktreeId: worktreeId, tabId: tabId)
     }
@@ -481,8 +613,13 @@ final class EditorBuffer {
         loading = true
         defer { loading = false }
         let url = worktreeRoot.appendingPathComponent(relativePath)
-        guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+        guard FileManager.default.fileExists(atPath: url.path) else {
             storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+            readOnly = true
+            return
+        }
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+            storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
             readOnly = true
             return
         }
@@ -497,6 +634,7 @@ final class EditorBuffer {
                 permissions = mode_t(nsPerms.uint16Value)
             }
         }
+        updateOriginalFileIdentity(from: url)
         readOnly = false
     }
 }
