@@ -15,6 +15,25 @@ struct CodePane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
+                SettingsGroup(title: "Appearance") {
+                    SettingsRow(name: "Font family") {
+                        FontFamilyPicker(
+                            family: state.bind(\.code.fontFamily),
+                            catalog: MonospaceFontCatalog.families()
+                        )
+                    }
+                    SettingsRow(name: "Font size") {
+                        AlasField(text: Binding(
+                            get: { String(state.config.code.fontSize) },
+                            set: {
+                                let raw = Int($0) ?? 13
+                                state.config.code.fontSize = max(8, min(64, raw))
+                                state.saveConfig()
+                            }
+                        ), monospaced: true).frame(width: 80)
+                    }
+                }
+
                 SettingsGroup(title: "Languages") {
                     ForEach(allEntries(), id: \.id) { entry in
                         SettingsRow(name: entry.language,
