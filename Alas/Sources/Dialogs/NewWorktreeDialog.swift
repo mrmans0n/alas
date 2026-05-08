@@ -3,6 +3,7 @@ import SwiftUI
 struct NewWorktreeDialog: View {
     @Bindable var state: AppState
     @Binding var presented: Bool
+    var presetProjectId: String? = nil
 
     @State private var projectId: String = ""
     // Defaults are seeded from the persisted Worktrees settings in .onAppear
@@ -69,7 +70,11 @@ struct NewWorktreeDialog: View {
         )
         .onAppear {
             if projectId.isEmpty {
-                projectId = state.projects.first?.id ?? ""
+                if let preset = presetProjectId, state.projects.contains(where: { $0.id == preset }) {
+                    projectId = preset
+                } else {
+                    projectId = state.projects.first?.id ?? ""
+                }
             }
             if base.isEmpty {
                 base = state.config.worktrees.baseBranch

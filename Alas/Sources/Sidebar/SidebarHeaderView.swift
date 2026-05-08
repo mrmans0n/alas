@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SidebarHeaderView: View {
     let onSettings: () -> Void
-    let onNewWorktree: () -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -22,7 +21,6 @@ struct SidebarHeaderView: View {
             // codex flagged correctly as misleading.
             HStack(spacing: 2) {
                 ToolbarBtn(icon: "gear", action: onSettings)
-                ToolbarBtn(icon: "plus", action: onNewWorktree)
             }
         }
         .padding(.horizontal, 12)
