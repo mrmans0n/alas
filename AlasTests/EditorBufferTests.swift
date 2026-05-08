@@ -617,6 +617,61 @@ struct EditorBufferTests {
         #expect(coordinator.diagnosticsFeature.current.isEmpty)
     }
 
+    @Test func coordinatorRebindRestoresCachedDiagnosticsForKnownURI() throws {
+        // Regression: the LSP server doesn't replay past publishDiagnostics
+        // batches to new subscribers. Without an in-coordinator cache, a
+        // tab switch to a previously-open file would lose its squiggles
+        // until the server happened to publish again. We cache every batch
+        // we see and restore from it on rebind.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        _ = try writeFile(root, "b.swift", "let b = 2\n")
+        let appState = AppState()
+        let bufferA = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: bufferA, layoutManager: layoutManager,
+            worktreeId: "wt", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Seed the per-URI cache as if the LSP had published diagnostics
+        // for A while we were attached.
+        let uriA = root.appendingPathComponent("a.swift").lspURI
+        let json = #"{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}},"severity":1,"message":"boom"}"#
+        let fakeDiag = try JSONDecoder().decode(LSPDiagnostic.self, from: Data(json.utf8))
+        coordinator.lastDiagnosticsByURI[uriA] = [fakeDiag]
+        coordinator.diagnosticsFeature.apply([fakeDiag], to: bufferA.storage, theme: theme)
+        #expect(bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil) != nil)
+
+        // Switch to B (no cached diagnostics for B), then back to A.
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "b.swift", tabId: "tab-b",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+        coordinator.updateIfNeeded(
+            worktreeId: "wt", worktreeRoot: root,
+            relativePath: "a.swift", tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        // Cached diagnostics for A should be re-applied to its storage —
+        // the underline attribute the diagnosticsFeature paints should be
+        // present again, even though no LSP server is running in this
+        // headless test.
+        let underline = bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil)
+        #expect(underline != nil)
+    }
+
     @Test func coordinatorPathChangeClearsTextViewUndoStack() throws {
         // Regression: NSTextView's undoManager survives across tab swaps
         // because CenterPaneView reuses the same text view. Without an

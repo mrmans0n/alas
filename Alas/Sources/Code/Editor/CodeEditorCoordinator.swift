@@ -27,6 +27,12 @@ final class CodeEditorCoordinator {
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
     let diagnosticsFeature = DiagnosticsFeature()
+    /// Most recent diagnostics batch the LSP server has published, keyed by
+    /// LSP URI. The server doesn't replay past batches to new subscribers,
+    /// so when a tab is rebound we restore from this cache; otherwise the
+    /// switched-to file would lose its squiggles until the server happens to
+    /// publish again. Internal so tests can seed it.
+    var lastDiagnosticsByURI: [String: [LSPDiagnostic]] = [:]
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
@@ -360,7 +366,14 @@ final class CodeEditorCoordinator {
         guard let buffer else { return }
         diagnosticsSetupTask?.cancel()
         diagnosticsTask?.cancel()
-        diagnosticsFeature.apply([], to: buffer.storage, theme: theme)
+        // Restore from cache instead of clearing. The LSP server doesn't
+        // replay past batches to new subscribers, so without this a tab
+        // switch would lose its squiggles until the server happened to
+        // republish (typically only after an edit/save). When there's no
+        // cached batch this still acts as the clear it used to be.
+        let bufferURI = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI
+        let cached = lastDiagnosticsByURI[bufferURI] ?? []
+        diagnosticsFeature.apply(cached, to: buffer.storage, theme: theme)
         guard let language = currentLanguage else { return }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         let root = buffer.worktreeRoot
@@ -386,9 +399,13 @@ final class CodeEditorCoordinator {
         diagnosticsTask?.cancel()
         diagnosticsTask = Task { [weak self] in
             for await batch in await client.subscribeDiagnostics() {
-                if batch.uri != uri { continue }
                 await MainActor.run {
-                    guard let self, let buffer = self.buffer else { return }
+                    guard let self else { return }
+                    // Cache every batch we see, not just the active URI's —
+                    // when a tab is rebound back to a previously-open file
+                    // we read this cache to restore its squiggles.
+                    self.lastDiagnosticsByURI[batch.uri] = batch.diagnostics
+                    guard batch.uri == uri, let buffer = self.buffer else { return }
                     self.diagnosticsFeature.apply(batch.diagnostics, to: buffer.storage, theme: theme)
                 }
             }
