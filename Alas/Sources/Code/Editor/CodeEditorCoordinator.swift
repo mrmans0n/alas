@@ -112,9 +112,10 @@ final class CodeEditorCoordinator {
             textView: textView,
             getClient: { [weak self] in
                 guard let self, let lang = self.currentLanguage else { return nil }
-                if self.currentExternalAbsolutePath != nil,
+                if let abs = self.currentExternalAbsolutePath,
                    let originating = self.currentOriginatingWorktreeRoot {
-                    return self.appState.lsp.client(forFile: originating, worktreeRoot: originating, language: lang)
+                    let absURL = URL(fileURLWithPath: abs)
+                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
                 }
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
@@ -132,9 +133,10 @@ final class CodeEditorCoordinator {
             textView: textView,
             getClient: { [weak self] in
                 guard let self, let lang = self.currentLanguage else { return nil }
-                if self.currentExternalAbsolutePath != nil,
+                if let abs = self.currentExternalAbsolutePath,
                    let originating = self.currentOriginatingWorktreeRoot {
-                    return self.appState.lsp.client(forFile: originating, worktreeRoot: originating, language: lang)
+                    let absURL = URL(fileURLWithPath: abs)
+                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
                 }
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
@@ -179,9 +181,10 @@ final class CodeEditorCoordinator {
             textView: textView,
             getClient: { [weak self] in
                 guard let self, let lang = self.currentLanguage else { return nil }
-                if self.currentExternalAbsolutePath != nil,
+                if let abs = self.currentExternalAbsolutePath,
                    let originating = self.currentOriginatingWorktreeRoot {
-                    return self.appState.lsp.client(forFile: originating, worktreeRoot: originating, language: lang)
+                    let absURL = URL(fileURLWithPath: abs)
+                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
                 }
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
@@ -217,7 +220,12 @@ final class CodeEditorCoordinator {
     }
 
     func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil) {
-        let nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        let nextLanguage: String?
+        if let abs = externalAbsolutePath {
+            nextLanguage = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
+        } else {
+            nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        }
         let pathChanged = currentWorktreeId != worktreeId
             || currentTabId != tabId
             || currentRoot != worktreeRoot
