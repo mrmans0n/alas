@@ -83,7 +83,9 @@ final class HoverHighlightFeature {
             try? await Task.sleep(nanoseconds: self?.debounceNanos ?? 0)
             guard !Task.isCancelled, let self else { return }
             let locations: [LSPLocation] = (try? await client.definition(uri: uri, position: position)) ?? []
-            await MainActor.run {
+            if Task.isCancelled { return }
+            await MainActor.run { [weak self] in
+                guard !Task.isCancelled, let self else { return }
                 if locations.isEmpty {
                     self.clearUnderline()
                     return

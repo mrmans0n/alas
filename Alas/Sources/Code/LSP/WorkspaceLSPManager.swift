@@ -430,9 +430,15 @@ final class WorkspaceLSPManager {
                 holders[key] = c
             }
         }
-        // NOTE: intentionally do NOT shut down the holder here. External
-        // documents attach to a running server that serves in-worktree tabs;
-        // their closure must not trigger server teardown.
+        // Shut down the server only when no refs remain. External documents
+        // attach to a running server that may also serve in-worktree tabs;
+        // skip teardown when in-worktree refs are still present. If the
+        // external doc was the last reference, the holder must be cleaned up
+        // to avoid leaking the LSP process until app exit.
+        if let c = holders[key], c.refsByURI.isEmpty {
+            await c.client.shutdown()
+            holders.removeValue(forKey: key)
+        }
     }
 
     /// Maps a file extension to its configured language id, or nil if no
