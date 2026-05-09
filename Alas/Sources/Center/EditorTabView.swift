@@ -8,6 +8,7 @@ struct EditorTabView: View {
     let revealLine: Int?
     let revealCharacter: Int?
     let appState: AppState
+    let externalAbsolutePath: String?
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -28,6 +29,7 @@ struct EditorTabView: View {
                 revealLine: revealLine,
                 revealCharacter: revealCharacter,
                 appState: appState,
+                externalAbsolutePath: externalAbsolutePath,
                 fontFamily: appState.config.code.fontFamily,
                 fontSize: appState.config.code.fontSize
             )

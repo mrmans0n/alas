@@ -23,6 +23,7 @@ final class CodeEditorCoordinator {
     private var currentFontFamily: String?
     private var currentFontSize: CGFloat?
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
+    private var currentExternalAbsolutePath: String?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -78,12 +79,13 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentTabId = tabId
         self.currentTheme = theme
+        self.currentExternalAbsolutePath = externalAbsolutePath
 
         let family = appState.config.code.fontFamily
         let size = CGFloat(appState.config.code.fontSize)
@@ -96,25 +98,45 @@ final class CodeEditorCoordinator {
 
         bindBuffer(buffer, theme: theme)
 
+        if buffer.isExternal {
+            textView.isEditable = false
+        }
+
         hover = HoverFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath, let lang = self.currentLanguage else { return nil }
+                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
+                if self.currentExternalAbsolutePath != nil {
+                    return self.appState.lsp.client(forFile: root, worktreeRoot: root, language: lang)
+                }
+                guard let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
             }
         )
         definition = DefinitionFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath, let lang = self.currentLanguage else { return nil }
+                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
+                if self.currentExternalAbsolutePath != nil {
+                    return self.appState.lsp.client(forFile: root, worktreeRoot: root, language: lang)
+                }
+                guard let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
             },
             openTarget: { [weak self] url, line, character in
@@ -142,27 +164,51 @@ final class CodeEditorCoordinator {
             getClient: { [weak self] in
                 guard let self,
                       let root = self.currentRoot,
-                      let rel = self.currentRelativePath,
                       let lang = self.currentLanguage else { return nil }
+                if self.currentExternalAbsolutePath != nil {
+                    return self.appState.lsp.client(forFile: root, worktreeRoot: root, language: lang)
+                }
+                guard let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
-                guard let self,
-                      let root = self.currentRoot,
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot,
                       let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
             }
         )
+
+        if buffer.isExternal,
+           let abs = currentExternalAbsolutePath,
+           let root = currentRoot,
+           let lang = currentLanguage {
+            let url = URL(fileURLWithPath: abs)
+            let contents = buffer.storage.string
+            Task { [appState = appState] in
+                await appState.lsp.openExternalDocument(
+                    absoluteURL: url,
+                    originatingWorktreeRoot: root,
+                    language: lang,
+                    contents: contents
+                )
+            }
+        }
+
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil) {
         let nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
         let pathChanged = currentWorktreeId != worktreeId
             || currentTabId != tabId
             || currentRoot != worktreeRoot
             || currentRelativePath != relativePath
             || currentLanguage != nextLanguage
+            || currentExternalAbsolutePath != externalAbsolutePath
 
         if pathChanged {
             didChangeTask?.cancel()
@@ -170,20 +216,70 @@ final class CodeEditorCoordinator {
             pendingTextEdits.removeAll()
             let session = highlightSession
             Task { await session.reset() }
+
+            // If switching away from an external, close the old LSP document.
+            if let oldAbs = currentExternalAbsolutePath,
+               let root = currentRoot,
+               let lang = currentLanguage,
+               oldAbs != externalAbsolutePath {
+                let url = URL(fileURLWithPath: oldAbs)
+                let appState = self.appState
+                Task {
+                    await appState.lsp.closeExternalDocument(
+                        absoluteURL: url,
+                        originatingWorktreeRoot: root,
+                        language: lang
+                    )
+                }
+            }
+
             currentWorktreeId = worktreeId
             currentTabId = tabId
+            currentExternalAbsolutePath = externalAbsolutePath
+
             // Fetch (and if needed, create) the buffer for the new tab and
             // re-bind the layout manager onto its storage. Without this swap
             // the text view keeps rendering the *previous* buffer's storage,
             // so every editor tab appears to show the file that was opened
             // first.
-            let nextBuffer = appState.tabs.buffer(
-                worktreeId: worktreeId,
-                tabId: tabId,
-                worktreeRoot: worktreeRoot,
-                relativePath: relativePath
-            )
+            let nextBuffer: EditorBuffer
+            if let abs = externalAbsolutePath {
+                nextBuffer = appState.tabs.externalBuffer(
+                    worktreeId: worktreeId,
+                    absoluteURL: URL(fileURLWithPath: abs)
+                )
+            } else {
+                nextBuffer = appState.tabs.buffer(
+                    worktreeId: worktreeId,
+                    tabId: tabId,
+                    worktreeRoot: worktreeRoot,
+                    relativePath: relativePath
+                )
+            }
             bindBuffer(nextBuffer, theme: theme)
+
+            if nextBuffer.isExternal {
+                textView?.isEditable = false
+            } else {
+                textView?.isEditable = true
+            }
+
+            // If switching to a new external, open its LSP document.
+            if nextBuffer.isExternal,
+               let abs = externalAbsolutePath,
+               let root = currentRoot,
+               let lang = currentLanguage {
+                let url = URL(fileURLWithPath: abs)
+                let contents = nextBuffer.storage.string
+                Task { [appState = appState] in
+                    await appState.lsp.openExternalDocument(
+                        absoluteURL: url,
+                        originatingWorktreeRoot: root,
+                        language: lang,
+                        contents: contents
+                    )
+                }
+            }
         }
 
         if currentTheme != theme {
@@ -248,6 +344,20 @@ final class CodeEditorCoordinator {
     }
 
     func detach() {
+        if let abs = currentExternalAbsolutePath,
+           let root = currentRoot,
+           let lang = currentLanguage {
+            let url = URL(fileURLWithPath: abs)
+            let appState = self.appState
+            Task {
+                await appState.lsp.closeExternalDocument(
+                    absoluteURL: url,
+                    originatingWorktreeRoot: root,
+                    language: lang
+                )
+            }
+        }
+        currentExternalAbsolutePath = nil
         if let buffer, let token = editObserverToken {
             buffer.removeOnEdit(token)
         }

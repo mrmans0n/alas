@@ -15,6 +15,7 @@ struct CodeEditorView: NSViewRepresentable {
     let revealLine: Int?
     let revealCharacter: Int?
     let appState: AppState
+    let externalAbsolutePath: String?
     /// Pulled from `appState.config.code.fontFamily` by the parent view's
     /// body so SwiftUI registers the dependency. NSViewRepresentable hooks
     /// (makeNSView/updateNSView) are not part of body evaluation, so reads
@@ -37,12 +38,20 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(theme.color("bg-1"))
 
-        let buffer = appState.tabs.buffer(
-            worktreeId: worktreeId,
-            tabId: tabId,
-            worktreeRoot: worktreeRoot,
-            relativePath: relativePath
-        )
+        let buffer: EditorBuffer
+        if let abs = externalAbsolutePath {
+            buffer = appState.tabs.externalBuffer(
+                worktreeId: worktreeId,
+                absoluteURL: URL(fileURLWithPath: abs)
+            )
+        } else {
+            buffer = appState.tabs.buffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath
+            )
+        }
 
         // Build the TextKit 1 chain. The coordinator owns the
         // storage<->layoutManager binding (see `bindBuffer`) so that swapping
@@ -82,7 +91,8 @@ struct CodeEditorView: NSViewRepresentable {
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
-            theme: theme
+            theme: theme,
+            externalAbsolutePath: externalAbsolutePath
         )
         return scroll
     }
@@ -95,7 +105,8 @@ struct CodeEditorView: NSViewRepresentable {
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
-            theme: theme
+            theme: theme,
+            externalAbsolutePath: externalAbsolutePath
         )
     }
 
