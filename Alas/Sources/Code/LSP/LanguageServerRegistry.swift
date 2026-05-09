@@ -28,6 +28,55 @@ struct LanguageServerRegistry {
             env: [:],
             rootMarkers: ["Package.swift", "*.xcodeproj", ".git"],
             enabled: true
+        ),
+        LanguageServerConfig(
+            language: "rust",
+            extensions: ["rs"],
+            command: "rust-analyzer",
+            args: [],
+            env: [:],
+            rootMarkers: ["Cargo.toml", "rust-project.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "kotlin",
+            extensions: ["kt", "kts"],
+            command: "kotlin-lsp",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: [
+                "build.gradle.kts", "build.gradle",
+                "settings.gradle.kts", "settings.gradle",
+                "pom.xml", ".git"
+            ],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "markdown",
+            extensions: ["md", "markdown"],
+            command: "marksman",
+            args: ["server"],
+            env: [:],
+            rootMarkers: [".marksman.toml", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "typescript",
+            extensions: ["ts", "tsx", "js", "jsx", "mjs", "cjs"],
+            command: "typescript-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["tsconfig.json", "jsconfig.json", "package.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "json",
+            extensions: ["json", "jsonc"],
+            command: "vscode-json-languageserver",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["package.json", ".git"],
+            enabled: true
         )
     ]
 

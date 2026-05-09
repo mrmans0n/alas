@@ -40,6 +40,12 @@ struct LanguageServerRegistryTests {
     func byExtension() {
         let r = LanguageServerRegistry(userDefined: [])
         #expect(r.language(forFileExtension: "swift") == "swift")
-        #expect(r.language(forFileExtension: "rs") == nil)
+        #expect(r.language(forFileExtension: "rs") == "rust")
+        #expect(r.language(forFileExtension: "kt") == "kotlin")
+        #expect(r.language(forFileExtension: "md") == "markdown")
+        #expect(r.language(forFileExtension: "ts") == "typescript")
+        #expect(r.language(forFileExtension: "tsx") == "typescript")
+        #expect(r.language(forFileExtension: "json") == "json")
+        #expect(r.language(forFileExtension: "xyz") == nil)
     }
 }
