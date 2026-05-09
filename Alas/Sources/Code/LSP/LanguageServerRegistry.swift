@@ -68,7 +68,7 @@ struct LanguageServerRegistry {
         // registry entry; they all spawn the same binary.
         LanguageServerConfig(
             language: "typescript",
-            extensions: ["ts"],
+            extensions: ["ts", "mts", "cts"],
             command: "typescript-language-server",
             args: ["--stdio"],
             env: [:],
