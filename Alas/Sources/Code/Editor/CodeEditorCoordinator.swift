@@ -23,6 +23,9 @@ final class CodeEditorCoordinator {
     private var currentFontFamily: String?
     private var currentFontSize: CGFloat?
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
+    private var currentExternalAbsolutePath: String?
+    private var currentOriginatingWorktreeRoot: URL?
+    private var currentOriginatingRelativePath: String?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -36,6 +39,7 @@ final class CodeEditorCoordinator {
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
+    private var hoverHighlight: HoverHighlightFeature?
 
     private var editObserverToken: EditorBuffer.EditObserverToken?
     private var didChangeTask: Task<Void, Never>?
@@ -77,12 +81,20 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentTabId = tabId
         self.currentTheme = theme
+        self.currentExternalAbsolutePath = externalAbsolutePath
+        if externalAbsolutePath != nil {
+            currentOriginatingWorktreeRoot = worktreeRoot
+            currentOriginatingRelativePath = originatingRelativePath
+        } else {
+            currentOriginatingWorktreeRoot = nil
+            currentOriginatingRelativePath = nil
+        }
 
         let family = appState.config.code.fontFamily
         let size = CGFloat(appState.config.code.fontSize)
@@ -95,78 +107,220 @@ final class CodeEditorCoordinator {
 
         bindBuffer(buffer, theme: theme)
 
+        if buffer.isExternal {
+            textView.isEditable = false
+        }
+
         hover = HoverFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath, let lang = self.currentLanguage else { return nil }
+                guard let self, let lang = self.currentLanguage else { return nil }
+                if let abs = self.currentExternalAbsolutePath,
+                   let originating = self.currentOriginatingWorktreeRoot {
+                    let absURL = URL(fileURLWithPath: abs)
+                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
             }
         )
         definition = DefinitionFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath, let lang = self.currentLanguage else { return nil }
+                guard let self, let lang = self.currentLanguage else { return nil }
+                if let abs = self.currentExternalAbsolutePath,
+                   let originating = self.currentOriginatingWorktreeRoot {
+                    let absURL = URL(fileURLWithPath: abs)
+                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
-                guard let self, let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
             },
             openTarget: { [weak self] url, line, character in
-                guard let self, let root = self.currentRoot, let wid = self.currentWorktreeId else { return }
-                // Targets outside the current worktree (SDK headers,
-                // DerivedData, modulemap files) are dropped on the floor for
-                // now — `appendingPathComponent` would treat the absolute
-                // path as a sub-path of the worktree and the editor would
-                // open a bogus `<worktree>/<abs>` location. v1.5 will route
-                // these via absolute URLs so they can be opened in a new tab.
+                guard let self,
+                      let wid = self.currentWorktreeId else { return }
+                // For external buffers, the originating worktree root is the
+                // anchor for in-worktree-vs-external classification, not the
+                // sentinel that bindBuffer set on currentRoot.
+                let anchor = self.currentOriginatingWorktreeRoot ?? self.currentRoot
+                guard let root = anchor else { return }
                 let abs = url.path
                 let prefix = root.path + "/"
-                guard abs.hasPrefix(prefix) else { return }
-                let rel = String(abs.dropFirst(prefix.count))
-                self.appState.tabs.openEditor(
-                    worktreeId: wid,
-                    relativePath: rel,
-                    revealLine: line,
-                    revealCharacter: character
-                )
+                if abs.hasPrefix(prefix) {
+                    let rel = String(abs.dropFirst(prefix.count))
+                    self.appState.tabs.openEditor(
+                        worktreeId: wid,
+                        relativePath: rel,
+                        revealLine: line,
+                        revealCharacter: character
+                    )
+                } else {
+                    // Pass the current in-worktree file as the originating
+                    // path so LSP traffic for the external file is routed to
+                    // the correct holder in nested-package layouts.
+                    // Also pass the worktree root and language so TabsManager
+                    // can rebind the LSP holder even when the tab is inactive.
+                    let originatingRel = self.currentExternalAbsolutePath == nil
+                        ? self.currentRelativePath
+                        : self.currentOriginatingRelativePath
+                    let originatingRoot = self.currentOriginatingWorktreeRoot ?? self.currentRoot
+                    let lang = self.currentLanguage
+                    self.appState.tabs.openExternalEditor(
+                        worktreeId: wid,
+                        absoluteURL: url,
+                        revealLine: line,
+                        revealCharacter: character,
+                        originatingRelativePath: originatingRel,
+                        originatingWorktreeRoot: originatingRoot,
+                        language: lang
+                    )
+                }
             }
         )
+        hoverHighlight = HoverHighlightFeature(
+            textView: textView,
+            getClient: { [weak self] in
+                guard let self, let lang = self.currentLanguage else { return nil }
+                if let abs = self.currentExternalAbsolutePath,
+                   let originating = self.currentOriginatingWorktreeRoot {
+                    let absURL = URL(fileURLWithPath: abs)
+                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
+            },
+            getURI: { [weak self] in
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot,
+                      let rel = self.currentRelativePath else { return nil }
+                return root.appendingPathComponent(rel).lspURI
+            }
+        )
+
+        // LSP open/close for external buffers is managed by TabsManager
+        // (tied to the buffer's cached lifetime), not by the coordinator
+        // (which is torn down on every tab switch by SwiftUI's dismantleNSView).
+        // However, the initial open may have found no holder if the language
+        // server hadn't started yet (e.g. persisted external tab restored
+        // before any in-worktree file launches the server). Retry here so
+        // that when the coordinator re-attaches after a server is up,
+        // hover and ⌘-click start working without the user closing the tab.
+        if externalAbsolutePath != nil {
+            appState.tabs.ensureExternalLSPOpen(tabId: tabId)
+        }
+
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme) {
-        let nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
-        let pathChanged = currentWorktreeId != worktreeId
-            || currentTabId != tabId
-            || currentRoot != worktreeRoot
-            || currentRelativePath != relativePath
-            || currentLanguage != nextLanguage
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
+        let nextLanguage: String?
+        if let abs = externalAbsolutePath {
+            nextLanguage = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
+        } else {
+            nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        }
+
+        let pathChanged: Bool
+        if externalAbsolutePath != nil || currentExternalAbsolutePath != nil {
+            // External-tab identity: only the (worktree, tabId, abs path) tuple matters.
+            // Don't compare currentRoot/currentRelativePath against the in-worktree
+            // worktreeRoot/relativePath — bindBuffer set them to sentinel values for
+            // the external buffer, which will never equal the parameters here.
+            // The || currentExternalAbsolutePath != nil clause catches the
+            // in-worktree-to-external and external-to-in-worktree transitions.
+            pathChanged = currentWorktreeId != worktreeId
+                || currentTabId != tabId
+                || currentExternalAbsolutePath != externalAbsolutePath
+                || currentOriginatingRelativePath != originatingRelativePath
+        } else {
+            pathChanged = currentWorktreeId != worktreeId
+                || currentTabId != tabId
+                || currentRoot != worktreeRoot
+                || currentRelativePath != relativePath
+                || currentLanguage != nextLanguage
+        }
 
         if pathChanged {
+            hoverHighlight?.cancelAndClear()
             didChangeTask?.cancel()
             hasPendingDidChange = false
             pendingTextEdits.removeAll()
             let session = highlightSession
             Task { await session.reset() }
+
             currentWorktreeId = worktreeId
             currentTabId = tabId
+            currentExternalAbsolutePath = externalAbsolutePath
+            if externalAbsolutePath != nil {
+                currentOriginatingWorktreeRoot = worktreeRoot
+                currentOriginatingRelativePath = originatingRelativePath
+            } else {
+                currentOriginatingWorktreeRoot = nil
+                currentOriginatingRelativePath = nil
+            }
+
             // Fetch (and if needed, create) the buffer for the new tab and
             // re-bind the layout manager onto its storage. Without this swap
             // the text view keeps rendering the *previous* buffer's storage,
             // so every editor tab appears to show the file that was opened
             // first.
-            let nextBuffer = appState.tabs.buffer(
-                worktreeId: worktreeId,
-                tabId: tabId,
-                worktreeRoot: worktreeRoot,
-                relativePath: relativePath
-            )
+            let nextBuffer: EditorBuffer
+            if let abs = externalAbsolutePath {
+                let absURL = URL(fileURLWithPath: abs)
+                let originatingFileURL: URL? = originatingRelativePath.flatMap {
+                    worktreeRoot.appendingPathComponent($0)
+                }
+                let language = appState.lsp.language(
+                    forFileExtension: (abs as NSString).pathExtension
+                )
+                nextBuffer = appState.tabs.externalBuffer(
+                    worktreeId: worktreeId,
+                    tabId: tabId,
+                    absoluteURL: absURL,
+                    worktreeRoot: worktreeRoot,
+                    originatingFileURL: originatingFileURL,
+                    language: language
+                )
+            } else {
+                nextBuffer = appState.tabs.buffer(
+                    worktreeId: worktreeId,
+                    tabId: tabId,
+                    worktreeRoot: worktreeRoot,
+                    relativePath: relativePath
+                )
+            }
             bindBuffer(nextBuffer, theme: theme)
+
+            if nextBuffer.isExternal {
+                textView?.isEditable = false
+            } else {
+                textView?.isEditable = true
+            }
+            // Note: origin-change rebinding (close-old-holder / open-new-holder)
+            // is now handled entirely by TabsManager.rebindExternalLSPHolder,
+            // which runs at openExternalEditor() time regardless of tab activation.
+            // The coordinator's externalBuffer() call above drives
+            // ensureExternalLSPOpen for the common case where the tab is active
+            // but the origin didn't change (normal tab switch).
         }
 
         if currentTheme != theme {
@@ -231,6 +385,13 @@ final class CodeEditorCoordinator {
     }
 
     func detach() {
+        // LSP open/close for external buffers is managed by TabsManager
+        // (tied to the buffer's cached lifetime), not by the coordinator
+        // (which is torn down on every tab switch by SwiftUI's dismantleNSView).
+        // Do NOT call closeExternalDocument here.
+        currentExternalAbsolutePath = nil
+        currentOriginatingWorktreeRoot = nil
+        currentOriginatingRelativePath = nil
         if let buffer, let token = editObserverToken {
             buffer.removeOnEdit(token)
         }
@@ -252,6 +413,11 @@ final class CodeEditorCoordinator {
         layoutManager = nil
         hover = nil
         definition = nil
+        hoverHighlight = nil
+        textView?.hoverHandler = nil
+        textView?.commandClickHandler = nil
+        textView?.flagsChangedHandler = nil
+        textView?.mouseExitedHandler = nil
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil

@@ -280,12 +280,8 @@ final class WorkspaceLSPManager {
     /// package's client is found correctly even when the caller only knows
     /// the worktree root.
     func client(forFile fileURL: URL, worktreeRoot: URL, language: String) -> LSPClient? {
-        // Look up by URI so a server opened under a now-edited entry is
-        // still findable by hover/diagnostic callers. `worktreeRoot` and
-        // `language` are kept on the signature for source compatibility
-        // and aren't needed once a holder exists for the file.
         let uri = fileURL.lspURI
-        guard let key = holderKey(forURI: uri) else { return nil }
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return nil }
         return holders[key]?.client
     }
 
@@ -298,6 +294,204 @@ final class WorkspaceLSPManager {
             return key
         }
         return nil
+    }
+
+    /// Worktree-scoped variant: returns a holder for `uri` only if its
+    /// `Key.root` falls inside `worktreeRoot`. Used as the last fallback in
+    /// external open/close so a tab in worktree B never matches a holder in
+    /// worktree A that happens to serve the same SDK file.
+    private func holderKey(forURI uri: String, withinWorktreeRoot worktreeRoot: URL) -> Key? {
+        let rootPath = worktreeRoot.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        for (key, holder) in holders where holder.refsByURI[uri] != nil {
+            if key.root == rootPath || key.root.hasPrefix(rootPrefix) {
+                return key
+            }
+        }
+        return nil
+    }
+
+    /// Find an existing holder serving any file inside `worktreeRoot` for
+    /// `language`. Used by external-document open/close where we don't have
+    /// an in-worktree file URI on hand but know the originating worktree.
+    ///
+    /// Unlike the old `holderKey(forWorktreeRoot:language:)` helper, this
+    /// scans existing holders instead of recomputing the key from scratch.
+    /// That matters for workspaces with nested packages: the running holder
+    /// was keyed against the nested package directory, not the worktree root,
+    /// so a recomputed lookup would miss it.
+    private func holderKeyForExternal(worktreeRoot: URL, language: String) -> Key? {
+        guard let entry = registry.entry(forLanguage: language) else { return nil }
+        let worktreePath = worktreeRoot.path
+        let pathPrefix = worktreePath.hasSuffix("/") ? worktreePath : worktreePath + "/"
+        for (key, holder) in holders {
+            guard key.command == entry.command,
+                  key.args == entry.args,
+                  key.env == entry.env else { continue }
+            // The holder's lspRoot may be the worktree itself or a nested
+            // package directory inside it. Either way, its path must start
+            // with the worktree path.
+            if key.root == worktreePath || key.root.hasPrefix(pathPrefix) {
+                return key
+            }
+            // Fallback: if the holder has any open URI inside the worktree,
+            // it's serving this workspace.
+            for uri in holder.refsByURI.keys {
+                if let url = URL(string: uri),
+                   url.path.hasPrefix(pathPrefix) {
+                    return key
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Notify the running LSP client for `originatingWorktreeRoot`/`language`
+    /// that a read-only out-of-worktree file is logically open. Issues
+    /// `textDocument/didOpen` the first time a given URI is registered and
+    /// increments a reference count for subsequent calls with the same URI.
+    ///
+    /// `originatingFileURL` is the in-worktree file the user was viewing when
+    /// they navigated to this external document (e.g. via ⌘-click). When
+    /// provided, the holder is looked up via the existing URI-keyed helper
+    /// (`holderKey(forURI:)`) so nested-package layouts with multiple LSP
+    /// servers resolve to the correct server. Falls back to the prefix-scan
+    /// approach when nil or when the originating file's URI isn't tracked yet
+    /// (e.g. app restart with persisted external tabs).
+    ///
+    /// Returns `true` when a holder was found and `didOpen` was sent (or the
+    /// URI was already open with a positive refcount). Returns `false` when no
+    /// holder was available — the call silently no-ops in that case and the
+    /// caller can retry later.
+    @discardableResult
+    func openExternalDocument(
+        absoluteURL: URL,
+        originatingWorktreeRoot: URL,
+        originatingFileURL: URL? = nil,
+        language: String,
+        contents: String
+    ) async -> Bool {
+        let uri = absoluteURL.lspURI
+        let key: Key?
+        if let originatingFileURL,
+           let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
+            key = preciseKey
+        } else {
+            // Fall back to prefix-scan; also try scanning by the external
+            // URI itself. Use worktree-scoped lookup as the last fallback
+            // to avoid matching a holder in a different worktree that
+            // happens to serve the same SDK file.
+            key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language) ?? holderKey(forURI: uri, withinWorktreeRoot: originatingWorktreeRoot)
+        }
+        guard let key, var holder = holders[key] else { return false }
+
+        // Bump refcount and record pending text in case the server is still
+        // initializing — the same approach used by openDocument for in-worktree
+        // files.
+        var refs = holder.refsByURI
+        refs[uri, default: 0] += 1
+        var pending = holder.pendingOpenText
+        if !holder.openedURIs.contains(uri) { pending[uri] = contents }
+        holder.refsByURI = refs
+        holder.pendingOpenText = pending
+        holders[key] = holder
+
+        let initOk = await holder.ready.value
+        guard initOk, let cur = holders[key], cur.client === holder.client,
+              (cur.refsByURI[uri] ?? 0) > 0 else { return false }
+
+        if !cur.openedURIs.contains(uri) {
+            let openText = cur.pendingOpenText[uri] ?? contents
+            if var h = holders[key] {
+                h.openedURIs.insert(uri)
+                h.versions[uri] = 1
+                h.pendingOpenText.removeValue(forKey: uri)
+                h.texts[uri] = openText
+                holders[key] = h
+            }
+            try? await cur.client.didOpen(
+                uri: uri,
+                languageId: language,
+                version: 1,
+                text: openText
+            )
+        }
+        return true
+    }
+
+    /// Notify the running LSP client that a previously opened external
+    /// (out-of-worktree) document is no longer needed. Decrements the
+    /// reference count incremented by `openExternalDocument`; when it reaches
+    /// zero, issues `textDocument/didClose`.
+    ///
+    /// `originatingFileURL` mirrors the parameter on `openExternalDocument`:
+    /// when provided, the holder is found via URI lookup for precision in
+    /// nested-package layouts. Falls back to the prefix-scan approach when
+    /// nil or not yet tracked.
+    ///
+    /// Silently no-ops if no LSP client is running for the given worktree and
+    /// language, or if the URI was never opened.
+    func closeExternalDocument(
+        absoluteURL: URL,
+        originatingWorktreeRoot: URL,
+        originatingFileURL: URL? = nil,
+        language: String
+    ) async {
+        let uri = absoluteURL.lspURI
+        let key: Key?
+        if let originatingFileURL,
+           let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
+            key = preciseKey
+        } else {
+            // Scan the external URI itself first (scoped to the worktree) to
+            // ensure we decrement the correct holder. Only fall back to the
+            // language-by-worktree scan if the URI isn't found in any holder's
+            // refsByURI — with multiple nested LSP holders for the same language,
+            // the prefix-scan could pick an arbitrary holder that doesn't actually
+            // have this URI registered, leaving the ref count imbalanced.
+            key = holderKey(forURI: uri, withinWorktreeRoot: originatingWorktreeRoot) ?? holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language)
+        }
+        guard let key,
+              var holder = holders[key],
+              (holder.refsByURI[uri] ?? 0) > 0 else { return }
+
+        // Decrement the refcount synchronously before awaiting.
+        var refs = holder.refsByURI
+        let newRef = (refs[uri] ?? 0) - 1
+        if newRef <= 0 {
+            refs.removeValue(forKey: uri)
+        } else {
+            refs[uri] = newRef
+        }
+        holder.refsByURI = refs
+        holders[key] = holder
+
+        let initOk = await holder.ready.value
+        guard initOk, let cur = holders[key] else { return }
+
+        // Another opener still has this URI open — nothing to send.
+        if (cur.refsByURI[uri] ?? 0) > 0 { return }
+
+        // Send didClose only if didOpen was actually delivered.
+        if cur.openedURIs.contains(uri) {
+            try? await cur.client.didClose(uri: uri)
+            if var c = holders[key] {
+                c.openedURIs.remove(uri)
+                c.versions.removeValue(forKey: uri)
+                c.pendingOpenText.removeValue(forKey: uri)
+                c.texts.removeValue(forKey: uri)
+                holders[key] = c
+            }
+        }
+        // Shut down the server only when no refs remain. External documents
+        // attach to a running server that may also serve in-worktree tabs;
+        // skip teardown when in-worktree refs are still present. If the
+        // external doc was the last reference, the holder must be cleaned up
+        // to avoid leaking the LSP process until app exit.
+        if let c = holders[key], c.refsByURI.isEmpty {
+            await c.client.shutdown()
+            holders.removeValue(forKey: key)
+        }
     }
 
     /// Maps a file extension to its configured language id, or nil if no

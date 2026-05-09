@@ -20,6 +20,29 @@ final class TabsManager {
     private let bufferStore: EditorBufferStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
     private var bufferKeys: [TabID: BufferKey] = [:]
+    /// Tracks the absolute URL for external (out-of-worktree) tabs so that
+    /// `discardBuffer(worktreeId:tabId:)` can tear them down too.
+    private var externalTabURLs: [TabID: (worktreeId: String, url: URL)] = [:]
+    /// LSP parameters recorded when `externalBuffer` fires `openExternalDocument`
+    /// so that `discardBuffer` can issue the matching `closeExternalDocument`.
+    private struct ExternalLSPInfo: Equatable {
+        var worktreeRoot: URL
+        var originatingFileURL: URL?
+        var language: String
+    }
+    private var externalLSPInfo: [TabID: ExternalLSPInfo] = [:]
+    /// Tracks which tab IDs have already had `openExternalDocument` fired so
+    /// that cache-hit calls to `externalBuffer` don't double-count the ref.
+    private var openedExternalDocs: Set<TabID> = []
+    /// Tracks in-flight `openExternalDocument` Tasks keyed by tabId.
+    /// Cancellation on `discardBuffer` prevents a completed-but-unregistered
+    /// open from leaking the URI if the tab was closed before the Task landed.
+    private var pendingExternalOpenTasks: [TabID: Task<Void, Never>] = [:]
+    /// Generation counter per tab for the pending open task. When a rebind
+    /// cancels and replaces the task, the generation increments. The task's
+    /// completion handler only clears pendingExternalOpenTasks if its
+    /// captured generation still matches the current one.
+    private var pendingExternalOpenGen: [TabID: Int] = [:]
     private let lsp: WorkspaceLSPManager?
 
     init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
@@ -108,6 +131,118 @@ final class TabsManager {
         let tab = Tab.editor(state)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    /// Open or focus an editor tab for an absolute URL outside the
+    /// worktree (SDK headers, dependencies). Reuse-or-create keyed by
+    /// absolute path. The tab is "owned" by `worktreeId` so closing the
+    /// worktree cascades.
+    ///
+    /// `originatingRelativePath` is the worktree-relative path of the
+    /// in-worktree file from which the user navigated here (e.g. via
+    /// ⌘-click). Stored on the tab so that LSP traffic for this external
+    /// file is routed to the correct holder in nested-package layouts.
+    ///
+    /// `originatingWorktreeRoot` and `language` are used to rebind the
+    /// external LSP holder when reusing an existing tab from a different
+    /// origin package, even while the tab is inactive.
+    @discardableResult
+    func openExternalEditor(
+        worktreeId: String,
+        absoluteURL: URL,
+        revealLine: Int?,
+        revealCharacter: Int?,
+        originatingRelativePath: String? = nil,
+        originatingWorktreeRoot: URL? = nil,
+        language: String? = nil
+    ) -> Tab {
+        let absPath = absoluteURL.path
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .editor(let s) = $0 { return s.externalAbsolutePath == absPath }
+               return false
+           }) {
+            if case .editor(var s) = file.tabs[idx] {
+                let originChanged = (s.originatingRelativePath != originatingRelativePath)
+                s.revealLine = revealLine
+                s.revealCharacter = revealCharacter
+                s.originatingRelativePath = originatingRelativePath   // refresh the origin
+                file.tabs[idx] = .editor(s)
+                file.activeTabId = s.id
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+                if originChanged, let originatingWorktreeRoot, let language {
+                    rebindExternalLSPHolder(
+                        tabId: s.id,
+                        absoluteURL: absoluteURL,
+                        worktreeRoot: originatingWorktreeRoot,
+                        originatingFileURL: originatingRelativePath.flatMap {
+                            originatingWorktreeRoot.appendingPathComponent($0)
+                        },
+                        language: language
+                    )
+                }
+                return .editor(s)
+            }
+        }
+        let title = absoluteURL.lastPathComponent
+        let state = EditorTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: "",
+            revealLine: revealLine,
+            revealCharacter: revealCharacter,
+            externalAbsolutePath: absPath,
+            originatingRelativePath: originatingRelativePath
+        )
+        let tab = Tab.editor(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    /// Rebind an external tab's LSP holder when the originating in-worktree
+    /// file changes (e.g. the user ⌘-clicked the same SDK file from a
+    /// different package while the external tab was inactive). Operates
+    /// regardless of whether the tab is currently active, so the fix applies
+    /// even when the coordinator's `updateIfNeeded` path is never reached.
+    private func rebindExternalLSPHolder(
+        tabId: TabID,
+        absoluteURL: URL,
+        worktreeRoot: URL,
+        originatingFileURL: URL?,
+        language: String
+    ) {
+        let oldInfo = externalLSPInfo[tabId]
+        let newInfo = ExternalLSPInfo(
+            worktreeRoot: worktreeRoot,
+            originatingFileURL: originatingFileURL,
+            language: language
+        )
+        externalLSPInfo[tabId] = newInfo
+
+        // Cancel any in-flight open targeting the old holder so its completion
+        // handler can no longer record openedExternalDocs for a stale holder.
+        pendingExternalOpenTasks[tabId]?.cancel()
+        pendingExternalOpenTasks[tabId] = nil
+        pendingExternalOpenGen[tabId] = nil
+
+        // If we already opened against the OLD holder, close that ref now.
+        if openedExternalDocs.contains(tabId), let old = oldInfo {
+            let lsp = self.lsp
+            Task { [lsp, old] in
+                await lsp?.closeExternalDocument(
+                    absoluteURL: absoluteURL,
+                    originatingWorktreeRoot: old.worktreeRoot,
+                    originatingFileURL: old.originatingFileURL,
+                    language: old.language
+                )
+            }
+        }
+
+        // Clear the opened flag so ensureExternalLSPOpen retries against the
+        // new holder even if the tab was already open against the old one.
+        openedExternalDocs.remove(tabId)
+        ensureExternalLSPOpen(tabId: tabId)
     }
 
     @discardableResult
@@ -269,6 +404,111 @@ final class TabsManager {
         return buffer
     }
 
+    /// Returns (or creates) a read-only external buffer keyed by absolute URL.
+    /// Registering `tabId` in `externalTabURLs` ensures that the normal
+    /// `discardBuffer(worktreeId:tabId:)` close-tab path tears the buffer
+    /// down and stops its file watcher.
+    ///
+    /// Fires `openExternalDocument` via the LSP manager so the holder's
+    /// reference count is tied to the buffer's lifetime, not the
+    /// `CodeEditorView`'s. The open is retried on every call until a holder
+    /// is found — this handles the case where a persisted external tab is
+    /// restored before any in-worktree file has started the language server.
+    func externalBuffer(
+        worktreeId: String,
+        tabId: TabID,
+        absoluteURL: URL,
+        worktreeRoot: URL? = nil,
+        originatingFileURL: URL? = nil,
+        language: String? = nil
+    ) -> EditorBuffer {
+        externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
+        let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
+        buffer.startWatching()
+
+        if let root = worktreeRoot, let lang = language {
+            externalLSPInfo[tabId] = ExternalLSPInfo(
+                worktreeRoot: root,
+                originatingFileURL: originatingFileURL,
+                language: lang
+            )
+        }
+
+        ensureExternalLSPOpen(tabId: tabId)
+
+        return buffer
+    }
+
+    /// Attempts to open the LSP document for `tabId` if it hasn't been opened
+    /// yet. Idempotent: no-ops if already opened or if an open is already in
+    /// flight. Retries silently until a holder is available — this covers the
+    /// case where a persisted external tab is restored before any in-worktree
+    /// file has started the language server.
+    func ensureExternalLSPOpen(tabId: TabID) {
+        guard !openedExternalDocs.contains(tabId), pendingExternalOpenTasks[tabId] == nil else { return }
+        guard let lsp,
+              let info = externalLSPInfo[tabId],
+              let entry = externalTabURLs[tabId] else { return }
+        let absoluteURL = entry.url
+        let contents = bufferStore.externalBuffer(worktreeId: entry.worktreeId, absoluteURL: absoluteURL).storage.string
+        // Capture the info snapshot this Task is opening against so the completion
+        // can detect a mid-flight rebind and undo the open on the old holder.
+        let snapshot = info
+        let gen = (pendingExternalOpenGen[tabId] ?? 0) + 1
+        pendingExternalOpenGen[tabId] = gen
+        let task = Task { [weak self] in
+            let opened = await lsp.openExternalDocument(
+                absoluteURL: absoluteURL,
+                originatingWorktreeRoot: snapshot.worktreeRoot,
+                originatingFileURL: snapshot.originatingFileURL,
+                language: snapshot.language,
+                contents: contents
+            )
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // Only clear our own entry — a rebind may have installed a successor.
+                if self.pendingExternalOpenGen[tabId] == gen {
+                    self.pendingExternalOpenTasks[tabId] = nil
+                }
+                // If the tab was discarded while the open was in flight, undo it
+                // against the snapshot we actually opened against, so the URI
+                // doesn't leak on the holder until app exit.
+                if self.externalTabURLs[tabId] == nil {
+                    if opened {
+                        Task { [lsp, snapshot] in
+                            await lsp.closeExternalDocument(
+                                absoluteURL: absoluteURL,
+                                originatingWorktreeRoot: snapshot.worktreeRoot,
+                                originatingFileURL: snapshot.originatingFileURL,
+                                language: snapshot.language
+                            )
+                        }
+                    }
+                    return
+                }
+                // Info changed mid-flight (rebind). Undo the open against the
+                // snapshot so the old holder's ref is balanced. Don't touch
+                // openedExternalDocs — the rebind's ensureExternalLSPOpen call
+                // (issued after the rebind) will register the new holder.
+                if let current = self.externalLSPInfo[tabId], current != snapshot {
+                    if opened {
+                        Task { [lsp, snapshot] in
+                            await lsp.closeExternalDocument(
+                                absoluteURL: absoluteURL,
+                                originatingWorktreeRoot: snapshot.worktreeRoot,
+                                originatingFileURL: snapshot.originatingFileURL,
+                                language: snapshot.language
+                            )
+                        }
+                    }
+                    return
+                }
+                if opened { self.openedExternalDocs.insert(tabId) }
+            }
+        }
+        pendingExternalOpenTasks[tabId] = task
+    }
+
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
     /// dirty-tab queries.
     func peekBuffer(tabId: TabID) -> EditorBuffer? {
@@ -291,6 +531,34 @@ final class TabsManager {
     /// wrong worktree context surfaces immediately rather than silently
     /// mis-routing the snapshot.
     func discardBuffer(worktreeId: String, tabId: TabID) {
+        // Handle external (out-of-worktree) tabs whose buffers live in the
+        // externalBuffers cache rather than the in-worktree `buffers` dict.
+        if let ext = externalTabURLs.removeValue(forKey: tabId) {
+            assert(ext.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but external buffer is owned by \(ext.worktreeId)")
+            // Cancel any in-flight open Task so it bails out before recording
+            // the stale tabId in openedExternalDocs. The Task's completion
+            // handler will also re-check externalTabURLs and undo the open if
+            // the LSP request had already been sent before cancellation.
+            pendingExternalOpenTasks[tabId]?.cancel()
+            pendingExternalOpenTasks[tabId] = nil
+            pendingExternalOpenGen[tabId] = nil
+            // Fire closeExternalDocument to release the LSP ref that was
+            // acquired in externalBuffer(...) on cache miss.
+            if let info = externalLSPInfo.removeValue(forKey: tabId), let lsp {
+                let url = ext.url
+                Task { [lsp, info] in
+                    await lsp.closeExternalDocument(
+                        absoluteURL: url,
+                        originatingWorktreeRoot: info.worktreeRoot,
+                        originatingFileURL: info.originatingFileURL,
+                        language: info.language
+                    )
+                }
+            }
+            openedExternalDocs.remove(tabId)
+            bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
+            return
+        }
         guard let key = bufferKeys.removeValue(forKey: tabId) else { return }
         assert(key.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(key.worktreeId)")
         bufferStore.discard(worktreeId: worktreeId, tabId: tabId)

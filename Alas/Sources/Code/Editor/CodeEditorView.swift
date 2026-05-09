@@ -15,6 +15,11 @@ struct CodeEditorView: NSViewRepresentable {
     let revealLine: Int?
     let revealCharacter: Int?
     let appState: AppState
+    let externalAbsolutePath: String?
+    /// The worktree-relative path of the in-worktree file from which the
+    /// user navigated to this external tab. Used to route LSP traffic for
+    /// the external file to the correct holder in nested-package layouts.
+    let originatingRelativePath: String?
     /// Pulled from `appState.config.code.fontFamily` by the parent view's
     /// body so SwiftUI registers the dependency. NSViewRepresentable hooks
     /// (makeNSView/updateNSView) are not part of body evaluation, so reads
@@ -37,12 +42,28 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(theme.color("bg-1"))
 
-        let buffer = appState.tabs.buffer(
-            worktreeId: worktreeId,
-            tabId: tabId,
-            worktreeRoot: worktreeRoot,
-            relativePath: relativePath
-        )
+        let buffer: EditorBuffer
+        if let abs = externalAbsolutePath {
+            let absoluteURL = URL(fileURLWithPath: abs)
+            let ext = (abs as NSString).pathExtension
+            let language = appState.lsp.language(forFileExtension: ext)
+            let originatingFileURL: URL? = originatingRelativePath.map { worktreeRoot.appendingPathComponent($0) }
+            buffer = appState.tabs.externalBuffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                absoluteURL: absoluteURL,
+                worktreeRoot: worktreeRoot,
+                originatingFileURL: originatingFileURL,
+                language: language
+            )
+        } else {
+            buffer = appState.tabs.buffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath
+            )
+        }
 
         // Build the TextKit 1 chain. The coordinator owns the
         // storage<->layoutManager binding (see `bindBuffer`) so that swapping
@@ -79,10 +100,13 @@ struct CodeEditorView: NSViewRepresentable {
             buffer: buffer,
             layoutManager: layoutManager,
             worktreeId: worktreeId,
+            worktreeRoot: worktreeRoot,
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
-            theme: theme
+            theme: theme,
+            externalAbsolutePath: externalAbsolutePath,
+            originatingRelativePath: originatingRelativePath
         )
         return scroll
     }
@@ -95,7 +119,9 @@ struct CodeEditorView: NSViewRepresentable {
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
-            theme: theme
+            theme: theme,
+            externalAbsolutePath: externalAbsolutePath,
+            originatingRelativePath: originatingRelativePath
         )
     }
 

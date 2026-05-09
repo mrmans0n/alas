@@ -17,6 +17,12 @@ final class EditorBuffer {
     let worktreeRoot: URL
     private(set) var relativePath: String
 
+    /// `true` when this buffer represents a file outside the worktree (e.g.
+    /// a dependency or system header opened via cmd-click). External buffers
+    /// are read-only, never emit `didChange` to LSP, and never write back to
+    /// disk — but they still reload when the file changes on disk.
+    let isExternal: Bool
+
     /// The live AppKit text storage displayed by the text view. The
     /// reference is stable for the lifetime of the buffer; tearing down
     /// the view detaches it without releasing it.
@@ -90,24 +96,46 @@ final class EditorBuffer {
     /// Convenience initializer for callers that do not need hot-exit support
     /// (tests from Tasks 3-6, and any non-persisted buffer).
     convenience init(worktreeRoot: URL, relativePath: String) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: nil, worktreeId: nil, tabId: nil, restoreEnabled: false, lsp: nil)
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: nil, worktreeId: nil, tabId: nil, restoreEnabled: false, lsp: nil)
     }
 
     /// Production initializer that opts into hot-exit (no LSP). The `store`
     /// is consulted at init time for any persisted snapshot.
     convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil)
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil)
     }
 
     /// Production initializer that opts into hot-exit and opens an LSP
     /// document. The buffer owns the LSP open/close lifecycle for this file.
     convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp)
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp)
     }
 
-    private init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?) {
+    /// External-mode init: loads `absoluteURL` synchronously, marks the buffer
+    /// read-only, and skips all save/didChange/file-watcher write paths. The
+    /// buffer still re-loads contents when the file changes on disk (passive
+    /// reload only — it never writes back). Uses sentinel worktreeRoot/
+    /// relativePath values (directory + filename) so the rest of the buffer
+    /// machinery works without optional-unwrap proliferation (option B).
+    convenience init(externalAbsoluteURL: URL) {
+        let worktreeRoot = externalAbsoluteURL.deletingLastPathComponent()
+        let relativePath = externalAbsoluteURL.lastPathComponent
+        self.init(
+            worktreeRoot: worktreeRoot,
+            relativePath: relativePath,
+            isExternal: true,
+            store: nil,
+            worktreeId: nil,
+            tabId: nil,
+            restoreEnabled: false,
+            lsp: nil
+        )
+    }
+
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
+        self.isExternal = isExternal
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
@@ -118,13 +146,14 @@ final class EditorBuffer {
         self.storageDelegate = delegate
         self.storage.delegate = delegate
         loadFromDisk()
-        if restoreEnabled,
+        if !isExternal,
+           restoreEnabled,
            let store, let worktreeId, let tabId,
            let snap = (try? store.read(worktreeId: worktreeId, tabId: tabId)) {
             applySnapshot(snap)
         }
         onEdit { [weak self] in self?.scheduleSnapshot() }
-        if let lsp, let language {
+        if !isExternal, let lsp, let language {
             let url = worktreeRoot.appendingPathComponent(relativePath)
             let text = storage.string
             Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
@@ -155,6 +184,9 @@ final class EditorBuffer {
 
     private func handleEdit(edit: EditorTextEdit?) {
         guard !loading else { return }
+        // External buffers are read-only; suppress all observer notifications
+        // so didChange is never propagated to LSP or snapshot scheduler.
+        guard !isExternal else { return }
         editGeneration &+= 1
         let snapshot = Array(editObservers.values)
         for block in snapshot { block(edit) }
@@ -635,7 +667,9 @@ final class EditorBuffer {
             }
         }
         updateOriginalFileIdentity(from: url)
-        readOnly = false
+        // External buffers remain read-only even after a successful reload;
+        // the isExternal flag is the authoritative source of read-only-ness.
+        readOnly = isExternal ? true : false
     }
 }
 

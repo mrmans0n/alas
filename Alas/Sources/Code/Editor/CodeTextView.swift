@@ -8,6 +8,8 @@ import AppKit
 final class CodeTextView: NSTextView, FontSizeResponder {
     var hoverHandler: ((NSPoint) -> Void)?
     var commandClickHandler: ((NSPoint) -> Void)?
+    var flagsChangedHandler: ((NSEvent) -> Void)?
+    var mouseExitedHandler: (() -> Void)?
 
     /// Set by `CodeEditorCoordinator.attach`. Each closure mutates the shared
     /// `code.fontSize` config in response to the matching menu command.
@@ -53,12 +55,22 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         super.mouseDown(with: event)
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        flagsChangedHandler?(event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        mouseExitedHandler?()
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         for area in trackingAreas { removeTrackingArea(area) }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
             owner: self, userInfo: nil
         )
         addTrackingArea(area)

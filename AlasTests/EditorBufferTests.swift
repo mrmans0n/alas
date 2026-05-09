@@ -466,6 +466,7 @@ struct EditorBufferTests {
             buffer: buffer,
             layoutManager: layoutManager,
             worktreeId: "wt",
+            worktreeRoot: root,
             tabId: "t",
             revealLine: nil,
             revealCharacter: nil,
@@ -506,6 +507,7 @@ struct EditorBufferTests {
             buffer: buffer,
             layoutManager: layoutManager,
             worktreeId: "wt",
+            worktreeRoot: root,
             tabId: "tab",
             revealLine: nil,
             revealCharacter: nil,
@@ -544,6 +546,7 @@ struct EditorBufferTests {
             buffer: bufferA,
             layoutManager: layoutManager,
             worktreeId: "wt",
+            worktreeRoot: root,
             tabId: "tab-a",
             revealLine: nil,
             revealCharacter: nil,
@@ -598,7 +601,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
@@ -639,7 +642,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
@@ -694,7 +697,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
@@ -711,6 +714,32 @@ struct EditorBufferTests {
         #expect(coordinator.lastDiagnosticsByURI[uriB]?.count == 1)
         // … but the batch must not paint onto A's storage.
         #expect(bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+    }
+
+    @Test func externalBufferLoadsContentsAndIsReadOnly() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ext-\(UUID().uuidString).h")
+        try "external content\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let buffer = EditorBuffer(externalAbsoluteURL: url)
+        #expect(buffer.storage.string == "external content\n")
+        #expect(buffer.isExternal == true)
+        #expect(buffer.dirty == false)
+    }
+
+    @Test func externalBufferSaveIsNoOp() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ext-\(UUID().uuidString).h")
+        try "x\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let buffer = EditorBuffer(externalAbsoluteURL: url)
+        // Mutate storage as if user typed (test-only — production sets isEditable=false on the view)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "INJECTED ")
+        // save() returns Void and is a no-op for external buffers (readOnly=true guard fires).
+        try buffer.save()
+        let onDisk = try String(contentsOf: url, encoding: .utf8)
+        #expect(onDisk == "x\n")
     }
 
     @Test func coordinatorPathChangeClearsTextViewUndoStack() throws {
@@ -739,7 +768,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
