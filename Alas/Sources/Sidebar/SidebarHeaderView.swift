@@ -3,19 +3,10 @@ import SwiftUI
 struct SidebarHeaderView: View {
     let onSettings: () -> Void
     let onAddProject: () -> Void
-    @Environment(\.theme) var theme
 
     var body: some View {
         HStack(spacing: 12) {
             TrafficLights()
-            HStack(spacing: 8) {
-                Image(systemName: "airplane")
-                    .font(.system(size: 14))
-                    .foregroundColor(theme.color("accent"))
-                Text("Alas")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(theme.color("fg"))
-            }
             Spacer()
             // Search will return here when there's an actual search handler.
             // Previously rendered as a no-op ToolbarBtn(action: {}) which
@@ -27,10 +18,6 @@ struct SidebarHeaderView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .overlay(
-            Divider().opacity(0.5),
-            alignment: .bottom
-        )
     }
 }
 
