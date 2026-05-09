@@ -72,6 +72,14 @@ final class HoverHighlightFeature {
         onMove(at: point)
     }
 
+    /// Cancel any in-flight LSP request and remove the underline + cursor
+    /// affordance. Does NOT change `commandHeld`, so a still-held ⌘ key
+    /// will resume normal hover behavior on the next mouse move.
+    func cancelAndClear() {
+        cancelInFlight()
+        clearUnderline()
+    }
+
     private func onMove(at point: NSPoint) {
         guard commandHeld else { return }
         cancelInFlight()

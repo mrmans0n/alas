@@ -260,6 +260,7 @@ final class CodeEditorCoordinator {
         }
 
         if pathChanged {
+            hoverHighlight?.cancelAndClear()
             didChangeTask?.cancel()
             hasPendingDidChange = false
             pendingTextEdits.removeAll()
