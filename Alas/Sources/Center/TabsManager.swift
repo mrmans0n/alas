@@ -110,6 +110,47 @@ final class TabsManager {
         return tab
     }
 
+    /// Open or focus an editor tab for an absolute URL outside the
+    /// worktree (SDK headers, dependencies). Reuse-or-create keyed by
+    /// absolute path. The tab is "owned" by `worktreeId` so closing the
+    /// worktree cascades.
+    @discardableResult
+    func openExternalEditor(
+        worktreeId: String,
+        absoluteURL: URL,
+        revealLine: Int?,
+        revealCharacter: Int?
+    ) -> Tab {
+        let absPath = absoluteURL.path
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .editor(let s) = $0 { return s.externalAbsolutePath == absPath }
+               return false
+           }) {
+            if case .editor(var s) = file.tabs[idx] {
+                s.revealLine = revealLine
+                s.revealCharacter = revealCharacter
+                file.tabs[idx] = .editor(s)
+                file.activeTabId = s.id
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+                return .editor(s)
+            }
+        }
+        let title = absoluteURL.lastPathComponent
+        let state = EditorTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: "",
+            revealLine: revealLine,
+            revealCharacter: revealCharacter,
+            externalAbsolutePath: absPath
+        )
+        let tab = Tab.editor(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     @discardableResult
     func appendDiff(worktreeId: String, title: String, relativePath: String) -> Tab {
         let state = DiffTabState(id: UUID().uuidString, title: title, relativePath: relativePath)

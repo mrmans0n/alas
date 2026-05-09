@@ -74,4 +74,39 @@ struct TabsManagerTests {
         #expect(back == s)
         #expect(back.isExternal)
     }
+
+    @Test func openExternalEditorAppendsAndActivates() {
+        let worktreeId = "tabs-manager-open-external"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.openExternalEditor(
+            worktreeId: worktreeId,
+            absoluteURL: URL(fileURLWithPath: "/usr/include/foo.h"),
+            revealLine: 10, revealCharacter: 0
+        )
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == tab.id)
+        if case .editor(let s) = tab {
+            #expect(s.isExternal)
+            #expect(s.externalAbsolutePath == "/usr/include/foo.h")
+            #expect(s.title == "foo.h")
+            #expect(s.revealLine == 10)
+        } else {
+            Issue.record("expected editor tab")
+        }
+    }
+
+    @Test func openExternalEditorReusesExistingTab() {
+        let worktreeId = "tabs-manager-reuse-external"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let url = URL(fileURLWithPath: "/usr/include/foo.h")
+        let first = mgr.openExternalEditor(worktreeId: worktreeId, absoluteURL: url, revealLine: 1, revealCharacter: 0)
+        let second = mgr.openExternalEditor(worktreeId: worktreeId, absoluteURL: url, revealLine: 5, revealCharacter: 2)
+        #expect(first.id == second.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 1)
+        if case .editor(let s) = second {
+            #expect(s.revealLine == 5)
+            #expect(s.revealCharacter == 2)
+        }
+    }
 }
