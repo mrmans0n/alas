@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="Alas">
+  <title>Alas</title>
+  <defs>
+    
+    <symbol id="alas-feather" overflow="visible">
+      <path d="M0,0 C3.2,-12 2.4,-32 1,-44 C0.5,-48.5 0,-50 0,-50 C0,-50 -0.5,-48.5 -1,-44 C-2.4,-32 -3.2,-12 0,0 Z"></path>
+    </symbol>
+  </defs>
+
+  
+  <g transform="translate(55 55)" fill="oklch(0.78 0.11 195)">
+    <use href="#alas-feather" transform="rotate(-48) scale(1.28)"></use>
+    <use href="#alas-feather" transform="rotate(-58) scale(1.0)"></use>
+    <use href="#alas-feather" transform="rotate(-72) scale(0.84)"></use>
+    <use href="#alas-feather" transform="rotate(-87) scale(0.66)"></use>
+    <use href="#alas-feather" transform="rotate(-107) scale(0.48)"></use>
+  </g>
+
+  
+  <g transform="translate(45 45)" fill="none" stroke="oklch(0.94 0.012 220)" stroke-linejoin="round">
+    <use href="#alas-feather" transform="rotate(132) scale(1.28)" stroke-width="1.4"></use>
+    <use href="#alas-feather" transform="rotate(122) scale(1.0)" stroke-width="1.6"></use>
+    <use href="#alas-feather" transform="rotate(108) scale(0.84)" stroke-width="1.8"></use>
+    <use href="#alas-feather" transform="rotate(93)  scale(0.66)" stroke-width="2.0"></use>
+    <use href="#alas-feather" transform="rotate(73)  scale(0.48)" stroke-width="2.2"></use>
+  </g>
+</svg>
