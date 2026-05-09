@@ -300,15 +300,39 @@ final class WorkspaceLSPManager {
         return nil
     }
 
-    /// Resolve the `Key` for an existing holder that was spawned for
-    /// `(originatingWorktreeRoot, language)`. Returns `nil` when no registry
-    /// entry is configured for `language` or when the holder has not been
-    /// started yet (i.e. no in-worktree file for that language is open).
-    private func holderKey(forWorktreeRoot root: URL, language: String) -> Key? {
+    /// Find an existing holder serving any file inside `worktreeRoot` for
+    /// `language`. Used by external-document open/close where we don't have
+    /// an in-worktree file URI on hand but know the originating worktree.
+    ///
+    /// Unlike the old `holderKey(forWorktreeRoot:language:)` helper, this
+    /// scans existing holders instead of recomputing the key from scratch.
+    /// That matters for workspaces with nested packages: the running holder
+    /// was keyed against the nested package directory, not the worktree root,
+    /// so a recomputed lookup would miss it.
+    private func holderKeyForExternal(worktreeRoot: URL, language: String) -> Key? {
         guard let entry = registry.entry(forLanguage: language) else { return nil }
-        let lspRoot = Self.resolveLSPRoot(fileURL: root, worktreeRoot: root, markers: entry.rootMarkers)
-        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
-        return holders[key] != nil ? key : nil
+        let worktreePath = worktreeRoot.path
+        let pathPrefix = worktreePath.hasSuffix("/") ? worktreePath : worktreePath + "/"
+        for (key, holder) in holders {
+            guard key.command == entry.command,
+                  key.args == entry.args,
+                  key.env == entry.env else { continue }
+            // The holder's lspRoot may be the worktree itself or a nested
+            // package directory inside it. Either way, its path must start
+            // with the worktree path.
+            if key.root == worktreePath || key.root.hasPrefix(pathPrefix) {
+                return key
+            }
+            // Fallback: if the holder has any open URI inside the worktree,
+            // it's serving this workspace.
+            for uri in holder.refsByURI.keys {
+                if let url = URL(string: uri),
+                   url.path.hasPrefix(pathPrefix) {
+                    return key
+                }
+            }
+        }
+        return nil
     }
 
     /// Notify the running LSP client for `originatingWorktreeRoot`/`language`
@@ -325,7 +349,7 @@ final class WorkspaceLSPManager {
         contents: String
     ) async {
         let uri = absoluteURL.lspURI
-        guard let key = holderKey(forWorktreeRoot: originatingWorktreeRoot, language: language),
+        guard let key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language),
               var holder = holders[key] else { return }
 
         // Bump refcount and record pending text in case the server is still
@@ -374,7 +398,7 @@ final class WorkspaceLSPManager {
         language: String
     ) async {
         let uri = absoluteURL.lspURI
-        guard let key = holderKey(forWorktreeRoot: originatingWorktreeRoot, language: language),
+        guard let key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language),
               var holder = holders[key],
               (holder.refsByURI[uri] ?? 0) > 0 else { return }
 

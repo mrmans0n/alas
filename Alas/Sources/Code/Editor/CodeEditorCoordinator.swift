@@ -226,12 +226,25 @@ final class CodeEditorCoordinator {
         } else {
             nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
         }
-        let pathChanged = currentWorktreeId != worktreeId
-            || currentTabId != tabId
-            || currentRoot != worktreeRoot
-            || currentRelativePath != relativePath
-            || currentLanguage != nextLanguage
-            || currentExternalAbsolutePath != externalAbsolutePath
+
+        let pathChanged: Bool
+        if externalAbsolutePath != nil || currentExternalAbsolutePath != nil {
+            // External-tab identity: only the (worktree, tabId, abs path) tuple matters.
+            // Don't compare currentRoot/currentRelativePath against the in-worktree
+            // worktreeRoot/relativePath — bindBuffer set them to sentinel values for
+            // the external buffer, which will never equal the parameters here.
+            // The || currentExternalAbsolutePath != nil clause catches the
+            // in-worktree-to-external and external-to-in-worktree transitions.
+            pathChanged = currentWorktreeId != worktreeId
+                || currentTabId != tabId
+                || currentExternalAbsolutePath != externalAbsolutePath
+        } else {
+            pathChanged = currentWorktreeId != worktreeId
+                || currentTabId != tabId
+                || currentRoot != worktreeRoot
+                || currentRelativePath != relativePath
+                || currentLanguage != nextLanguage
+        }
 
         if pathChanged {
             didChangeTask?.cancel()
