@@ -12,6 +12,7 @@ struct TerminalTabView: View {
         Group {
             if let session = state.terminal.registry.session(for: sessionId) {
                 GhosttyHost(session: session)
+                    .id(sessionId)
             } else {
                 // Session was lost (likely after relaunch). Recreate.
                 TerminalRecoverPlaceholder(state: state, worktreeId: worktreeId, tabId: tabId)
