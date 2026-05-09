@@ -14,9 +14,7 @@ struct HoverHighlightFeatureTests {
         let container = NSTextContainer(size: NSSize(width: 800, height: 600))
         layoutManager.addTextContainer(container)
         let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
-        view.string = text
-        let storage = NSTextStorage(string: text)
-        storage.addLayoutManager(layoutManager)
+        view.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
         return view
     }
 

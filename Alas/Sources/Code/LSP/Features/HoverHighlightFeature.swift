@@ -44,10 +44,8 @@ final class HoverHighlightFeature {
     private func onFlagsChanged(_ event: NSEvent) {
         let pressed = event.modifierFlags.contains(.command)
         if pressed && !commandHeld {
-            commandHeld = true
             simulateCommandPressed()
         } else if !pressed && commandHeld {
-            commandHeld = false
             simulateCommandReleased()
         }
     }
@@ -96,7 +94,8 @@ final class HoverHighlightFeature {
     }
 
     private func applyUnderline(at position: LSPPosition) {
-        guard let textView, let storage = textView.textStorage else { return }
+        guard let textView, let storage = textView.textStorage,
+              let layoutManager = textView.layoutManager else { return }
         let nsString = storage.string as NSString
         // Compute UTF-16 offset for `position`.
         var offset = 0
@@ -112,21 +111,21 @@ final class HoverHighlightFeature {
         let wordRange = nsString.rangeOfWord(at: offset)
         clearUnderline()
         if wordRange.length == 0 { return }
-        storage.addAttributes([
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-        ], range: wordRange)
+        layoutManager.addTemporaryAttributes(
+            [.underlineStyle: NSUnderlineStyle.single.rawValue],
+            forCharacterRange: wordRange
+        )
         lastUnderlinedRange = wordRange
         NSCursor.pointingHand.set()
     }
 
     private func clearUnderline() {
-        guard let textView, let storage = textView.textStorage,
-              let range = lastUnderlinedRange,
-              range.location + range.length <= storage.length else {
+        guard let textView, let layoutManager = textView.layoutManager,
+              let range = lastUnderlinedRange else {
             lastUnderlinedRange = nil
             return
         }
-        storage.removeAttribute(.underlineStyle, range: range)
+        layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: range)
         lastUnderlinedRange = nil
     }
 
