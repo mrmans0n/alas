@@ -260,10 +260,10 @@ final class CodeEditorCoordinator {
             let session = highlightSession
             Task { await session.reset() }
 
-            // If switching away from an external (or reusing the same external from a
-            // different originating path), close the old LSP document first.
             // Capture old values into locals BEFORE mutating the current* properties
-            // so the close goes to the right holder.
+            // so the close goes to the right holder, and so we can compute the
+            // isSameTabOriginChange gate from pre-mutation state.
+            let oldTabId = currentTabId
             let oldAbs = currentExternalAbsolutePath
             let oldOriginatingRoot = currentOriginatingWorktreeRoot
             let oldOriginatingRelPath = currentOriginatingRelativePath
@@ -280,10 +280,21 @@ final class CodeEditorCoordinator {
                 currentOriginatingRelativePath = nil
             }
 
-            if let oldAbs,
+            // Only fire the close-old/open-new pair when this is a genuine
+            // same-tab origin change (same tabId, same external abs path, but
+            // the originating in-worktree path changed). When the coordinator
+            // is reused for a DIFFERENT tab the manager's discardBuffer path
+            // owns the old tab's LSP ref — firing close here would prematurely
+            // release it while the old tab is still open.
+            let isSameTabOriginChange = (oldTabId == tabId)
+                && (oldAbs == externalAbsolutePath)
+                && (oldAbs != nil)
+
+            if isSameTabOriginChange,
+               let oldAbs,
                let originating = oldOriginatingRoot,
                let lang = oldLang,
-               (oldAbs != externalAbsolutePath || oldOriginatingRelPath != originatingRelativePath) {
+               oldOriginatingRelPath != originatingRelativePath {
                 let url = URL(fileURLWithPath: oldAbs)
                 let appState = self.appState
                 let oldOriginatingFileURL: URL? = oldOriginatingRelPath.map { originating.appendingPathComponent($0) }
@@ -325,11 +336,14 @@ final class CodeEditorCoordinator {
                 textView?.isEditable = true
             }
 
-            // If the origin changed for an external buffer, open the LSP
-            // document under the NEW holder (the close-old Task fired above
-            // released the ref on the old holder). Also update the manager's
-            // externalLSPInfo so discardBuffer closes the right holder.
-            if nextBuffer.isExternal,
+            // If the origin changed for an external buffer on the SAME tab,
+            // open the LSP document under the NEW holder (the close-old Task
+            // fired above released the ref on the old holder). Also update the
+            // manager's externalLSPInfo so discardBuffer closes the right holder.
+            // For tab swaps (different tabId), TabsManager's externalBuffer call
+            // above already drives ensureExternalLSPOpen for the new tab.
+            if isSameTabOriginChange,
+               nextBuffer.isExternal,
                let abs = externalAbsolutePath,
                let originating = currentOriginatingWorktreeRoot,
                let lang = currentLanguage {

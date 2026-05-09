@@ -34,11 +34,10 @@ final class TabsManager {
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
-    /// Tracks tab IDs for which an `openExternalDocument` Task is currently
-    /// in flight. Prevents two concurrent Tasks from double-bumping the LSP
-    /// refcount when both `externalBuffer` and the coordinator's `attach`
-    /// fire `ensureExternalLSPOpen` before the first Task completes.
-    private var pendingExternalOpens: Set<TabID> = []
+    /// Tracks in-flight `openExternalDocument` Tasks keyed by tabId.
+    /// Cancellation on `discardBuffer` prevents a completed-but-unregistered
+    /// open from leaking the URI if the tab was closed before the Task landed.
+    private var pendingExternalOpenTasks: [TabID: Task<Void, Never>] = [:]
     private let lsp: WorkspaceLSPManager?
 
     init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
@@ -378,14 +377,13 @@ final class TabsManager {
     /// case where a persisted external tab is restored before any in-worktree
     /// file has started the language server.
     func ensureExternalLSPOpen(tabId: TabID) {
-        guard !openedExternalDocs.contains(tabId), !pendingExternalOpens.contains(tabId) else { return }
+        guard !openedExternalDocs.contains(tabId), pendingExternalOpenTasks[tabId] == nil else { return }
         guard let lsp,
               let info = externalLSPInfo[tabId],
               let entry = externalTabURLs[tabId] else { return }
         let absoluteURL = entry.url
         let contents = bufferStore.externalBuffer(worktreeId: entry.worktreeId, absoluteURL: absoluteURL).storage.string
-        pendingExternalOpens.insert(tabId)
-        Task { [weak self] in
+        let task = Task { [weak self] in
             let opened = await lsp.openExternalDocument(
                 absoluteURL: absoluteURL,
                 originatingWorktreeRoot: info.worktreeRoot,
@@ -394,10 +392,27 @@ final class TabsManager {
                 contents: contents
             )
             await MainActor.run { [weak self] in
-                self?.pendingExternalOpens.remove(tabId)
-                if opened { self?.openedExternalDocs.insert(tabId) }
+                guard let self else { return }
+                self.pendingExternalOpenTasks[tabId] = nil
+                // If the tab was discarded while the open was in flight, undo it
+                // so the URI doesn't leak on the holder until app exit.
+                if self.externalTabURLs[tabId] == nil {
+                    if opened {
+                        Task { [lsp, info] in
+                            await lsp.closeExternalDocument(
+                                absoluteURL: absoluteURL,
+                                originatingWorktreeRoot: info.worktreeRoot,
+                                originatingFileURL: info.originatingFileURL,
+                                language: info.language
+                            )
+                        }
+                    }
+                    return
+                }
+                if opened { self.openedExternalDocs.insert(tabId) }
             }
         }
+        pendingExternalOpenTasks[tabId] = task
     }
 
     /// Updates the LSP info recorded for an external tab (called by the
@@ -444,6 +459,12 @@ final class TabsManager {
         // externalBuffers cache rather than the in-worktree `buffers` dict.
         if let ext = externalTabURLs.removeValue(forKey: tabId) {
             assert(ext.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but external buffer is owned by \(ext.worktreeId)")
+            // Cancel any in-flight open Task so it bails out before recording
+            // the stale tabId in openedExternalDocs. The Task's completion
+            // handler will also re-check externalTabURLs and undo the open if
+            // the LSP request had already been sent before cancellation.
+            pendingExternalOpenTasks[tabId]?.cancel()
+            pendingExternalOpenTasks[tabId] = nil
             // Fire closeExternalDocument to release the LSP ref that was
             // acquired in externalBuffer(...) on cache miss.
             if let info = externalLSPInfo.removeValue(forKey: tabId), let lsp {
@@ -458,7 +479,6 @@ final class TabsManager {
                 }
             }
             openedExternalDocs.remove(tabId)
-            pendingExternalOpens.remove(tabId)
             bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
             return
         }
