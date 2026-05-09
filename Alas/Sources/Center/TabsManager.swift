@@ -20,6 +20,9 @@ final class TabsManager {
     private let bufferStore: EditorBufferStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
     private var bufferKeys: [TabID: BufferKey] = [:]
+    /// Tracks the absolute URL for external (out-of-worktree) tabs so that
+    /// `discardBuffer(worktreeId:tabId:)` can tear them down too.
+    private var externalTabURLs: [TabID: (worktreeId: String, url: URL)] = [:]
     private let lsp: WorkspaceLSPManager?
 
     init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
@@ -311,7 +314,11 @@ final class TabsManager {
     }
 
     /// Returns (or creates) a read-only external buffer keyed by absolute URL.
-    func externalBuffer(worktreeId: String, absoluteURL: URL) -> EditorBuffer {
+    /// Registering `tabId` in `externalTabURLs` ensures that the normal
+    /// `discardBuffer(worktreeId:tabId:)` close-tab path tears the buffer
+    /// down and stops its file watcher.
+    func externalBuffer(worktreeId: String, tabId: TabID, absoluteURL: URL) -> EditorBuffer {
+        externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
         let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
         buffer.startWatching()
         return buffer
@@ -339,6 +346,13 @@ final class TabsManager {
     /// wrong worktree context surfaces immediately rather than silently
     /// mis-routing the snapshot.
     func discardBuffer(worktreeId: String, tabId: TabID) {
+        // Handle external (out-of-worktree) tabs whose buffers live in the
+        // externalBuffers cache rather than the in-worktree `buffers` dict.
+        if let ext = externalTabURLs.removeValue(forKey: tabId) {
+            assert(ext.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but external buffer is owned by \(ext.worktreeId)")
+            bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
+            return
+        }
         guard let key = bufferKeys.removeValue(forKey: tabId) else { return }
         assert(key.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(key.worktreeId)")
         bufferStore.discard(worktreeId: worktreeId, tabId: tabId)

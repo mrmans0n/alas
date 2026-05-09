@@ -334,4 +334,20 @@ struct TabsManagerBufferTests {
         #expect(manager.peekBuffer(tabId: tab.id) == nil)
         #expect(try store.read(worktreeId: "wt", tabId: tab.id) != nil)
     }
+
+    @Test func externalBufferIsReleasedWhenTabIsClosed() throws {
+        let (manager, store, _) = makeManager()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ext-tab-discard-\(UUID().uuidString).h")
+        try "// header\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let tabId = "ext-tab"
+        let a = manager.externalBuffer(worktreeId: "wt", tabId: tabId, absoluteURL: url)
+        manager.discardBuffer(worktreeId: "wt", tabId: tabId)
+        // After discard the store must have evicted the entry; requesting the
+        // buffer again should return a new (distinct) instance.
+        let b = store.externalBuffer(worktreeId: "wt", absoluteURL: url)
+        #expect(a !== b)
+    }
 }

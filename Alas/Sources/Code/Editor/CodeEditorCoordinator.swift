@@ -287,6 +287,7 @@ final class CodeEditorCoordinator {
             if let abs = externalAbsolutePath {
                 nextBuffer = appState.tabs.externalBuffer(
                     worktreeId: worktreeId,
+                    tabId: tabId,
                     absoluteURL: URL(fileURLWithPath: abs)
                 )
             } else {

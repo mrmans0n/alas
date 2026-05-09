@@ -99,4 +99,12 @@ final class EditorBufferStore {
         externalBuffers[key] = buffer
         return buffer
     }
+
+    /// Remove an external buffer from the cache and stop its watcher.
+    /// A no-op if no buffer for this URL exists in `worktreeId`.
+    func discardExternalBuffer(worktreeId: String, absoluteURL: URL) {
+        let key = ExternalKey(worktreeId: worktreeId, path: absoluteURL.path)
+        guard let buffer = externalBuffers.removeValue(forKey: key) else { return }
+        buffer.close(persistDirtySnapshot: false)
+    }
 }

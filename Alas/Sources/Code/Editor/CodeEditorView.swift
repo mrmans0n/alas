@@ -42,6 +42,7 @@ struct CodeEditorView: NSViewRepresentable {
         if let abs = externalAbsolutePath {
             buffer = appState.tabs.externalBuffer(
                 worktreeId: worktreeId,
+                tabId: tabId,
                 absoluteURL: URL(fileURLWithPath: abs)
             )
         } else {

@@ -80,4 +80,17 @@ struct EditorBufferStoreTests {
         let c = store.externalBuffer(worktreeId: "w2", absoluteURL: url)
         #expect(c !== a)
     }
+
+    @Test func externalBufferIsReleasedOnDiscard() throws {
+        let (store, _) = makeStore()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ext-discard-\(UUID().uuidString).h")
+        try "x\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let a = store.externalBuffer(worktreeId: "w", absoluteURL: url)
+        store.discardExternalBuffer(worktreeId: "w", absoluteURL: url)
+        let b = store.externalBuffer(worktreeId: "w", absoluteURL: url)
+        #expect(a !== b)  // a was discarded; b is a fresh instance
+    }
 }
