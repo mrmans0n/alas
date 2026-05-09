@@ -31,7 +31,9 @@ final class HoverHighlightFeature {
             self?.onFlagsChanged(event)
         }
         textView.mouseExitedHandler = { [weak self] in
-            self?.clearUnderline()
+            guard let self else { return }
+            self.cancelInFlight()
+            self.clearUnderline()
         }
         // Reuse the existing hover handler — feature multiplexes hover and
         // command-hover through the same closure. The popover-based
