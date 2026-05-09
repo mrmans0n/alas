@@ -25,6 +25,7 @@ final class CodeEditorCoordinator {
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
     private var currentExternalAbsolutePath: String?
     private var currentOriginatingWorktreeRoot: URL?
+    private var currentOriginatingRelativePath: String?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -80,7 +81,7 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
@@ -89,8 +90,10 @@ final class CodeEditorCoordinator {
         self.currentExternalAbsolutePath = externalAbsolutePath
         if externalAbsolutePath != nil {
             currentOriginatingWorktreeRoot = worktreeRoot
+            currentOriginatingRelativePath = originatingRelativePath
         } else {
             currentOriginatingWorktreeRoot = nil
+            currentOriginatingRelativePath = nil
         }
 
         let family = appState.config.code.fontFamily
@@ -168,11 +171,18 @@ final class CodeEditorCoordinator {
                         revealCharacter: character
                     )
                 } else {
+                    // Pass the current in-worktree file as the originating
+                    // path so LSP traffic for the external file is routed to
+                    // the correct holder in nested-package layouts.
+                    let originatingRel = self.currentExternalAbsolutePath == nil
+                        ? self.currentRelativePath
+                        : self.currentOriginatingRelativePath
                     self.appState.tabs.openExternalEditor(
                         worktreeId: wid,
                         absoluteURL: url,
                         revealLine: line,
-                        revealCharacter: character
+                        revealCharacter: character,
+                        originatingRelativePath: originatingRel
                     )
                 }
             }
@@ -206,10 +216,12 @@ final class CodeEditorCoordinator {
            let lang = currentLanguage {
             let url = URL(fileURLWithPath: abs)
             let contents = buffer.storage.string
+            let originatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
             Task { [appState = appState] in
                 await appState.lsp.openExternalDocument(
                     absoluteURL: url,
                     originatingWorktreeRoot: originating,
+                    originatingFileURL: originatingFileURL,
                     language: lang,
                     contents: contents
                 )
@@ -219,7 +231,7 @@ final class CodeEditorCoordinator {
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil) {
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
         let nextLanguage: String?
         if let abs = externalAbsolutePath {
             nextLanguage = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
@@ -260,10 +272,12 @@ final class CodeEditorCoordinator {
                oldAbs != externalAbsolutePath {
                 let url = URL(fileURLWithPath: oldAbs)
                 let appState = self.appState
+                let oldOriginatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
                 Task {
                     await appState.lsp.closeExternalDocument(
                         absoluteURL: url,
                         originatingWorktreeRoot: originating,
+                        originatingFileURL: oldOriginatingFileURL,
                         language: lang
                     )
                 }
@@ -274,8 +288,10 @@ final class CodeEditorCoordinator {
             currentExternalAbsolutePath = externalAbsolutePath
             if externalAbsolutePath != nil {
                 currentOriginatingWorktreeRoot = worktreeRoot
+                currentOriginatingRelativePath = originatingRelativePath
             } else {
                 currentOriginatingWorktreeRoot = nil
+                currentOriginatingRelativePath = nil
             }
 
             // Fetch (and if needed, create) the buffer for the new tab and
@@ -313,10 +329,12 @@ final class CodeEditorCoordinator {
                let lang = currentLanguage {
                 let url = URL(fileURLWithPath: abs)
                 let contents = nextBuffer.storage.string
+                let originatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
                 Task { [appState = appState] in
                     await appState.lsp.openExternalDocument(
                         absoluteURL: url,
                         originatingWorktreeRoot: originating,
+                        originatingFileURL: originatingFileURL,
                         language: lang,
                         contents: contents
                     )
@@ -391,16 +409,19 @@ final class CodeEditorCoordinator {
            let lang = currentLanguage {
             let url = URL(fileURLWithPath: abs)
             let appState = self.appState
+            let originatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
             Task {
                 await appState.lsp.closeExternalDocument(
                     absoluteURL: url,
                     originatingWorktreeRoot: originating,
+                    originatingFileURL: originatingFileURL,
                     language: lang
                 )
             }
         }
         currentExternalAbsolutePath = nil
         currentOriginatingWorktreeRoot = nil
+        currentOriginatingRelativePath = nil
         if let buffer, let token = editObserverToken {
             buffer.removeOnEdit(token)
         }

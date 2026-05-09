@@ -95,6 +95,29 @@ struct TabsManagerTests {
         }
     }
 
+    @Test func editorTabStateRoundTripsOriginatingRelativePath() throws {
+        let s = EditorTabState(
+            id: "z", title: "NSString.h",
+            relativePath: "",
+            externalAbsolutePath: "/usr/include/NSString.h",
+            originatingRelativePath: "Foo/Bar.swift"
+        )
+        let data = try JSONEncoder().encode(s)
+        let back = try JSONDecoder().decode(EditorTabState.self, from: data)
+        #expect(back == s)
+        #expect(back.originatingRelativePath == "Foo/Bar.swift")
+    }
+
+    @Test func editorTabStateDecodesLegacyShapeWithoutOriginatingRelativePath() throws {
+        // Old shape: no originatingRelativePath key. Must decode cleanly.
+        let json = #"""
+        {"id":"z","title":"NSString.h","relativePath":"","externalAbsolutePath":"/usr/include/NSString.h"}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(EditorTabState.self, from: json)
+        #expect(decoded.isExternal)
+        #expect(decoded.originatingRelativePath == nil)
+    }
+
     @Test func openExternalEditorReusesExistingTab() {
         let worktreeId = "tabs-manager-reuse-external"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

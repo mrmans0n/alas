@@ -16,6 +16,10 @@ struct CodeEditorView: NSViewRepresentable {
     let revealCharacter: Int?
     let appState: AppState
     let externalAbsolutePath: String?
+    /// The worktree-relative path of the in-worktree file from which the
+    /// user navigated to this external tab. Used to route LSP traffic for
+    /// the external file to the correct holder in nested-package layouts.
+    let originatingRelativePath: String?
     /// Pulled from `appState.config.code.fontFamily` by the parent view's
     /// body so SwiftUI registers the dependency. NSViewRepresentable hooks
     /// (makeNSView/updateNSView) are not part of body evaluation, so reads
@@ -94,7 +98,8 @@ struct CodeEditorView: NSViewRepresentable {
             revealLine: revealLine,
             revealCharacter: revealCharacter,
             theme: theme,
-            externalAbsolutePath: externalAbsolutePath
+            externalAbsolutePath: externalAbsolutePath,
+            originatingRelativePath: originatingRelativePath
         )
         return scroll
     }
@@ -108,7 +113,8 @@ struct CodeEditorView: NSViewRepresentable {
             revealLine: revealLine,
             revealCharacter: revealCharacter,
             theme: theme,
-            externalAbsolutePath: externalAbsolutePath
+            externalAbsolutePath: externalAbsolutePath,
+            originatingRelativePath: originatingRelativePath
         )
     }
 

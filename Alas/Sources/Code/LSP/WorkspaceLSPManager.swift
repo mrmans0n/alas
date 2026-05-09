@@ -340,17 +340,32 @@ final class WorkspaceLSPManager {
     /// `textDocument/didOpen` the first time a given URI is registered and
     /// increments a reference count for subsequent calls with the same URI.
     ///
+    /// `originatingFileURL` is the in-worktree file the user was viewing when
+    /// they navigated to this external document (e.g. via ⌘-click). When
+    /// provided, the holder is looked up via the existing URI-keyed helper
+    /// (`holderKey(forURI:)`) so nested-package layouts with multiple LSP
+    /// servers resolve to the correct server. Falls back to the prefix-scan
+    /// approach when nil or when the originating file's URI isn't tracked yet
+    /// (e.g. app restart with persisted external tabs).
+    ///
     /// Silently no-ops if no LSP client is running for the given worktree and
     /// language (e.g. no in-worktree tab is open to have started the server).
     func openExternalDocument(
         absoluteURL: URL,
         originatingWorktreeRoot: URL,
+        originatingFileURL: URL? = nil,
         language: String,
         contents: String
     ) async {
         let uri = absoluteURL.lspURI
-        guard let key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language),
-              var holder = holders[key] else { return }
+        let key: Key?
+        if let originatingFileURL,
+           let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
+            key = preciseKey
+        } else {
+            key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language)
+        }
+        guard let key, var holder = holders[key] else { return }
 
         // Bump refcount and record pending text in case the server is still
         // initializing — the same approach used by openDocument for in-worktree
@@ -390,15 +405,31 @@ final class WorkspaceLSPManager {
     /// reference count incremented by `openExternalDocument`; when it reaches
     /// zero, issues `textDocument/didClose`.
     ///
+    /// `originatingFileURL` mirrors the parameter on `openExternalDocument`:
+    /// when provided, the holder is found via URI lookup for precision in
+    /// nested-package layouts. Falls back to the prefix-scan approach when
+    /// nil or not yet tracked.
+    ///
     /// Silently no-ops if no LSP client is running for the given worktree and
     /// language, or if the URI was never opened.
     func closeExternalDocument(
         absoluteURL: URL,
         originatingWorktreeRoot: URL,
+        originatingFileURL: URL? = nil,
         language: String
     ) async {
         let uri = absoluteURL.lspURI
-        guard let key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language),
+        let key: Key?
+        if let originatingFileURL,
+           let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
+            key = preciseKey
+        } else {
+            // Fall back to prefix-scan; also try scanning by the external
+            // URI itself (it may already be tracked in refsByURI if didOpen
+            // was sent but the originating file was closed in the meantime).
+            key = holderKey(forURI: uri) ?? holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language)
+        }
+        guard let key,
               var holder = holders[key],
               (holder.refsByURI[uri] ?? 0) > 0 else { return }
 

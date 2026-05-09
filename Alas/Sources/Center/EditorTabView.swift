@@ -9,18 +9,24 @@ struct EditorTabView: View {
     let revealCharacter: Int?
     let appState: AppState
     let externalAbsolutePath: String?
+    let originatingRelativePath: String?
     @Environment(\.theme) var theme
 
     var body: some View {
-        let buffer = appState.tabs.buffer(
-            worktreeId: worktreeId,
-            tabId: tabId,
-            worktreeRoot: worktreePath,
-            relativePath: relativePath
-        )
         return VStack(spacing: 0) {
             breadcrumb
-            EditorConflictBanner(buffer: buffer)
+            if externalAbsolutePath == nil {
+                // In-worktree tabs: create a normal buffer and show the
+                // conflict banner (external tabs are read-only and have no
+                // conflict semantics).
+                let buffer = appState.tabs.buffer(
+                    worktreeId: worktreeId,
+                    tabId: tabId,
+                    worktreeRoot: worktreePath,
+                    relativePath: relativePath
+                )
+                EditorConflictBanner(buffer: buffer)
+            }
             CodeEditorView(
                 worktreeId: worktreeId,
                 worktreeRoot: worktreePath,
@@ -30,6 +36,7 @@ struct EditorTabView: View {
                 revealCharacter: revealCharacter,
                 appState: appState,
                 externalAbsolutePath: externalAbsolutePath,
+                originatingRelativePath: originatingRelativePath,
                 fontFamily: appState.config.code.fontFamily,
                 fontSize: appState.config.code.fontSize
             )

@@ -117,12 +117,18 @@ final class TabsManager {
     /// worktree (SDK headers, dependencies). Reuse-or-create keyed by
     /// absolute path. The tab is "owned" by `worktreeId` so closing the
     /// worktree cascades.
+    ///
+    /// `originatingRelativePath` is the worktree-relative path of the
+    /// in-worktree file from which the user navigated here (e.g. via
+    /// ⌘-click). Stored on the tab so that LSP traffic for this external
+    /// file is routed to the correct holder in nested-package layouts.
     @discardableResult
     func openExternalEditor(
         worktreeId: String,
         absoluteURL: URL,
         revealLine: Int?,
-        revealCharacter: Int?
+        revealCharacter: Int?,
+        originatingRelativePath: String? = nil
     ) -> Tab {
         let absPath = absoluteURL.path
         if var file = byWorktree[worktreeId],
@@ -147,7 +153,8 @@ final class TabsManager {
             relativePath: "",
             revealLine: revealLine,
             revealCharacter: revealCharacter,
-            externalAbsolutePath: absPath
+            externalAbsolutePath: absPath,
+            originatingRelativePath: originatingRelativePath
         )
         let tab = Tab.editor(state)
         append(tab, to: worktreeId)

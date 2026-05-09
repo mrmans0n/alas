@@ -70,7 +70,8 @@ struct CenterPaneView: View {
                                       revealLine: s.revealLine,
                                       revealCharacter: s.revealCharacter,
                                       appState: state,
-                                      externalAbsolutePath: s.externalAbsolutePath)
+                                      externalAbsolutePath: s.externalAbsolutePath,
+                                      originatingRelativePath: s.originatingRelativePath)
                     case .diff(let s):
                         DiffTabView(worktreePath: worktree.path,
                                     relativePath: s.relativePath)

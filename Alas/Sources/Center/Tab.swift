@@ -52,6 +52,12 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     var revealLine: Int? = nil       // 0-based, optional reveal hint set by go-to-definition
     var revealCharacter: Int? = nil  // 0-based UTF-16
     var externalAbsolutePath: String? = nil  // set when navigating to a file outside the worktree
+    /// The worktree-relative path of the in-worktree file the user was
+    /// viewing when they ⌘-clicked to open this external tab. Persisted so
+    /// that app-restart reopens can still route LSP traffic to the correct
+    /// holder in nested-package layouts. Nil for tabs persisted before this
+    /// field was added (backward-compatible via the default value).
+    var originatingRelativePath: String? = nil
 
     var isExternal: Bool { externalAbsolutePath != nil }
 }
