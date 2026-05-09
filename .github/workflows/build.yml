@@ -91,7 +91,7 @@ jobs:
         # the xcframework is cached the instant it's produced so subsequent
         # runs (including failed-and-retry) get a warm cache.
         id: ghostty-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             .build/ghostty
@@ -111,7 +111,7 @@ jobs:
         # on script failure (saving an incomplete tree); restrict to success.
         # `cache-hit != 'true'` skips a no-op save when restore already hit.
         if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .build/ghostty
