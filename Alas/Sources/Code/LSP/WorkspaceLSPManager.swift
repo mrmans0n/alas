@@ -300,6 +300,117 @@ final class WorkspaceLSPManager {
         return nil
     }
 
+    /// Resolve the `Key` for an existing holder that was spawned for
+    /// `(originatingWorktreeRoot, language)`. Returns `nil` when no registry
+    /// entry is configured for `language` or when the holder has not been
+    /// started yet (i.e. no in-worktree file for that language is open).
+    private func holderKey(forWorktreeRoot root: URL, language: String) -> Key? {
+        guard let entry = registry.entry(forLanguage: language) else { return nil }
+        let lspRoot = Self.resolveLSPRoot(fileURL: root, worktreeRoot: root, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        return holders[key] != nil ? key : nil
+    }
+
+    /// Notify the running LSP client for `originatingWorktreeRoot`/`language`
+    /// that a read-only out-of-worktree file is logically open. Issues
+    /// `textDocument/didOpen` the first time a given URI is registered and
+    /// increments a reference count for subsequent calls with the same URI.
+    ///
+    /// Silently no-ops if no LSP client is running for the given worktree and
+    /// language (e.g. no in-worktree tab is open to have started the server).
+    func openExternalDocument(
+        absoluteURL: URL,
+        originatingWorktreeRoot: URL,
+        language: String,
+        contents: String
+    ) async {
+        let uri = absoluteURL.lspURI
+        guard let key = holderKey(forWorktreeRoot: originatingWorktreeRoot, language: language),
+              var holder = holders[key] else { return }
+
+        // Bump refcount and record pending text in case the server is still
+        // initializing — the same approach used by openDocument for in-worktree
+        // files.
+        var refs = holder.refsByURI
+        refs[uri, default: 0] += 1
+        var pending = holder.pendingOpenText
+        if !holder.openedURIs.contains(uri) { pending[uri] = contents }
+        holder.refsByURI = refs
+        holder.pendingOpenText = pending
+        holders[key] = holder
+
+        let initOk = await holder.ready.value
+        guard initOk, let cur = holders[key], cur.client === holder.client,
+              (cur.refsByURI[uri] ?? 0) > 0 else { return }
+
+        if !cur.openedURIs.contains(uri) {
+            let openText = cur.pendingOpenText[uri] ?? contents
+            if var h = holders[key] {
+                h.openedURIs.insert(uri)
+                h.versions[uri] = 1
+                h.pendingOpenText.removeValue(forKey: uri)
+                h.texts[uri] = openText
+                holders[key] = h
+            }
+            try? await cur.client.didOpen(
+                uri: uri,
+                languageId: language,
+                version: 1,
+                text: openText
+            )
+        }
+    }
+
+    /// Notify the running LSP client that a previously opened external
+    /// (out-of-worktree) document is no longer needed. Decrements the
+    /// reference count incremented by `openExternalDocument`; when it reaches
+    /// zero, issues `textDocument/didClose`.
+    ///
+    /// Silently no-ops if no LSP client is running for the given worktree and
+    /// language, or if the URI was never opened.
+    func closeExternalDocument(
+        absoluteURL: URL,
+        originatingWorktreeRoot: URL,
+        language: String
+    ) async {
+        let uri = absoluteURL.lspURI
+        guard let key = holderKey(forWorktreeRoot: originatingWorktreeRoot, language: language),
+              var holder = holders[key],
+              (holder.refsByURI[uri] ?? 0) > 0 else { return }
+
+        // Decrement the refcount synchronously before awaiting.
+        var refs = holder.refsByURI
+        let newRef = (refs[uri] ?? 0) - 1
+        if newRef <= 0 {
+            refs.removeValue(forKey: uri)
+        } else {
+            refs[uri] = newRef
+        }
+        holder.refsByURI = refs
+        holders[key] = holder
+
+        let initOk = await holder.ready.value
+        guard initOk, let cur = holders[key] else { return }
+
+        // Another opener still has this URI open — nothing to send.
+        if (cur.refsByURI[uri] ?? 0) > 0 { return }
+
+        // Send didClose only if didOpen was actually delivered.
+        if cur.openedURIs.contains(uri) {
+            try? await cur.client.didClose(uri: uri)
+            if var c = holders[key] {
+                c.openedURIs.remove(uri)
+                c.versions.removeValue(forKey: uri)
+                c.pendingOpenText.removeValue(forKey: uri)
+                c.texts.removeValue(forKey: uri)
+                holders[key] = c
+            }
+        }
+        // NOTE: intentionally do NOT shut down the holder here. External
+        // documents attach to a running server that serves in-worktree tabs;
+        // their closure must not trigger server teardown.
+    }
+
     /// Maps a file extension to its configured language id, or nil if no
     /// enabled server claims that extension. Delegates to the registry so
     /// user-defined entries (Settings → Code) are honored.
