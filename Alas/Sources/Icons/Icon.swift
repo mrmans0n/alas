@@ -32,7 +32,6 @@ struct Icon: View {
         case "palette":    return "paintpalette"
         case "keyboard":   return "keyboard"
         case "github":     return "circle.hexagongrid"
-        case "wing":       return "airplane"
         default:           return "questionmark"
         }
     }
