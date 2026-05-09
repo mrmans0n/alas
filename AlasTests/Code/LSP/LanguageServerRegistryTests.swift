@@ -41,7 +41,7 @@ struct LanguageServerRegistryTests {
         let r = LanguageServerRegistry(userDefined: [])
         #expect(r.language(forFileExtension: "swift") == "swift")
         #expect(r.language(forFileExtension: "rs") == "rust")
-        #expect(r.language(forFileExtension: "kt") == "kotlin")
+        #expect(r.language(forFileExtension: "kt") == nil)
         #expect(r.language(forFileExtension: "md") == "markdown")
         #expect(r.language(forFileExtension: "ts") == "typescript")
         #expect(r.language(forFileExtension: "mts") == "typescript")
