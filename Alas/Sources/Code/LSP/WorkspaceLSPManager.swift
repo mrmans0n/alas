@@ -348,15 +348,18 @@ final class WorkspaceLSPManager {
     /// approach when nil or when the originating file's URI isn't tracked yet
     /// (e.g. app restart with persisted external tabs).
     ///
-    /// Silently no-ops if no LSP client is running for the given worktree and
-    /// language (e.g. no in-worktree tab is open to have started the server).
+    /// Returns `true` when a holder was found and `didOpen` was sent (or the
+    /// URI was already open with a positive refcount). Returns `false` when no
+    /// holder was available — the call silently no-ops in that case and the
+    /// caller can retry later.
+    @discardableResult
     func openExternalDocument(
         absoluteURL: URL,
         originatingWorktreeRoot: URL,
         originatingFileURL: URL? = nil,
         language: String,
         contents: String
-    ) async {
+    ) async -> Bool {
         let uri = absoluteURL.lspURI
         let key: Key?
         if let originatingFileURL,
@@ -365,7 +368,7 @@ final class WorkspaceLSPManager {
         } else {
             key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language)
         }
-        guard let key, var holder = holders[key] else { return }
+        guard let key, var holder = holders[key] else { return false }
 
         // Bump refcount and record pending text in case the server is still
         // initializing — the same approach used by openDocument for in-worktree
@@ -380,7 +383,7 @@ final class WorkspaceLSPManager {
 
         let initOk = await holder.ready.value
         guard initOk, let cur = holders[key], cur.client === holder.client,
-              (cur.refsByURI[uri] ?? 0) > 0 else { return }
+              (cur.refsByURI[uri] ?? 0) > 0 else { return false }
 
         if !cur.openedURIs.contains(uri) {
             let openText = cur.pendingOpenText[uri] ?? contents
@@ -398,6 +401,7 @@ final class WorkspaceLSPManager {
                 text: openText
             )
         }
+        return true
     }
 
     /// Notify the running LSP client that a previously opened external

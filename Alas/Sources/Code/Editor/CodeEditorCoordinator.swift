@@ -213,6 +213,14 @@ final class CodeEditorCoordinator {
         // LSP open/close for external buffers is managed by TabsManager
         // (tied to the buffer's cached lifetime), not by the coordinator
         // (which is torn down on every tab switch by SwiftUI's dismantleNSView).
+        // However, the initial open may have found no holder if the language
+        // server hadn't started yet (e.g. persisted external tab restored
+        // before any in-worktree file launches the server). Retry here so
+        // that when the coordinator re-attaches after a server is up,
+        // hover and ⌘-click start working without the user closing the tab.
+        if externalAbsolutePath != nil {
+            appState.tabs.ensureExternalLSPOpen(tabId: tabId)
+        }
 
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
