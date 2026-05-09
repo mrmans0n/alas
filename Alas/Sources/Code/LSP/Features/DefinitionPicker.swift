@@ -23,11 +23,15 @@ struct DefinitionPicker: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
                 .padding(.bottom, 6)
-            ForEach(Array(entries.enumerated()), id: \.offset) { idx, entry in
-                row(idx: idx, entry: entry)
-                    .background(idx == selection ? Color.accentColor.opacity(0.18) : Color.clear)
-                    .contentShape(Rectangle())
-                    .onTapGesture { onChoose(idx) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.offset) { idx, entry in
+                        row(idx: idx, entry: entry)
+                            .background(idx == selection ? Color.accentColor.opacity(0.18) : Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onChoose(idx) }
+                    }
+                }
             }
         }
         .frame(width: 380)
