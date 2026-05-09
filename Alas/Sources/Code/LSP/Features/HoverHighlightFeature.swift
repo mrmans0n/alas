@@ -30,6 +30,9 @@ final class HoverHighlightFeature {
         textView.flagsChangedHandler = { [weak self] event in
             self?.onFlagsChanged(event)
         }
+        textView.mouseExitedHandler = { [weak self] in
+            self?.clearUnderline()
+        }
         // Reuse the existing hover handler — feature multiplexes hover and
         // command-hover through the same closure. The popover-based
         // `HoverFeature` already lives on `hoverHandler`, so install a

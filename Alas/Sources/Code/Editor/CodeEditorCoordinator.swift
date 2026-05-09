@@ -416,6 +416,7 @@ final class CodeEditorCoordinator {
         textView?.hoverHandler = nil
         textView?.commandClickHandler = nil
         textView?.flagsChangedHandler = nil
+        textView?.mouseExitedHandler = nil
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
