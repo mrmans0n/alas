@@ -315,10 +315,20 @@ final class CodeEditorCoordinator {
             // first.
             let nextBuffer: EditorBuffer
             if let abs = externalAbsolutePath {
+                let absURL = URL(fileURLWithPath: abs)
+                let originatingFileURL: URL? = originatingRelativePath.flatMap {
+                    worktreeRoot.appendingPathComponent($0)
+                }
+                let language = appState.lsp.language(
+                    forFileExtension: (abs as NSString).pathExtension
+                )
                 nextBuffer = appState.tabs.externalBuffer(
                     worktreeId: worktreeId,
                     tabId: tabId,
-                    absoluteURL: URL(fileURLWithPath: abs)
+                    absoluteURL: absURL,
+                    worktreeRoot: worktreeRoot,
+                    originatingFileURL: originatingFileURL,
+                    language: language
                 )
             } else {
                 nextBuffer = appState.tabs.buffer(
