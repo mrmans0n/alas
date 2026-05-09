@@ -25,7 +25,7 @@ final class TabsManager {
     private var externalTabURLs: [TabID: (worktreeId: String, url: URL)] = [:]
     /// LSP parameters recorded when `externalBuffer` fires `openExternalDocument`
     /// so that `discardBuffer` can issue the matching `closeExternalDocument`.
-    private struct ExternalLSPInfo {
+    private struct ExternalLSPInfo: Equatable {
         var worktreeRoot: URL
         var originatingFileURL: URL?
         var language: String
@@ -445,27 +445,48 @@ final class TabsManager {
               let entry = externalTabURLs[tabId] else { return }
         let absoluteURL = entry.url
         let contents = bufferStore.externalBuffer(worktreeId: entry.worktreeId, absoluteURL: absoluteURL).storage.string
+        // Capture the info snapshot this Task is opening against so the completion
+        // can detect a mid-flight rebind and undo the open on the old holder.
+        let snapshot = info
         let task = Task { [weak self] in
             let opened = await lsp.openExternalDocument(
                 absoluteURL: absoluteURL,
-                originatingWorktreeRoot: info.worktreeRoot,
-                originatingFileURL: info.originatingFileURL,
-                language: info.language,
+                originatingWorktreeRoot: snapshot.worktreeRoot,
+                originatingFileURL: snapshot.originatingFileURL,
+                language: snapshot.language,
                 contents: contents
             )
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.pendingExternalOpenTasks[tabId] = nil
                 // If the tab was discarded while the open was in flight, undo it
-                // so the URI doesn't leak on the holder until app exit.
+                // against the snapshot we actually opened against, so the URI
+                // doesn't leak on the holder until app exit.
                 if self.externalTabURLs[tabId] == nil {
                     if opened {
-                        Task { [lsp, info] in
+                        Task { [lsp, snapshot] in
                             await lsp.closeExternalDocument(
                                 absoluteURL: absoluteURL,
-                                originatingWorktreeRoot: info.worktreeRoot,
-                                originatingFileURL: info.originatingFileURL,
-                                language: info.language
+                                originatingWorktreeRoot: snapshot.worktreeRoot,
+                                originatingFileURL: snapshot.originatingFileURL,
+                                language: snapshot.language
+                            )
+                        }
+                    }
+                    return
+                }
+                // Info changed mid-flight (rebind). Undo the open against the
+                // snapshot so the old holder's ref is balanced. Don't touch
+                // openedExternalDocs — the rebind's ensureExternalLSPOpen call
+                // (issued after the rebind) will register the new holder.
+                if let current = self.externalLSPInfo[tabId], current != snapshot {
+                    if opened {
+                        Task { [lsp, snapshot] in
+                            await lsp.closeExternalDocument(
+                                absoluteURL: absoluteURL,
+                                originatingWorktreeRoot: snapshot.worktreeRoot,
+                                originatingFileURL: snapshot.originatingFileURL,
+                                language: snapshot.language
                             )
                         }
                     }
