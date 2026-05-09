@@ -88,6 +88,7 @@ struct CodeEditorView: NSViewRepresentable {
             buffer: buffer,
             layoutManager: layoutManager,
             worktreeId: worktreeId,
+            worktreeRoot: worktreeRoot,
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,

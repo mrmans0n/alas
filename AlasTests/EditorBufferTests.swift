@@ -466,6 +466,7 @@ struct EditorBufferTests {
             buffer: buffer,
             layoutManager: layoutManager,
             worktreeId: "wt",
+            worktreeRoot: root,
             tabId: "t",
             revealLine: nil,
             revealCharacter: nil,
@@ -506,6 +507,7 @@ struct EditorBufferTests {
             buffer: buffer,
             layoutManager: layoutManager,
             worktreeId: "wt",
+            worktreeRoot: root,
             tabId: "tab",
             revealLine: nil,
             revealCharacter: nil,
@@ -544,6 +546,7 @@ struct EditorBufferTests {
             buffer: bufferA,
             layoutManager: layoutManager,
             worktreeId: "wt",
+            worktreeRoot: root,
             tabId: "tab-a",
             revealLine: nil,
             revealCharacter: nil,
@@ -598,7 +601,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
@@ -639,7 +642,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
@@ -694,7 +697,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 
@@ -765,7 +768,7 @@ struct EditorBufferTests {
         let theme = try ThemeStore().current
         coordinator.attach(
             textView: textView, buffer: bufferA, layoutManager: layoutManager,
-            worktreeId: "wt", tabId: "tab-a",
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
             revealLine: nil, revealCharacter: nil, theme: theme
         )
 

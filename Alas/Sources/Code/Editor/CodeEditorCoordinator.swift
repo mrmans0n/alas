@@ -24,6 +24,7 @@ final class CodeEditorCoordinator {
     private var currentFontSize: CGFloat?
     private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
     private var currentExternalAbsolutePath: String?
+    private var currentOriginatingWorktreeRoot: URL?
 
     private var diagnosticsTask: Task<Void, Never>?
     private var diagnosticsSetupTask: Task<Void, Never>?
@@ -79,13 +80,18 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentTabId = tabId
         self.currentTheme = theme
         self.currentExternalAbsolutePath = externalAbsolutePath
+        if externalAbsolutePath != nil {
+            currentOriginatingWorktreeRoot = worktreeRoot
+        } else {
+            currentOriginatingWorktreeRoot = nil
+        }
 
         let family = appState.config.code.fontFamily
         let size = CGFloat(appState.config.code.fontSize)
@@ -105,11 +111,12 @@ final class CodeEditorCoordinator {
         hover = HoverFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
-                if self.currentExternalAbsolutePath != nil {
-                    return self.appState.lsp.client(forFile: root, worktreeRoot: root, language: lang)
+                guard let self, let lang = self.currentLanguage else { return nil }
+                if self.currentExternalAbsolutePath != nil,
+                   let originating = self.currentOriginatingWorktreeRoot {
+                    return self.appState.lsp.client(forFile: originating, worktreeRoot: originating, language: lang)
                 }
-                guard let rel = self.currentRelativePath else { return nil }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
@@ -124,11 +131,12 @@ final class CodeEditorCoordinator {
         definition = DefinitionFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self, let root = self.currentRoot, let lang = self.currentLanguage else { return nil }
-                if self.currentExternalAbsolutePath != nil {
-                    return self.appState.lsp.client(forFile: root, worktreeRoot: root, language: lang)
+                guard let self, let lang = self.currentLanguage else { return nil }
+                if self.currentExternalAbsolutePath != nil,
+                   let originating = self.currentOriginatingWorktreeRoot {
+                    return self.appState.lsp.client(forFile: originating, worktreeRoot: originating, language: lang)
                 }
-                guard let rel = self.currentRelativePath else { return nil }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
@@ -162,13 +170,12 @@ final class CodeEditorCoordinator {
         hoverHighlight = HoverHighlightFeature(
             textView: textView,
             getClient: { [weak self] in
-                guard let self,
-                      let root = self.currentRoot,
-                      let lang = self.currentLanguage else { return nil }
-                if self.currentExternalAbsolutePath != nil {
-                    return self.appState.lsp.client(forFile: root, worktreeRoot: root, language: lang)
+                guard let self, let lang = self.currentLanguage else { return nil }
+                if self.currentExternalAbsolutePath != nil,
+                   let originating = self.currentOriginatingWorktreeRoot {
+                    return self.appState.lsp.client(forFile: originating, worktreeRoot: originating, language: lang)
                 }
-                guard let rel = self.currentRelativePath else { return nil }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
@@ -184,14 +191,14 @@ final class CodeEditorCoordinator {
 
         if buffer.isExternal,
            let abs = currentExternalAbsolutePath,
-           let root = currentRoot,
+           let originating = currentOriginatingWorktreeRoot,
            let lang = currentLanguage {
             let url = URL(fileURLWithPath: abs)
             let contents = buffer.storage.string
             Task { [appState = appState] in
                 await appState.lsp.openExternalDocument(
                     absoluteURL: url,
-                    originatingWorktreeRoot: root,
+                    originatingWorktreeRoot: originating,
                     language: lang,
                     contents: contents
                 )
@@ -219,7 +226,7 @@ final class CodeEditorCoordinator {
 
             // If switching away from an external, close the old LSP document.
             if let oldAbs = currentExternalAbsolutePath,
-               let root = currentRoot,
+               let originating = currentOriginatingWorktreeRoot,
                let lang = currentLanguage,
                oldAbs != externalAbsolutePath {
                 let url = URL(fileURLWithPath: oldAbs)
@@ -227,7 +234,7 @@ final class CodeEditorCoordinator {
                 Task {
                     await appState.lsp.closeExternalDocument(
                         absoluteURL: url,
-                        originatingWorktreeRoot: root,
+                        originatingWorktreeRoot: originating,
                         language: lang
                     )
                 }
@@ -236,6 +243,11 @@ final class CodeEditorCoordinator {
             currentWorktreeId = worktreeId
             currentTabId = tabId
             currentExternalAbsolutePath = externalAbsolutePath
+            if externalAbsolutePath != nil {
+                currentOriginatingWorktreeRoot = worktreeRoot
+            } else {
+                currentOriginatingWorktreeRoot = nil
+            }
 
             // Fetch (and if needed, create) the buffer for the new tab and
             // re-bind the layout manager onto its storage. Without this swap
@@ -267,14 +279,14 @@ final class CodeEditorCoordinator {
             // If switching to a new external, open its LSP document.
             if nextBuffer.isExternal,
                let abs = externalAbsolutePath,
-               let root = currentRoot,
+               let originating = currentOriginatingWorktreeRoot,
                let lang = currentLanguage {
                 let url = URL(fileURLWithPath: abs)
                 let contents = nextBuffer.storage.string
                 Task { [appState = appState] in
                     await appState.lsp.openExternalDocument(
                         absoluteURL: url,
-                        originatingWorktreeRoot: root,
+                        originatingWorktreeRoot: originating,
                         language: lang,
                         contents: contents
                     )
@@ -345,19 +357,20 @@ final class CodeEditorCoordinator {
 
     func detach() {
         if let abs = currentExternalAbsolutePath,
-           let root = currentRoot,
+           let originating = currentOriginatingWorktreeRoot,
            let lang = currentLanguage {
             let url = URL(fileURLWithPath: abs)
             let appState = self.appState
             Task {
                 await appState.lsp.closeExternalDocument(
                     absoluteURL: url,
-                    originatingWorktreeRoot: root,
+                    originatingWorktreeRoot: originating,
                     language: lang
                 )
             }
         }
         currentExternalAbsolutePath = nil
+        currentOriginatingWorktreeRoot = nil
         if let buffer, let token = editObserverToken {
             buffer.removeOnEdit(token)
         }
