@@ -51,4 +51,27 @@ struct TabsManagerTests {
         #expect(state.sessionId == "new")
         #expect(state.title == "x")
     }
+
+    @Test func editorTabStateDecodesLegacyShape() throws {
+        // Old shape: no externalAbsolutePath key.
+        let json = #"""
+        {"id":"x","title":"a.txt","relativePath":"a.txt"}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(EditorTabState.self, from: json)
+        #expect(decoded.relativePath == "a.txt")
+        #expect(decoded.isExternal == false)
+        #expect(decoded.externalAbsolutePath == nil)
+    }
+
+    @Test func editorTabStateRoundTripsExternalPath() throws {
+        let s = EditorTabState(
+            id: "y", title: "NSString.h",
+            relativePath: "",
+            externalAbsolutePath: "/usr/include/NSString.h"
+        )
+        let data = try JSONEncoder().encode(s)
+        let back = try JSONDecoder().decode(EditorTabState.self, from: data)
+        #expect(back == s)
+        #expect(back.isExternal)
+    }
 }

@@ -33,7 +33,7 @@ enum Tab: Codable, Equatable, Identifiable {
 
     var relativeFilePath: String? {
         switch self {
-        case .editor(let s): return s.relativePath
+        case .editor(let s): return s.isExternal ? nil : s.relativePath
         default:             return nil
         }
     }
@@ -48,9 +48,12 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
 struct EditorTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
-    var relativePath: String   // relative to worktree root
+    var relativePath: String   // relative to worktree root; empty when external
     var revealLine: Int? = nil       // 0-based, optional reveal hint set by go-to-definition
     var revealCharacter: Int? = nil  // 0-based UTF-16
+    var externalAbsolutePath: String? = nil  // set when navigating to a file outside the worktree
+
+    var isExternal: Bool { externalAbsolutePath != nil }
 }
 
 struct DiffTabState: Codable, Equatable, Identifiable {
