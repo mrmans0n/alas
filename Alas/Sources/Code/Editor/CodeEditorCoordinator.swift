@@ -210,23 +210,9 @@ final class CodeEditorCoordinator {
             }
         )
 
-        if buffer.isExternal,
-           let abs = currentExternalAbsolutePath,
-           let originating = currentOriginatingWorktreeRoot,
-           let lang = currentLanguage {
-            let url = URL(fileURLWithPath: abs)
-            let contents = buffer.storage.string
-            let originatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
-            Task { [appState = appState] in
-                await appState.lsp.openExternalDocument(
-                    absoluteURL: url,
-                    originatingWorktreeRoot: originating,
-                    originatingFileURL: originatingFileURL,
-                    language: lang,
-                    contents: contents
-                )
-            }
-        }
+        // LSP open/close for external buffers is managed by TabsManager
+        // (tied to the buffer's cached lifetime), not by the coordinator
+        // (which is torn down on every tab switch by SwiftUI's dismantleNSView).
 
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
     }
@@ -331,7 +317,10 @@ final class CodeEditorCoordinator {
                 textView?.isEditable = true
             }
 
-            // If switching to a new external, open its LSP document.
+            // If the origin changed for an external buffer, open the LSP
+            // document under the NEW holder (the close-old Task fired above
+            // released the ref on the old holder). Also update the manager's
+            // externalLSPInfo so discardBuffer closes the right holder.
             if nextBuffer.isExternal,
                let abs = externalAbsolutePath,
                let originating = currentOriginatingWorktreeRoot,
@@ -339,6 +328,12 @@ final class CodeEditorCoordinator {
                 let url = URL(fileURLWithPath: abs)
                 let contents = nextBuffer.storage.string
                 let originatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
+                appState.tabs.updateExternalLSPInfo(
+                    tabId: tabId,
+                    worktreeRoot: originating,
+                    originatingFileURL: originatingFileURL,
+                    language: lang
+                )
                 Task { [appState = appState] in
                     await appState.lsp.openExternalDocument(
                         absoluteURL: url,
@@ -413,21 +408,10 @@ final class CodeEditorCoordinator {
     }
 
     func detach() {
-        if let abs = currentExternalAbsolutePath,
-           let originating = currentOriginatingWorktreeRoot,
-           let lang = currentLanguage {
-            let url = URL(fileURLWithPath: abs)
-            let appState = self.appState
-            let originatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
-            Task {
-                await appState.lsp.closeExternalDocument(
-                    absoluteURL: url,
-                    originatingWorktreeRoot: originating,
-                    originatingFileURL: originatingFileURL,
-                    language: lang
-                )
-            }
-        }
+        // LSP open/close for external buffers is managed by TabsManager
+        // (tied to the buffer's cached lifetime), not by the coordinator
+        // (which is torn down on every tab switch by SwiftUI's dismantleNSView).
+        // Do NOT call closeExternalDocument here.
         currentExternalAbsolutePath = nil
         currentOriginatingWorktreeRoot = nil
         currentOriginatingRelativePath = nil

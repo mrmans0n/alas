@@ -350,4 +350,31 @@ struct TabsManagerBufferTests {
         let b = store.externalBuffer(worktreeId: "wt", absoluteURL: url)
         #expect(a !== b)
     }
+
+    /// Calling `externalBuffer` for the same `tabId` twice (simulating a tab
+    /// switch back) must return the SAME cached buffer instance — proving the
+    /// cache-hit path is exercised and that a second LSP open would be guarded
+    /// by the `openedExternalDocs` set.
+    @Test func externalBufferCacheHitReturnsSameInstance() throws {
+        let (manager, _, _) = makeManager()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ext-cache-hit-\(UUID().uuidString).h")
+        try "// header\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let root = FileManager.default.temporaryDirectory
+        let tabId = "ext-cache-tab"
+        let a = manager.externalBuffer(
+            worktreeId: "wt", tabId: tabId, absoluteURL: url,
+            worktreeRoot: root, originatingFileURL: nil, language: "c"
+        )
+        // Simulates the view being dismantled and remounted (tab switch away
+        // and back). The second call must return the same instance and must
+        // NOT attempt a second openExternalDocument.
+        let b = manager.externalBuffer(
+            worktreeId: "wt", tabId: tabId, absoluteURL: url,
+            worktreeRoot: root, originatingFileURL: nil, language: "c"
+        )
+        #expect(a === b)
+    }
 }

@@ -23,6 +23,17 @@ final class TabsManager {
     /// Tracks the absolute URL for external (out-of-worktree) tabs so that
     /// `discardBuffer(worktreeId:tabId:)` can tear them down too.
     private var externalTabURLs: [TabID: (worktreeId: String, url: URL)] = [:]
+    /// LSP parameters recorded when `externalBuffer` fires `openExternalDocument`
+    /// so that `discardBuffer` can issue the matching `closeExternalDocument`.
+    private struct ExternalLSPInfo {
+        var worktreeRoot: URL
+        var originatingFileURL: URL?
+        var language: String
+    }
+    private var externalLSPInfo: [TabID: ExternalLSPInfo] = [:]
+    /// Tracks which tab IDs have already had `openExternalDocument` fired so
+    /// that cache-hit calls to `externalBuffer` don't double-count the ref.
+    private var openedExternalDocs: Set<TabID> = []
     private let lsp: WorkspaceLSPManager?
 
     init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
@@ -325,11 +336,67 @@ final class TabsManager {
     /// Registering `tabId` in `externalTabURLs` ensures that the normal
     /// `discardBuffer(worktreeId:tabId:)` close-tab path tears the buffer
     /// down and stops its file watcher.
-    func externalBuffer(worktreeId: String, tabId: TabID, absoluteURL: URL) -> EditorBuffer {
+    ///
+    /// On first access (cache miss) fires `openExternalDocument` via the LSP
+    /// manager so the holder's reference count is tied to the buffer's
+    /// lifetime, not the `CodeEditorView`'s. Subsequent calls for the same
+    /// `tabId` (cache hit after a tab switch) are idempotent.
+    func externalBuffer(
+        worktreeId: String,
+        tabId: TabID,
+        absoluteURL: URL,
+        worktreeRoot: URL? = nil,
+        originatingFileURL: URL? = nil,
+        language: String? = nil
+    ) -> EditorBuffer {
         externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
         let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
         buffer.startWatching()
+
+        // Fire openExternalDocument the FIRST time this tab's buffer is
+        // accessed.  Cache hits (tab switch back) must not re-open.
+        if let lsp,
+           let root = worktreeRoot,
+           let lang = language,
+           !openedExternalDocs.contains(tabId) {
+            openedExternalDocs.insert(tabId)
+            let info = ExternalLSPInfo(
+                worktreeRoot: root,
+                originatingFileURL: originatingFileURL,
+                language: lang
+            )
+            externalLSPInfo[tabId] = info
+            let contents = buffer.storage.string
+            Task { [lsp] in
+                await lsp.openExternalDocument(
+                    absoluteURL: absoluteURL,
+                    originatingWorktreeRoot: root,
+                    originatingFileURL: originatingFileURL,
+                    language: lang,
+                    contents: contents
+                )
+            }
+        }
+
         return buffer
+    }
+
+    /// Updates the LSP info recorded for an external tab (called by the
+    /// coordinator when the originating path changes mid-session).  The
+    /// caller is responsible for firing the close-old / open-new pair;
+    /// this method only updates the record so that the eventual
+    /// `discardBuffer` close targets the right holder.
+    func updateExternalLSPInfo(
+        tabId: TabID,
+        worktreeRoot: URL,
+        originatingFileURL: URL?,
+        language: String
+    ) {
+        externalLSPInfo[tabId] = ExternalLSPInfo(
+            worktreeRoot: worktreeRoot,
+            originatingFileURL: originatingFileURL,
+            language: language
+        )
     }
 
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
@@ -358,6 +425,20 @@ final class TabsManager {
         // externalBuffers cache rather than the in-worktree `buffers` dict.
         if let ext = externalTabURLs.removeValue(forKey: tabId) {
             assert(ext.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but external buffer is owned by \(ext.worktreeId)")
+            // Fire closeExternalDocument to release the LSP ref that was
+            // acquired in externalBuffer(...) on cache miss.
+            if let info = externalLSPInfo.removeValue(forKey: tabId), let lsp {
+                let url = ext.url
+                Task { [lsp, info] in
+                    await lsp.closeExternalDocument(
+                        absoluteURL: url,
+                        originatingWorktreeRoot: info.worktreeRoot,
+                        originatingFileURL: info.originatingFileURL,
+                        language: info.language
+                    )
+                }
+            }
+            openedExternalDocs.remove(tabId)
             bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
             return
         }

@@ -44,10 +44,17 @@ struct CodeEditorView: NSViewRepresentable {
 
         let buffer: EditorBuffer
         if let abs = externalAbsolutePath {
+            let absoluteURL = URL(fileURLWithPath: abs)
+            let ext = (abs as NSString).pathExtension
+            let language = appState.lsp.language(forFileExtension: ext)
+            let originatingFileURL: URL? = originatingRelativePath.map { worktreeRoot.appendingPathComponent($0) }
             buffer = appState.tabs.externalBuffer(
                 worktreeId: worktreeId,
                 tabId: tabId,
-                absoluteURL: URL(fileURLWithPath: abs)
+                absoluteURL: absoluteURL,
+                worktreeRoot: worktreeRoot,
+                originatingFileURL: originatingFileURL,
+                language: language
             )
         } else {
             buffer = appState.tabs.buffer(
