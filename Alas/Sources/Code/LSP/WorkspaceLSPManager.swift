@@ -4,7 +4,15 @@ import Observation
 @Observable
 @MainActor
 final class WorkspaceLSPManager {
-    private struct Key: Hashable { let root: String; let language: String }
+    /// Identifies a holder by the resolved server (root + spawn command +
+    /// args) rather than the LSP languageId. typescript-language-server
+    /// requires per-extension language IDs (`typescript`, `typescriptreact`,
+    /// `javascript`, `javascriptreact`), but they all point at the same
+    /// binary and a single instance handles cross-file references and
+    /// unsaved buffers across the whole project. Keying on the languageId
+    /// would split them into 4 isolated servers and stale-out cross-file
+    /// hover/diagnostics/definitions for unsaved edits.
+    private struct Key: Hashable { let root: String; let command: String; let args: [String] }
 
     /// One holder per `(worktreeRoot, language)`. Inserted **before**
     /// awaiting `initialize()` so a concurrent `closeDocument` can find it
@@ -57,7 +65,7 @@ final class WorkspaceLSPManager {
     func openDocument(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async -> LSPClient? {
         guard let entry = registry.entry(forLanguage: languageId) else { return nil }
         let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
-        let key = Key(root: lspRoot.path, language: languageId)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args)
         let uri = fileURL.lspURI
         // If a previous holder's server died (process exited, transport
         // closed) we'd otherwise reuse the dead client and silently fail to
@@ -164,9 +172,9 @@ final class WorkspaceLSPManager {
     /// delayed `didOpen` carries the latest content — otherwise we'd lose
     /// the reload and the server would analyze the stale tab-open snapshot.
     func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]? = nil) async {
-        let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
-        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
-        let key = Key(root: lspRoot.path, language: languageId)
+        guard let entry = registry.entry(forLanguage: languageId) else { return }
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args)
         let uri = fileURL.lspURI
         guard var holder = holders[key] else { return }
         if !holder.openedURIs.contains(uri) {
@@ -189,9 +197,9 @@ final class WorkspaceLSPManager {
     }
 
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {
-        let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
-        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
-        let key = Key(root: lspRoot.path, language: languageId)
+        guard let entry = registry.entry(forLanguage: languageId) else { return }
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args)
         let uri = fileURL.lspURI
         guard var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else { return }
         var refs = holder.refsByURI
@@ -235,9 +243,9 @@ final class WorkspaceLSPManager {
     /// never opened on the server (init still in flight, or a different
     /// holder is in play). Mirrors `didChange`'s readiness semantics.
     func didSave(worktreeRoot: URL, fileURL: URL, languageId: String) async {
-        let markers = registry.entry(forLanguage: languageId)?.rootMarkers ?? []
-        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
-        let key = Key(root: lspRoot.path, language: languageId)
+        guard let entry = registry.entry(forLanguage: languageId) else { return }
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args)
         let uri = fileURL.lspURI
         guard let holder = holders[key], holder.openedURIs.contains(uri) else { return }
         let initOk = await holder.ready.value
@@ -264,9 +272,9 @@ final class WorkspaceLSPManager {
     /// package's client is found correctly even when the caller only knows
     /// the worktree root.
     func client(forFile fileURL: URL, worktreeRoot: URL, language: String) -> LSPClient? {
-        let markers = registry.entry(forLanguage: language)?.rootMarkers ?? []
-        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
-        return holders[Key(root: lspRoot.path, language: language)]?.client
+        guard let entry = registry.entry(forLanguage: language) else { return nil }
+        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        return holders[Key(root: lspRoot.path, command: entry.command, args: entry.args)]?.client
     }
 
     /// Maps a file extension to its configured language id, or nil if no
