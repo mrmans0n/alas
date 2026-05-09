@@ -148,23 +148,31 @@ final class CodeEditorCoordinator {
                 return root.appendingPathComponent(rel).lspURI
             },
             openTarget: { [weak self] url, line, character in
-                guard let self, let root = self.currentRoot, let wid = self.currentWorktreeId else { return }
-                // Targets outside the current worktree (SDK headers,
-                // DerivedData, modulemap files) are dropped on the floor for
-                // now — `appendingPathComponent` would treat the absolute
-                // path as a sub-path of the worktree and the editor would
-                // open a bogus `<worktree>/<abs>` location. v1.5 will route
-                // these via absolute URLs so they can be opened in a new tab.
+                guard let self,
+                      let wid = self.currentWorktreeId else { return }
+                // For external buffers, the originating worktree root is the
+                // anchor for in-worktree-vs-external classification, not the
+                // sentinel that bindBuffer set on currentRoot.
+                let anchor = self.currentOriginatingWorktreeRoot ?? self.currentRoot
+                guard let root = anchor else { return }
                 let abs = url.path
                 let prefix = root.path + "/"
-                guard abs.hasPrefix(prefix) else { return }
-                let rel = String(abs.dropFirst(prefix.count))
-                self.appState.tabs.openEditor(
-                    worktreeId: wid,
-                    relativePath: rel,
-                    revealLine: line,
-                    revealCharacter: character
-                )
+                if abs.hasPrefix(prefix) {
+                    let rel = String(abs.dropFirst(prefix.count))
+                    self.appState.tabs.openEditor(
+                        worktreeId: wid,
+                        relativePath: rel,
+                        revealLine: line,
+                        revealCharacter: character
+                    )
+                } else {
+                    self.appState.tabs.openExternalEditor(
+                        worktreeId: wid,
+                        absoluteURL: url,
+                        revealLine: line,
+                        revealCharacter: character
+                    )
+                }
             }
         )
         hoverHighlight = HoverHighlightFeature(
