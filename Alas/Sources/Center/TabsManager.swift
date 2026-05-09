@@ -137,13 +137,19 @@ final class TabsManager {
     /// in-worktree file from which the user navigated here (e.g. via
     /// ⌘-click). Stored on the tab so that LSP traffic for this external
     /// file is routed to the correct holder in nested-package layouts.
+    ///
+    /// `originatingWorktreeRoot` and `language` are used to rebind the
+    /// external LSP holder when reusing an existing tab from a different
+    /// origin package, even while the tab is inactive.
     @discardableResult
     func openExternalEditor(
         worktreeId: String,
         absoluteURL: URL,
         revealLine: Int?,
         revealCharacter: Int?,
-        originatingRelativePath: String? = nil
+        originatingRelativePath: String? = nil,
+        originatingWorktreeRoot: URL? = nil,
+        language: String? = nil
     ) -> Tab {
         let absPath = absoluteURL.path
         if var file = byWorktree[worktreeId],
@@ -152,6 +158,7 @@ final class TabsManager {
                return false
            }) {
             if case .editor(var s) = file.tabs[idx] {
+                let originChanged = (s.originatingRelativePath != originatingRelativePath)
                 s.revealLine = revealLine
                 s.revealCharacter = revealCharacter
                 s.originatingRelativePath = originatingRelativePath   // refresh the origin
@@ -159,6 +166,17 @@ final class TabsManager {
                 file.activeTabId = s.id
                 byWorktree[worktreeId] = file
                 persist(worktreeId)
+                if originChanged, let originatingWorktreeRoot, let language {
+                    rebindExternalLSPHolder(
+                        tabId: s.id,
+                        absoluteURL: absoluteURL,
+                        worktreeRoot: originatingWorktreeRoot,
+                        originatingFileURL: originatingRelativePath.flatMap {
+                            originatingWorktreeRoot.appendingPathComponent($0)
+                        },
+                        language: language
+                    )
+                }
                 return .editor(s)
             }
         }
@@ -175,6 +193,50 @@ final class TabsManager {
         let tab = Tab.editor(state)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    /// Rebind an external tab's LSP holder when the originating in-worktree
+    /// file changes (e.g. the user ⌘-clicked the same SDK file from a
+    /// different package while the external tab was inactive). Operates
+    /// regardless of whether the tab is currently active, so the fix applies
+    /// even when the coordinator's `updateIfNeeded` path is never reached.
+    private func rebindExternalLSPHolder(
+        tabId: TabID,
+        absoluteURL: URL,
+        worktreeRoot: URL,
+        originatingFileURL: URL?,
+        language: String
+    ) {
+        let oldInfo = externalLSPInfo[tabId]
+        let newInfo = ExternalLSPInfo(
+            worktreeRoot: worktreeRoot,
+            originatingFileURL: originatingFileURL,
+            language: language
+        )
+        externalLSPInfo[tabId] = newInfo
+
+        // Cancel any in-flight open targeting the old holder so its completion
+        // handler can no longer record openedExternalDocs for a stale holder.
+        pendingExternalOpenTasks[tabId]?.cancel()
+        pendingExternalOpenTasks[tabId] = nil
+
+        // If we already opened against the OLD holder, close that ref now.
+        if openedExternalDocs.contains(tabId), let old = oldInfo {
+            let lsp = self.lsp
+            Task { [lsp, old] in
+                await lsp?.closeExternalDocument(
+                    absoluteURL: absoluteURL,
+                    originatingWorktreeRoot: old.worktreeRoot,
+                    originatingFileURL: old.originatingFileURL,
+                    language: old.language
+                )
+            }
+        }
+
+        // Clear the opened flag so ensureExternalLSPOpen retries against the
+        // new holder even if the tab was already open against the old one.
+        openedExternalDocs.remove(tabId)
+        ensureExternalLSPOpen(tabId: tabId)
     }
 
     @discardableResult
@@ -413,24 +475,6 @@ final class TabsManager {
             }
         }
         pendingExternalOpenTasks[tabId] = task
-    }
-
-    /// Updates the LSP info recorded for an external tab (called by the
-    /// coordinator when the originating path changes mid-session).  The
-    /// caller is responsible for firing the close-old / open-new pair;
-    /// this method only updates the record so that the eventual
-    /// `discardBuffer` close targets the right holder.
-    func updateExternalLSPInfo(
-        tabId: TabID,
-        worktreeRoot: URL,
-        originatingFileURL: URL?,
-        language: String
-    ) {
-        externalLSPInfo[tabId] = ExternalLSPInfo(
-            worktreeRoot: worktreeRoot,
-            originatingFileURL: originatingFileURL,
-            language: language
-        )
     }
 
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by

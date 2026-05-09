@@ -174,15 +174,21 @@ final class CodeEditorCoordinator {
                     // Pass the current in-worktree file as the originating
                     // path so LSP traffic for the external file is routed to
                     // the correct holder in nested-package layouts.
+                    // Also pass the worktree root and language so TabsManager
+                    // can rebind the LSP holder even when the tab is inactive.
                     let originatingRel = self.currentExternalAbsolutePath == nil
                         ? self.currentRelativePath
                         : self.currentOriginatingRelativePath
+                    let originatingRoot = self.currentOriginatingWorktreeRoot ?? self.currentRoot
+                    let lang = self.currentLanguage
                     self.appState.tabs.openExternalEditor(
                         worktreeId: wid,
                         absoluteURL: url,
                         revealLine: line,
                         revealCharacter: character,
-                        originatingRelativePath: originatingRel
+                        originatingRelativePath: originatingRel,
+                        originatingWorktreeRoot: originatingRoot,
+                        language: lang
                     )
                 }
             }
@@ -260,15 +266,6 @@ final class CodeEditorCoordinator {
             let session = highlightSession
             Task { await session.reset() }
 
-            // Capture old values into locals BEFORE mutating the current* properties
-            // so the close goes to the right holder, and so we can compute the
-            // isSameTabOriginChange gate from pre-mutation state.
-            let oldTabId = currentTabId
-            let oldAbs = currentExternalAbsolutePath
-            let oldOriginatingRoot = currentOriginatingWorktreeRoot
-            let oldOriginatingRelPath = currentOriginatingRelativePath
-            let oldLang = currentLanguage
-
             currentWorktreeId = worktreeId
             currentTabId = tabId
             currentExternalAbsolutePath = externalAbsolutePath
@@ -278,34 +275,6 @@ final class CodeEditorCoordinator {
             } else {
                 currentOriginatingWorktreeRoot = nil
                 currentOriginatingRelativePath = nil
-            }
-
-            // Only fire the close-old/open-new pair when this is a genuine
-            // same-tab origin change (same tabId, same external abs path, but
-            // the originating in-worktree path changed). When the coordinator
-            // is reused for a DIFFERENT tab the manager's discardBuffer path
-            // owns the old tab's LSP ref — firing close here would prematurely
-            // release it while the old tab is still open.
-            let isSameTabOriginChange = (oldTabId == tabId)
-                && (oldAbs == externalAbsolutePath)
-                && (oldAbs != nil)
-
-            if isSameTabOriginChange,
-               let oldAbs,
-               let originating = oldOriginatingRoot,
-               let lang = oldLang,
-               oldOriginatingRelPath != originatingRelativePath {
-                let url = URL(fileURLWithPath: oldAbs)
-                let appState = self.appState
-                let oldOriginatingFileURL: URL? = oldOriginatingRelPath.map { originating.appendingPathComponent($0) }
-                Task {
-                    await appState.lsp.closeExternalDocument(
-                        absoluteURL: url,
-                        originatingWorktreeRoot: originating,
-                        originatingFileURL: oldOriginatingFileURL,
-                        language: lang
-                    )
-                }
             }
 
             // Fetch (and if needed, create) the buffer for the new tab and
@@ -345,37 +314,12 @@ final class CodeEditorCoordinator {
             } else {
                 textView?.isEditable = true
             }
-
-            // If the origin changed for an external buffer on the SAME tab,
-            // open the LSP document under the NEW holder (the close-old Task
-            // fired above released the ref on the old holder). Also update the
-            // manager's externalLSPInfo so discardBuffer closes the right holder.
-            // For tab swaps (different tabId), TabsManager's externalBuffer call
-            // above already drives ensureExternalLSPOpen for the new tab.
-            if isSameTabOriginChange,
-               nextBuffer.isExternal,
-               let abs = externalAbsolutePath,
-               let originating = currentOriginatingWorktreeRoot,
-               let lang = currentLanguage {
-                let url = URL(fileURLWithPath: abs)
-                let contents = nextBuffer.storage.string
-                let originatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
-                appState.tabs.updateExternalLSPInfo(
-                    tabId: tabId,
-                    worktreeRoot: originating,
-                    originatingFileURL: originatingFileURL,
-                    language: lang
-                )
-                Task { [appState = appState] in
-                    await appState.lsp.openExternalDocument(
-                        absoluteURL: url,
-                        originatingWorktreeRoot: originating,
-                        originatingFileURL: originatingFileURL,
-                        language: lang,
-                        contents: contents
-                    )
-                }
-            }
+            // Note: origin-change rebinding (close-old-holder / open-new-holder)
+            // is now handled entirely by TabsManager.rebindExternalLSPHolder,
+            // which runs at openExternalEditor() time regardless of tab activation.
+            // The coordinator's externalBuffer() call above drives
+            // ensureExternalLSPOpen for the common case where the tab is active
+            // but the origin didn't change (normal tab switch).
         }
 
         if currentTheme != theme {
