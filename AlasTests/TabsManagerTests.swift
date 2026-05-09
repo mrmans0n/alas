@@ -132,4 +132,27 @@ struct TabsManagerTests {
             #expect(s.revealCharacter == 2)
         }
     }
+
+    @Test func openExternalEditorReuseRefreshesOriginatingRelativePath() {
+        let worktreeId = "tabs-manager-reuse-refresh-origin"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let url = URL(fileURLWithPath: "/usr/include/foo.h")
+        _ = mgr.openExternalEditor(
+            worktreeId: worktreeId, absoluteURL: url,
+            revealLine: 1, revealCharacter: 0,
+            originatingRelativePath: "PkgA/Sources/main.swift"
+        )
+        let second = mgr.openExternalEditor(
+            worktreeId: worktreeId, absoluteURL: url,
+            revealLine: 5, revealCharacter: 2,
+            originatingRelativePath: "PkgB/Sources/lib.swift"
+        )
+        if case .editor(let s) = second {
+            #expect(s.originatingRelativePath == "PkgB/Sources/lib.swift")
+            #expect(s.revealLine == 5)
+        } else {
+            Issue.record("expected editor tab")
+        }
+    }
 }

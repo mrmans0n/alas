@@ -250,6 +250,7 @@ final class CodeEditorCoordinator {
             pathChanged = currentWorktreeId != worktreeId
                 || currentTabId != tabId
                 || currentExternalAbsolutePath != externalAbsolutePath
+                || currentOriginatingRelativePath != originatingRelativePath
         } else {
             pathChanged = currentWorktreeId != worktreeId
                 || currentTabId != tabId
@@ -265,23 +266,14 @@ final class CodeEditorCoordinator {
             let session = highlightSession
             Task { await session.reset() }
 
-            // If switching away from an external, close the old LSP document.
-            if let oldAbs = currentExternalAbsolutePath,
-               let originating = currentOriginatingWorktreeRoot,
-               let lang = currentLanguage,
-               oldAbs != externalAbsolutePath {
-                let url = URL(fileURLWithPath: oldAbs)
-                let appState = self.appState
-                let oldOriginatingFileURL: URL? = currentOriginatingRelativePath.map { originating.appendingPathComponent($0) }
-                Task {
-                    await appState.lsp.closeExternalDocument(
-                        absoluteURL: url,
-                        originatingWorktreeRoot: originating,
-                        originatingFileURL: oldOriginatingFileURL,
-                        language: lang
-                    )
-                }
-            }
+            // If switching away from an external (or reusing the same external from a
+            // different originating path), close the old LSP document first.
+            // Capture old values into locals BEFORE mutating the current* properties
+            // so the close goes to the right holder.
+            let oldAbs = currentExternalAbsolutePath
+            let oldOriginatingRoot = currentOriginatingWorktreeRoot
+            let oldOriginatingRelPath = currentOriginatingRelativePath
+            let oldLang = currentLanguage
 
             currentWorktreeId = worktreeId
             currentTabId = tabId
@@ -292,6 +284,23 @@ final class CodeEditorCoordinator {
             } else {
                 currentOriginatingWorktreeRoot = nil
                 currentOriginatingRelativePath = nil
+            }
+
+            if let oldAbs,
+               let originating = oldOriginatingRoot,
+               let lang = oldLang,
+               (oldAbs != externalAbsolutePath || oldOriginatingRelPath != originatingRelativePath) {
+                let url = URL(fileURLWithPath: oldAbs)
+                let appState = self.appState
+                let oldOriginatingFileURL: URL? = oldOriginatingRelPath.map { originating.appendingPathComponent($0) }
+                Task {
+                    await appState.lsp.closeExternalDocument(
+                        absoluteURL: url,
+                        originatingWorktreeRoot: originating,
+                        originatingFileURL: oldOriginatingFileURL,
+                        language: lang
+                    )
+                }
             }
 
             // Fetch (and if needed, create) the buffer for the new tab and

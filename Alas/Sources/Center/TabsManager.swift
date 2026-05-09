@@ -139,6 +139,7 @@ final class TabsManager {
             if case .editor(var s) = file.tabs[idx] {
                 s.revealLine = revealLine
                 s.revealCharacter = revealCharacter
+                s.originatingRelativePath = originatingRelativePath   // refresh the origin
                 file.tabs[idx] = .editor(s)
                 file.activeTabId = s.id
                 byWorktree[worktreeId] = file
