@@ -17,7 +17,7 @@ settings:
 packages:
   SwiftTreeSitter:
     url: https://github.com/tree-sitter/swift-tree-sitter
-    from: 0.9.0
+    from: 0.25.0
   TreeSitterSwift:
     url: https://github.com/alex-pinkus/tree-sitter-swift
     # tag 0.7.2-with-generated-files; this fork's `main` branch
