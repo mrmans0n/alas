@@ -44,8 +44,11 @@ struct LanguageServerRegistryTests {
         #expect(r.language(forFileExtension: "kt") == "kotlin")
         #expect(r.language(forFileExtension: "md") == "markdown")
         #expect(r.language(forFileExtension: "ts") == "typescript")
-        #expect(r.language(forFileExtension: "tsx") == "typescript")
+        #expect(r.language(forFileExtension: "tsx") == "typescriptreact")
+        #expect(r.language(forFileExtension: "js") == "javascript")
+        #expect(r.language(forFileExtension: "jsx") == "javascriptreact")
         #expect(r.language(forFileExtension: "json") == "json")
+        #expect(r.language(forFileExtension: "jsonc") == "jsonc")
         #expect(r.language(forFileExtension: "xyz") == nil)
     }
 }

@@ -60,9 +60,42 @@ struct LanguageServerRegistry {
             rootMarkers: [".marksman.toml", ".git"],
             enabled: true
         ),
+        // typescript-language-server distinguishes typescript /
+        // typescriptreact / javascript / javascriptreact in
+        // `mode2ScriptKind` and never re-derives the mode from the file
+        // extension, so TSX/JSX files opened with `languageId: "typescript"`
+        // get parsed as plain TS. Each LSP language ID needs its own
+        // registry entry; they all spawn the same binary.
         LanguageServerConfig(
             language: "typescript",
-            extensions: ["ts", "tsx", "js", "jsx", "mjs", "cjs"],
+            extensions: ["ts"],
+            command: "typescript-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["tsconfig.json", "jsconfig.json", "package.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "typescriptreact",
+            extensions: ["tsx"],
+            command: "typescript-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["tsconfig.json", "jsconfig.json", "package.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "javascript",
+            extensions: ["js", "mjs", "cjs"],
+            command: "typescript-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["tsconfig.json", "jsconfig.json", "package.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "javascriptreact",
+            extensions: ["jsx"],
             command: "typescript-language-server",
             args: ["--stdio"],
             env: [:],
@@ -71,7 +104,19 @@ struct LanguageServerRegistry {
         ),
         LanguageServerConfig(
             language: "json",
-            extensions: ["json", "jsonc"],
+            extensions: ["json"],
+            command: "vscode-json-languageserver",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["package.json", ".git"],
+            enabled: true
+        ),
+        // vscode-json-languageserver only allows comments when the document
+        // languageId is "jsonc"; opening a .jsonc as "json" gets the strict
+        // parser and bogus diagnostics on every comment.
+        LanguageServerConfig(
+            language: "jsonc",
+            extensions: ["jsonc"],
             command: "vscode-json-languageserver",
             args: ["--stdio"],
             env: [:],
