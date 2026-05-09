@@ -64,4 +64,20 @@ struct EditorBufferStoreTests {
         try store.write(snap, worktreeId: "wt", tabId: "t")
         #expect(try store.read(worktreeId: "wt", tabId: "t") == snap)
     }
+
+    @Test func externalBufferIsCachedSeparately() throws {
+        let (store, _) = makeStore()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ext-\(UUID().uuidString).h")
+        try "header content\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let a = store.externalBuffer(worktreeId: "w1", absoluteURL: url)
+        let b = store.externalBuffer(worktreeId: "w1", absoluteURL: url)
+        #expect(a === b)  // same instance reused
+
+        // Different worktreeId → distinct buffer.
+        let c = store.externalBuffer(worktreeId: "w2", absoluteURL: url)
+        #expect(c !== a)
+    }
 }

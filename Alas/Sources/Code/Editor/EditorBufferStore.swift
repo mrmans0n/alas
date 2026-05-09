@@ -18,6 +18,16 @@ final class EditorBufferStore {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
+    /// External (out-of-worktree) buffer cache keyed by
+    /// `(worktreeId, absolute path)`. Distinct from the in-worktree cache
+    /// so absolute paths never collide with relative ones.
+    private struct ExternalKey: Hashable {
+        let worktreeId: String
+        let path: String
+    }
+
+    private var externalBuffers: [ExternalKey: EditorBuffer] = [:]
+
     /// `rootOverride` is for tests only; production callers omit it and
     /// the store reads/writes under `Paths.buffersRoot`.
     init(rootOverride: URL? = nil) {
@@ -80,5 +90,13 @@ final class EditorBufferStore {
     func discard(worktreeId: String, tabId: String) {
         let file = fileURL(worktreeId: worktreeId, tabId: tabId)
         try? FileManager.default.removeItem(at: file)
+    }
+
+    func externalBuffer(worktreeId: String, absoluteURL: URL) -> EditorBuffer {
+        let key = ExternalKey(worktreeId: worktreeId, path: absoluteURL.path)
+        if let cached = externalBuffers[key] { return cached }
+        let buffer = EditorBuffer(externalAbsoluteURL: absoluteURL)
+        externalBuffers[key] = buffer
+        return buffer
     }
 }
