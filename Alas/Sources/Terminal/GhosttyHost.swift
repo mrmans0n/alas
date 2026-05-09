@@ -21,8 +21,16 @@ struct GhosttyHost: NSViewRepresentable {
     }
 
     @MainActor
+    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
+        nsView.subviews.forEach { $0.removeFromSuperview() }
+    }
+
+    @MainActor
     private func attach(_ container: NSView) {
-        // Detach surface from previous superview if any
+        for subview in container.subviews where subview !== session.surface {
+            subview.removeFromSuperview()
+        }
+
         if session.surface.superview !== container {
             session.surface.removeFromSuperview()
             session.surface.translatesAutoresizingMaskIntoConstraints = false
