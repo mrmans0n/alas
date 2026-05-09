@@ -300,6 +300,21 @@ final class WorkspaceLSPManager {
         return nil
     }
 
+    /// Worktree-scoped variant: returns a holder for `uri` only if its
+    /// `Key.root` falls inside `worktreeRoot`. Used as the last fallback in
+    /// external open/close so a tab in worktree B never matches a holder in
+    /// worktree A that happens to serve the same SDK file.
+    private func holderKey(forURI uri: String, withinWorktreeRoot worktreeRoot: URL) -> Key? {
+        let rootPath = worktreeRoot.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        for (key, holder) in holders where holder.refsByURI[uri] != nil {
+            if key.root == rootPath || key.root.hasPrefix(rootPrefix) {
+                return key
+            }
+        }
+        return nil
+    }
+
     /// Find an existing holder serving any file inside `worktreeRoot` for
     /// `language`. Used by external-document open/close where we don't have
     /// an in-worktree file URI on hand but know the originating worktree.
@@ -366,7 +381,11 @@ final class WorkspaceLSPManager {
            let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
             key = preciseKey
         } else {
-            key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language)
+            // Fall back to prefix-scan; also try scanning by the external
+            // URI itself. Use worktree-scoped lookup as the last fallback
+            // to avoid matching a holder in a different worktree that
+            // happens to serve the same SDK file.
+            key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language) ?? holderKey(forURI: uri, withinWorktreeRoot: originatingWorktreeRoot)
         }
         guard let key, var holder = holders[key] else { return false }
 
@@ -431,7 +450,9 @@ final class WorkspaceLSPManager {
             // Fall back to prefix-scan; also try scanning by the external
             // URI itself (it may already be tracked in refsByURI if didOpen
             // was sent but the originating file was closed in the meantime).
-            key = holderKey(forURI: uri) ?? holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language)
+            // Use worktree-scoped lookup to avoid matching a holder in a
+            // different worktree that happens to serve the same SDK file.
+            key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language) ?? holderKey(forURI: uri, withinWorktreeRoot: originatingWorktreeRoot)
         }
         guard let key,
               var holder = holders[key],
