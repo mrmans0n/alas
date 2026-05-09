@@ -312,7 +312,9 @@ final class TabsManager {
 
     /// Returns (or creates) a read-only external buffer keyed by absolute URL.
     func externalBuffer(worktreeId: String, absoluteURL: URL) -> EditorBuffer {
-        bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
+        let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
+        buffer.startWatching()
+        return buffer
     }
 
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
