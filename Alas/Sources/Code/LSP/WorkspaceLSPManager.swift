@@ -280,12 +280,8 @@ final class WorkspaceLSPManager {
     /// package's client is found correctly even when the caller only knows
     /// the worktree root.
     func client(forFile fileURL: URL, worktreeRoot: URL, language: String) -> LSPClient? {
-        // Look up by URI so a server opened under a now-edited entry is
-        // still findable by hover/diagnostic callers. `worktreeRoot` and
-        // `language` are kept on the signature for source compatibility
-        // and aren't needed once a holder exists for the file.
         let uri = fileURL.lspURI
-        guard let key = holderKey(forURI: uri) else { return nil }
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return nil }
         return holders[key]?.client
     }
 
