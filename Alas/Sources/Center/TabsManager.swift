@@ -38,6 +38,11 @@ final class TabsManager {
     /// Cancellation on `discardBuffer` prevents a completed-but-unregistered
     /// open from leaking the URI if the tab was closed before the Task landed.
     private var pendingExternalOpenTasks: [TabID: Task<Void, Never>] = [:]
+    /// Generation counter per tab for the pending open task. When a rebind
+    /// cancels and replaces the task, the generation increments. The task's
+    /// completion handler only clears pendingExternalOpenTasks if its
+    /// captured generation still matches the current one.
+    private var pendingExternalOpenGen: [TabID: Int] = [:]
     private let lsp: WorkspaceLSPManager?
 
     init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
@@ -219,6 +224,7 @@ final class TabsManager {
         // handler can no longer record openedExternalDocs for a stale holder.
         pendingExternalOpenTasks[tabId]?.cancel()
         pendingExternalOpenTasks[tabId] = nil
+        pendingExternalOpenGen[tabId] = nil
 
         // If we already opened against the OLD holder, close that ref now.
         if openedExternalDocs.contains(tabId), let old = oldInfo {
@@ -448,6 +454,8 @@ final class TabsManager {
         // Capture the info snapshot this Task is opening against so the completion
         // can detect a mid-flight rebind and undo the open on the old holder.
         let snapshot = info
+        let gen = (pendingExternalOpenGen[tabId] ?? 0) + 1
+        pendingExternalOpenGen[tabId] = gen
         let task = Task { [weak self] in
             let opened = await lsp.openExternalDocument(
                 absoluteURL: absoluteURL,
@@ -458,7 +466,10 @@ final class TabsManager {
             )
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.pendingExternalOpenTasks[tabId] = nil
+                // Only clear our own entry — a rebind may have installed a successor.
+                if self.pendingExternalOpenGen[tabId] == gen {
+                    self.pendingExternalOpenTasks[tabId] = nil
+                }
                 // If the tab was discarded while the open was in flight, undo it
                 // against the snapshot we actually opened against, so the URI
                 // doesn't leak on the holder until app exit.
@@ -530,6 +541,7 @@ final class TabsManager {
             // the LSP request had already been sent before cancellation.
             pendingExternalOpenTasks[tabId]?.cancel()
             pendingExternalOpenTasks[tabId] = nil
+            pendingExternalOpenGen[tabId] = nil
             // Fire closeExternalDocument to release the LSP ref that was
             // acquired in externalBuffer(...) on cache miss.
             if let info = externalLSPInfo.removeValue(forKey: tabId), let lsp {

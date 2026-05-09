@@ -447,12 +447,13 @@ final class WorkspaceLSPManager {
            let preciseKey = holderKey(forURI: originatingFileURL.lspURI) {
             key = preciseKey
         } else {
-            // Fall back to prefix-scan; also try scanning by the external
-            // URI itself (it may already be tracked in refsByURI if didOpen
-            // was sent but the originating file was closed in the meantime).
-            // Use worktree-scoped lookup to avoid matching a holder in a
-            // different worktree that happens to serve the same SDK file.
-            key = holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language) ?? holderKey(forURI: uri, withinWorktreeRoot: originatingWorktreeRoot)
+            // Scan the external URI itself first (scoped to the worktree) to
+            // ensure we decrement the correct holder. Only fall back to the
+            // language-by-worktree scan if the URI isn't found in any holder's
+            // refsByURI — with multiple nested LSP holders for the same language,
+            // the prefix-scan could pick an arbitrary holder that doesn't actually
+            // have this URI registered, leaving the ref count imbalanced.
+            key = holderKey(forURI: uri, withinWorktreeRoot: originatingWorktreeRoot) ?? holderKeyForExternal(worktreeRoot: originatingWorktreeRoot, language: language)
         }
         guard let key,
               var holder = holders[key],
