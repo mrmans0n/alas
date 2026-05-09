@@ -122,6 +122,7 @@ final class HoverHighlightFeature {
     }
 
     private func clearUnderline() {
+        defer { restoreCursor() }
         guard let textView, let layoutManager = textView.layoutManager,
               let range = lastUnderlinedRange else {
             lastUnderlinedRange = nil
