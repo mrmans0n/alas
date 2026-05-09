@@ -78,6 +78,11 @@ private struct TabButton: View {
                 .font(.system(size: 11.5))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
                 .lineLimit(1)
+            if case .editor(let state) = tab, state.isExternal {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
             if let info = harnessInfo {
                 Circle().fill(stateColor(info.state)).frame(width: 6, height: 6)
                     .opacity(info.state == "running" ? 0.85 : 1)
