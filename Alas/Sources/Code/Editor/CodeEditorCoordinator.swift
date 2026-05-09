@@ -36,6 +36,7 @@ final class CodeEditorCoordinator {
     let symbolsFeature = SymbolsFeature()
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
+    private var hoverHighlight: HoverHighlightFeature?
 
     private var editObserverToken: EditorBuffer.EditObserverToken?
     private var didChangeTask: Task<Void, Never>?
@@ -134,6 +135,22 @@ final class CodeEditorCoordinator {
                     revealLine: line,
                     revealCharacter: character
                 )
+            }
+        )
+        hoverHighlight = HoverHighlightFeature(
+            textView: textView,
+            getClient: { [weak self] in
+                guard let self,
+                      let root = self.currentRoot,
+                      let rel = self.currentRelativePath,
+                      let lang = self.currentLanguage else { return nil }
+                return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
+            },
+            getURI: { [weak self] in
+                guard let self,
+                      let root = self.currentRoot,
+                      let rel = self.currentRelativePath else { return nil }
+                return root.appendingPathComponent(rel).lspURI
             }
         )
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
@@ -252,6 +269,10 @@ final class CodeEditorCoordinator {
         layoutManager = nil
         hover = nil
         definition = nil
+        hoverHighlight = nil
+        textView?.hoverHandler = nil
+        textView?.commandClickHandler = nil
+        textView?.flagsChangedHandler = nil
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
