@@ -94,6 +94,39 @@ final class AppState {
         saveProjects()
     }
 
+    /// Archive (hide) a worktree. Closes all tabs/terminals/harness state for
+    /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
+    /// the archived worktree was selected. Does NOT touch git or disk.
+    func archiveWorktree(_ worktree: Worktree) {
+        // Snapshot index in the visible list BEFORE we mutate anything, so we
+        // can pick a sensible follow-up selection.
+        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+        let wasSelected = selectedWorktreeId == worktree.id
+
+        cleanupWorktreeState(worktreeId: worktree.id)
+        projectsManager.setWorktreeHidden(
+            projectId: worktree.projectId,
+            path: worktree.path,
+            hidden: true
+        )
+        saveProjects()
+
+        if wasSelected {
+            selectedWorktreeId = selectionAfterRemoval(
+                removedFromProjectId: worktree.projectId,
+                removedAtIndex: removedIndex
+            )
+        }
+    }
+
+    /// Restore an archived worktree. Tabs/terminals are NOT recreated — they
+    /// were torn down at archive time and the user re-opens what they need.
+    func unarchiveWorktree(projectId: String, path: URL) {
+        projectsManager.setWorktreeHidden(projectId: projectId, path: path, hidden: false)
+        saveProjects()
+    }
+
     func startHarness() {
         // Sync the persisted preference into NotificationService BEFORE start —
         // otherwise the service defaults to enabled and users who turned
@@ -295,11 +328,18 @@ final class AppState {
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
-    func closeAllTabs(worktreeId: String) {
+    /// Tear down every tab/terminal/harness reference for a worktree id without
+    /// touching git or persistence. Shared between Close-All, archive, and
+    /// delete so the bookkeeping stays in one place.
+    private func cleanupWorktreeState(worktreeId: String) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+    }
+
+    func closeAllTabs(worktreeId: String) {
+        cleanupWorktreeState(worktreeId: worktreeId)
     }
 
     func closeTabsToLeft(worktreeId: String, of tabId: TabID) {
@@ -357,6 +397,27 @@ final class AppState {
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return worktree
+            }
+        }
+        return nil
+    }
+
+    /// Pick a sensible new selection after a worktree was removed (archived or
+    /// deleted) from the given project at the given index in its visible list.
+    /// Prefers the entry now occupying that index in the same project (i.e.
+    /// what was the next sibling). Falls back to the new last entry if the
+    /// removed worktree was the last one. If the project has no remaining
+    /// visible worktrees, picks the first visible worktree across all projects
+    /// in declaration order. Returns `nil` if nothing is left.
+    private func selectionAfterRemoval(removedFromProjectId: String, removedAtIndex: Int) -> String? {
+        let siblings = projectsManager.visibleWorktrees(projectId: removedFromProjectId)
+        if !siblings.isEmpty {
+            let i = min(removedAtIndex, siblings.count - 1)
+            return siblings[i].id
+        }
+        for project in projects {
+            if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
+                return first.id
             }
         }
         return nil
