@@ -590,9 +590,13 @@ final class TabsManager {
             bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
             return
         }
+        // Always discard the persisted snapshot for in-worktree tabs, even
+        // when the buffer was never loaded (e.g. snapshot-only state after a
+        // relaunch). Otherwise the early-return below would leave snapshot
+        // JSON orphaned under App Support after tab teardown.
+        bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
         guard let key = bufferKeys.removeValue(forKey: tabId) else { return }
         assert(key.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(key.worktreeId)")
-        bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
         guard let buffer = buffers[key] else { return }
         if let nextTabId = bufferKeys.first(where: { $0.value == key })?.key {
             if buffer.persistenceTabId == tabId {
