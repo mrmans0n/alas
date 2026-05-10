@@ -513,4 +513,95 @@ final class AppState {
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
+
+    /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
+    /// failure offers a force retry. Cleans up in-app state on success.
+    func deleteWorktree(_ worktree: Worktree) {
+        guard confirmDeleteWorktree(branch: worktree.branch) else { return }
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
+            return
+        }
+        let repoPath = URL(fileURLWithPath: project.path)
+        let deleteBranch = config.worktrees.deleteBranchOnRemove
+
+        // Snapshot for selection follow-up.
+        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+        let wasSelected = selectedWorktreeId == worktree.id
+
+        Task { @MainActor in
+            let svc = WorktreeService()
+            do {
+                try await svc.remove(
+                    repoPath: repoPath,
+                    worktree: worktree,
+                    deleteBranchIfMerged: deleteBranch,
+                    force: false
+                )
+            } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
+                if Self.looksLikeDirtyWorktreeError(stderr) {
+                    guard confirmForceDeleteWorktree(branch: worktree.branch) else { return }
+                    do {
+                        try await svc.remove(
+                            repoPath: repoPath,
+                            worktree: worktree,
+                            deleteBranchIfMerged: deleteBranch,
+                            force: true
+                        )
+                    } catch {
+                        showFileActionError(title: "Delete Failed", message: "\(error)")
+                        return
+                    }
+                } else {
+                    showFileActionError(title: "Delete Failed", message: stderr)
+                    return
+                }
+            } catch {
+                showFileActionError(title: "Delete Failed", message: "\(error)")
+                return
+            }
+
+            cleanupWorktreeState(worktreeId: worktree.id)
+            try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)
+            if wasSelected {
+                selectedWorktreeId = selectionAfterRemoval(
+                    removedFromProjectId: worktree.projectId,
+                    removedAtIndex: removedIndex
+                )
+            }
+        }
+    }
+
+    /// Permissive substring check: git's exact wording around dirty/locked
+    /// worktrees varies by version. If the match misses, the caller surfaces
+    /// the raw stderr instead, which is acceptable degradation.
+    private static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
+        let s = stderr.lowercased()
+        return s.contains("is dirty")
+            || s.contains("contains modified or untracked files")
+            || s.contains("modified or untracked")
+    }
+
+    private func confirmDeleteWorktree(branch: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Delete worktree '\(branch)'?"
+        alert.informativeText = "This removes its files from disk. The local branch will be deleted if merged."
+        alert.alertStyle = .warning
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        deleteButton.hasDestructiveAction = true
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func confirmForceDeleteWorktree(branch: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "'\(branch)' has uncommitted changes."
+        alert.informativeText = "Force delete? Any uncommitted work in this worktree will be lost."
+        alert.alertStyle = .warning
+        let forceButton = alert.addButton(withTitle: "Force Delete")
+        alert.addButton(withTitle: "Cancel")
+        forceButton.hasDestructiveAction = true
+        return alert.runModal() == .alertFirstButtonReturn
+    }
 }
