@@ -36,22 +36,6 @@ jobs:
       - name: Fetch tags
         run: git fetch origin --tags --force
 
-      - name: Bootstrap check
-        # The first-ever nightly run must build main so the `nightly` tag gets
-        # created at a main SHA. Refuse to upload from a feature ref before
-        # bootstrap, otherwise softprops/action-gh-release would create the
-        # tag pointing at the feature ref's SHA. Gate on the *built* ref
-        # (`inputs.ref`), not the dispatch ref (`github.ref`), since you can
-        # dispatch from main with `ref=feature-branch`.
-        run: |
-          if ! git rev-parse refs/tags/nightly >/dev/null 2>&1; then
-            built_ref="${{ inputs.ref || 'main' }}"
-            if [ "$built_ref" != "main" ]; then
-              echo "::error::nightly tag does not exist yet. Run this workflow with ref=main first to bootstrap."
-              exit 1
-            fi
-          fi
-
       - name: Decide whether to skip
         id: skip-check
         # Only the scheduled cron run can skip. Manual dispatches always build.
@@ -154,8 +138,11 @@ jobs:
             echo "__ALAS_NIGHTLY_BODY__"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload to rolling nightly release
-        if: steps.skip-check.outputs.skip != 'true'
+      - name: Upload to rolling nightly release (main builds only)
+        # Only main builds publish to the public rolling release. Non-main
+        # dispatches go to workflow artifacts below so the public `nightly`
+        # URL never serves feature-branch builds.
+        if: steps.skip-check.outputs.skip != 'true' && (inputs.ref == '' || inputs.ref == 'main')
         uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
@@ -165,6 +152,19 @@ jobs:
           files: |
             build/Build/Products/Release/Alas-nightly.app.zip
             build/Build/Products/Release/Alas-nightly.dmg
+
+      - name: Upload artifacts (non-main dispatches)
+        # Non-main dispatches produce a workflow artifact instead of a public
+        # release upload. Useful for testing the build path on a feature ref
+        # without polluting the rolling `nightly` release.
+        if: steps.skip-check.outputs.skip != 'true' && inputs.ref != '' && inputs.ref != 'main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: alas-nightly-build
+          path: |
+            build/Build/Products/Release/Alas-nightly.app.zip
+            build/Build/Products/Release/Alas-nightly.dmg
+          retention-days: 14
 
       - name: Move nightly tag (main builds only)
         # Gate on the built ref (`inputs.ref`), not `github.ref` — the latter
