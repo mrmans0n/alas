@@ -92,6 +92,6 @@ final class ProjectsManager {
     }
 
     private func canonical(_ url: URL) -> String {
-        url.standardizedFileURL.path
+        Worktree.makeId(path: url)
     }
 }
