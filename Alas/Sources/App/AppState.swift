@@ -437,7 +437,7 @@ final class AppState {
                     guard let self else { return [] }
                     var out: [SearchWorktree] = []
                     for project in self.projects {
-                        for wt in self.projectsManager.worktrees(projectId: project.id) {
+                        for wt in self.projectsManager.visibleWorktrees(projectId: project.id) {
                             out.append(SearchWorktree(
                                 id: wt.id,
                                 projectId: project.id,
@@ -466,6 +466,11 @@ final class AppState {
     /// in a different worktree.
     func openFile(relativePath: String, worktreeId: String) {
         guard let worktree = worktree(withId: worktreeId) else { return }
+        // Reject archived worktrees: their ids may still appear in some legacy
+        // call sites (e.g. older persisted tabs). Selecting one would set
+        // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
+        // (now visibility-aware) would reject anyway, leaving an empty pane.
+        guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
         if selectedWorktreeId != worktree.id { selectedWorktreeId = worktree.id }
 
         let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
