@@ -590,9 +590,13 @@ final class TabsManager {
             bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
             return
         }
+        // Always discard the persisted snapshot for in-worktree tabs, even
+        // when the buffer was never loaded (e.g. snapshot-only state after a
+        // relaunch). Otherwise the early-return below would leave snapshot
+        // JSON orphaned under App Support after tab teardown.
+        bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
         guard let key = bufferKeys.removeValue(forKey: tabId) else { return }
         assert(key.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(key.worktreeId)")
-        bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
         guard let buffer = buffers[key] else { return }
         if let nextTabId = bufferKeys.first(where: { $0.value == key })?.key {
             if buffer.persistenceTabId == tabId {
@@ -609,6 +613,25 @@ final class TabsManager {
         bufferKeys.compactMap { tabId, key in
             buffers[key]?.dirty == true ? tabId : nil
         }
+    }
+
+    /// Tab IDs in `worktreeId` that have unsaved changes — either a live dirty
+    /// buffer or a persisted hot-exit snapshot for a buffer that hasn't been
+    /// instantiated yet. Returns IDs in tab order (declaration order within the
+    /// worktree's tab list).
+    func tabIdsWithUnsavedChanges(forWorktree worktreeId: String) -> [TabID] {
+        guard let file = byWorktree[worktreeId] else { return [] }
+        var result: [TabID] = []
+        for tab in file.tabs {
+            guard case .editor(let state) = tab else { continue }
+            let tabId = state.id
+            if let buffer = peekBuffer(tabId: tabId) {
+                if buffer.dirty { result.append(tabId) }
+            } else if (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) != nil {
+                result.append(tabId)
+            }
+        }
+        return result
     }
 
     @discardableResult
@@ -697,6 +720,63 @@ final class TabsManager {
                     errors.append((state.id, error))
                     buffer.close(persistDirtySnapshot: true)
                 }
+            }
+        }
+        return errors
+    }
+
+    /// Save all unsaved buffers for a single worktree. Mirrors the snapshot-
+    /// materialize pattern from `saveAll(worktreeRoots:)` but scoped to one
+    /// worktree so archive/delete can save before teardown.
+    /// Returns an array of (tabId, error) pairs; empty on full success.
+    @discardableResult
+    func saveAllUnsaved(forWorktree worktreeId: String, root: URL) -> [(tabId: TabID, error: Error)] {
+        var errors: [(TabID, Error)] = []
+        var saved = Set<ObjectIdentifier>()
+        // Pass 1: live dirty buffers belonging to this worktree.
+        for (tabId, key) in bufferKeys {
+            guard key.worktreeId == worktreeId,
+                  let buffer = buffers[key], buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try buffer.saveRecordingError()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
+        // Pass 2: editor tabs with no live buffer but a persisted snapshot.
+        guard let file = byWorktree[worktreeId] else { return errors }
+        for tab in file.tabs {
+            guard case .editor(let state) = tab,
+                  peekBuffer(tabId: state.id) == nil,
+                  (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
+            let buffer: EditorBuffer
+            if let lsp {
+                buffer = EditorBuffer(
+                    worktreeRoot: root,
+                    relativePath: state.relativePath,
+                    store: bufferStore,
+                    worktreeId: worktreeId,
+                    tabId: state.id,
+                    lsp: lsp
+                )
+            } else {
+                buffer = EditorBuffer(
+                    worktreeRoot: root,
+                    relativePath: state.relativePath,
+                    store: bufferStore,
+                    worktreeId: worktreeId,
+                    tabId: state.id
+                )
+            }
+            do {
+                try buffer.saveRecordingError()
+                buffer.close(persistDirtySnapshot: false)
+            } catch {
+                errors.append((state.id, error))
+                buffer.close(persistDirtySnapshot: true)
             }
         }
         return errors

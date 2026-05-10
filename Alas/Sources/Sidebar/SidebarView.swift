@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SidebarView: View {
     @Bindable var state: AppState
@@ -18,7 +19,7 @@ struct SidebarView: View {
                         ForEach(state.projects) { project in
                             RepoGroupView(
                                 project: project,
-                                worktrees: state.projectsManager.worktrees(projectId: project.id),
+                                worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),
                                 collapsed: Binding(
                                     get: { collapsedProjects.contains(project.id) },
                                     set: { collapsed in
@@ -28,7 +29,26 @@ struct SidebarView: View {
                                 ),
                                 selectedWorktreeId: state.selectedWorktreeId,
                                 onSelect: { wt in state.selectedWorktreeId = wt.id },
-                                onNewWorktree: { onNewWorktree(project.id) }
+                                onNewWorktree: { onNewWorktree(project.id) },
+                                onOpenTerminal: { wt in
+                                    state.selectedWorktreeId = wt.id
+                                    _ = try? state.openTerminalTab(for: wt)
+                                },
+                                onCopyPath: { wt in
+                                    let pb = NSPasteboard.general
+                                    pb.clearContents()
+                                    pb.setString(wt.path.path, forType: .string)
+                                },
+                                onCopyBranch: { wt in
+                                    let pb = NSPasteboard.general
+                                    pb.clearContents()
+                                    pb.setString(wt.branch, forType: .string)
+                                },
+                                onRevealInFinder: { wt in
+                                    NSWorkspace.shared.activateFileViewerSelecting([wt.path])
+                                },
+                                onArchive: { wt in state.archiveWorktree(wt) },
+                                onDelete: { wt in state.deleteWorktree(wt) }
                             )
                         }
                     }

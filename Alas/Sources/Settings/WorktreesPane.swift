@@ -45,9 +45,26 @@ struct WorktreesPane: View {
                         AlasToggle(on: bind(\.worktrees.deleteBranchOnRemove))
                     }
                 }
+
+                if hasAnyArchived {
+                    SettingsGroup(title: "Archived worktrees") {
+                        ForEach(state.projects) { project in
+                            let archived = state.projectsManager.archivedWorktrees(projectId: project.id)
+                            if !archived.isEmpty {
+                                ArchivedProjectSection(project: project, archived: archived) { wt in
+                                    state.unarchiveWorktree(projectId: project.id, path: wt.path)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
+    }
+
+    private var hasAnyArchived: Bool {
+        state.projects.contains { !state.projectsManager.archivedWorktrees(projectId: $0.id).isEmpty }
     }
 
     private func bind<T>(_ kp: WritableKeyPath<AppConfig, T>) -> Binding<T> {
@@ -56,5 +73,38 @@ struct WorktreesPane: View {
             set: { state.config[keyPath: kp] = $0
             state.saveConfig() }
         )
+    }
+}
+
+private struct ArchivedProjectSection: View {
+    let project: ProjectConfig
+    let archived: [Worktree]
+    let onUnarchive: (Worktree) -> Void
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(project.name)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.top, 4)
+            ForEach(archived) { wt in
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(wt.branch)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundColor(theme.color("fg"))
+                        Text(wt.path.path)
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.color("fg-dim"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                    AlasButton(title: "Unarchive", style: .normal) { onUnarchive(wt) }
+                }
+                .padding(.vertical, 6)
+            }
+        }
     }
 }

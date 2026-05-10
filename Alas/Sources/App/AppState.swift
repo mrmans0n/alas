@@ -86,11 +86,63 @@ final class AppState {
     func addProject(path: URL, displayName: String, color: String) async throws {
         _ = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
         saveProjects()
-        await projectsManager.refreshAll()
+        if await projectsManager.refreshAll() {
+            saveProjects()
+        }
     }
 
     func removeProject(id: String) {
         projectsManager.removeProject(id: id)
+        saveProjects()
+    }
+
+    /// Archive (hide) a worktree. Closes all tabs/terminals/harness state for
+    /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
+    /// the archived worktree was selected. Does NOT touch git or disk.
+    func archiveWorktree(_ worktree: Worktree) {
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        if !dirty.isEmpty {
+            switch promptForDirtyBuffers(
+                action: "Archive",
+                branch: worktree.branch,
+                dirtyCount: dirty.count,
+                onDiskDestructive: false
+            ) {
+            case .save:
+                guard saveDirtyBuffers(in: worktree) else { return }
+            case .discard:
+                break
+            case .cancel:
+                return
+            }
+        }
+
+        // Snapshot index in the visible list BEFORE we mutate anything, so we
+        // can pick a sensible follow-up selection.
+        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+        let wasSelected = selectedWorktreeId == worktree.id
+
+        cleanupWorktreeState(worktreeId: worktree.id)
+        projectsManager.setWorktreeHidden(
+            projectId: worktree.projectId,
+            path: worktree.path,
+            hidden: true
+        )
+        saveProjects()
+
+        if wasSelected {
+            selectedWorktreeId = selectionAfterRemoval(
+                removedFromProjectId: worktree.projectId,
+                removedAtIndex: removedIndex
+            )
+        }
+    }
+
+    /// Restore an archived worktree. Tabs/terminals are NOT recreated — they
+    /// were torn down at archive time and the user re-opens what they need.
+    func unarchiveWorktree(projectId: String, path: URL) {
+        projectsManager.setWorktreeHidden(projectId: projectId, path: path, hidden: false)
         saveProjects()
     }
 
@@ -295,11 +347,18 @@ final class AppState {
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
-    func closeAllTabs(worktreeId: String) {
+    /// Tear down every tab/terminal/harness reference for a worktree id without
+    /// touching git or persistence. Shared between Close-All, archive, and
+    /// delete so the bookkeeping stays in one place.
+    private func cleanupWorktreeState(worktreeId: String) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+    }
+
+    func closeAllTabs(worktreeId: String) {
+        cleanupWorktreeState(worktreeId: worktreeId)
     }
 
     func closeTabsToLeft(worktreeId: String, of tabId: TabID) {
@@ -362,6 +421,27 @@ final class AppState {
         return nil
     }
 
+    /// Pick a sensible new selection after a worktree was removed (archived or
+    /// deleted) from the given project at the given index in its visible list.
+    /// Prefers the entry now occupying that index in the same project (i.e.
+    /// what was the next sibling). Falls back to the new last entry if the
+    /// removed worktree was the last one. If the project has no remaining
+    /// visible worktrees, picks the first visible worktree across all projects
+    /// in declaration order. Returns `nil` if nothing is left.
+    private func selectionAfterRemoval(removedFromProjectId: String, removedAtIndex: Int) -> String? {
+        let siblings = projectsManager.visibleWorktrees(projectId: removedFromProjectId)
+        if !siblings.isEmpty {
+            let i = min(removedAtIndex, siblings.count - 1)
+            return siblings[i].id
+        }
+        for project in projects {
+            if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
+                return first.id
+            }
+        }
+        return nil
+    }
+
     private func makeSearchEnvironment() -> SearchEnvironment {
         // Invariant: the two synchronous closures below are only invoked
         // from `SearchModel`, which is `@MainActor` — so `assumeIsolated`
@@ -376,7 +456,7 @@ final class AppState {
                     guard let self else { return [] }
                     var out: [SearchWorktree] = []
                     for project in self.projects {
-                        for wt in self.projectsManager.worktrees(projectId: project.id) {
+                        for wt in self.projectsManager.visibleWorktrees(projectId: project.id) {
                             out.append(SearchWorktree(
                                 id: wt.id,
                                 projectId: project.id,
@@ -405,6 +485,11 @@ final class AppState {
     /// in a different worktree.
     func openFile(relativePath: String, worktreeId: String) {
         guard let worktree = worktree(withId: worktreeId) else { return }
+        // Reject archived worktrees: their ids may still appear in some legacy
+        // call sites (e.g. older persisted tabs). Selecting one would set
+        // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
+        // (now visibility-aware) would reject anyway, leaving an empty pane.
+        guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
         if selectedWorktreeId != worktree.id { selectedWorktreeId = worktree.id }
 
         let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
@@ -451,5 +536,185 @@ final class AppState {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
+    /// failure offers a force retry. Cleans up in-app state on success.
+    func deleteWorktree(_ worktree: Worktree) {
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        let saveBuffersFirst: Bool
+        if dirty.isEmpty {
+            guard confirmDeleteWorktree(branch: worktree.branch) else { return }
+            saveBuffersFirst = false
+        } else {
+            switch promptForDirtyBuffers(
+                action: "Delete",
+                branch: worktree.branch,
+                dirtyCount: dirty.count,
+                onDiskDestructive: true
+            ) {
+            case .save: saveBuffersFirst = true
+            case .discard: saveBuffersFirst = false
+            case .cancel: return
+            }
+        }
+        if saveBuffersFirst {
+            guard saveDirtyBuffers(in: worktree) else { return }
+        }
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
+            return
+        }
+        let repoPath = URL(fileURLWithPath: project.path)
+        let deleteBranch = config.worktrees.deleteBranchOnRemove
+
+        // Snapshot for selection follow-up. The index must be captured BEFORE
+        // the await because the worktree won't be in `visibleWorktrees` after
+        // `refreshWorktrees`. We re-check selection (live) post-await so a
+        // selection change during the dialog/await flow isn't clobbered.
+        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+
+        Task { @MainActor in
+            let svc = WorktreeService()
+            do {
+                try await svc.remove(
+                    repoPath: repoPath,
+                    worktree: worktree,
+                    deleteBranchIfMerged: deleteBranch,
+                    force: false
+                )
+            } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
+                if Self.looksLikeDirtyWorktreeError(stderr) {
+                    guard confirmForceDeleteWorktree(branch: worktree.branch) else { return }
+                    do {
+                        try await svc.remove(
+                            repoPath: repoPath,
+                            worktree: worktree,
+                            deleteBranchIfMerged: deleteBranch,
+                            force: true
+                        )
+                    } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
+                        showFileActionError(title: "Delete Failed", message: stderr)
+                        return
+                    } catch {
+                        showFileActionError(title: "Delete Failed", message: "\(error)")
+                        return
+                    }
+                } else {
+                    showFileActionError(title: "Delete Failed", message: stderr)
+                    return
+                }
+            } catch {
+                showFileActionError(title: "Delete Failed", message: "\(error)")
+                return
+            }
+
+            cleanupWorktreeState(worktreeId: worktree.id)
+            if (try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)) == true {
+                saveProjects()
+            }
+            if selectedWorktreeId == worktree.id {
+                selectedWorktreeId = selectionAfterRemoval(
+                    removedFromProjectId: worktree.projectId,
+                    removedAtIndex: removedIndex
+                )
+            }
+        }
+    }
+
+    /// Permissive substring check: git's exact wording around dirty/locked
+    /// worktrees varies by version. If the match misses, the caller surfaces
+    /// the raw stderr instead, which is acceptable degradation.
+    private static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
+        let s = stderr.lowercased()
+        return s.contains("is dirty")
+            || s.contains("contains modified or untracked files")
+            || s.contains("modified or untracked")
+    }
+
+    private func confirmDeleteWorktree(branch: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Delete worktree '\(branch)'?"
+        alert.informativeText = "This removes its files from disk. The local branch will be deleted if merged."
+        alert.alertStyle = .warning
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        deleteButton.hasDestructiveAction = true
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func confirmForceDeleteWorktree(branch: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "'\(branch)' has uncommitted changes."
+        alert.informativeText = "Force delete? Any uncommitted work in this worktree will be lost."
+        alert.alertStyle = .warning
+        let forceButton = alert.addButton(withTitle: "Force Delete")
+        alert.addButton(withTitle: "Cancel")
+        forceButton.hasDestructiveAction = true
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private enum DirtyBufferChoice {
+        case save
+        case discard
+        case cancel
+    }
+
+    /// Returns the editor tabs in this worktree whose buffers have unsaved
+    /// changes — including tabs whose buffers are not yet instantiated but
+    /// have a persisted hot-exit snapshot on disk.
+    private func dirtyEditorTabIds(worktreeId: String) -> [TabID] {
+        tabs.tabIdsWithUnsavedChanges(forWorktree: worktreeId)
+    }
+
+    /// Three-way prompt for actions (archive, delete) that would otherwise
+    /// silently discard unsaved editor buffers. The default button (Enter)
+    /// is "Save & <action>"; the destructive button is "Discard & <action>".
+    /// `onDiskDestructive` true means `<action>` will also remove files from
+    /// disk; the message text adjusts accordingly.
+    private func promptForDirtyBuffers(
+        action: String,
+        branch: String,
+        dirtyCount: Int,
+        onDiskDestructive: Bool
+    ) -> DirtyBufferChoice {
+        let alert = NSAlert()
+        alert.messageText = "\(action) worktree '\(branch)'?"
+        let countSentence = dirtyCount == 1
+            ? "1 file has unsaved changes."
+            : "\(dirtyCount) files have unsaved changes."
+        let actionSentence = onDiskDestructive
+            ? "This removes its files from disk. The local branch will be deleted if merged."
+            : "The worktree itself stays on disk."
+        alert.informativeText = "\(countSentence) Saving will write them to disk; discarding will lose them. \(actionSentence)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save & \(action)")
+        let discardButton = alert.addButton(withTitle: "Discard & \(action)")
+        alert.addButton(withTitle: "Cancel")
+        discardButton.hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    /// Save every dirty editor buffer in the given worktree — including tabs
+    /// whose buffers are not yet instantiated but have a persisted hot-exit
+    /// snapshot on disk. Returns true on full success; on partial failure
+    /// surfaces an aggregate error and returns false so the caller can bail
+    /// before the destructive cleanup.
+    private func saveDirtyBuffers(in worktree: Worktree) -> Bool {
+        let errors = tabs.saveAllUnsaved(forWorktree: worktree.id, root: worktree.path)
+        if !errors.isEmpty {
+            let count = errors.count
+            showFileActionError(
+                title: "Save Failed",
+                message: "\(count) file\(count == 1 ? "" : "s") could not be saved. The worktree was not archived or deleted."
+            )
+            return false
+        }
+        return true
     }
 }
