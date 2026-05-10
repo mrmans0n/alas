@@ -181,7 +181,7 @@ jobs:
         # release upload. Useful for testing the build path on a feature ref
         # without polluting the rolling `nightly` release.
         if: steps.skip-check.outputs.skip != 'true' && inputs.ref != '' && inputs.ref != 'main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: alas-nightly-build
           path: |
