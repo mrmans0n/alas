@@ -82,9 +82,15 @@ jobs:
           git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
           shasum scripts/build-ghostty.sh >> .ghostty-pin
 
-      - name: Cache Ghostty build outputs
+      - name: Restore Ghostty cache
+        # Split restore + save — and gate save on main-built refs only — so a
+        # non-main dispatch building an arbitrary tree can never write into the
+        # repo-wide cache scope. Without this gate, a feature ref leaving
+        # .ghostty-pin unchanged could seed the main-scope key with a poisoned
+        # .build/ghostty, which later main builds would restore and ship.
         if: steps.skip-check.outputs.skip != 'true'
-        uses: actions/cache@v5
+        id: ghostty-cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             .build/ghostty
@@ -93,6 +99,17 @@ jobs:
       - name: Build Ghostty xcframework
         if: steps.skip-check.outputs.skip != 'true'
         run: ./scripts/build-ghostty.sh
+
+      - name: Save Ghostty cache (main builds only)
+        if: success()
+          && steps.skip-check.outputs.skip != 'true'
+          && steps.ghostty-cache.outputs.cache-hit != 'true'
+          && (inputs.ref == '' || inputs.ref == 'main')
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .build/ghostty
+          key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Generate project
         if: steps.skip-check.outputs.skip != 'true'
