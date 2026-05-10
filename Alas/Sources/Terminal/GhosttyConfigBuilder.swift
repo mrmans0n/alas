@@ -6,7 +6,6 @@ import Foundation
 import SwiftUI
 
 enum GhosttyConfigBuilder {
-
     // MARK: - Cursor style
 
     /// Cursor style strings as they appear in our app config.

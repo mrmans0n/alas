@@ -6,7 +6,6 @@ import Foundation
 import GhosttyKit
 
 extension AlasGhostty {
-
     /// Per-surface configuration passed when creating a `SurfaceView`.
     struct SurfaceConfiguration {
         /// Working directory for the shell process. Nil = inherit from parent.
@@ -43,7 +42,6 @@ extension AlasGhostty {
 // MARK: - C struct conversion
 
 extension AlasGhostty.SurfaceConfiguration {
-
     /// Calls `body` with a correctly populated `ghostty_surface_config_s`.
     ///
     /// All C strings are backed by Swift storage pinned with `withCString`; they are valid

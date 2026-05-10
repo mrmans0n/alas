@@ -15,7 +15,8 @@ enum LanguageRegistry {
 
     static func language(forFileExtension ext: String) -> Language? {
         let key = ext.lowercased()
-        cacheLock.lock(); defer { cacheLock.unlock() }
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
         if let cached = languageCache[key] { return cached }
         let lang: Language?
         switch key {
@@ -30,8 +31,10 @@ enum LanguageRegistry {
     static func highlightQuery(forExtension ext: String) -> Query? {
         let key = ext.lowercased()
         cacheLock.lock()
-        if let cached = queryCache[key] { cacheLock.unlock(); return cached }
-        if queryMissCache.contains(key) { cacheLock.unlock(); return nil }
+        if let cached = queryCache[key] { cacheLock.unlock()
+        return cached }
+        if queryMissCache.contains(key) { cacheLock.unlock()
+        return nil }
         cacheLock.unlock()
 
         guard let lang = language(forFileExtension: ext) else { return nil }
@@ -45,7 +48,8 @@ enum LanguageRegistry {
             query = nil
         }
 
-        cacheLock.lock(); defer { cacheLock.unlock() }
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
         if let query {
             queryCache[key] = query
         } else {

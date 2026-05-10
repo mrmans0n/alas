@@ -290,22 +290,19 @@ extension SearchModelTests {
     @Test func contentSearchCapsAtTwoHundredHits() async {
         let worktree = wt("a")
         // Yield 220 hits across two files (way above the 200-hit cap).
-        var hits: [ContentSearchHit] = []
-        for i in 0..<220 {
-            hits.append(ContentSearchHit(
+        let hits = (0..<220).map { i in
+            ContentSearchHit(
                 worktreeId: "a", projectId: "p1",
                 relativePath: i.isMultiple(of: 2) ? "a.rs" : "b.rs",
                 line: i + 1, column: 1, snippet: "x", matchCharRange: nil
-            ))
+            )
         }
         let env = makeEnv(
             worktrees: [worktree],
             contentSearch: { _, _, _ in
                 AsyncThrowingStream { cont in
-                    Task {
-                        for h in hits { cont.yield(h) }
-                        cont.finish()
-                    }
+                    for hit in hits { cont.yield(hit) }
+                    cont.finish()
                 }
             }
         )

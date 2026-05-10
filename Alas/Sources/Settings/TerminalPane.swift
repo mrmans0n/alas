@@ -87,7 +87,8 @@ struct TerminalPane: View {
                     SettingsRow(name: "Scrollback lines") {
                         AlasField(text: Binding(
                             get: { String(state.config.terminal.scrollbackLines) },
-                            set: { state.config.terminal.scrollbackLines = Int($0) ?? 10000; state.saveConfig() }
+                            set: { state.config.terminal.scrollbackLines = Int($0) ?? 10000
+                            state.saveConfig() }
                         ), monospaced: true).frame(width: 100)
                     }
                     SettingsRow(name: "Bell") {
@@ -102,7 +103,9 @@ struct TerminalPane: View {
                                 desc: "Show a macOS notification when a detected harness completes.") {
                         AlasToggle(on: Binding(
                             get: { state.config.harness.notifyOnFinish },
-                            set: { state.config.harness.notifyOnFinish = $0; state.saveConfig(); state.harness.notifications.setEnabled($0) }
+                            set: { state.config.harness.notifyOnFinish = $0
+                            state.saveConfig()
+                            state.harness.notifications.setEnabled($0) }
                         ))
                     }
                     ForEach(HarnessKind.allCases) { kind in
@@ -137,5 +140,4 @@ struct TerminalPane: View {
             hookStatus[kind] = "Error: \(error.localizedDescription)"
         }
     }
-
 }

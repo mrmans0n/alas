@@ -4,7 +4,6 @@ import Foundation
 
 @Suite(.serialized)
 struct DefinitionSnippetCacheTests {
-
     private func tempFile(_ contents: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("snippet-\(UUID().uuidString).txt")

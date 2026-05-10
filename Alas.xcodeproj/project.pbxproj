@@ -139,6 +139,7 @@
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
 		AA8FEF94B861001AB643E005 /* FontFamilyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */; };
 		AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15E14D45EC3926768DE5BD1 /* DiffTabView.swift */; };
+		AC905947E88C7A2BE39D9B00 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
 		AD311BBE11A5A2751EA0907C /* HoverFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AF8152B18C9D6290724122F /* HoverFeature.swift */; };
 		AD3469F4745DF96ED3D0E06E /* codex-cli.sh in Resources */ = {isa = PBXBuildFile; fileRef = F1524DAA94E33D2938853810 /* codex-cli.sh */; };
 		B064B59D40A47026CDDEB189 /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96E7159EED1183F784104B4F /* FuzzyMatch.swift */; };
@@ -149,6 +150,7 @@
 		B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */; };
 		B8B0B60C8096F691F8401D31 /* TabBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC7CCBF8463A95EAAE9EBCE /* TabBarView.swift */; };
 		B8D2EB18303D58777D79CDBA /* SearchResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0FF718D68E15F539577F56 /* SearchResult.swift */; };
+		BAE4D422FC3950E61FEE1D15 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
 		BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88379ACE40F42BE4A3257659 /* ThemeTests.swift */; };
 		BFF99F8FDEA5D05EF4E1EEC3 /* DiagnosticsRangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412B2AF1B68E3B56DE21EB91 /* DiagnosticsRangeTests.swift */; };
 		C179C5202C4BB8D73E7EB701 /* AppIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 620C4A708CD1013DE2736A00 /* AppIconTests.swift */; };
@@ -368,6 +370,7 @@
 		C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTheme.swift; sourceTree = "<group>"; };
 		C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.Surface.swift; sourceTree = "<group>"; };
 		C995611A6313FABE30508248 /* WorktreeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRowView.swift; sourceTree = "<group>"; };
+		CA43AA9C8462D579E733B46C /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentResultGroup.swift; sourceTree = "<group>"; };
 		CB020862232495EC1C5ECBEA /* WindowAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowAppearance.swift; sourceTree = "<group>"; };
@@ -417,9 +420,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				48E0B43B698544C1C4524242 /* GhosttyKit.xcframework in Frameworks */,
+				AC905947E88C7A2BE39D9B00 /* AppIntents.framework in Frameworks */,
 				8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */,
 				1E775E7F3C9F47C676C61B09 /* SwiftTreeSitter in Frameworks */,
 				74CCD3B95116C51EB43F5CFA /* TreeSitterSwift in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CE811745928C7FA1A7D1EE13 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BAE4D422FC3950E61FEE1D15 /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -578,6 +590,7 @@
 		40C7F06C7176E479491B0228 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				CA43AA9C8462D579E733B46C /* AppIntents.framework */,
 				8DD66F449B380BC74B373647 /* Carbon.framework */,
 				7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */,
 			);
@@ -926,6 +939,7 @@
 			buildConfigurationList = 4ECEFB1265B7751E394C85A4 /* Build configuration list for PBXNativeTarget "AlasTests" */;
 			buildPhases = (
 				9331F99F9123E03583C8B892 /* Sources */,
+				CE811745928C7FA1A7D1EE13 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -1299,6 +1313,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_APPINTENTS_METADATA_EXTRACTION = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1358,6 +1373,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_APPINTENTS_METADATA_EXTRACTION = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;

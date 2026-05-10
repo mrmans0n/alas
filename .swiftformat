@@ -1,0 +1,11 @@
+--swiftversion 5.9
+--indent 4
+--linebreaks lf
+--trim-whitespace always
+--header ignore
+--semicolons never
+--trailingcommas collections-only
+--stripunusedargs closure-only
+--exclude .build,build,Alas.xcodeproj,ThirdParty
+--disable all
+--enable blankLinesAtEndOfScope,blankLinesAtStartOfScope,consecutiveBlankLines,duplicateImports,linebreakAtEndOfFile,linebreaks,semicolons,trailingSpace

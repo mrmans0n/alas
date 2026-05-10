@@ -464,7 +464,6 @@ final class EditorBuffer {
         // Restore captured perms; failure is non-fatal (file is saved, just
         // not with our preferred mode).
         try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: UInt16(permissions))], ofItemAtPath: url.path)
-
     }
 
     private func updateOriginalMtime(from url: URL) {

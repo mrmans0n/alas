@@ -19,17 +19,15 @@ private final class AppWakeupBox: @unchecked Sendable {
 }
 
 extension AlasGhostty {
-
     /// Manages the single Ghostty application instance.
     ///
     /// Owns one `ghostty_app_t`. Create once at startup and keep alive for the app lifetime.
     @MainActor
     final class App {
-
         // MARK: Stored properties
 
         /// Raw C app pointer. Valid for this object's lifetime.
-        let cValue: ghostty_app_t
+        nonisolated(unsafe) let cValue: ghostty_app_t
 
         /// Config kept alive so Ghostty can reference it through the app's lifetime.
         private let config: Config
@@ -165,7 +163,6 @@ private func alasGhosttyAction(
     }()
 
     switch action.tag {
-
     case GHOSTTY_ACTION_SET_TITLE:
         guard let sv = surfaceView else { return false }
         let title = action.action.set_title.title.map { String(cString: $0) } ?? ""

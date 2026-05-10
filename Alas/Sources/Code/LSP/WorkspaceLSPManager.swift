@@ -111,7 +111,8 @@ final class WorkspaceLSPManager {
             let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: entry.env.isEmpty ? nil : entry.env)
             let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
             let task = Task<Bool, Never> {
-                do { try await newClient.initialize(); return true } catch { return false }
+                do { try await newClient.initialize()
+                return true } catch { return false }
             }
             holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:])
             client = newClient

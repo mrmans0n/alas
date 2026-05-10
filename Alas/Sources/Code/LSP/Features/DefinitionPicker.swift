@@ -37,10 +37,14 @@ struct DefinitionPicker: View {
         .frame(width: 380)
         .padding(.bottom, 6)
         .focusable()
-        .onKeyPress(.upArrow)   { selection = max(0, selection - 1); return .handled }
-        .onKeyPress(.downArrow) { selection = min(entries.count - 1, selection + 1); return .handled }
-        .onKeyPress(.return)    { onChoose(selection); return .handled }
-        .onKeyPress(.escape)    { onChoose(nil);       return .handled }
+        .onKeyPress(.upArrow)   { selection = max(0, selection - 1)
+        return .handled }
+        .onKeyPress(.downArrow) { selection = min(entries.count - 1, selection + 1)
+        return .handled }
+        .onKeyPress(.return)    { onChoose(selection)
+        return .handled }
+        .onKeyPress(.escape)    { onChoose(nil)
+        return .handled }
     }
 
     private func row(idx: Int, entry: DefinitionPickerEntry) -> some View {

@@ -17,7 +17,10 @@ enum FileTreeBuilder {
         var badge: String?
         var children: [String: TreeBuildNode] = [:]
         init(name: String, path: String, isDir: Bool, badge: String?) {
-            self.name = name; self.path = path; self.isDir = isDir; self.badge = badge
+            self.name = name
+            self.path = path
+            self.isDir = isDir
+            self.badge = badge
         }
     }
 

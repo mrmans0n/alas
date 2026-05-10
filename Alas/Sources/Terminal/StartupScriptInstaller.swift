@@ -1,7 +1,6 @@
 import Foundation
 
 enum StartupScriptInstaller {
-
     /// What to launch for a session, including any env overrides needed to make
     /// the startup script source after the user's normal init.
     struct Plan: Equatable {

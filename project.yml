@@ -11,6 +11,7 @@ settings:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_APPINTENTS_METADATA_EXTRACTION: NO
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
 
@@ -59,6 +60,7 @@ targets:
         embed: false
         link: true
         codeSign: false
+      - sdk: AppIntents.framework
       - sdk: Carbon.framework
       - package: SwiftTreeSitter
         product: SwiftTreeSitter
@@ -94,6 +96,7 @@ targets:
       - path: AlasTests
     dependencies:
       - target: Alas
+      - sdk: AppIntents.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.tests

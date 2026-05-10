@@ -135,4 +135,3 @@ private struct StatusBadgeView: View {
             .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
     }
 }
-

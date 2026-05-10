@@ -84,6 +84,6 @@ struct CenterPaneView: View {
     }
 
     private func openTerminal() {
-        try? state.openTerminalTab(for: worktree)
+        _ = try? state.openTerminalTab(for: worktree)
     }
 }

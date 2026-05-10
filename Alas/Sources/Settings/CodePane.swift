@@ -78,11 +78,14 @@ struct CodePane: View {
         let color: Color
         switch availability.status(for: entry) {
         case .disabled:
-            label = "Disabled"; color = theme.color("fg-faint")
+            label = "Disabled"
+            color = theme.color("fg-faint")
         case .available:
-            label = "Available"; color = theme.color("add")
+            label = "Available"
+            color = theme.color("add")
         case .notInstalled:
-            label = "Not installed"; color = theme.color("warn")
+            label = "Not installed"
+            color = theme.color("warn")
         }
         return Text(label).font(.system(size: 10.5)).foregroundColor(color)
     }

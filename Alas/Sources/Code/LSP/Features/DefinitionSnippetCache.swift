@@ -4,7 +4,8 @@ import Foundation
 /// single line lazily on first access for `(absolutePath, line)` and
 /// returns the cached value on subsequent calls. Bounded to 64 entries.
 final class DefinitionSnippetCache {
-    private struct Key: Hashable { let path: String; let line: Int }
+    private struct Key: Hashable { let path: String
+    let line: Int }
     private var cache: [Key: String] = [:]
     private var order: [Key] = []
     private let limit = 64

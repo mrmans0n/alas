@@ -2,6 +2,7 @@ import Foundation
 import Observation
 
 @Observable
+@MainActor
 final class ProjectsManager {
     private(set) var projects: [ProjectConfig]
     private(set) var worktreesByProject: [String: [Worktree]] = [:]

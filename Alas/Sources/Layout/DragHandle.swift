@@ -65,7 +65,7 @@ struct DragHandle: View {
         cursorPushed = false
     }
 
-    static func clamp(value: Double, min minVal: Double, max maxVal: Double) -> Double {
+    nonisolated static func clamp(value: Double, min minVal: Double, max maxVal: Double) -> Double {
         max(minVal, min(maxVal, value))
     }
 }
