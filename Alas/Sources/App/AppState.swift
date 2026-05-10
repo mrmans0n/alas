@@ -107,7 +107,7 @@ final class AppState {
                 onDiskDestructive: false
             ) {
             case .save:
-                guard saveDirtyBuffers(in: worktree.id) else { return }
+                guard saveDirtyBuffers(in: worktree) else { return }
             case .discard:
                 break
             case .cancel:
@@ -557,7 +557,7 @@ final class AppState {
             }
         }
         if saveBuffersFirst {
-            guard saveDirtyBuffers(in: worktree.id) else { return }
+            guard saveDirtyBuffers(in: worktree) else { return }
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
@@ -658,15 +658,10 @@ final class AppState {
     }
 
     /// Returns the editor tabs in this worktree whose buffers have unsaved
-    /// changes. Used by archive/delete to warn the user before tearing down
-    /// the buffer state.
+    /// changes — including tabs whose buffers are not yet instantiated but
+    /// have a persisted hot-exit snapshot on disk.
     private func dirtyEditorTabIds(worktreeId: String) -> [TabID] {
-        tabs.tabs(forWorktree: worktreeId).compactMap { tab in
-            guard case .editor(let state) = tab,
-                  let buffer = tabs.peekBuffer(tabId: state.id),
-                  buffer.dirty else { return nil }
-            return state.id
-        }
+        tabs.tabIdsWithUnsavedChanges(forWorktree: worktreeId)
     }
 
     /// Three-way prompt for actions (archive, delete) that would otherwise
@@ -701,23 +696,15 @@ final class AppState {
         }
     }
 
-    /// Save every dirty editor buffer in the given worktree. Returns true on
-    /// full success; on partial failure surfaces an aggregate error and
-    /// returns false so the caller can bail before the destructive cleanup.
-    private func saveDirtyBuffers(in worktreeId: String) -> Bool {
-        var failed: [(TabID, Error)] = []
-        for tab in tabs.tabs(forWorktree: worktreeId) {
-            guard case .editor(let state) = tab,
-                  let buffer = tabs.peekBuffer(tabId: state.id),
-                  buffer.dirty else { continue }
-            do {
-                try buffer.save()
-            } catch {
-                failed.append((state.id, error))
-            }
-        }
-        if !failed.isEmpty {
-            let count = failed.count
+    /// Save every dirty editor buffer in the given worktree — including tabs
+    /// whose buffers are not yet instantiated but have a persisted hot-exit
+    /// snapshot on disk. Returns true on full success; on partial failure
+    /// surfaces an aggregate error and returns false so the caller can bail
+    /// before the destructive cleanup.
+    private func saveDirtyBuffers(in worktree: Worktree) -> Bool {
+        let errors = tabs.saveAllUnsaved(forWorktree: worktree.id, root: worktree.path)
+        if !errors.isEmpty {
+            let count = errors.count
             showFileActionError(
                 title: "Save Failed",
                 message: "\(count) file\(count == 1 ? "" : "s") could not be saved. The worktree was not archived or deleted."
