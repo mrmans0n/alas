@@ -32,6 +32,12 @@ jobs:
           ref: ${{ inputs.ref || 'main' }}
           submodules: recursive
           fetch-depth: 0
+          # Don't write the GitHub token into .git/config. Build phases run
+          # code from `inputs.ref` — for non-main refs that may be untrusted
+          # — and must not have ambient access to a `contents: write` token.
+          # The only step that needs to push (the tag-move below) injects
+          # the token via env, scoped to that step only.
+          persist-credentials: false
 
       - name: Fetch tags
         run: git fetch origin --tags --force
@@ -171,9 +177,14 @@ jobs:
         # is the dispatch ref and can be `main` while we built a feature
         # branch. Tag the actually-checked-out HEAD so the tag matches the
         # uploaded artifacts even when bash expansion of `$GITHUB_SHA` would
-        # name the dispatch SHA instead.
+        # name the dispatch SHA instead. Token is injected via env (scoped to
+        # this step) since checkout was run with persist-credentials: false.
         if: steps.skip-check.outputs.skip != 'true' && (inputs.ref == '' || inputs.ref == 'main')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sha="$(git rev-parse HEAD)"
           git tag -f nightly "$sha"
-          git push origin --force "refs/tags/nightly"
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64)"
+          git -c http.extraheader="AUTHORIZATION: basic $auth_header" \
+            push origin --force "refs/tags/nightly"
