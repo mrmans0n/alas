@@ -6,7 +6,6 @@ import AppKit
 @MainActor
 @Suite(.serialized)
 struct HoverHighlightFeatureTests {
-
     /// Build a text view backed by a real layout chain so the feature can
     /// resolve word ranges and write temp attributes.
     private func makeTextView(_ text: String) -> CodeTextView {

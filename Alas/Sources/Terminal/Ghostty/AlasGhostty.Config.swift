@@ -5,7 +5,6 @@ import Foundation
 import GhosttyKit
 
 extension AlasGhostty {
-
     /// Wraps a `ghostty_config_t`. Owns the config lifetime.
     ///
     /// Usage:
@@ -13,9 +12,8 @@ extension AlasGhostty {
     ///   let cfg = try Config(filePath: "~/.config/ghostty/config")
     @MainActor
     final class Config {
-
         /// The raw C config pointer. Valid for this object's lifetime.
-        private(set) var cValue: ghostty_config_t
+        nonisolated(unsafe) private(set) var cValue: ghostty_config_t
 
         // MARK: - Init
 

@@ -10,10 +10,12 @@ enum StatusParser {
         var i = 0
         while i < parts.count {
             let line = parts[i]
-            if line.isEmpty { i += 1; continue }
+            if line.isEmpty { i += 1
+            continue }
             if line.hasPrefix("1 ") {
                 let tokens = line.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: true).map(String.init)
-                guard tokens.count >= 9 else { i += 1; continue }
+                guard tokens.count >= 9 else { i += 1
+                continue }
                 let xy = tokens[1]
                 let status = mapXY(xy)
                 let path = tokens[8]
@@ -22,7 +24,8 @@ enum StatusParser {
             } else if line.hasPrefix("2 ") {
                 // Rename: this entry's path, then a follow-up record with the original path.
                 let tokens = line.split(separator: " ", maxSplits: 9, omittingEmptySubsequences: true).map(String.init)
-                guard tokens.count >= 10, i + 1 < parts.count else { i += 1; continue }
+                guard tokens.count >= 10, i + 1 < parts.count else { i += 1
+                continue }
                 let path = tokens[9]
                 let from = parts[i + 1]
                 result.append(ChangedFile(path: path, status: "R", add: 0, del: 0, renameFrom: from))

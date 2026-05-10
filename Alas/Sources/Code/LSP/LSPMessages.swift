@@ -8,8 +8,10 @@ enum LSPID: Hashable, Codable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if let i = try? c.decode(Int.self) { self = .int(i); return }
-        if let s = try? c.decode(String.self) { self = .string(s); return }
+        if let i = try? c.decode(Int.self) { self = .int(i)
+        return }
+        if let s = try? c.decode(String.self) { self = .string(s)
+        return }
         throw DecodingError.dataCorruptedError(in: c, debugDescription: "id must be int or string")
     }
     func encode(to encoder: Encoder) throws {
@@ -92,13 +94,20 @@ indirect enum JSONValue: Codable, Sendable {
     case null, bool(Bool), int(Int), double(Double), string(String), array([JSONValue]), object([String: JSONValue])
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if c.decodeNil() { self = .null; return }
-        if let v = try? c.decode(Bool.self) { self = .bool(v); return }
-        if let v = try? c.decode(Int.self) { self = .int(v); return }
-        if let v = try? c.decode(Double.self) { self = .double(v); return }
-        if let v = try? c.decode(String.self) { self = .string(v); return }
-        if let v = try? c.decode([JSONValue].self) { self = .array(v); return }
-        if let v = try? c.decode([String: JSONValue].self) { self = .object(v); return }
+        if c.decodeNil() { self = .null
+        return }
+        if let v = try? c.decode(Bool.self) { self = .bool(v)
+        return }
+        if let v = try? c.decode(Int.self) { self = .int(v)
+        return }
+        if let v = try? c.decode(Double.self) { self = .double(v)
+        return }
+        if let v = try? c.decode(String.self) { self = .string(v)
+        return }
+        if let v = try? c.decode([JSONValue].self) { self = .array(v)
+        return }
+        if let v = try? c.decode([String: JSONValue].self) { self = .object(v)
+        return }
         throw DecodingError.dataCorruptedError(in: c, debugDescription: "unknown JSON value")
     }
     func encode(to encoder: Encoder) throws {
@@ -159,7 +168,8 @@ enum LSPMarkup: Decodable, Sendable {
     init(from decoder: Decoder) throws {
         // 1. Plain string.
         if let s = try? decoder.singleValueContainer().decode(String.self) {
-            self = .plain(s); return
+            self = .plain(s)
+            return
         }
         // 2. `MarkedString[]` (legacy spec form) or any mixed array of
         //    strings / objects. Concatenate the rendered values into one
@@ -187,11 +197,13 @@ enum LSPMarkup: Decodable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if let kind = try? c.decode(String.self, forKey: .kind),
            let value = try? c.decode(String.self, forKey: .value) {
-            self = .markupContent(kind: kind, value: value); return
+            self = .markupContent(kind: kind, value: value)
+            return
         }
         if let lang = try? c.decode(String.self, forKey: .language),
            let value = try? c.decode(String.self, forKey: .value) {
-            self = .markupContent(kind: lang, value: value); return
+            self = .markupContent(kind: lang, value: value)
+            return
         }
         throw DecodingError.dataCorruptedError(
             forKey: CodingKeys.value, in: c,

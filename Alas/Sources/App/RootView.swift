@@ -165,7 +165,7 @@ private struct RootCommandHandlers: ViewModifier {
                 showNewWorktree = true
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
-                if let wt = selectedWorktree() { try? state.openTerminalTab(for: wt) }
+                if let wt = selectedWorktree() { _ = try? state.openTerminalTab(for: wt) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
                 if let wt = selectedWorktree(), let active = state.tabs.activeTabId(forWorktree: wt.id) {

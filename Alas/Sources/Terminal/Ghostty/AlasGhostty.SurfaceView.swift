@@ -20,11 +20,9 @@ import QuartzCore
 import GhosttyKit
 
 extension AlasGhostty {
-
     /// Terminal display view. Each session owns exactly one of these.
     @MainActor
     final class SurfaceView: NSView, FontSizeResponder {
-
         // MARK: - Public callbacks
 
         /// Called (on main thread) whenever the terminal title changes.
@@ -289,7 +287,7 @@ extension AlasGhostty {
 
         override func keyUp(with event: NSEvent) {
             guard let surface = cSurface else { return }
-            var keyEv = event.alasGhosttyKeyEvent(GHOSTTY_ACTION_RELEASE)
+            let keyEv = event.alasGhosttyKeyEvent(GHOSTTY_ACTION_RELEASE)
             _ = ghostty_surface_key(surface, keyEv)
         }
 
@@ -312,7 +310,7 @@ extension AlasGhostty {
                 ? GHOSTTY_ACTION_PRESS
                 : GHOSTTY_ACTION_RELEASE
 
-            var keyEv = event.alasGhosttyKeyEvent(action)
+            let keyEv = event.alasGhosttyKeyEvent(action)
             _ = ghostty_surface_key(surface, keyEv)
         }
 
@@ -426,7 +424,6 @@ extension AlasGhostty {
 // MARK: - NSEvent key-translation helpers (ported from upstream NSEvent+Extension.swift)
 
 private extension NSEvent {
-
     /// Build a `ghostty_input_key_s` for the given action. Does NOT set `text` or `composing`.
     func alasGhosttyKeyEvent(_ action: ghostty_input_action_e) -> ghostty_input_key_s {
         var ev = ghostty_input_key_s()

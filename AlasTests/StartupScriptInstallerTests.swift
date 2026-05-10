@@ -3,7 +3,6 @@ import Foundation
 @testable import Alas
 
 struct StartupScriptInstallerTests {
-
     @Test func emptyScriptIsLoginShell() throws {
         let plan = try StartupScriptInstaller.plan(
             shell: "/bin/zsh", startupScript: "", sessionId: "s-empty"

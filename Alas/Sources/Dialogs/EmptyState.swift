@@ -36,9 +36,12 @@ struct EmptyState: View {
                         .opacity(canCreateWorktree ? 1 : 0.5)
                 }
                 HStack(spacing: 10) {
-                    HStack(spacing: 4) { Kbd(label: "⌘ P"); Text("switch").font(.system(size: 11)) }
-                    HStack(spacing: 4) { Kbd(label: "⌥ ⌘ N"); Text("new").font(.system(size: 11)) }
-                    HStack(spacing: 4) { Kbd(label: "⌘ ,"); Text("settings").font(.system(size: 11)) }
+                    HStack(spacing: 4) { Kbd(label: "⌘ P")
+                    Text("switch").font(.system(size: 11)) }
+                    HStack(spacing: 4) { Kbd(label: "⌥ ⌘ N")
+                    Text("new").font(.system(size: 11)) }
+                    HStack(spacing: 4) { Kbd(label: "⌘ ,")
+                    Text("settings").font(.system(size: 11)) }
                 }
                 .foregroundColor(theme.color("fg-faint"))
             }

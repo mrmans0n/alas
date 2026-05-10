@@ -3,7 +3,8 @@ import Foundation
 @testable import Alas
 
 struct PersistenceStoreTests {
-    struct Sample: Codable, Equatable { let name: String; let count: Int }
+    struct Sample: Codable, Equatable { let name: String
+    let count: Int }
 
     private func tmpURL() -> URL {
         FileManager.default.temporaryDirectory

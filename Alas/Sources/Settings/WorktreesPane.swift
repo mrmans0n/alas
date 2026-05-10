@@ -53,7 +53,8 @@ struct WorktreesPane: View {
     private func bind<T>(_ kp: WritableKeyPath<AppConfig, T>) -> Binding<T> {
         Binding(
             get: { state.config[keyPath: kp] },
-            set: { state.config[keyPath: kp] = $0; state.saveConfig() }
+            set: { state.config[keyPath: kp] = $0
+            state.saveConfig() }
         )
     }
 }

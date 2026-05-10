@@ -106,7 +106,8 @@ struct AppearancePane: View {
                                 desc: "Width of the repos/worktrees sidebar.") {
                         AlasField(text: Binding(
                             get: { String(Int(state.config.sidebarWidth)) },
-                            set: { state.config.sidebarWidth = Double($0) ?? 244; state.saveConfig() }
+                            set: { state.config.sidebarWidth = Double($0) ?? 244
+                            state.saveConfig() }
                         ), monospaced: true).frame(width: 100)
                     }
                 }
@@ -118,7 +119,8 @@ struct AppearancePane: View {
     private func bind<T>(_ kp: WritableKeyPath<AppConfig, T>) -> Binding<T> {
         Binding(
             get: { state.config[keyPath: kp] },
-            set: { state.config[keyPath: kp] = $0; state.saveConfig() }
+            set: { state.config[keyPath: kp] = $0
+            state.saveConfig() }
         )
     }
 }

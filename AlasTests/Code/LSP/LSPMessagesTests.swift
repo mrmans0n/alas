@@ -25,7 +25,8 @@ struct LSPMessagesTests {
         #expect(resp.id == .int(1))
         #expect(resp.error == nil)
         let result = try #require(resp.result)
-        struct InitResult: Decodable { struct Caps: Decodable { let hoverProvider: Bool? }; let capabilities: Caps }
+        struct InitResult: Decodable { struct Caps: Decodable { let hoverProvider: Bool? }
+        let capabilities: Caps }
         let decoded = try JSONDecoder().decode(InitResult.self, from: result)
         #expect(decoded.capabilities.hoverProvider == true)
     }

@@ -15,7 +15,9 @@ final class SymbolsFeature {
     }
 
     func refresh(client: LSPClient?, uri: String) async {
-        guard let client else { symbols = []; onChange?(); return }
+        guard let client else { symbols = []
+        onChange?()
+        return }
         let raw = (try? await client.documentSymbol(uri: uri)) ?? []
         var flat: [Item] = []
         func walk(_ list: [LSPDocumentSymbol], depth: Int) {

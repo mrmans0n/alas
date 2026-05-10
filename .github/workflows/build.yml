@@ -68,10 +68,13 @@ jobs:
           git config --global --unset-all credential.helper || true
           git config --global credential.helper ""
 
-      - name: Install xcodegen + zig@0.15
+      - name: Install xcodegen + zig@0.15 + SwiftFormat
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
         # linker bug Ghostty's HACKING.md describes. Vanilla Zig 0.15.2 does not.
-        run: brew install xcodegen zig@0.15
+        run: brew install xcodegen zig@0.15 swiftformat
+
+      - name: Check formatting
+        run: swiftformat Alas AlasTests --lint --reporter github-actions-log
 
       - name: Compute Ghostty cache key inputs
         # Submodules track their HEAD via .git/modules/... in the parent repo, so
@@ -133,7 +136,7 @@ jobs:
         # CI with no signing identity present (per supacode's CI workflow).
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
-            -destination 'platform=macOS' \
+            -destination 'platform=macOS,arch=arm64' \
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -149,7 +152,7 @@ jobs:
       - name: Test — pure & light-IO suites
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
-            -destination 'platform=macOS' \
+            -destination 'platform=macOS,arch=arm64' \
             -only-testing AlasTests/AppConfigTests \
             -only-testing AlasTests/OKLCHTests \
             -only-testing AlasTests/ThemeTests \
@@ -179,7 +182,7 @@ jobs:
         timeout-minutes: 8
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
-            -destination 'platform=macOS' \
+            -destination 'platform=macOS,arch=arm64' \
             -only-testing AlasTests/ProcessGitTests \
             -skipMacroValidation \
             -parallel-testing-enabled NO \

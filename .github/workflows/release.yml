@@ -50,7 +50,7 @@ jobs:
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -configuration Release \
             -derivedDataPath build \
-            -destination 'platform=macOS' \
+            -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
       - name: Zip the .app
