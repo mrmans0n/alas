@@ -1,0 +1,170 @@
+name: Nightly Build
+
+on:
+  # NOTE: cron is intentionally disabled for the initial bring-up. It is
+  # uncommented in Task 5 once a manual dispatch on main has bootstrapped the
+  # `nightly` git tag and verified the upload path.
+  # schedule:
+  #   - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (default: main)"
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+# Manual + scheduled runs queue rather than race on the rolling release.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch origin --tags --force
+
+      - name: Bootstrap check
+        # The first-ever nightly run must be on `main` so the `nightly` tag
+        # gets created at a main SHA. Refuse to upload from a feature branch
+        # before bootstrap, otherwise softprops/action-gh-release would create
+        # the tag pointing at the feature branch's SHA.
+        run: |
+          if ! git rev-parse refs/tags/nightly >/dev/null 2>&1; then
+            if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+              echo "::error::nightly tag does not exist yet. Run this workflow on main first to bootstrap."
+              exit 1
+            fi
+          fi
+
+      - name: Decide whether to skip
+        id: skip-check
+        # Only the scheduled cron run can skip. Manual dispatches always build.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] \
+             && git rev-parse refs/tags/nightly >/dev/null 2>&1 \
+             && [ "$(git rev-parse HEAD)" = "$(git rev-parse refs/tags/nightly)" ]; then
+            echo "Nothing changed since last nightly. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Capture previous nightly SHA
+        if: steps.skip-check.outputs.skip != 'true'
+        id: prev
+        run: |
+          if git rev-parse refs/tags/nightly >/dev/null 2>&1; then
+            echo "sha=$(git rev-parse refs/tags/nightly)" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Print toolchain versions
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Install xcodegen + zig@0.15 + create-dmg
+        if: steps.skip-check.outputs.skip != 'true'
+        run: brew install xcodegen zig@0.15 create-dmg
+
+      - name: Compute Ghostty cache key inputs
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
+          shasum scripts/build-ghostty.sh >> .ghostty-pin
+
+      - name: Cache Ghostty build outputs
+        if: steps.skip-check.outputs.skip != 'true'
+        uses: actions/cache@v5
+        with:
+          path: |
+            .build/ghostty
+          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+
+      - name: Build Ghostty xcframework
+        if: steps.skip-check.outputs.skip != 'true'
+        run: ./scripts/build-ghostty.sh
+
+      - name: Generate project
+        if: steps.skip-check.outputs.skip != 'true'
+        run: xcodegen
+
+      - name: Build release app
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -configuration Release \
+            -derivedDataPath build \
+            -destination 'platform=macOS,arch=arm64' \
+            -quiet build
+
+      - name: Package .app (zip + DMG)
+        if: steps.skip-check.outputs.skip != 'true'
+        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app Alas-nightly
+
+      - name: Compose release body
+        if: steps.skip-check.outputs.skip != 'true'
+        id: body
+        run: |
+          short_sha="$(git rev-parse --short HEAD)"
+          full_sha="$(git rev-parse HEAD)"
+          ts="$(date -u +'%Y-%m-%d %H:%M UTC')"
+          {
+            echo "body<<__ALAS_NIGHTLY_BODY__"
+            echo "**Build:** \`$short_sha\` ($full_sha)"
+            echo "**Built:** $ts"
+            echo "**Ref:** \`${{ inputs.ref || 'main' }}\`"
+            echo ""
+            echo "## Changes since previous nightly"
+            echo ""
+            if [ -n "${{ steps.prev.outputs.sha }}" ]; then
+              git log --oneline "${{ steps.prev.outputs.sha }}..HEAD" || echo "_(no commit log available)_"
+            else
+              echo "_Initial nightly build._"
+            fi
+            echo ""
+            echo "## Installation"
+            echo ""
+            echo "Nightly builds are unsigned. After moving Alas.app to /Applications, run:"
+            echo ""
+            echo '```'
+            echo "xattr -dr com.apple.quarantine /Applications/Alas.app"
+            echo '```'
+            echo ""
+            echo "to clear the Gatekeeper quarantine flag."
+            echo "__ALAS_NIGHTLY_BODY__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload to rolling nightly release
+        if: steps.skip-check.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          body: ${{ steps.body.outputs.body }}
+          files: |
+            build/Build/Products/Release/Alas-nightly.app.zip
+            build/Build/Products/Release/Alas-nightly.dmg
+
+      - name: Move nightly tag (main only)
+        if: steps.skip-check.outputs.skip != 'true' && github.ref == 'refs/heads/main'
+        run: |
+          git tag -f nightly "$GITHUB_SHA"
+          git push origin --force "refs/tags/nightly"
