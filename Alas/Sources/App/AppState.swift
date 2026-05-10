@@ -525,10 +525,12 @@ final class AppState {
         let repoPath = URL(fileURLWithPath: project.path)
         let deleteBranch = config.worktrees.deleteBranchOnRemove
 
-        // Snapshot for selection follow-up.
+        // Snapshot for selection follow-up. The index must be captured BEFORE
+        // the await because the worktree won't be in `visibleWorktrees` after
+        // `refreshWorktrees`. We re-check selection (live) post-await so a
+        // selection change during the dialog/await flow isn't clobbered.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        let wasSelected = selectedWorktreeId == worktree.id
 
         Task { @MainActor in
             let svc = WorktreeService()
@@ -567,7 +569,7 @@ final class AppState {
 
             cleanupWorktreeState(worktreeId: worktree.id)
             try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)
-            if wasSelected {
+            if selectedWorktreeId == worktree.id {
                 selectedWorktreeId = selectionAfterRemoval(
                     removedFromProjectId: worktree.projectId,
                     removedAtIndex: removedIndex
