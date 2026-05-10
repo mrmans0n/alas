@@ -47,3 +47,42 @@ struct ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: project.id).isEmpty)
     }
 }
+
+extension ProjectsManagerTests {
+    @Test func hidingAndUnhidingFlipsVisibilityAndArchive() async throws {
+        let repo = try await makeRepo(name: "delta")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "delta", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        let mainPath = trees[0].path
+
+        mgr.setWorktreeHidden(projectId: project.id, path: mainPath, hidden: true)
+        #expect(mgr.isWorktreeHidden(projectId: project.id, path: mainPath))
+        #expect(mgr.visibleWorktrees(projectId: project.id).isEmpty)
+        #expect(mgr.archivedWorktrees(projectId: project.id).count == 1)
+
+        mgr.setWorktreeHidden(projectId: project.id, path: mainPath, hidden: false)
+        #expect(!mgr.isWorktreeHidden(projectId: project.id, path: mainPath))
+        #expect(mgr.visibleWorktrees(projectId: project.id).count == 1)
+        #expect(mgr.archivedWorktrees(projectId: project.id).isEmpty)
+    }
+
+    @Test func refreshGarbageCollectsOrphanHiddenPaths() async throws {
+        let repo = try await makeRepo(name: "epsilon")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "epsilon", color: "#5fb7c4")
+        // Pre-seed a hidden path that doesn't correspond to any live worktree.
+        let bogus = URL(fileURLWithPath: "/nonexistent/orphan-worktree")
+        mgr.setWorktreeHidden(projectId: project.id, path: bogus, hidden: true)
+        #expect(mgr.isWorktreeHidden(projectId: project.id, path: bogus))
+
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        // Refresh should drop the orphan since git worktree list doesn't include it.
+        #expect(!mgr.isWorktreeHidden(projectId: project.id, path: bogus))
+    }
+}
