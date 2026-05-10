@@ -23,7 +23,7 @@ jobs:
       - name: Install xcodegen + zig@0.15
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
         # linker bug. See ThirdParty/ghostty/HACKING.md.
-        run: brew install xcodegen zig@0.15
+        run: brew install xcodegen zig@0.15 create-dmg
 
       - name: Compute Ghostty cache key inputs
         run: |
@@ -53,12 +53,12 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
-      - name: Zip the .app
-        run: |
-          cd build/Build/Products/Release
-          zip -r Alas.app.zip Alas.app
+      - name: Package .app (zip + DMG)
+        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app Alas
 
-      - name: Upload macOS artifact to release
+      - name: Upload macOS artifacts to release
         uses: softprops/action-gh-release@v3
         with:
-          files: build/Build/Products/Release/Alas.app.zip
+          files: |
+            build/Build/Products/Release/Alas.app.zip
+            build/Build/Products/Release/Alas.dmg
