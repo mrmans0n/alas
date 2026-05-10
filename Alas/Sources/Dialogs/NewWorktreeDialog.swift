@@ -118,7 +118,21 @@ struct NewWorktreeDialog: View {
                     repoPath: URL(fileURLWithPath: project.path),
                     base: base, branch: branch, destination: dest, projectId: project.id
                 )
-                if try await state.projectsManager.refreshWorktrees(projectId: project.id) {
+                // Defensive: clear any stale hidden entry for this path. An
+                // archived worktree could have been externally removed and
+                // recreated at the same destination before any refresh/GC; the
+                // GC otherwise keeps the entry because the path is live again.
+                let wasHidden = state.projectsManager.isWorktreeHidden(
+                    projectId: project.id,
+                    path: newWorktree.path
+                )
+                state.projectsManager.setWorktreeHidden(
+                    projectId: project.id,
+                    path: newWorktree.path,
+                    hidden: false
+                )
+                let gcDropped = try await state.projectsManager.refreshWorktrees(projectId: project.id)
+                if wasHidden || gcDropped {
                     state.saveProjects()
                 }
 
