@@ -7,6 +7,12 @@ struct RepoGroupView: View {
     let selectedWorktreeId: String?
     let onSelect: (Worktree) -> Void
     let onNewWorktree: () -> Void
+    let onOpenTerminal: (Worktree) -> Void
+    let onCopyPath: (Worktree) -> Void
+    let onCopyBranch: (Worktree) -> Void
+    let onRevealInFinder: (Worktree) -> Void
+    let onArchive: (Worktree) -> Void
+    let onDelete: (Worktree) -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
     @State private var plusHovering = false
@@ -60,7 +66,13 @@ struct RepoGroupView: View {
                         WorktreeRowView(
                             worktree: wt,
                             isSelected: wt.id == selectedWorktreeId,
-                            onTap: { onSelect(wt) }
+                            onTap: { onSelect(wt) },
+                            onOpenTerminal: { onOpenTerminal(wt) },
+                            onCopyPath: { onCopyPath(wt) },
+                            onCopyBranch: { onCopyBranch(wt) },
+                            onRevealInFinder: { onRevealInFinder(wt) },
+                            onArchive: { onArchive(wt) },
+                            onDelete: { onDelete(wt) }
                         )
                     }
                 }

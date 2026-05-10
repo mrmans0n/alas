@@ -4,6 +4,12 @@ struct WorktreeRowView: View {
     let worktree: Worktree
     let isSelected: Bool
     let onTap: () -> Void
+    let onOpenTerminal: () -> Void
+    let onCopyPath: () -> Void
+    let onCopyBranch: () -> Void
+    let onRevealInFinder: () -> Void
+    let onArchive: () -> Void
+    let onDelete: () -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -52,6 +58,15 @@ struct WorktreeRowView: View {
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            Button("Open in Terminal", action: onOpenTerminal)
+            Button("Copy Path", action: onCopyPath)
+            Button("Copy Branch Name", action: onCopyBranch)
+            Button("Reveal in Finder", action: onRevealInFinder)
+            Divider()
+            Button("Archive", action: onArchive)
+            Button("Delete Worktree…", role: .destructive, action: onDelete)
+        }
     }
 
     private func relative(_ date: Date) -> String {
