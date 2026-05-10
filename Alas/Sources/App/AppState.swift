@@ -549,6 +549,9 @@ final class AppState {
                             deleteBranchIfMerged: deleteBranch,
                             force: true
                         )
+                    } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
+                        showFileActionError(title: "Delete Failed", message: stderr)
+                        return
                     } catch {
                         showFileActionError(title: "Delete Failed", message: "\(error)")
                         return
