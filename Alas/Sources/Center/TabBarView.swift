@@ -13,6 +13,7 @@ struct TabBarView: View {
     let onCloseToRight: (TabID) -> Void
     let onCopyPath: (TabID) -> Void
     let onCopyRelativePath: (TabID) -> Void
+    let onRenameTerminal: (TabID) -> Void
     let onNewTerminal: () -> Void
     @Environment(\.theme) var theme
 
@@ -29,6 +30,10 @@ struct TabBarView: View {
                     onClose: { onClose(tab.id) }
                 )
                 .contextMenu {
+                    if case .terminal = tab {
+                        Button("Rename…") { onRenameTerminal(tab.id) }
+                        Divider()
+                    }
                     Button("Close") { onClose(tab.id) }
                     Button("Close Other Tabs") { onCloseOthers(tab.id) }
                         .disabled(tabs.count <= 1)
