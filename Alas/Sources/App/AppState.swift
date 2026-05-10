@@ -125,7 +125,11 @@ final class AppState {
         harness.detector.register(sessionId: session.id) { [weak session] in
             session?.surface.foregroundPid
         }
-        return tabs.appendTerminal(worktreeId: worktree.id, title: worktree.branch, sessionId: session.id)
+        let title = tabs.nextTerminalTitle(
+            worktreeId: worktree.id,
+            baseTitle: defaultTerminalTitle(for: worktree)
+        )
+        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: session.id)
     }
 
     @discardableResult
@@ -230,6 +234,26 @@ final class AppState {
         }
     }
 
+    func renameTerminalTab(worktreeId: String, tabId: TabID) {
+        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Terminal"
+        alert.informativeText = "Choose a stable name for this terminal tab."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = state.title
+        field.lineBreakMode = .byTruncatingTail
+        alert.accessoryView = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        _ = tabs.renameTerminal(worktreeId: worktreeId, tabId: tabId, title: field.stringValue)
+    }
+
     func closeTab(worktreeId: String, tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
@@ -318,6 +342,15 @@ final class AppState {
             throw NSError(domain: "AppState", code: 3)
         }
         return replacement
+    }
+
+    private func defaultTerminalTitle(for worktree: Worktree) -> String {
+        let folder = worktree.path.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !folder.isEmpty { return folder }
+        let name = worktree.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
+        let branch = worktree.branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return branch.isEmpty ? "Terminal" : branch
     }
 
     private func worktree(withId id: String) -> Worktree? {

@@ -49,6 +49,9 @@ struct CenterPaneView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(rel, forType: .string)
                 },
+                onRenameTerminal: { id in
+                    state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
+                },
                 onNewTerminal: openTerminal
             )
             Group {

@@ -74,6 +74,37 @@ final class TabsManager {
         return tab
     }
 
+    func nextTerminalTitle(worktreeId: String, baseTitle: String) -> String {
+        let base = baseTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = base.isEmpty ? "Terminal" : base
+        let existing = Set(tabs(forWorktree: worktreeId).compactMap { tab -> String? in
+            guard case .terminal(let state) = tab else { return nil }
+            return state.title
+        })
+        guard existing.contains(fallback) else { return fallback }
+
+        var suffix = 2
+        while existing.contains("\(fallback) \(suffix)") {
+            suffix += 1
+        }
+        return "\(fallback) \(suffix)"
+    }
+
+    @discardableResult
+    func renameTerminal(worktreeId: String, tabId: TabID, title: String) -> Tab? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx] else { return nil }
+        state.title = trimmed
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
     @discardableResult
     func replaceTerminalSession(worktreeId: String, tabId: TabID, sessionId: String) -> Tab? {
         guard var file = byWorktree[worktreeId],

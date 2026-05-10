@@ -52,6 +52,42 @@ struct TabsManagerTests {
         #expect(state.title == "x")
     }
 
+    @Test func nextTerminalTitleUsesStableNumericSuffix() {
+        let worktreeId = "tabs-manager-terminal-title-suffix"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        #expect(mgr.nextTerminalTitle(worktreeId: worktreeId, baseTitle: "alas") == "alas")
+        _ = mgr.appendTerminal(worktreeId: worktreeId, title: "alas", sessionId: "s1")
+        #expect(mgr.nextTerminalTitle(worktreeId: worktreeId, baseTitle: "alas") == "alas 2")
+        _ = mgr.appendTerminal(worktreeId: worktreeId, title: "alas 2", sessionId: "s2")
+        #expect(mgr.nextTerminalTitle(worktreeId: worktreeId, baseTitle: "alas") == "alas 3")
+    }
+
+    @Test func renamingTerminalUpdatesTitleAndTrimsWhitespace() {
+        let worktreeId = "tabs-manager-rename-terminal"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "alas", sessionId: "s")
+
+        let renamed = mgr.renameTerminal(worktreeId: worktreeId, tabId: tab.id, title: "  Server  ")
+
+        #expect(renamed?.title == "Server")
+        #expect(mgr.tabs(forWorktree: worktreeId).first?.title == "Server")
+    }
+
+    @Test func renamingTerminalRejectsEmptyTitle() {
+        let worktreeId = "tabs-manager-rename-terminal-empty"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "alas", sessionId: "s")
+
+        let renamed = mgr.renameTerminal(worktreeId: worktreeId, tabId: tab.id, title: "   ")
+
+        #expect(renamed == nil)
+        #expect(mgr.tabs(forWorktree: worktreeId).first?.title == "alas")
+    }
+
     @Test func editorTabStateDecodesLegacyShape() throws {
         // Old shape: no externalAbsolutePath key.
         let json = #"""
