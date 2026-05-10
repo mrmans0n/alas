@@ -73,11 +73,17 @@ struct WorktreeService {
     /// reliably resolve the branch name when `deleteBranchIfMerged` is true —
     /// path basenames diverge from branch names whenever the path template
     /// substitutes `/` (e.g. branch `feat/x` lives at dir basename `feat-x`).
-    func remove(repoPath: URL, worktree: Worktree, deleteBranchIfMerged: Bool) async throws {
-        let result = try await Process.git(
-            ["worktree", "remove", worktree.path.path],
-            cwd: repoPath
-        )
+    /// `force` adds `--force`, required when the worktree has uncommitted
+    /// changes or untracked files.
+    func remove(
+        repoPath: URL,
+        worktree: Worktree,
+        deleteBranchIfMerged: Bool,
+        force: Bool = false
+    ) async throws {
+        var args = ["worktree", "remove", worktree.path.path]
+        if force { args.append("--force") }
+        let result = try await Process.git(args, cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             // Best-effort delete. -d only succeeds if merged; ignore failures.

@@ -82,3 +82,46 @@ struct WorktreeServiceTests {
         #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }
+
+extension WorktreeServiceTests {
+    @Test func removeFailsOnDirtyWorktreeWithoutForce() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-dirty")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/dirty",
+            destination: dest, projectId: "p"
+        )
+        // Make the worktree dirty by writing an untracked file.
+        try "hello".write(
+            to: dest.appendingPathComponent("untracked.txt"),
+            atomically: true, encoding: .utf8
+        )
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        }
+    }
+
+    @Test func removeWithForceSucceedsOnDirtyWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-force")
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/force",
+            destination: dest, projectId: "p"
+        )
+        try "hello".write(
+            to: dest.appendingPathComponent("untracked.txt"),
+            atomically: true, encoding: .utf8
+        )
+
+        try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false, force: true)
+
+        let listed = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(listed.count == 1) // only main remains
+    }
+}
