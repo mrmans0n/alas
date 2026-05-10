@@ -98,6 +98,23 @@ final class AppState {
     /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
     /// the archived worktree was selected. Does NOT touch git or disk.
     func archiveWorktree(_ worktree: Worktree) {
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        if !dirty.isEmpty {
+            switch promptForDirtyBuffers(
+                action: "Archive",
+                branch: worktree.branch,
+                dirtyCount: dirty.count,
+                onDiskDestructive: false
+            ) {
+            case .save:
+                guard saveDirtyBuffers(in: worktree.id) else { return }
+            case .discard:
+                break
+            case .cancel:
+                return
+            }
+        }
+
         // Snapshot index in the visible list BEFORE we mutate anything, so we
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
@@ -522,7 +539,26 @@ final class AppState {
     /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
     /// failure offers a force retry. Cleans up in-app state on success.
     func deleteWorktree(_ worktree: Worktree) {
-        guard confirmDeleteWorktree(branch: worktree.branch) else { return }
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        let saveBuffersFirst: Bool
+        if dirty.isEmpty {
+            guard confirmDeleteWorktree(branch: worktree.branch) else { return }
+            saveBuffersFirst = false
+        } else {
+            switch promptForDirtyBuffers(
+                action: "Delete",
+                branch: worktree.branch,
+                dirtyCount: dirty.count,
+                onDiskDestructive: true
+            ) {
+            case .save: saveBuffersFirst = true
+            case .discard: saveBuffersFirst = false
+            case .cancel: return
+            }
+        }
+        if saveBuffersFirst {
+            guard saveDirtyBuffers(in: worktree.id) else { return }
+        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
             return
@@ -613,5 +649,81 @@ final class AppState {
         alert.addButton(withTitle: "Cancel")
         forceButton.hasDestructiveAction = true
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private enum DirtyBufferChoice {
+        case save
+        case discard
+        case cancel
+    }
+
+    /// Returns the editor tabs in this worktree whose buffers have unsaved
+    /// changes. Used by archive/delete to warn the user before tearing down
+    /// the buffer state.
+    private func dirtyEditorTabIds(worktreeId: String) -> [TabID] {
+        tabs.tabs(forWorktree: worktreeId).compactMap { tab in
+            guard case .editor(let state) = tab,
+                  let buffer = tabs.peekBuffer(tabId: state.id),
+                  buffer.dirty else { return nil }
+            return state.id
+        }
+    }
+
+    /// Three-way prompt for actions (archive, delete) that would otherwise
+    /// silently discard unsaved editor buffers. The default button (Enter)
+    /// is "Save & <action>"; the destructive button is "Discard & <action>".
+    /// `onDiskDestructive` true means `<action>` will also remove files from
+    /// disk; the message text adjusts accordingly.
+    private func promptForDirtyBuffers(
+        action: String,
+        branch: String,
+        dirtyCount: Int,
+        onDiskDestructive: Bool
+    ) -> DirtyBufferChoice {
+        let alert = NSAlert()
+        alert.messageText = "\(action) worktree '\(branch)'?"
+        let countSentence = dirtyCount == 1
+            ? "1 file has unsaved changes."
+            : "\(dirtyCount) files have unsaved changes."
+        let actionSentence = onDiskDestructive
+            ? "This removes its files from disk. The local branch will be deleted if merged."
+            : "The worktree itself stays on disk."
+        alert.informativeText = "\(countSentence) Saving will write them to disk; discarding will lose them. \(actionSentence)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save & \(action)")
+        let discardButton = alert.addButton(withTitle: "Discard & \(action)")
+        alert.addButton(withTitle: "Cancel")
+        discardButton.hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    /// Save every dirty editor buffer in the given worktree. Returns true on
+    /// full success; on partial failure surfaces an aggregate error and
+    /// returns false so the caller can bail before the destructive cleanup.
+    private func saveDirtyBuffers(in worktreeId: String) -> Bool {
+        var failed: [(TabID, Error)] = []
+        for tab in tabs.tabs(forWorktree: worktreeId) {
+            guard case .editor(let state) = tab,
+                  let buffer = tabs.peekBuffer(tabId: state.id),
+                  buffer.dirty else { continue }
+            do {
+                try buffer.save()
+            } catch {
+                failed.append((state.id, error))
+            }
+        }
+        if !failed.isEmpty {
+            let count = failed.count
+            showFileActionError(
+                title: "Save Failed",
+                message: "\(count) file\(count == 1 ? "" : "s") could not be saved. The worktree was not archived or deleted."
+            )
+            return false
+        }
+        return true
     }
 }
