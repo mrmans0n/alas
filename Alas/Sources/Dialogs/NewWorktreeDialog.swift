@@ -118,7 +118,9 @@ struct NewWorktreeDialog: View {
                     repoPath: URL(fileURLWithPath: project.path),
                     base: base, branch: branch, destination: dest, projectId: project.id
                 )
-                try await state.projectsManager.refreshWorktrees(projectId: project.id)
+                if try await state.projectsManager.refreshWorktrees(projectId: project.id) {
+                    state.saveProjects()
+                }
 
                 // Run worktree-create script if requested. Best-effort: errors
                 // in the user-supplied script don't roll back the worktree.

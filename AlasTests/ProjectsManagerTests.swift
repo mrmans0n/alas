@@ -80,9 +80,19 @@ extension ProjectsManagerTests {
         mgr.setWorktreeHidden(projectId: project.id, path: bogus, hidden: true)
         #expect(mgr.isWorktreeHidden(projectId: project.id, path: bogus))
 
-        try await mgr.refreshWorktrees(projectId: project.id)
+        let gcDropped = try await mgr.refreshWorktrees(projectId: project.id)
 
         // Refresh should drop the orphan since git worktree list doesn't include it.
+        #expect(gcDropped)
         #expect(!mgr.isWorktreeHidden(projectId: project.id, path: bogus))
+    }
+
+    @Test func refreshWithNoOrphansReturnsFalse() async throws {
+        let repo = try await makeRepo(name: "zeta")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "zeta", color: "#5fb7c4")
+        let gcDropped = try await mgr.refreshWorktrees(projectId: project.id)
+        #expect(!gcDropped)
     }
 }

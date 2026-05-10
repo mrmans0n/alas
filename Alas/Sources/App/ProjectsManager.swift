@@ -66,24 +66,36 @@ final class ProjectsManager {
         projects[idx].hiddenWorktreePaths = paths
     }
 
-    func refreshWorktrees(projectId: String) async throws {
-        guard let project = projects.first(where: { $0.id == projectId }) else { return }
+    /// Refresh the live worktree list for a project and GC orphan hidden
+    /// paths. Returns `true` when the GC dropped at least one entry, so the
+    /// caller can persist the change to disk; `false` otherwise.
+    @discardableResult
+    func refreshWorktrees(projectId: String) async throws -> Bool {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         let url = URL(fileURLWithPath: project.path)
         let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
         worktreesByProject[projectId] = trees
         // GC orphan hidden entries: drop any hidden path that doesn't match a
         // live worktree path. Prevents stale entries accumulating when worktrees
         // get removed externally (e.g. `git worktree remove` from a terminal).
-        if let idx = projects.firstIndex(where: { $0.id == projectId }) {
-            let live = Set(trees.map { canonical($0.path) })
-            projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
-        }
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return false }
+        let live = Set(trees.map { canonical($0.path) })
+        let before = projects[idx].hiddenWorktreePaths.count
+        projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
+        return projects[idx].hiddenWorktreePaths.count != before
     }
 
-    func refreshAll() async {
+    /// Refresh every project. Returns `true` when at least one project's
+    /// hidden-path GC dropped an entry, so the caller can persist the change.
+    @discardableResult
+    func refreshAll() async -> Bool {
+        var changed = false
         for project in projects {
-            try? await refreshWorktrees(projectId: project.id)
+            if let didGC = try? await refreshWorktrees(projectId: project.id) {
+                changed = changed || didGC
+            }
         }
+        return changed
     }
 
     private func hiddenSet(projectId: String) -> Set<String> {

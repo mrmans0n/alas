@@ -95,7 +95,9 @@ struct RootView: View {
         }
         .task {
             state.startHarness()
-            await state.projectsManager.refreshAll()
+            if await state.projectsManager.refreshAll() {
+                state.saveProjects()
+            }
             // Worktrees now exist — load any persisted tab files for them. Init
             // can't do this because refreshAll runs async after init.
             state.reloadTabs()

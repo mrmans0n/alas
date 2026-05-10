@@ -86,7 +86,9 @@ final class AppState {
     func addProject(path: URL, displayName: String, color: String) async throws {
         _ = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
         saveProjects()
-        await projectsManager.refreshAll()
+        if await projectsManager.refreshAll() {
+            saveProjects()
+        }
     }
 
     func removeProject(id: String) {
@@ -609,7 +611,9 @@ final class AppState {
             }
 
             cleanupWorktreeState(worktreeId: worktree.id)
-            try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)
+            if (try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)) == true {
+                saveProjects()
+            }
             if selectedWorktreeId == worktree.id {
                 selectedWorktreeId = selectionAfterRemoval(
                     removedFromProjectId: worktree.projectId,
