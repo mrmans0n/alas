@@ -30,10 +30,15 @@ app_name="$(basename "$app_path")"
 # `zip -r` does not, which would corrupt any signature we add later.
 ( cd "$out_dir" && ditto -c -k --keepParent "$app_name" "$prefix.app.zip" )
 
-# .dmg: create-dmg lays out a single-window installer DMG with an
-# /Applications drop link. --hdiutil-quiet keeps CI logs clean.
-# create-dmg refuses to overwrite an existing output file.
+# .dmg: create-dmg's documented contract is `<output.dmg> <source_folder>`
+# and copies the *contents* of <source_folder> into the DMG. Stage the .app
+# inside a temp folder so we pass a folder (not the .app itself), guaranteeing
+# the .app lands at the DMG root and the --icon flag resolves.
+# --hdiutil-quiet keeps CI logs clean. create-dmg refuses to overwrite output.
 rm -f "$out_dir/$prefix.dmg"
+stage_dir="$(mktemp -d -t package-app)"
+trap 'rm -rf "$stage_dir"' EXIT
+cp -a "$app_path" "$stage_dir/"
 create-dmg \
   --volname "Alas" \
   --window-size 540 380 \
@@ -43,7 +48,7 @@ create-dmg \
   --no-internet-enable \
   --hdiutil-quiet \
   "$out_dir/$prefix.dmg" \
-  "$app_path"
+  "$stage_dir"
 
 echo "Wrote $out_dir/$prefix.app.zip"
 echo "Wrote $out_dir/$prefix.dmg"

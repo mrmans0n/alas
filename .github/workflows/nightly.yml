@@ -37,14 +37,17 @@ jobs:
         run: git fetch origin --tags --force
 
       - name: Bootstrap check
-        # The first-ever nightly run must be on `main` so the `nightly` tag
-        # gets created at a main SHA. Refuse to upload from a feature branch
-        # before bootstrap, otherwise softprops/action-gh-release would create
-        # the tag pointing at the feature branch's SHA.
+        # The first-ever nightly run must build main so the `nightly` tag gets
+        # created at a main SHA. Refuse to upload from a feature ref before
+        # bootstrap, otherwise softprops/action-gh-release would create the
+        # tag pointing at the feature ref's SHA. Gate on the *built* ref
+        # (`inputs.ref`), not the dispatch ref (`github.ref`), since you can
+        # dispatch from main with `ref=feature-branch`.
         run: |
           if ! git rev-parse refs/tags/nightly >/dev/null 2>&1; then
-            if [ "${{ github.ref }}" != "refs/heads/main" ]; then
-              echo "::error::nightly tag does not exist yet. Run this workflow on main first to bootstrap."
+            built_ref="${{ inputs.ref || 'main' }}"
+            if [ "$built_ref" != "main" ]; then
+              echo "::error::nightly tag does not exist yet. Run this workflow with ref=main first to bootstrap."
               exit 1
             fi
           fi
@@ -163,8 +166,14 @@ jobs:
             build/Build/Products/Release/Alas-nightly.app.zip
             build/Build/Products/Release/Alas-nightly.dmg
 
-      - name: Move nightly tag (main only)
-        if: steps.skip-check.outputs.skip != 'true' && github.ref == 'refs/heads/main'
+      - name: Move nightly tag (main builds only)
+        # Gate on the built ref (`inputs.ref`), not `github.ref` — the latter
+        # is the dispatch ref and can be `main` while we built a feature
+        # branch. Tag the actually-checked-out HEAD so the tag matches the
+        # uploaded artifacts even when bash expansion of `$GITHUB_SHA` would
+        # name the dispatch SHA instead.
+        if: steps.skip-check.outputs.skip != 'true' && (inputs.ref == '' || inputs.ref == 'main')
         run: |
-          git tag -f nightly "$GITHUB_SHA"
+          sha="$(git rev-parse HEAD)"
+          git tag -f nightly "$sha"
           git push origin --force "refs/tags/nightly"
