@@ -213,6 +213,59 @@ struct CommitDetailsTests {
         #expect(delCount >= 1)
     }
 
+    @Test func diffOfCopiedFileExcludesSourceHunks() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Seed with a 10-line file so git's copy detection has enough
+        // similarity to consider the duplicate a copy.
+        try (1...10).map { "line \($0)\n" }.joined()
+            .write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+        // Copy old.txt to new.txt AND modify old.txt — exactly the
+        // scenario where passing both paths without slicing would pull
+        // in old.txt's M hunks under new.txt's header.
+        try (1...10).map { "line \($0)\n" }.joined()
+            .write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        try (1...10).map { i in i == 5 ? "MODIFIED\n" : "line \(i)\n" }.joined()
+            .write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "copy + edit"], cwd: repo)
+        let sha = try await currentSha(in: repo)
+
+        let svc = GitService()
+        // Diff for new.txt with originalPath = old.txt. The slice should
+        // strip old.txt's M hunks. A pure copy with no further edits has
+        // zero hunks; if our slice kept old.txt's section, we'd see the
+        // MODIFIED <- line 5 swap.
+        let diff = try await svc.diff(worktreePath: repo, sha: sha, file: "new.txt", originalPath: "old.txt")
+        let texts = diff.hunks.flatMap { $0.lines }.map(\.text)
+        #expect(!texts.contains("MODIFIED"))
+        #expect(!texts.contains("line 5"))
+    }
+
+    @Test func sliceDiffForFileKeepsOnlyMatchingSection() {
+        let raw = """
+        diff --git a/old.txt b/new.txt
+        similarity index 100%
+        copy from old.txt
+        copy to new.txt
+        diff --git a/old.txt b/old.txt
+        index abc..def 100644
+        --- a/old.txt
+        +++ b/old.txt
+        @@ -1,3 +1,3 @@
+         line 1
+        -line 2
+        +MODIFIED
+         line 3
+        """
+        let kept = GitService.sliceDiffForFile(raw, file: "new.txt")
+        #expect(kept.contains("copy from old.txt"))
+        #expect(!kept.contains("MODIFIED"))
+        #expect(!kept.contains("@@ -1,3 +1,3 @@"))
+    }
+
     @Test func diffOfMergeCommitFollowsFirstParent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

@@ -220,14 +220,14 @@ extension GitService {
         }
 
         // Always enable rename/copy detection so the diff header reflects
-        // the same classification the file list shows. For renames (R),
-        // the old path is gone from <sha>'s tree, so we MUST also append
-        // it to the pathspec — otherwise git can't see both sides and
-        // renders the rename as a full new-file addition. For copies (C),
-        // the old path still exists with its own row in the file list,
-        // so we leave it out of the pathspec to avoid pulling in the
-        // source's unrelated hunks; -M -C is still enough for git to
-        // emit a "copy from old" header on the new file.
+        // the same classification the file list shows, and ALWAYS include
+        // the old path in the pathspec when one was provided — empirically
+        // `git diff -M -C <parent> <sha> -- <new>` strips the copy header
+        // and renders a copy as a full new-file addition, so we need both
+        // paths in the pathspec to keep the "copy from old" header. The
+        // resulting multi-file diff (for copies, since the source still
+        // exists with its own modifications) is then sliced down to just
+        // the requested file's section before handing it to DiffParser.
         var args: [String] = ["diff", "--no-color", "-M", "-C", parentSha, sha, "--", file]
         if let originalPath { args.append(originalPath) }
         let result = try await Process.git(args, cwd: worktreePath)
@@ -238,7 +238,37 @@ extension GitService {
                 userInfo: [NSLocalizedDescriptionKey: result.stderr]
             )
         }
-        return DiffParser.parse(result.stdout)
+        return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
+    }
+
+    /// Given a multi-file `git diff` output and a target path, return only
+    /// the slice of lines belonging to the section whose new-side path
+    /// matches `file`. Sections start with `diff --git a/X b/Y`. When the
+    /// target file is not present in any section, returns the empty string
+    /// (DiffParser yields zero hunks). When the diff has a single section
+    /// (the common non-copy case) the whole output passes through.
+    static func sliceDiffForFile(_ raw: String, file: String) -> String {
+        let lines = raw.components(separatedBy: "\n")
+        let bMarker = "b/\(file)"
+        var sections: [(matches: Bool, lines: [String])] = []
+        var current: (matches: Bool, lines: [String])? = nil
+        for line in lines {
+            if line.hasPrefix("diff --git ") {
+                if let c = current { sections.append(c) }
+                // The header reads `diff --git a/<old> b/<new>`. Check the
+                // b/<...> token by suffix; we already know the new path
+                // doesn't contain whitespace because git emits the raw
+                // path here (no quoting unless the path contains special
+                // chars, which we don't generate in tests / typical use).
+                let matches = line.hasSuffix(" " + bMarker)
+                current = (matches: matches, lines: [line])
+            } else if current != nil {
+                current!.lines.append(line)
+            }
+        }
+        if let c = current { sections.append(c) }
+        let kept = sections.first(where: { $0.matches })?.lines ?? []
+        return kept.joined(separator: "\n")
     }
 
     func fileTree(worktreePath: URL, statusEntries: [ChangedFile]) async throws -> [FileTreeNode] {
