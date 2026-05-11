@@ -25,6 +25,9 @@ packages:
     # gitignores generated parser files, so SPM consumers must
     # pin to a `*-with-generated-files` revision.
     revision: 7b7909f2f6b9414be0958275f4c8e5d69c3bca43
+  Markdown:
+    url: https://github.com/apple/swift-markdown
+    from: 0.4.0
 
 targets:
   Alas:
@@ -66,6 +69,8 @@ targets:
         product: SwiftTreeSitter
       - package: TreeSitterSwift
         product: TreeSitterSwift
+      - package: Markdown
+        product: Markdown
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas

@@ -311,6 +311,39 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    // MARK: - Markdown tab helpers
+
+    /// Lookup the editor state for a given tab. Used by markdown tabs to read
+    /// persisted view-mode / split-fraction without re-walking the tab list.
+    func editorTabState(worktreeId: String, tabId: TabID) -> EditorTabState? {
+        guard let file = byWorktree[worktreeId] else { return nil }
+        if let tab = file.tabs.first(where: { $0.id == tabId }),
+           case .editor(let s) = tab { return s }
+        return nil
+    }
+
+    /// Update the per-tab markdown view mode and persist.
+    func setMarkdownViewMode(worktreeId: String, tabId: TabID, mode: MarkdownViewMode) {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .editor(var state) = file.tabs[idx] else { return }
+        state.markdownViewMode = mode
+        file.tabs[idx] = .editor(state)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
+    /// Update the per-tab markdown split fraction and persist.
+    func setMarkdownSplitFraction(worktreeId: String, tabId: TabID, fraction: Double) {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .editor(var state) = file.tabs[idx] else { return }
+        state.markdownSplitFraction = max(0.1, min(0.9, fraction))
+        file.tabs[idx] = .editor(state)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
     func activate(worktreeId: String, tabId: TabID) {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.activeTabId = tabId

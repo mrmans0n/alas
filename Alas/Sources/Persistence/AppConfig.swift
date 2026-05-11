@@ -13,6 +13,7 @@ struct AppConfig: Codable, Equatable {
     var terminal: Terminal
     var harness: Harness
     var code: Code
+    var markdown: Markdown
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -64,6 +65,14 @@ struct AppConfig: Codable, Equatable {
         }
     }
 
+    struct Markdown: Codable, Equatable {
+        var defaultViewMode: MarkdownViewMode
+
+        enum CodingKeys: String, CodingKey {
+            case defaultViewMode
+        }
+    }
+
     static let defaults = AppConfig(
         themeId: "cool-slate",
         accent: "teal",
@@ -106,7 +115,8 @@ struct AppConfig: Codable, Equatable {
             fontFamily: "SF Mono",
             fontSize: 13,
             languageServers: []
-        )
+        ),
+        markdown: Markdown(defaultViewMode: .editor)
     )
 }
 
@@ -114,7 +124,7 @@ extension AppConfig {
     enum CodingKeys: String, CodingKey {
         case themeId, accent, density, matchSystemTheme,
              sidebarWidth, rightPaneWidth, rightPaneVisible,
-             general, worktrees, terminal, harness, code
+             general, worktrees, terminal, harness, code, markdown
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -144,6 +154,13 @@ extension AppConfig {
             code = Code(fontFamily: fontFamily, fontSize: fontSize, languageServers: servers)
         } else {
             code = Code(fontFamily: "SF Mono", fontSize: 13, languageServers: [])
+        }
+        if let mdContainer = try? c.nestedContainer(keyedBy: AppConfig.Markdown.CodingKeys.self, forKey: .markdown) {
+            let raw = (try? mdContainer.decode(String.self, forKey: .defaultViewMode)) ?? "editor"
+            let mode = MarkdownViewMode(rawValue: raw) ?? .editor
+            markdown = Markdown(defaultViewMode: mode)
+        } else {
+            markdown = Markdown(defaultViewMode: .editor)
         }
     }
 }

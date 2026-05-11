@@ -1,6 +1,24 @@
 {
-  "originHash" : "9209eb391e3fc9e4cd099d2cb3c6bd7eec22f35d07ffae645e59c6ec94ddd20b",
+  "originHash" : "470d4cfda5e64f6b510902e8e38178339db39391db2dd4b7a0a622f6fb223517",
   "pins" : [
+    {
+      "identity" : "swift-cmark",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-cmark.git",
+      "state" : {
+        "revision" : "924936d0427cb25a61169739a7660230bffa6ea6",
+        "version" : "0.8.0"
+      }
+    },
+    {
+      "identity" : "swift-markdown",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-markdown",
+      "state" : {
+        "revision" : "3c6f9523da3a1ec2fd829673e472d95b8097a3b8",
+        "version" : "0.8.0"
+      }
+    },
     {
       "identity" : "swift-tree-sitter",
       "kind" : "remoteSourceControl",
@@ -24,7 +42,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/alex-pinkus/tree-sitter-swift",
       "state" : {
-        "branch" : "with-generated-files",
         "revision" : "7b7909f2f6b9414be0958275f4c8e5d69c3bca43"
       }
     }

@@ -507,6 +507,13 @@ final class AppState {
         }
     }
 
+    /// Open a markdown relative-link target as a new editor tab in the same worktree.
+    /// Delegates to `openFile` which handles find-or-create, activate, and
+    /// worktree-switch if necessary.
+    func openMarkdownLink(worktreeId: String, worktreeRoot: URL, relativePath: String) {
+        openFile(relativePath: relativePath, worktreeId: worktreeId)
+    }
+
     private func relativePath(for url: URL, in worktreeRoot: URL) throws -> String {
         let root = worktreeRoot.standardizedFileURL.path
         let target = url.standardizedFileURL.path
