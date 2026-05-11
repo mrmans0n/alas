@@ -59,11 +59,13 @@ struct DiffTabView: View {
                 .font(.system(size: 11.5))
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
-            HStack(spacing: 10) {
-                Text("+\(totalAdd)").foregroundColor(theme.color("add"))
-                Text("−\(totalDel)").foregroundColor(theme.color("del"))
+            if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
+                HStack(spacing: 10) {
+                    Text("+\(totalAdd)").foregroundColor(theme.color("add"))
+                    Text("−\(totalDel)").foregroundColor(theme.color("del"))
+                }
+                .font(.system(size: 11.5, design: .monospaced))
             }
-            .font(.system(size: 11.5, design: .monospaced))
             HStack(spacing: 4) {
                 if !staged {
                     AlasButton(title: "Stage hunk", style: .subtle, action: stageHunk)

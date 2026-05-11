@@ -66,11 +66,13 @@ struct ChangesSectionView: View {
                 .clipShape(Capsule())
                 .foregroundColor(theme.color("fg-muted"))
             Spacer()
-            HStack(spacing: 6) {
-                Text("+\(totalAdd)").foregroundColor(theme.color("add"))
-                Text("−\(totalDel)").foregroundColor(theme.color("del"))
+            if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
+                HStack(spacing: 6) {
+                    Text("+\(totalAdd)").foregroundColor(theme.color("add"))
+                    Text("−\(totalDel)").foregroundColor(theme.color("del"))
+                }
+                .font(.system(size: 11, design: .monospaced))
             }
-            .font(.system(size: 11, design: .monospaced))
             Button(action: onRefresh) {
                 Icon(name: "search", size: 11)
             }
