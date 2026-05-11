@@ -15,6 +15,41 @@ struct GitService {
         return Self.parseRemote(url) ?? path.lastPathComponent
     }
 
+    func branches(at repoPath: URL) async throws -> [String] {
+        let local = try await Process.git(
+            ["branch", "--list", "--format=%(refname:short)"],
+            cwd: repoPath
+        )
+        guard local.exitCode == 0 else {
+            throw BranchListError(stderr: local.stderr)
+        }
+
+        let remote = try await Process.git(
+            ["branch", "--remotes", "--format=%(refname:short)"],
+            cwd: repoPath
+        )
+        guard remote.exitCode == 0 else {
+            throw BranchListError(stderr: remote.stderr)
+        }
+
+        return Self.parseBranchList(local.stdout + "\n" + remote.stdout)
+    }
+
+    static func parseBranchList(_ output: String) -> [String] {
+        var seen = Set<String>()
+        var branches: [String] = []
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            var branch = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if branch.hasPrefix("* ") {
+                branch.removeFirst(2)
+                branch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard !branch.isEmpty, seen.insert(branch).inserted else { continue }
+            branches.append(branch)
+        }
+        return branches
+    }
+
     static func parseRemote(_ url: String) -> String? {
         // https://host/owner/repo(.git)?  or  git@host:owner/repo(.git)?
         var trimmed = url
@@ -35,6 +70,18 @@ struct GitService {
             return "\(segs[segs.count - 2])/\(segs[segs.count - 1])"
         }
         return nil
+    }
+}
+
+private struct BranchListError: LocalizedError {
+    let stderr: String
+
+    var errorDescription: String? {
+        let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if message.isEmpty {
+            return "Could not load branches."
+        }
+        return message
     }
 }
 

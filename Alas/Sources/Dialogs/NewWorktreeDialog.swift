@@ -14,6 +14,9 @@ struct NewWorktreeDialog: View {
     @State private var pathOverride: String = ""
     @State private var runStartup: Bool = true
     @State private var openTerminal: Bool = true
+    @State private var branches: [String] = []
+    @State private var isLoadingBranches = false
+    @State private var branchLoadError: String?
     @State private var isCreating = false
     @State private var errorMessage: String?
 
@@ -36,9 +39,12 @@ struct NewWorktreeDialog: View {
                     }
                 }
                 DialogField(label: "Base branch") {
-                    Seg(value: $base, options: [
-                        ("main", "main"), ("develop", "develop"), ("origin/HEAD", "origin/HEAD")
-                    ])
+                    BranchPicker(
+                        selection: $base,
+                        branches: branches,
+                        isLoading: isLoadingBranches,
+                        errorMessage: branchLoadError
+                    )
                 }
                 DialogField(label: "Branch name") {
                     AlasField(text: $branch, monospaced: true)
@@ -84,6 +90,10 @@ struct NewWorktreeDialog: View {
             if branch.isEmpty {
                 branch = state.config.worktrees.branchPrefix
             }
+            loadBranchesForSelectedProject()
+        }
+        .onChange(of: projectId) { _, _ in
+            loadBranchesForSelectedProject()
         }
     }
 
@@ -111,6 +121,39 @@ struct NewWorktreeDialog: View {
             .replacingOccurrences(of: "{user}", with: NSUserName())
             .replacingOccurrences(of: "{ts}", with: ISO8601DateFormatter().string(from: Date()))
         return (template as NSString).expandingTildeInPath
+    }
+
+    private func loadBranchesForSelectedProject() {
+        guard let project = state.projects.first(where: { $0.id == projectId }) else {
+            branches = []
+            branchLoadError = nil
+            isLoadingBranches = false
+            return
+        }
+
+        let selectedProjectId = project.id
+        isLoadingBranches = true
+        branchLoadError = nil
+        Task {
+            do {
+                let discovered = try await GitService().branches(at: URL(fileURLWithPath: project.path))
+                guard projectId == selectedProjectId else { return }
+                branches = discovered
+                base = Self.preferredBaseBranch(
+                    availableBranches: discovered,
+                    configuredDefault: state.config.worktrees.baseBranch
+                )
+            } catch {
+                guard projectId == selectedProjectId else { return }
+                branches = []
+                branchLoadError = error.localizedDescription
+                if base.isEmpty {
+                    base = state.config.worktrees.baseBranch
+                }
+            }
+            guard projectId == selectedProjectId else { return }
+            isLoadingBranches = false
+        }
     }
 
     private func create() {
@@ -186,5 +229,18 @@ struct NewWorktreeDialog: View {
         projects: [ProjectConfig]
     ) -> Bool {
         !projects.isEmpty && resolvedPresetProject(presetProjectId: presetProjectId, projects: projects) == nil
+    }
+
+    nonisolated static func preferredBaseBranch(
+        availableBranches: [String],
+        configuredDefault: String
+    ) -> String {
+        for preferred in ["main", "master", "trunk"] where availableBranches.contains(preferred) {
+            return preferred
+        }
+        if availableBranches.contains(configuredDefault) {
+            return configuredDefault
+        }
+        return availableBranches.first ?? configuredDefault
     }
 }

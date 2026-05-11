@@ -28,10 +28,8 @@ struct WorktreesPane: View {
                         AlasField(text: bind(\.worktrees.branchPrefix), monospaced: true)
                     }
                     SettingsRow(name: "Base branch",
-                                desc: "Branch to fork new worktrees from.") {
-                        Seg(value: bind(\.worktrees.baseBranch), options: [
-                            ("main", "main"), ("develop", "develop"), ("origin/HEAD", "origin/HEAD")
-                        ])
+                                desc: "Default base branch for new worktrees; repo branches can be selected in the create dialog.") {
+                        AlasField(text: bind(\.worktrees.baseBranch), monospaced: true)
                     }
                 }
                 // trackUpstream / autoFetch / fetchIntervalMinutes / pruneStale
