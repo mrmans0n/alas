@@ -203,6 +203,13 @@ extension GitService {
             ["rev-list", "--parents", "-n", "1", sha],
             cwd: worktreePath
         )
+        guard parentsResult.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.diff(sha:file:)",
+                code: Int(parentsResult.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: parentsResult.stderr]
+            )
+        }
         let parts = parentsResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: " ", omittingEmptySubsequences: true)
         let parentSha: String

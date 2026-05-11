@@ -126,4 +126,37 @@ struct CommitDetailsTests {
         #expect(b?.status == "A")
         #expect(b?.add == 1)
     }
+
+    @Test func diffOfMergeCommitFollowsFirstParent() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "base\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+
+        _ = try await Process.git(["checkout", "-q", "-b", "side"], cwd: repo)
+        try "side\n".write(to: repo.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "side"], cwd: repo)
+
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try "main\n".write(to: repo.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "main"], cwd: repo)
+
+        _ = try await Process.git(["merge", "--no-ff", "-q", "-m", "merge", "side"], cwd: repo)
+        let sha = try await currentSha(in: repo)
+
+        // First-parent diff brings b.txt in from `side` (the second parent).
+        // c.txt was the last commit on main (the first parent) and is NOT in this diff.
+        let diff = try await GitService().diff(worktreePath: repo, sha: sha, file: "b.txt")
+        let kinds = diff.hunks.flatMap { $0.lines.map(\.kind) }
+        #expect(!diff.hunks.isEmpty)
+        #expect(kinds.allSatisfy { $0 == .add })   // b.txt is new from this side, all additions
+
+        // Sanity: c.txt is unchanged in the merge (it's already in the first parent),
+        // so the diff for it should be empty.
+        let cDiff = try await GitService().diff(worktreePath: repo, sha: sha, file: "c.txt")
+        #expect(cDiff.hunks.isEmpty)
+    }
 }
