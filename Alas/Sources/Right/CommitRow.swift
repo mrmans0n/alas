@@ -1,0 +1,125 @@
+import SwiftUI
+
+struct CommitRow: View {
+    let commit: CommitInfo
+    let isLast: Bool
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            rail
+            VStack(alignment: .leading, spacing: 2) {
+                subjectLine
+                metaLine
+            }
+            .padding(.bottom, isLast ? 6 : 8)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 12)
+        .padding(.top, 4)
+        .contentShape(Rectangle())
+    }
+
+    private var rail: some View {
+        GeometryReader { geo in
+            let dotSize: CGFloat = 6
+            let dotY: CGFloat = 6
+            let bottom: CGFloat = isLast ? dotY + dotSize : geo.size.height
+            Path { p in
+                p.move(to: CGPoint(x: 4, y: dotY + dotSize / 2))
+                p.addLine(to: CGPoint(x: 4, y: bottom))
+            }
+            .stroke(theme.color("line"), lineWidth: 1)
+            Circle()
+                .fill(theme.color("accent"))
+                .frame(width: dotSize, height: dotSize)
+                .position(x: 4, y: dotY + dotSize / 2)
+        }
+        .frame(width: 8)
+    }
+
+    private var subjectLine: some View {
+        HStack(spacing: 6) {
+            if let tag = commit.conventionalTag {
+                Text(tag)
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .foregroundColor(tagColor(tag))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(tagColor(tag).opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            Text(commit.subject)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var metaLine: some View {
+        HStack(spacing: 6) {
+            Text(commit.shortSha)
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundColor(theme.color("fg-faint"))
+            avatar
+            Text(relativeTime(commit.date))
+                .font(.system(size: 10.5))
+                .foregroundColor(theme.color("fg-faint"))
+            Text("· \(commit.filesChanged) file\(commit.filesChanged == 1 ? "" : "s")")
+                .font(.system(size: 10.5))
+                .foregroundColor(theme.color("fg-faint"))
+            if shouldShowChangeSummary(additions: commit.insertions, deletions: commit.deletions) {
+                Text("+\(commit.insertions)").foregroundColor(theme.color("add"))
+                Text("−\(commit.deletions)").foregroundColor(theme.color("del"))
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 10.5, design: .monospaced))
+    }
+
+    private var avatar: some View {
+        Text(commit.authorInitials)
+            .font(.system(size: 8, weight: .bold))
+            .foregroundColor(.white)
+            .frame(width: 14, height: 14)
+            .background(authorColor(commit.author))
+            .clipShape(Circle())
+    }
+
+    private func tagColor(_ tag: String) -> Color {
+        switch tag {
+        case "feat":     return Color(hex: "61dafb")
+        case "fix":      return Color(hex: "cc342d")
+        case "perf":     return Color(hex: "e0c33b")
+        case "refactor": return Color(hex: "a87fc4")
+        case "docs":     return Color(hex: "5a8fc4")
+        case "test":     return Color(hex: "7aa86a")
+        case "chore":    return Color(hex: "9c7b56")
+        case "ci":       return Color(hex: "7a8089")
+        case "build":    return Color(hex: "9c8e6e")
+        default:         return theme.color("fg-muted")
+        }
+    }
+
+    /// Deterministic hash → one of a small preset palette.
+    private func authorColor(_ author: String) -> Color {
+        let palette = ["5fb7c4", "c89d6f", "9789c7", "7aa86a", "cf649a", "e0a04a", "5fa7d6"]
+        var hash: UInt64 = 5381
+        for byte in author.utf8 {
+            hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)
+        }
+        return Color(hex: palette[Int(hash % UInt64(palette.count))])
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let delta = Date().timeIntervalSince(date)
+        if delta < 60          { return "now" }
+        if delta < 3600        { return "\(Int(delta / 60))m" }
+        if delta < 86_400      { return "\(Int(delta / 3600))h" }
+        if delta < 30 * 86_400 { return "\(Int(delta / 86_400))d" }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d"
+        return fmt.string(from: date)
+    }
+}
