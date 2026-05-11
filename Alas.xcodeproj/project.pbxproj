@@ -116,6 +116,7 @@
 		90958414931FC96F766F0C46 /* DiagnosticsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 932F0FEE5330D5B4470C1874 /* DiagnosticsFeature.swift */; };
 		90B09645EB794C287B95A5AD /* HarnessService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155B35EBCCE7F2CA1A0E5DE5 /* HarnessService.swift */; };
 		91BA613AFD278AF56168EB22 /* LSPURI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C69060B922A729DD807920 /* LSPURI.swift */; };
+		92EEAFAEFB3E637FB72174A8 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
 		93B1DC70731B7F661D3AE26F /* FontSizeCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44D759586280250330A9A04 /* FontSizeCommands.swift */; };
 		9422B6F8F6C1E3E64B259712 /* LanguageServerRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345CFF4DBE5794DEBF43F996 /* LanguageServerRegistryTests.swift */; };
 		950C937884477417569DC20B /* EmptyTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008E982C8526670670425AB8 /* EmptyTabView.swift */; };
@@ -426,6 +427,7 @@
 				8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */,
 				1E775E7F3C9F47C676C61B09 /* SwiftTreeSitter in Frameworks */,
 				74CCD3B95116C51EB43F5CFA /* TreeSitterSwift in Frameworks */,
+				92EEAFAEFB3E637FB72174A8 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -974,6 +976,7 @@
 			packageProductDependencies = (
 				F1A519F1F3F2B01C1D2E13A7 /* SwiftTreeSitter */,
 				77EF95AD63DDA8DB0504087B /* TreeSitterSwift */,
+				B69450B224F0C82A52D00662 /* Markdown */,
 			);
 			productName = Alas;
 			productReference = 519CFB3707E8DDBDECD6C5D1 /* Alas.app */;
@@ -1003,6 +1006,7 @@
 			mainGroup = 848F1B301BB31A69DEB82615;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				B9008B8C0F5A7E880C250FE4 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				CF72A36467D20A160E653761 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */,
 				7019D0C134F78A3B7F4CF4BB /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
 			);
@@ -1534,6 +1538,14 @@
 				revision = 7b7909f2f6b9414be0958275f4c8e5d69c3bca43;
 			};
 		};
+		B9008B8C0F5A7E880C250FE4 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.0;
+			};
+		};
 		CF72A36467D20A160E653761 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/tree-sitter/swift-tree-sitter";
@@ -1549,6 +1561,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7019D0C134F78A3B7F4CF4BB /* XCRemoteSwiftPackageReference "tree-sitter-swift" */;
 			productName = TreeSitterSwift;
+		};
+		B69450B224F0C82A52D00662 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B9008B8C0F5A7E880C250FE4 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
 		};
 		F1A519F1F3F2B01C1D2E13A7 /* SwiftTreeSitter */ = {
 			isa = XCSwiftPackageProductDependency;
