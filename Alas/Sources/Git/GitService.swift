@@ -307,11 +307,11 @@ extension GitService {
         let rightTree = sha
 
         async let numstatResult = Process.git(
-            ["diff-tree", "--no-commit-id", "-r", "--no-color", "--numstat", leftTree, rightTree],
+            ["diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
             cwd: worktree
         )
         async let nameStatusResult = Process.git(
-            ["diff-tree", "--no-commit-id", "-r", "--no-color", "--name-status", leftTree, rightTree],
+            ["diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
             cwd: worktree
         )
         let numstatOut = try await numstatResult

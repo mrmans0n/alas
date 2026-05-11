@@ -165,17 +165,12 @@ struct CommitDetailsTests {
         #expect(binary?.add == 0)
         #expect(binary?.del == 0)
 
-        // Rename: name-status row starts with "R<score>"; CommitChangedFile.status
-        // is the first letter ("R"); path is the NEW path. Note: diff-tree
-        // requires rename detection enabled. By default git diff-tree does
-        // NOT detect renames. So depending on git config, the rename may
-        // surface as a separate A (new.txt) + D (old.txt) pair instead of
-        // a single R entry. Accept either outcome so the test isn't flaky
-        // across git versions.
-        let renameStatus = details.files.first { $0.path == "new.txt" }?.status
-        let oldStillThere = details.files.contains { $0.path == "old.txt" && $0.status == "D" }
-        #expect(renameStatus == "R" || (renameStatus == "A" && oldStillThere),
-                "Expected either an R-status rename or an A+D pair, got files: \(details.files)")
+        // Rename: -M enables rename detection so git diff-tree reports a single
+        // R entry for new.txt. The old path must NOT appear as a separate D entry.
+        let renamed = details.files.first { $0.path == "new.txt" }
+        #expect(renamed?.status == "R")
+        // The old path should NOT appear as a separate D entry once rename detection fires.
+        #expect(!details.files.contains { $0.path == "old.txt" })
     }
 
     @Test func diffOfMergeCommitFollowsFirstParent() async throws {
