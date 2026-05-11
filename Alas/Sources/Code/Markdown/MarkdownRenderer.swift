@@ -78,6 +78,9 @@ final class MarkdownRenderer {
         case let h as Heading:          visitHeading(h)
         case let l as UnorderedList:    visitUnorderedList(l)
         case let l as OrderedList:      visitOrderedList(l)
+        case let b as BlockQuote:       visitBlockQuote(b)
+        case _ as ThematicBreak:        appendThematicBreak()
+        case let c as CodeBlock:        visitCodeBlock(c)
         default:
             visitChildren(markup)
         }
@@ -150,6 +153,46 @@ final class MarkdownRenderer {
             n += 1
         }
         if listDepth == 0 { appendPlain("\n") }
+    }
+
+    private func visitBlockQuote(_ quote: BlockQuote) {
+        let startOfBlock = output.length
+        for child in quote.children { visit(child) }
+        // Insert a "│ " prefix on every line of the just-rendered block.
+        let nsOutput = output.string as NSString
+        let blockNS = NSRange(location: startOfBlock, length: nsOutput.length - startOfBlock)
+        guard blockNS.length > 0 else { return }
+        let blockText = nsOutput.substring(with: blockNS)
+        let lines = blockText.split(separator: "\n", omittingEmptySubsequences: false)
+        let rebuilt = lines.map { "│ \($0)" }.joined(separator: "\n")
+        output.replaceCharacters(in: blockNS, with: rebuilt)
+        // Color the entire rebuilt block in muted foreground.
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor(theme.color("fg-muted")),
+            .font: bodyFont()
+        ]
+        output.addAttributes(attrs, range: NSRange(location: startOfBlock, length: (rebuilt as NSString).length))
+    }
+
+    private func appendThematicBreak() {
+        let line = String(repeating: "─", count: 32)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor(theme.color("fg-faint")),
+            .font: bodyFont()
+        ]
+        output.append(NSAttributedString(string: line + "\n\n", attributes: attrs))
+    }
+
+    private func visitCodeBlock(_ block: CodeBlock) {
+        // For this task: plain monospaced with a faint background. Syntax
+        // highlighting via tree-sitter is wired in Task 11.
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: monospaceFont(size: monoSize),
+            .foregroundColor: NSColor(theme.color("fg")),
+            .backgroundColor: NSColor(theme.color("bg-2"))
+        ]
+        output.append(NSAttributedString(string: block.code, attributes: attrs))
+        appendPlain("\n")
     }
 
     private func marker(for item: ListItem) -> String {

@@ -115,4 +115,26 @@ struct MarkdownRendererTests {
         #expect(s.contains("• a"))
         #expect(s.contains("• b"))
     }
+
+    @Test func rendersBlockquoteWithIndent() throws {
+        let r = try MarkdownRendererTests.render("> quoted")
+        let s = r.attributedString.string
+        // Blockquote prefix is a vertical bar character.
+        #expect(s.contains("│ quoted"))
+    }
+
+    @Test func rendersThematicBreak() throws {
+        let r = try MarkdownRendererTests.render("---")
+        let s = r.attributedString.string
+        // A horizontal-rule run of box-drawing characters is emitted.
+        #expect(s.contains(String(repeating: "─", count: 8)))
+    }
+
+    @Test func rendersFencedCodeBlockMonospaced() throws {
+        let r = try MarkdownRendererTests.render("```\nlet x = 1\n```")
+        let s = r.attributedString
+        let range = (s.string as NSString).range(of: "let x = 1")
+        let font = s.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+        #expect(font?.isFixedPitch == true)
+    }
 }
