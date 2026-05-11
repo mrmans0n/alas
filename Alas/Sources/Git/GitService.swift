@@ -187,6 +187,45 @@ extension GitService {
         return DiffParser.parse(result.stdout)
     }
 
+    func diff(worktreePath: URL, sha: String, file: String) async throws -> ParsedDiff {
+        // Detect initial commit (no parent) so we can fall back to the empty
+        // tree, mirroring the technique used in commitDetails. Empirically,
+        // `<sha>^!` fails for parentless commits because `<sha>^` doesn't
+        // resolve, and `git show --root` would emit a header we don't want
+        // to feed to DiffParser. Use the explicit two-tree form against the
+        // canonical empty-tree SHA so DiffParser sees a clean diff body.
+        //
+        // For merge commits, diff against the first parent — same first-
+        // parent rule as commitDetails. `<sha>^1..<sha>` is the natural
+        // range expression for this; equivalently `<sha>^1 <sha>` as the
+        // two-tree form. We use the two-tree form for consistency.
+        let parentsResult = try await Process.git(
+            ["rev-list", "--parents", "-n", "1", sha],
+            cwd: worktreePath
+        )
+        let parts = parentsResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        let parentSha: String
+        if parts.count > 1 {
+            parentSha = String(parts[1])     // first parent
+        } else {
+            parentSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"   // canonical empty tree
+        }
+
+        let result = try await Process.git(
+            ["diff", "--no-color", parentSha, sha, "--", file],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.diff(sha:file:)",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr]
+            )
+        }
+        return DiffParser.parse(result.stdout)
+    }
+
     func fileTree(worktreePath: URL, statusEntries: [ChangedFile]) async throws -> [FileTreeNode] {
         let result = try await Process.git(
             ["ls-files", "--cached", "--others", "--exclude-standard"],

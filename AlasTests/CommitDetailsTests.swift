@@ -66,6 +66,37 @@ struct CommitDetailsTests {
         #expect(byPath["new.txt"]?.del == 0)
     }
 
+    @Test func diffOfCommitReturnsHunks() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\ntwo\nthree\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+        try "one\nTWO\nthree\nfour\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "edit"], cwd: repo)
+        let sha = try await currentSha(in: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, sha: sha, file: "a.txt")
+        #expect(!diff.hunks.isEmpty)
+        let kinds = diff.hunks.flatMap { $0.lines.map(\.kind) }
+        #expect(kinds.contains(.add))
+        #expect(kinds.contains(.delete))
+    }
+
+    @Test func diffOfInitialCommitReturnsAllAdditions() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "first\nsecond\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        let sha = try await currentSha(in: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, sha: sha, file: "a.txt")
+        #expect(!diff.hunks.isEmpty)
+        let kinds = diff.hunks.flatMap { $0.lines.map(\.kind) }
+        #expect(kinds.allSatisfy { $0 == .add })
+    }
+
     @Test func parsesMergeCommitWithTwoParents() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
