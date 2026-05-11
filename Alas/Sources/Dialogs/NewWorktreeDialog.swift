@@ -24,11 +24,13 @@ struct NewWorktreeDialog: View {
             title: "New worktree",
             subtitle: subtitleText,
             content: {
-                DialogField(label: "Repository") {
-                    if state.projects.isEmpty {
+                if state.projects.isEmpty {
+                    DialogField(label: "Repository") {
                         Text("No projects yet — add one first.").font(.system(size: 12))
                             .foregroundColor(theme.color("fg-dim"))
-                    } else {
+                    }
+                } else if showsRepositorySelector {
+                    DialogField(label: "Repository") {
                         Seg(value: $projectId,
                             options: state.projects.map { ($0.id, $0.name) })
                     }
@@ -83,6 +85,14 @@ struct NewWorktreeDialog: View {
                 branch = state.config.worktrees.branchPrefix
             }
         }
+    }
+
+    private var presetProject: ProjectConfig? {
+        Self.resolvedPresetProject(presetProjectId: presetProjectId, projects: state.projects)
+    }
+
+    private var showsRepositorySelector: Bool {
+        !state.projects.isEmpty && presetProject == nil
     }
 
     private var subtitleText: String {
@@ -161,5 +171,20 @@ struct NewWorktreeDialog: View {
             }
             isCreating = false
         }
+    }
+
+    static func resolvedPresetProject(
+        presetProjectId: String?,
+        projects: [ProjectConfig]
+    ) -> ProjectConfig? {
+        guard let presetProjectId else { return nil }
+        return projects.first { $0.id == presetProjectId }
+    }
+
+    static func showsRepositorySelector(
+        presetProjectId: String?,
+        projects: [ProjectConfig]
+    ) -> Bool {
+        !projects.isEmpty && resolvedPresetProject(presetProjectId: presetProjectId, projects: projects) == nil
     }
 }
