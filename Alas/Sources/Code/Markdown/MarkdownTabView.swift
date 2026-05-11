@@ -1,0 +1,224 @@
+import SwiftUI
+import AppKit
+
+struct MarkdownTabView: View {
+    let worktreePath: URL
+    let worktreeId: String
+    let tabId: TabID
+    let relativePath: String
+    let externalAbsolutePath: String?
+    let originatingRelativePath: String?
+    let revealLine: Int?
+    let revealCharacter: Int?
+    @Bindable var appState: AppState
+    @Environment(\.theme) var theme
+
+    @State private var renderResult: MarkdownRenderResult?
+    @State private var debounceTask: Task<Void, Never>?
+
+    private var resolvedMode: MarkdownViewMode {
+        appState.tabs.editorTabState(worktreeId: worktreeId, tabId: tabId)?.markdownViewMode
+            ?? appState.config.markdown.defaultViewMode
+    }
+
+    private var splitFraction: Double {
+        appState.tabs.editorTabState(worktreeId: worktreeId, tabId: tabId)?.markdownSplitFraction ?? 0.5
+    }
+
+    private var buffer: EditorBuffer {
+        if let abs = externalAbsolutePath {
+            return appState.tabs.externalBuffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                absoluteURL: URL(fileURLWithPath: abs),
+                worktreeRoot: worktreePath,
+                originatingFileURL: originatingRelativePath.map { worktreePath.appendingPathComponent($0) },
+                language: "markdown"
+            )
+        } else {
+            return appState.tabs.buffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                worktreeRoot: worktreePath,
+                relativePath: relativePath
+            )
+        }
+    }
+
+    private var baseDirectory: URL {
+        if let abs = externalAbsolutePath {
+            return URL(fileURLWithPath: abs).deletingLastPathComponent()
+        }
+        return worktreePath.appendingPathComponent(relativePath).deletingLastPathComponent()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if externalAbsolutePath == nil {
+                EditorConflictBanner(buffer: buffer)
+            }
+            bodyView
+        }
+        .background(theme.color("bg-1"))
+        .onAppear { scheduleRender(immediate: true) }
+        .onChange(of: buffer.editGeneration) { _, _ in scheduleRender(immediate: false) }
+    }
+
+    @ViewBuilder
+    private var bodyView: some View {
+        switch resolvedMode {
+        case .editor:
+            codeEditor
+        case .preview:
+            preview
+        case .split:
+            GeometryReader { proxy in
+                let leftWidth = max(120, proxy.size.width * splitFraction)
+                HStack(spacing: 0) {
+                    codeEditor.frame(width: leftWidth)
+                    DragHandle(axis: .horizontal) { delta in
+                        let total = proxy.size.width
+                        guard total > 0 else { return }
+                        let newWidth = max(120, min(total - 120, leftWidth + delta))
+                        appState.tabs.setMarkdownSplitFraction(
+                            worktreeId: worktreeId, tabId: tabId,
+                            fraction: newWidth / total
+                        )
+                    }
+                    preview
+                }
+            }
+        }
+    }
+
+    private var codeEditor: some View {
+        CodeEditorView(
+            worktreeId: worktreeId,
+            worktreeRoot: worktreePath,
+            relativePath: relativePath,
+            tabId: tabId,
+            revealLine: revealLine,
+            revealCharacter: revealCharacter,
+            appState: appState,
+            externalAbsolutePath: externalAbsolutePath,
+            originatingRelativePath: originatingRelativePath,
+            fontFamily: appState.config.code.fontFamily,
+            fontSize: appState.config.code.fontSize
+        )
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if let renderResult {
+            MarkdownPreviewView(result: renderResult, onLinkClick: handleLinkClick)
+        } else {
+            Color.clear.onAppear { scheduleRender(immediate: true) }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            breadcrumbText
+            Spacer()
+            Picker("", selection: Binding(
+                get: { resolvedMode },
+                set: { newMode in
+                    appState.tabs.setMarkdownViewMode(worktreeId: worktreeId, tabId: tabId, mode: newMode)
+                }
+            )) {
+                Image(systemName: "pencil").tag(MarkdownViewMode.editor)
+                Image(systemName: "rectangle.split.2x1").tag(MarkdownViewMode.split)
+                Image(systemName: "eye").tag(MarkdownViewMode.preview)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 120)
+        }
+        .padding(.horizontal, 12).frame(height: 28)
+        .background(theme.color("bg-1"))
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
+    }
+
+    private var breadcrumbText: some View {
+        let components = relativePath.split(separator: "/")
+        let lastIndex = components.count - 1
+        return HStack(spacing: 6) {
+            ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
+                Text(comp)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
+                if i < lastIndex {
+                    Text("/").foregroundColor(theme.color("fg-faint"))
+                }
+            }
+        }
+    }
+
+    private func scheduleRender(immediate: Bool) {
+        debounceTask?.cancel()
+        let buffer = self.buffer
+        let theme = self.theme
+        let fontFamily = appState.config.code.fontFamily
+        let fontSize = appState.config.code.fontSize
+        let baseDir = baseDirectory
+        debounceTask = Task { @MainActor in
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if Task.isCancelled { return }
+            }
+            let source = buffer.storage.string
+            let doc = MarkdownParser.parse(source)
+            let result = MarkdownRenderer().render(
+                document: doc,
+                theme: theme,
+                monospacedFontFamily: fontFamily,
+                monospacedFontSize: fontSize,
+                baseDirectory: baseDir
+            )
+            if Task.isCancelled { return }
+            renderResult = result
+        }
+    }
+
+    private func handleLinkClick(_ url: URL) {
+        // Anchor-only forms like "#some-heading": dispatch via NotificationCenter.
+        // Task 17 wires the observer on MarkdownPreviewController.
+        if url.absoluteString.hasPrefix("#") {
+            let slug = String(url.absoluteString.dropFirst())
+            NotificationCenter.default.post(
+                name: .markdownScrollToAnchor,
+                object: nil,
+                userInfo: ["slug": slug, "tabId": tabId]
+            )
+            return
+        }
+        if url.scheme == nil, let fragment = url.fragment, url.host == nil, url.path.isEmpty {
+            NotificationCenter.default.post(
+                name: .markdownScrollToAnchor,
+                object: nil,
+                userInfo: ["slug": fragment, "tabId": tabId]
+            )
+            return
+        }
+        // Relative file links (no scheme + non-empty path).
+        if url.scheme == nil {
+            let candidate = baseDirectory.appendingPathComponent(url.path).standardizedFileURL
+            let worktreeRootPath = worktreePath.standardizedFileURL.path
+            if candidate.path.hasPrefix(worktreeRootPath + "/") {
+                let relative = String(candidate.path.dropFirst(worktreeRootPath.count + 1))
+                appState.openMarkdownLink(
+                    worktreeId: worktreeId,
+                    worktreeRoot: worktreePath,
+                    relativePath: relative
+                )
+                return
+            }
+            // Outside the worktree: fall through to NSWorkspace.
+        }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+extension Notification.Name {
+    static let markdownScrollToAnchor = Notification.Name("io.nlopez.alas.markdown.scrollToAnchor")
+}

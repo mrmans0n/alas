@@ -3,7 +3,7 @@ import Foundation
 /// View mode for a markdown editor tab. Persisted in `EditorTabState`
 /// and in `AppConfig.markdown.defaultViewMode`. Raw values are part of
 /// the on-disk format — do not rename.
-enum MarkdownViewMode: String, Codable, Equatable, Sendable, CaseIterable {
+enum MarkdownViewMode: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
     case editor, split, preview
 
     /// Cycle order used by the `⌘⇧M` shortcut: editor → split → preview → editor.
