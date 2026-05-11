@@ -110,11 +110,17 @@ struct CommitTabView: View {
             if activeDiffKey == requestedKey { loadingDiff = false }
         }
         do {
+            // For copies (C status), the source file still exists in the new
+            // commit and can have its own M row. Passing the old path to git diff
+            // would emit both files' hunks under the new-file header. Renames
+            // (R status) need the old path because the source is gone from the
+            // new tree and git can't produce a rename diff without seeing both.
+            let renamedFrom: String? = file.status == "R" ? file.originalPath : nil
             let loaded = try await git.diff(
                 worktreePath: worktreePath,
                 sha: sha,
                 file: path,
-                originalPath: file.originalPath
+                originalPath: renamedFrom
             )
             guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             self.diff = loaded
