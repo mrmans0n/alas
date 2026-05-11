@@ -86,3 +86,44 @@ enum FileTypeIcon {
         "rust-toolchain.toml": ("rs",  "D97558"),
     ]
 }
+
+/// Square tile with the file-type glyph. For `.generic` kind, renders the
+/// existing SF Symbol `doc` so files with no extension still get an icon.
+struct FileTypeIconView: View {
+    let filename: String
+    var size: CGFloat = 13
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let info = FileTypeIcon.info(for: filename)
+        switch info.kind {
+        case .generic:
+            Icon(name: "file", size: size, color: theme.color("fg-faint"))
+        case .filename, .ext, .fallbackExt:
+            let color = Color(hex: info.hex)
+            Text(info.label)
+                .font(.system(size: fontPx(for: info.label), weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+                .kerning(-0.2)
+                .lineLimit(1)
+                .frame(width: size, height: size)
+                .background(color.opacity(0.14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .strokeBorder(color.opacity(0.25), lineWidth: 0.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        }
+    }
+
+    private func fontPx(for label: String) -> CGFloat {
+        let chars = max(1, label.count)
+        let scale: CGFloat
+        switch chars {
+        case 1:  scale = 0.60
+        case 2:  scale = 0.52
+        default: scale = 0.42  // 3+
+        }
+        return max(7, (size * scale).rounded())
+    }
+}
