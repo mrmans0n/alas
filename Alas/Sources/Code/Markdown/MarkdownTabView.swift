@@ -53,16 +53,36 @@ struct MarkdownTabView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            if externalAbsolutePath == nil {
-                EditorConflictBanner(buffer: buffer)
+        ZStack {
+            VStack(spacing: 0) {
+                header
+                if externalAbsolutePath == nil {
+                    EditorConflictBanner(buffer: buffer)
+                }
+                bodyView
             }
-            bodyView
+            .background(theme.color("bg-1"))
+
+            // Hidden zero-size shortcut button. The button only exists when
+            // this view is in the hierarchy, which only happens for markdown
+            // tabs that are the active tab — so the shortcut is implicitly
+            // scoped to markdown tabs without explicit isEnabled gating.
+            Button(action: cycleMode) { Color.clear }
+                .frame(width: 0, height: 0)
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .opacity(0)
+                .accessibilityHidden(true)
         }
-        .background(theme.color("bg-1"))
         .onAppear { scheduleRender(immediate: true) }
         .onChange(of: buffer.editGeneration) { _, _ in scheduleRender(immediate: false) }
+    }
+
+    private func cycleMode() {
+        appState.tabs.setMarkdownViewMode(
+            worktreeId: worktreeId,
+            tabId: tabId,
+            mode: resolvedMode.next()
+        )
     }
 
     @ViewBuilder
