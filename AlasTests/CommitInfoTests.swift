@@ -46,4 +46,27 @@ struct CommitInfoTests {
             #expect(tag == type, "expected \(type) to be recognised")
         }
     }
+
+    @Test func initialsEmpty() {
+        #expect(CommitInfo.initials(for: "") == "?")
+    }
+
+    @Test func initialsWhitespaceOnly() {
+        // split(whereSeparator:) drops empty subsequences, so the parts
+        // array is empty and we fall back to "?".
+        #expect(CommitInfo.initials(for: "   ") == "?")
+    }
+
+    @Test func initialsSingleName() {
+        #expect(CommitInfo.initials(for: "Nacho") == "N")
+    }
+
+    @Test func initialsTwoNames() {
+        #expect(CommitInfo.initials(for: "Nacho Lopez") == "NL")
+    }
+
+    @Test func initialsTruncatesToTwo() {
+        // 3+ name parts only contribute their first initials, capped at 2.
+        #expect(CommitInfo.initials(for: "Jean Luc Picard") == "JL")
+    }
 }
