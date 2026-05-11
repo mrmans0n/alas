@@ -316,6 +316,8 @@ extension AlasGhostty {
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             guard event.type == .keyDown, isFocused else { return false }
+            if Self.isReservedAppKeyEquivalent(event) { return false }
+
             // Pass Cmd+key and Ctrl+key through to Ghostty if we're focused.
             let flags = event.modifierFlags
             if flags.contains(.command) || flags.contains(.control) {
@@ -323,6 +325,17 @@ extension AlasGhostty {
                 return true
             }
             return false
+        }
+
+        static func isReservedAppKeyEquivalent(_ event: NSEvent) -> Bool {
+            guard event.type == .keyDown else { return false }
+
+            let flags = event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask)
+                .subtracting(.capsLock)
+            guard flags == .command else { return false }
+
+            return event.charactersIgnoringModifiers?.lowercased() == "t"
         }
 
         // MARK: - Mouse events
