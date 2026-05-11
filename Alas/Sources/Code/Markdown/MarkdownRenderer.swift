@@ -34,6 +34,24 @@ final class MarkdownRenderer {
     private var inStrikethrough: Bool = false
     private var listDepth: Int = 0
 
+    private static let fenceLanguageToExtension: [String: String] = [
+        "swift": "swift",
+        "rust": "rs", "rs": "rs",
+        "json": "json",
+        "markdown": "md", "md": "md",
+        "python": "py", "py": "py",
+        "typescript": "ts", "ts": "ts",
+        "javascript": "js", "js": "js",
+        "tsx": "tsx", "jsx": "jsx",
+        "kotlin": "kt", "kt": "kt"
+    ]
+
+    private func extensionFor(fenceLanguage info: String?) -> String? {
+        guard let info, !info.isEmpty else { return nil }
+        let tag = info.split(separator: " ").first.map(String.init)?.lowercased() ?? ""
+        return MarkdownRenderer.fenceLanguageToExtension[tag]
+    }
+
     func render(
         document: Document,
         theme: Theme,
@@ -184,14 +202,31 @@ final class MarkdownRenderer {
     }
 
     private func visitCodeBlock(_ block: CodeBlock) {
-        // For this task: plain monospaced with a faint background. Syntax
-        // highlighting via tree-sitter is wired in Task 11.
-        let attrs: [NSAttributedString.Key: Any] = [
+        let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: monospaceFont(size: monoSize),
             .foregroundColor: NSColor(theme.color("fg")),
             .backgroundColor: NSColor(theme.color("bg-2"))
         ]
-        output.append(NSAttributedString(string: block.code, attributes: attrs))
+        let start = output.length
+        output.append(NSAttributedString(string: block.code, attributes: baseAttrs))
+        let length = output.length - start
+
+        if let ext = extensionFor(fenceLanguage: block.language) {
+            let spans = TreeSitterHighlighter.highlight(source: block.code, fileExtension: ext)
+            let editorTheme = EditorTheme(theme: theme)
+            let blockRange = NSRange(location: start, length: length)
+            for span in spans {
+                let absolute = NSRange(location: start + span.range.location,
+                                       length: span.range.length)
+                // Guard against spans that escape the block (shouldn't happen,
+                // but defensive: TreeSitter is sometimes imprecise).
+                guard NSIntersectionRange(absolute, blockRange).length == absolute.length else { continue }
+                let attrs = editorTheme.attributes(for: span.capture)
+                for (key, value) in attrs {
+                    output.addAttribute(key, value: value, range: absolute)
+                }
+            }
+        }
         appendPlain("\n")
     }
 

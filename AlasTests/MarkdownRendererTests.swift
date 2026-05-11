@@ -137,4 +137,24 @@ struct MarkdownRendererTests {
         let font = s.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
         #expect(font?.isFixedPitch == true)
     }
+
+    @Test func highlightsSwiftCodeBlockKeyword() throws {
+        let r = try MarkdownRendererTests.render("```swift\nfunc f() {}\n```")
+        let s = r.attributedString
+        let range = (s.string as NSString).range(of: "func")
+        let color = s.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+        // Keyword color is "syntax-keyword". Just confirm it is NOT the default
+        // fg ("fg") — any non-default color means the highlighter ran.
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let defaultFG = NSColor(theme.color("fg"))
+        #expect(color != defaultFG)
+    }
+
+    @Test func unknownLanguageRemainsPlainMonospaced() throws {
+        let r = try MarkdownRendererTests.render("```neverheardofit\nfoo\n```")
+        let s = r.attributedString
+        let range = (s.string as NSString).range(of: "foo")
+        let font = s.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+        #expect(font?.isFixedPitch == true)
+    }
 }
