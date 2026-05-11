@@ -5,6 +5,7 @@ final class WorktreeWatcher {
     var onChange: (() -> Void)?
     private let path: URL
     private var stream: FSEventStreamRef?
+    private var gitDirStream: FSEventStreamRef?
     private let debouncer = DebounceTimer(interval: 0.5)
 
     init(path: URL) {
@@ -16,6 +17,46 @@ final class WorktreeWatcher {
 
     func start() {
         stop()
+        stream = makeStream(paths: [path.path])
+        if let stream {
+            FSEventStreamSetDispatchQueue(stream, .main)
+            FSEventStreamStart(stream)
+        }
+        // Resolve git-dir asynchronously so a slow or hung git invocation
+        // never blocks watcher startup. Worktree-file events still flow.
+        Task { [weak self] in
+            guard let self else { return }
+            guard let gitDir = await Self.resolveGitDir(at: self.path) else { return }
+            await MainActor.run {
+                guard self.stream != nil else { return }  // already stopped
+                self.gitDirStream = self.makeStream(paths: [gitDir.path])
+                if let s = self.gitDirStream {
+                    FSEventStreamSetDispatchQueue(s, .main)
+                    FSEventStreamStart(s)
+                }
+            }
+        }
+    }
+
+    func stop() {
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            self.stream = nil
+        }
+        if let gitDirStream {
+            FSEventStreamStop(gitDirStream)
+            FSEventStreamInvalidate(gitDirStream)
+            FSEventStreamRelease(gitDirStream)
+            self.gitDirStream = nil
+        }
+        debouncer.cancel()
+    }
+
+    deinit { stop() }
+
+    private func makeStream(paths: [String]) -> FSEventStreamRef? {
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
@@ -26,30 +67,30 @@ final class WorktreeWatcher {
             let watcher = Unmanaged<WorktreeWatcher>.fromOpaque(ctx).takeUnretainedValue()
             watcher.debouncer.poke()
         }
-        let paths = [path.path] as CFArray
-        stream = FSEventStreamCreate(
+        return FSEventStreamCreate(
             kCFAllocatorDefault,
             cb,
             &context,
-            paths,
+            paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.5,
             FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
         )
-        guard let stream else { return }
-        FSEventStreamSetDispatchQueue(stream, .main)
-        FSEventStreamStart(stream)
     }
 
-    func stop() {
-        if let stream {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
-            self.stream = nil
+    /// Resolves the real git-dir for a worktree. For a normal repo this is
+    /// `<worktree>/.git`; for a linked worktree it points into
+    /// `<repo>/.git/worktrees/<name>/` instead. Returns nil if `git
+    /// rev-parse` fails (not a repo, etc.).
+    private static func resolveGitDir(at worktree: URL) async -> URL? {
+        guard let result = try? await Process.git(
+            ["rev-parse", "--absolute-git-dir"],
+            cwd: worktree
+        ), result.exitCode == 0 else {
+            return nil
         }
-        debouncer.cancel()
+        let dir = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !dir.isEmpty else { return nil }
+        return URL(fileURLWithPath: dir)
     }
-
-    deinit { stop() }
 }
