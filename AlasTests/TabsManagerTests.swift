@@ -168,6 +168,24 @@ struct TabsManagerTests {
         #expect(decoded.staged)
     }
 
+    @Test func imagePreviewTabStateRoundTrips() throws {
+        let state = ImagePreviewTabState(id: "img", title: "logo.png", relativePath: "Assets/logo.png")
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(ImagePreviewTabState.self, from: data)
+        #expect(decoded == state)
+    }
+
+    @Test func imagePreviewTabRoundTripsAndExposesFilePath() throws {
+        let tab = Tab.imagePreview(ImagePreviewTabState(id: "img", title: "logo.png", relativePath: "Assets/logo.png"))
+        let data = try JSONEncoder().encode(tab)
+        let decoded = try JSONDecoder().decode(Tab.self, from: data)
+        #expect(decoded == tab)
+        #expect(decoded.id == "img")
+        #expect(decoded.title == "logo.png")
+        #expect(decoded.iconName == "image")
+        #expect(decoded.relativeFilePath == "Assets/logo.png")
+    }
+
     @Test func editorTabStateRoundTripsExternalPath() throws {
         let s = EditorTabState(
             id: "y", title: "NSString.h",
@@ -198,6 +216,50 @@ struct TabsManagerTests {
         } else {
             Issue.record("expected editor tab")
         }
+    }
+
+    @Test func openImagePreviewAppendsAndActivates() {
+        let worktreeId = "tabs-manager-open-image-preview"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let tab = mgr.openImagePreview(worktreeId: worktreeId, relativePath: "Assets/logo.png")
+
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == tab.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 1)
+        guard case .imagePreview(let state) = tab else {
+            Issue.record("expected image preview tab")
+            return
+        }
+        #expect(state.title == "logo.png")
+        #expect(state.relativePath == "Assets/logo.png")
+    }
+
+    @Test func openImagePreviewReusesExistingTab() {
+        let worktreeId = "tabs-manager-reuse-image-preview"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openImagePreview(worktreeId: worktreeId, relativePath: "Assets/logo.png")
+        _ = mgr.appendTerminal(worktreeId: worktreeId, title: "main", sessionId: "s")
+        let second = mgr.openImagePreview(worktreeId: worktreeId, relativePath: "Assets/logo.png")
+
+        #expect(first.id == second.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 2)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
+    }
+
+    @Test func openImagePreviewCreatesSeparateTabsForDifferentPaths() {
+        let worktreeId = "tabs-manager-different-image-previews"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openImagePreview(worktreeId: worktreeId, relativePath: "Assets/logo.png")
+        let second = mgr.openImagePreview(worktreeId: worktreeId, relativePath: "Assets/banner.png")
+
+        #expect(first.id != second.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 2)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == second.id)
     }
 
     @Test func editorTabStateRoundTripsOriginatingRelativePath() throws {

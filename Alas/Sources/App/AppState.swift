@@ -516,6 +516,11 @@ final class AppState {
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
         if selectedWorktreeId != worktree.id { selectedWorktreeId = worktree.id }
 
+        if ImageFileType.isSupported(relativePath: relativePath) {
+            _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
+            return
+        }
+
         let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
             if case .editor(let s) = tab { return s.relativePath == relativePath } else { return false }
         }
