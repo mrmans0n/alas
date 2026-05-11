@@ -108,6 +108,10 @@ struct TerminalPane: View {
                             state.harness.notifications.setEnabled($0) }
                         ))
                     }
+                    SettingsRow(name: "Ping when AI harness needs input",
+                                desc: "Play a short sound when a detected harness is waiting for input.") {
+                        AlasToggle(on: state.bind(\.harness.notifyOnAwaiting))
+                    }
                     ForEach(HarnessKind.allCases) { kind in
                         SettingsRow(name: "Install hook for \(kind.displayName)") {
                             HStack {

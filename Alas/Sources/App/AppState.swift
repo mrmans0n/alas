@@ -176,13 +176,18 @@ final class AppState {
         // notifications off in a previous session get them again until they
         // re-toggle.
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
-        harness.start { [weak self] sessionId in
-            guard let self else { return nil }
-            for s in self.terminal.registry.all where s.id == sessionId {
-                return (projectId: s.projectId, worktreeId: s.worktreeId)
+        harness.start(
+            stateLookup: { [weak self] sessionId in
+                guard let self else { return nil }
+                for s in self.terminal.registry.all where s.id == sessionId {
+                    return (projectId: s.projectId, worktreeId: s.worktreeId)
+                }
+                return nil
+            },
+            shouldNotifyOnAwaiting: { [weak self] in
+                self?.config.harness.notifyOnAwaiting ?? true
             }
-            return nil
-        }
+        )
         harness.onClickThrough = { [weak self] _, worktreeId, _ in
             self?.selectedWorktreeId = worktreeId
             NSApp.activate(ignoringOtherApps: true)

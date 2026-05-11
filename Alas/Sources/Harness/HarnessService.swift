@@ -24,7 +24,10 @@ final class HarnessService {
         watcher = HookWatcher(dir: Paths.hookDir)
     }
 
-    func start(stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?) {
+    func start(
+        stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
+        shouldNotifyOnAwaiting: @escaping () -> Bool = { true }
+    ) {
         detector.onUpdate = { [weak self] sid, kind in
             guard let self else { return }
             if let kind {
@@ -47,17 +50,37 @@ final class HarnessService {
         }
 
         watcher.onEvent = { [weak self] event in
-            guard let self else { return }
-            self.stateBySession[event.sessionId] = event.kind == "stop" ? "done" : "awaiting"
-            if event.kind == "stop", let kind = self.harnessBySession[event.sessionId],
-               let lookup = stateLookup(event.sessionId) {
-                self.notifications.notifyHarnessFinished(
-                    harness: kind, summary: event.summary,
-                    projectId: lookup.projectId, worktreeId: lookup.worktreeId, sessionId: event.sessionId
-                )
-            }
+            self?.handleHookEvent(
+                event,
+                stateLookup: stateLookup,
+                shouldNotifyOnAwaiting: shouldNotifyOnAwaiting
+            )
         }
         watcher.start()
+    }
+
+    func handleHookEvent(
+        _ event: HookEvent,
+        stateLookup: (String) -> (projectId: String, worktreeId: String)?,
+        shouldNotifyOnAwaiting: () -> Bool
+    ) {
+        let previousState = stateBySession[event.sessionId]
+        stateBySession[event.sessionId] = event.kind == "stop" ? "done" : "awaiting"
+
+        if event.kind == "awaiting" {
+            if previousState != "awaiting", shouldNotifyOnAwaiting() {
+                notifications.playAwaitingPing()
+            }
+            return
+        }
+
+        if event.kind == "stop", let kind = harnessBySession[event.sessionId],
+           let lookup = stateLookup(event.sessionId) {
+            notifications.notifyHarnessFinished(
+                harness: kind, summary: event.summary,
+                projectId: lookup.projectId, worktreeId: lookup.worktreeId, sessionId: event.sessionId
+            )
+        }
     }
 
     func stop() {
