@@ -21,7 +21,7 @@ struct AppearancePane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Appearance").font(.system(size: 18, weight: .semibold))
-                Text("Themes, density, and window chrome.")
+                Text("Themes, density, window chrome, and display defaults.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
@@ -109,6 +109,24 @@ struct AppearancePane: View {
                             set: { state.config.sidebarWidth = Double($0) ?? 244
                             state.saveConfig() }
                         ), monospaced: true).frame(width: 100)
+                    }
+                }
+                SettingsGroup(title: "Markdown") {
+                    SettingsRow(name: "Default view mode",
+                                desc: "Initial mode when a markdown file is opened.") {
+                        Picker("", selection: Binding(
+                            get: { state.config.markdown.defaultViewMode },
+                            set: {
+                                state.config.markdown.defaultViewMode = $0
+                                state.saveConfig()
+                            }
+                        )) {
+                            Text("Editor").tag(MarkdownViewMode.editor)
+                            Text("Split").tag(MarkdownViewMode.split)
+                            Text("Preview").tag(MarkdownViewMode.preview)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 240)
                     }
                 }
             }
