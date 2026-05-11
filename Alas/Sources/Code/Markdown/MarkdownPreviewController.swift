@@ -16,6 +16,7 @@ final class MarkdownPreviewController: NSObject {
     let scrollView: NSScrollView
 
     private let imageLoader = MarkdownImageLoader()
+    private nonisolated(unsafe) var anchorObserver: NSObjectProtocol?
 
     init(theme: Theme) {
         let scroll = NSScrollView()
@@ -63,6 +64,16 @@ final class MarkdownPreviewController: NSObject {
         self.scrollView = scroll
         super.init()
         textView.delegate = self
+
+        anchorObserver = NotificationCenter.default.addObserver(
+            forName: .markdownScrollToAnchor,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let slug = note.userInfo?["slug"] as? String else { return }
+            Task { @MainActor in self.scrollTo(slug: slug) }
+        }
     }
 
     /// Replace the rendered content. Must be called on the main thread.
@@ -97,6 +108,12 @@ final class MarkdownPreviewController: NSObject {
     func scrollTo(slug: String) {
         guard let range = anchorRanges[slug] else { return }
         textView.scrollRangeToVisible(range)
+    }
+
+    deinit {
+        if let anchorObserver {
+            NotificationCenter.default.removeObserver(anchorObserver)
+        }
     }
 }
 
