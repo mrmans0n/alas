@@ -23,7 +23,10 @@ final class RightPaneState {
     /// that, the user's tab choice is sticky and refreshes leave it alone.
     private var didInitDefaultTab: Bool = false
 
-    let baseBranch: String
+    /// `var` so `RightPaneStore` can keep this in sync with
+    /// `AppConfig.worktrees.baseBranch` when the user edits it in Settings,
+    /// without throwing away the rest of the cached state.
+    var baseBranch: String
 
     private let git = GitService()
     private let watcher: WorktreeWatcher
