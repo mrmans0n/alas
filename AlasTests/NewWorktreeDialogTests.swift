@@ -40,19 +40,28 @@ struct NewWorktreeDialogTests {
         )?.id == "repo-b")
     }
 
-    @Test func preferredBaseBranchChoosesMainFirst() {
+    @Test func preferredBaseBranchChoosesMainWhenNoConfiguredDefault() {
         let selected = NewWorktreeDialog.preferredBaseBranch(
             availableBranches: ["trunk", "master", "main"],
-            configuredDefault: "develop"
+            configuredDefault: ""
         )
 
         #expect(selected == "main")
     }
 
+    @Test func preferredBaseBranchUsesConfiguredDefaultOverMain() {
+        let selected = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: ["trunk", "master", "main", "develop"],
+            configuredDefault: "develop"
+        )
+
+        #expect(selected == "develop")
+    }
+
     @Test func preferredBaseBranchChoosesMasterBeforeTrunk() {
         let selected = NewWorktreeDialog.preferredBaseBranch(
             availableBranches: ["trunk", "master"],
-            configuredDefault: "develop"
+            configuredDefault: ""
         )
 
         #expect(selected == "master")

@@ -235,11 +235,11 @@ struct NewWorktreeDialog: View {
         availableBranches: [String],
         configuredDefault: String
     ) -> String {
+        if !configuredDefault.isEmpty && availableBranches.contains(configuredDefault) {
+            return configuredDefault
+        }
         for preferred in ["main", "master", "trunk"] where availableBranches.contains(preferred) {
             return preferred
-        }
-        if availableBranches.contains(configuredDefault) {
-            return configuredDefault
         }
         return availableBranches.first ?? configuredDefault
     }
