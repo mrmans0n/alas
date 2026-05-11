@@ -13,8 +13,12 @@ struct CommitsAheadTests {
         _ = try await Process.git(["init", "-q", "--bare", "-b", "main"], cwd: remote)
 
         // Local repo with one commit, push to remote, set upstream.
+        // Set a local git identity so `git commit` works in CI/clean envs
+        // that don't have a global user.name/user.email configured.
         try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: worktree)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: worktree)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: worktree)
         try "hi".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "."], cwd: worktree)
         _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: worktree)
@@ -64,6 +68,8 @@ struct CommitsAheadTests {
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: tmp)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "solo"], cwd: tmp)
 
         let svc = GitService()

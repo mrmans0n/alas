@@ -57,10 +57,12 @@ final class RightPaneState {
             self.upstreamRef = upstream
 
             // Smart first-open default: if there are no working-tree
-            // changes, surface Files instead of an empty Changes pane.
-            // Applied exactly once; user toggles win thereafter.
+            // changes AND no commits ahead of upstream, surface Files
+            // instead of an empty Changes pane. A clean worktree with
+            // ahead commits should stay on Changes so the Commits section
+            // is visible. Applied exactly once; user toggles win thereafter.
             if !didInitDefaultTab {
-                if entries.isEmpty && !tree.isEmpty {
+                if entries.isEmpty && commits.isEmpty && !tree.isEmpty {
                     activeTab = .files
                 }
                 didInitDefaultTab = true
