@@ -228,7 +228,9 @@ extension GitService {
         // resulting multi-file diff (for copies, since the source still
         // exists with its own modifications) is then sliced down to just
         // the requested file's section before handing it to DiffParser.
-        var args: [String] = ["diff", "--no-color", "-M", "-C", parentSha, sha, "--", file]
+        // See commitDetails for the rationale on -c core.quotePath=false.
+        var args: [String] = ["-c", "core.quotePath=false",
+                              "diff", "--no-color", "-M", "-C", parentSha, sha, "--", file]
         if let originalPath { args.append(originalPath) }
         let result = try await Process.git(args, cwd: worktreePath)
         guard result.exitCode == 0 else {
@@ -344,12 +346,20 @@ extension GitService {
         let leftTree = parents.isEmpty ? emptyTreeSha : "\(sha)^1"
         let rightTree = sha
 
+        // `-c core.quotePath=false` keeps non-ASCII / special characters in
+        // paths emitted as raw UTF-8 instead of git's default backslash-
+        // octal quoting (e.g. `"caf\303\251.txt"`). Without it, the parsed
+        // path is the quoted text — the file list shows the escaped name,
+        // the numstat↔name-status merge misses (key mismatch), and a later
+        // `git diff -- <quoted-path>` finds nothing on disk.
         async let numstatResult = Process.git(
-            ["diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
+            ["-c", "core.quotePath=false",
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
             cwd: worktree
         )
         async let nameStatusResult = Process.git(
-            ["diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
+            ["-c", "core.quotePath=false",
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
             cwd: worktree
         )
         let numstatOut = try await numstatResult
