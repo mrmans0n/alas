@@ -108,7 +108,7 @@ final class WorkspaceLSPManager {
             isFirstOpener = false
         } else {
             let spawn = Self.resolveSpawn(command: entry.command, args: entry.args, env: entry.env, language: entry.language)
-            let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: entry.env.isEmpty ? nil : entry.env)
+            let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: spawn.environment)
             let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
             let task = Task<Bool, Never> {
                 do { try await newClient.initialize()
@@ -507,6 +507,7 @@ final class WorkspaceLSPManager {
     private struct Spawn {
         let executable: URL
         let arguments: [String]
+        let environment: [String: String]
     }
 
     /// Resolves the spawn command for `entry`. Bare commands (no `/`) are
@@ -516,18 +517,30 @@ final class WorkspaceLSPManager {
     /// with `/usr/bin/env` — that ensures `sourcekit-lsp` launches even
     /// when it lives inside Xcode.app and isn't on PATH.
     private static func resolveSpawn(command: String, args: [String], env: [String: String], language: String) -> Spawn {
-        if command.contains("/") {
-            return Spawn(executable: URL(fileURLWithPath: command), arguments: args)
-        }
         let probe = LanguageServerConfig(
             language: language, extensions: [], command: command, args: args,
             env: env, rootMarkers: [], enabled: true
         )
         let availability = LanguageServerAvailability()
-        if let spawnArgs = availability.spawnArguments(for: probe) {
-            return Spawn(executable: URL(fileURLWithPath: spawnArgs.executable), arguments: spawnArgs.arguments)
+        if command.contains("/") {
+            return Spawn(
+                executable: URL(fileURLWithPath: command),
+                arguments: args,
+                environment: availability.launchEnvironment(for: probe)
+            )
         }
-        return Spawn(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: [command] + args)
+        if let spawnArgs = availability.spawnArguments(for: probe) {
+            return Spawn(
+                executable: URL(fileURLWithPath: spawnArgs.executable),
+                arguments: spawnArgs.arguments,
+                environment: availability.launchEnvironment(for: probe)
+            )
+        }
+        return Spawn(
+            executable: URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: [command] + args,
+            environment: availability.launchEnvironment(for: probe)
+        )
     }
 
     // MARK: - Root resolution

@@ -39,6 +39,26 @@ struct LanguageServerAvailabilityTests {
         #expect(availability.status(for: entry) == .available)
     }
 
+    @Test("minimal GUI PATH still checks additional tool directories")
+    func additionalToolDirectories() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let executable = dir.appendingPathComponent("rust-analyzer")
+        let created = FileManager.default.createFile(atPath: executable.path, contents: Data())
+        #expect(created)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let entry = config(language: "rust", command: "rust-analyzer")
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [dir.path]
+        )
+
+        #expect(availability.status(for: entry) == .available)
+        #expect(availability.resolvedCommand(for: entry) == executable.path)
+    }
+
     @Test("Swift sourcekit-lsp falls back to xcrun")
     func swiftXcrunFallback() {
         var requestedTool: String?
@@ -125,6 +145,22 @@ struct LanguageServerAvailabilityTests {
         let entry = config(command: "custom-lsp", env: ["PATH": dir.path])
         let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in nil })
         #expect(availability.status(for: entry) == .available)
+    }
+
+    @Test("launch environment uses same augmented PATH as resolution")
+    func launchEnvironmentPath() {
+        let entry = config(command: "custom-lsp", env: ["PATH": "/custom/bin", "CUSTOM": "1"])
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": "/usr/bin:/bin", "HOME": "/Users/test"],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: ["/opt/homebrew/bin", "/custom/bin"]
+        )
+
+        let env = availability.launchEnvironment(for: entry)
+
+        #expect(env["CUSTOM"] == "1")
+        #expect(env["HOME"] == "/Users/test")
+        #expect(env["PATH"] == "/custom/bin:/usr/bin:/bin:/opt/homebrew/bin")
     }
 
     private func config(language: String = "test", command: String, args: [String] = [], env: [String: String] = [:], enabled: Bool = true) -> LanguageServerConfig {
