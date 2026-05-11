@@ -3,15 +3,14 @@ import SwiftUI
 struct SidebarHeaderView: View {
     let onSettings: () -> Void
     let onAddProject: () -> Void
+    let onSearch: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             TrafficLights()
             Spacer()
-            // Search will return here when there's an actual search handler.
-            // Previously rendered as a no-op ToolbarBtn(action: {}) which
-            // codex flagged correctly as misleading.
-            HStack(spacing: 2) {
+            HStack(alignment: .center, spacing: 2) {
+                ToolbarBtn(icon: "search", action: onSearch)
                 ToolbarBtn(icon: "folder-plus", action: onAddProject)
                 ToolbarBtn(icon: "gear", action: onSettings)
             }
