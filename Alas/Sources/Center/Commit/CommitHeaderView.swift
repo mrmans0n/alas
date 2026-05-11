@@ -75,17 +75,6 @@ struct CommitHeaderView: View {
         .padding(.top, 8)
     }
 
-    private func relativeTime(_ date: Date) -> String {
-        let delta = Date().timeIntervalSince(date)
-        if delta < 60          { return "now" }
-        if delta < 3600        { return "\(Int(delta / 60))m" }
-        if delta < 86_400      { return "\(Int(delta / 3600))h" }
-        if delta < 30 * 86_400 { return "\(Int(delta / 86_400))d" }
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MMM d"
-        return fmt.string(from: date)
-    }
-
     private func absoluteDate(_ date: Date) -> String {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm"

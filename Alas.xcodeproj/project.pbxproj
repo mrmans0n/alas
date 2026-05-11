@@ -68,6 +68,7 @@
 		3DC6518A9050D1029D4D99A4 /* aider.sh in Resources */ = {isa = PBXBuildFile; fileRef = 2AC91D744E42A7C071268B74 /* aider.sh */; };
 		3E9B50F3BA9D7273EBA50445 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */; };
 		40450134EBF5CCD5CD667327 /* ChangeSummaryVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */; };
+		77DFDFA536E14F63B8B5428A /* RelativeTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0A2718C830348098C1758E3 /* RelativeTime.swift */; };
 		4153DAD75F27395D2D385BED /* LanguageServerAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8CC42BD54479E057902D392 /* LanguageServerAvailabilityTests.swift */; };
 		41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA505FF2E6CFA8278C95C6E /* GhosttyConfigBuilder.swift */; };
 		41C7E41360B2A443AE2A18B8 /* GhosttyHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 215C9AE9FBCB1FD9F6D030FE /* GhosttyHost.swift */; };
@@ -345,6 +346,7 @@
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessGitTests.swift; sourceTree = "<group>"; };
 		524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangeSummaryVisibility.swift; sourceTree = "<group>"; };
+		B0A2718C830348098C1758E3 /* RelativeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTime.swift; sourceTree = "<group>"; };
 		5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneLayout.swift; sourceTree = "<group>"; };
 		563B664D082A9523260AA2EF /* RepoDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoDot.swift; sourceTree = "<group>"; };
 		576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsAheadTests.swift; sourceTree = "<group>"; };
@@ -664,6 +666,7 @@
 				D9E6D61B213F3378243B4A26 /* AlasField.swift */,
 				1841997CCBDB9611576B930C /* AlasToggle.swift */,
 				524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */,
+				B0A2718C830348098C1758E3 /* RelativeTime.swift */,
 				16CA8FEE64D73BDEBAF74878 /* Kbd.swift */,
 				489C9B383554D7DAB170C2F8 /* Seg.swift */,
 				2CDC00065CA8839DA1AD0E0F /* TrafficLights.swift */,
@@ -1274,6 +1277,7 @@
 				7C8E278F6BED0924531E3C91 /* BundledFontRegistrar.swift in Sources */,
 				139F45EE390C27342C5DD734 /* CenterPaneView.swift in Sources */,
 				40450134EBF5CCD5CD667327 /* ChangeSummaryVisibility.swift in Sources */,
+				77DFDFA536E14F63B8B5428A /* RelativeTime.swift in Sources */,
 				8147BF86F2E77D81BE885B8F /* ChangedRow.swift in Sources */,
 				23013D3D2538AC2D1BD3403D /* ChangesTabView.swift in Sources */,
 				EF2540A211FBE06D7B30FC61 /* Code.swift in Sources */,

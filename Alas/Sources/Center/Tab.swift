@@ -47,7 +47,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
     let sha: String
-    var title: String
+    let title: String
 
     init(worktreeId: String, sha: String, title: String) {
         self.id = "commit:\(worktreeId):\(sha)"
