@@ -58,6 +58,12 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     /// holder in nested-package layouts. Nil for tabs persisted before this
     /// field was added (backward-compatible via the default value).
     var originatingRelativePath: String? = nil
+    /// Last view mode the user selected for this markdown tab. `nil` means
+    /// "use `AppConfig.markdown.defaultViewMode`". Nil for non-markdown tabs.
+    var markdownViewMode: MarkdownViewMode? = nil
+    /// Editor-pane width as a fraction of the split container, persisted
+    /// per-tab. Nil → 0.5. Nil for non-markdown or non-split tabs.
+    var markdownSplitFraction: Double? = nil
 
     var isExternal: Bool { externalAbsolutePath != nil }
 }
