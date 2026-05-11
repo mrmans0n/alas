@@ -295,6 +295,14 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func appendCommit(worktreeId: String, sha: String, title: String) -> Tab {
+        let state = CommitTabState(worktreeId: worktreeId, sha: sha, title: title)
+        let tab = Tab.commit(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     /// Clears the `revealLine`/`revealCharacter` hints on an editor tab.
     /// Called by the editor coordinator once it has scrolled to the target,
     /// so the hint isn't replayed on the next view re-render or app
