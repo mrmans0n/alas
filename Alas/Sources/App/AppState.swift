@@ -96,6 +96,30 @@ final class AppState {
         saveProjects()
     }
 
+    func renameProject(id: String) {
+        guard let project = projects.first(where: { $0.id == id }) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Project"
+        alert.informativeText = "Choose a new name for this project."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = project.name
+        field.lineBreakMode = .byTruncatingTail
+        alert.accessoryView = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != project.name else { return }
+
+        projectsManager.renameProject(id: id, name: name)
+        saveProjects()
+    }
+
     /// Archive (hide) a worktree. Closes all tabs/terminals/harness state for
     /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
     /// the archived worktree was selected. Does NOT touch git or disk.
