@@ -247,24 +247,44 @@ extension GitService {
             .map(String.init)
 
         // Files: two separate diff-tree calls.
-        // --root is required so that initial commits (no parent) are diffed
-        // against the empty tree rather than returning nothing.
+        // Use the explicit two-tree form (<left> <right>) instead of the
+        // single-sha form so that:
+        //   • Merge commits: compare first parent vs. the merge commit.
+        //     The single-sha form suppresses output for merges without -m.
+        //   • Initial commits: compare the canonical empty-tree SHA vs. the
+        //     commit. The --root flag only works with the single-sha form and
+        //     is not needed here.
         // --numstat and --name-status are mutually exclusive when combined in a
         // single invocation, so we run them separately and merge the results.
+        let emptyTreeSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        let leftTree = parents.isEmpty ? emptyTreeSha : "\(sha)^1"
+        let rightTree = sha
+
         async let numstatResult = Process.git(
-            ["diff-tree", "--root", "--no-commit-id", "-r", "--no-color", "--numstat", sha],
+            ["diff-tree", "--no-commit-id", "-r", "--no-color", "--numstat", leftTree, rightTree],
             cwd: worktree
         )
         async let nameStatusResult = Process.git(
-            ["diff-tree", "--root", "--no-commit-id", "-r", "--no-color", "--name-status", sha],
+            ["diff-tree", "--no-commit-id", "-r", "--no-color", "--name-status", leftTree, rightTree],
             cwd: worktree
         )
-        let (numstatOut, nameStatusOut) = try await (numstatResult, nameStatusResult)
+        let numstatOut = try await numstatResult
+        let nameStatusOut = try await nameStatusResult
+
+        guard numstatOut.exitCode == 0 else {
+            throw NSError(domain: "GitService.commitDetails", code: Int(numstatOut.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: numstatOut.stderr])
+        }
+        guard nameStatusOut.exitCode == 0 else {
+            throw NSError(domain: "GitService.commitDetails", code: Int(nameStatusOut.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: nameStatusOut.stderr])
+        }
 
         var addByPath: [String: Int] = [:]
         var delByPath: [String: Int] = [:]
         var statusByPath: [String: String] = [:]
         var ordered: [String] = []
+        var orderedSet: Set<String> = []
 
         // Parse numstat: "adds \t dels \t path"
         for line in numstatOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -290,7 +310,7 @@ extension GitService {
                 newPath = parts[1]
             }
             statusByPath[newPath] = statusLetter
-            if !ordered.contains(newPath) { ordered.append(newPath) }
+            if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
         }
 
         let files: [CommitChangedFile] = ordered.map { path in

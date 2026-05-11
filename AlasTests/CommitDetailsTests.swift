@@ -88,5 +88,11 @@ struct CommitDetailsTests {
 
         let details = try await GitService().commitDetails(at: repo, sha: sha)
         #expect(details.parents.count == 2)
+        // First-parent diff: merging `side` into `main` brings b.txt from side.
+        let paths = details.files.map(\.path).sorted()
+        #expect(paths == ["b.txt"])
+        let b = details.files.first { $0.path == "b.txt" }
+        #expect(b?.status == "A")
+        #expect(b?.add == 1)
     }
 }
