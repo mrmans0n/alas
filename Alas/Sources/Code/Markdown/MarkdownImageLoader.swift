@@ -5,7 +5,11 @@ import Foundation
 /// synchronously on call; remote `https://` images are fetched
 /// asynchronously and cached. The caller is responsible for applying the
 /// fetched image to the placeholder attachment and invalidating layout.
-final class MarkdownImageLoader {
+///
+/// `@unchecked Sendable` is sound because the only mutable state is
+/// `NSCache`, which is documented thread-safe, and `URLSession`, which is
+/// itself `Sendable`. The class has no other writable storage.
+final class MarkdownImageLoader: @unchecked Sendable {
     enum Source: Equatable {
         case local(String)
         case remote(URL)
