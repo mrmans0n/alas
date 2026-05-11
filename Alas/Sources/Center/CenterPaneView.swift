@@ -66,15 +66,29 @@ struct CenterPaneView: View {
                                         tabId: tab.id,
                                         sessionId: s.sessionId)
                     case .editor(let s):
-                        EditorTabView(worktreePath: worktree.path,
-                                      relativePath: s.relativePath,
-                                      worktreeId: worktree.id,
-                                      tabId: s.id,
-                                      revealLine: s.revealLine,
-                                      revealCharacter: s.revealCharacter,
-                                      appState: state,
-                                      externalAbsolutePath: s.externalAbsolutePath,
-                                      originatingRelativePath: s.originatingRelativePath)
+                        if MarkdownFileType.isMarkdown(relativePath: s.isExternal
+                                                        ? (s.externalAbsolutePath ?? "")
+                                                        : s.relativePath) {
+                            MarkdownTabView(worktreePath: worktree.path,
+                                            worktreeId: worktree.id,
+                                            tabId: s.id,
+                                            relativePath: s.relativePath,
+                                            externalAbsolutePath: s.externalAbsolutePath,
+                                            originatingRelativePath: s.originatingRelativePath,
+                                            revealLine: s.revealLine,
+                                            revealCharacter: s.revealCharacter,
+                                            appState: state)
+                        } else {
+                            EditorTabView(worktreePath: worktree.path,
+                                          relativePath: s.relativePath,
+                                          worktreeId: worktree.id,
+                                          tabId: s.id,
+                                          revealLine: s.revealLine,
+                                          revealCharacter: s.revealCharacter,
+                                          appState: state,
+                                          externalAbsolutePath: s.externalAbsolutePath,
+                                          originatingRelativePath: s.originatingRelativePath)
+                        }
                     case .diff(let s):
                         DiffTabView(worktreePath: worktree.path,
                                     relativePath: s.relativePath,
