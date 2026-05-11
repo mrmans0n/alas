@@ -81,25 +81,14 @@ final class MarkdownPreviewController: NSObject {
         anchorRanges = result.anchorRanges
         textView.textStorage?.setAttributedString(result.attributedString)
         for ref in result.remoteImages {
-            _ = imageLoader.loadRemote(url: ref.url) { [weak self] image in
+            // Cache hit returns synchronously and skips the completion handler.
+            // Apply it here so the fresh placeholder attachment created by the
+            // new attributed string actually shows the cached image.
+            if let cached = imageLoader.loadRemote(url: ref.url, completion: { [weak self] image in
                 guard let self, let image else { return }
-                ref.attachment.image = image
-                // Sizing: if attachment was placeholder (200x16), grow to image's
-                // natural size up to a max width of 600.
-                let maxWidth: CGFloat = 600
-                if image.size.width > maxWidth {
-                    let scale = maxWidth / image.size.width
-                    ref.attachment.bounds = NSRect(x: 0, y: 0, width: maxWidth, height: image.size.height * scale)
-                } else {
-                    ref.attachment.bounds = NSRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
-                }
-                // Invalidate layout so the attachment glyph re-measures.
-                if let storage = self.textView.textStorage {
-                    let len = storage.length
-                    storage.edited([.editedAttributes, .editedCharacters],
-                                   range: NSRange(location: 0, length: len),
-                                   changeInLength: 0)
-                }
+                self.applyRemoteImage(image, to: ref.attachment)
+            }) {
+                applyRemoteImage(cached, to: ref.attachment)
             }
         }
     }
@@ -108,6 +97,24 @@ final class MarkdownPreviewController: NSObject {
     func scrollTo(slug: String) {
         guard let range = anchorRanges[slug] else { return }
         textView.scrollRangeToVisible(range)
+    }
+
+    /// Install a loaded `NSImage` into the placeholder attachment, resize it
+    /// to fit within the preview, and invalidate layout so the glyph
+    /// re-measures.
+    private func applyRemoteImage(_ image: NSImage, to attachment: NSTextAttachment) {
+        attachment.image = image
+        let maxWidth: CGFloat = 600
+        if image.size.width > maxWidth {
+            let scale = maxWidth / image.size.width
+            attachment.bounds = NSRect(x: 0, y: 0, width: maxWidth, height: image.size.height * scale)
+        } else {
+            attachment.bounds = NSRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
+        }
+        if let storage = textView.textStorage {
+            let len = storage.length
+            storage.edited([.editedAttributes], range: NSRange(location: 0, length: len), changeInLength: 0)
+        }
     }
 
     deinit {
