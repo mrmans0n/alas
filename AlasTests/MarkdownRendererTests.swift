@@ -183,8 +183,10 @@ struct MarkdownRendererTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let imageURL = tmp.appendingPathComponent("dot.png")
         let img = NSImage(size: NSSize(width: 1, height: 1))
-        img.lockFocus(); NSColor.red.setFill()
-        NSRect(x: 0, y: 0, width: 1, height: 1).fill(); img.unlockFocus()
+        img.lockFocus()
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 1, height: 1).fill()
+        img.unlockFocus()
         if let tiff = img.tiffRepresentation,
            let rep = NSBitmapImageRep(data: tiff),
            let png = rep.representation(using: .png, properties: [:]) {
