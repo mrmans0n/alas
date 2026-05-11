@@ -113,6 +113,7 @@
 		8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8DD66F449B380BC74B373647 /* Carbon.framework */; };
 		884F7EB87029E537B923191E /* DefinitionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 781B8F6F0A3085FEBFC615C2 /* DefinitionPicker.swift */; };
 		8ACF2EE38E46F72F5466DB01 /* SettingsRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE607EE1ACDE73C1DB0FCA00 /* SettingsRow.swift */; };
+		8B0F53A453343AF8DA0B4C0C /* MarkdownViewModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC3328C0EF905A8AC6F6F34D /* MarkdownViewModeTests.swift */; };
 		8E2FB28D4C7681611BC67537 /* WorkspaceLSPManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE809DBC1E614321EE793D00 /* WorkspaceLSPManager.swift */; };
 		8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C2AC0F8B3A1B75239995AC /* AppState.swift */; };
 		90958414931FC96F766F0C46 /* DiagnosticsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 932F0FEE5330D5B4470C1874 /* DiagnosticsFeature.swift */; };
@@ -138,6 +139,7 @@
 		A77E7290FD589BC3227ADE27 /* ContentSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE7AEB9E8D83B610E291BAE1 /* ContentSearcher.swift */; };
 		A7BDA44A8E4364C4C335C4DA /* HookEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8820E4289EEB1ADCA9E490F /* HookEventTests.swift */; };
 		A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */; };
+		A98F3436BE8AB680178B341C /* MarkdownViewMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC83C13F9F6391F9CE8BF2CA /* MarkdownViewMode.swift */; };
 		A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */; };
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
 		AA8FEF94B861001AB643E005 /* FontFamilyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */; };
@@ -382,6 +384,7 @@
 		CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentResultGroup.swift; sourceTree = "<group>"; };
 		CB020862232495EC1C5ECBEA /* WindowAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowAppearance.swift; sourceTree = "<group>"; };
 		CB68E9C3C8853AF7E8AB5DB4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		CC83C13F9F6391F9CE8BF2CA /* MarkdownViewMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownViewMode.swift; sourceTree = "<group>"; };
 		CE6CCD7F7273667B5D67F821 /* SearchScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchScope.swift; sourceTree = "<group>"; };
 		D2AD81E0DFE33CE4DACF0ADF /* WorktreeWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeWatcher.swift; sourceTree = "<group>"; };
 		D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeServiceTests.swift; sourceTree = "<group>"; };
@@ -392,6 +395,7 @@
 		D97EF761C70A3AF83C00879A /* VisualEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectView.swift; sourceTree = "<group>"; };
 		D9E6D61B213F3378243B4A26 /* AlasField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasField.swift; sourceTree = "<group>"; };
 		DBA6A9F78C8E8CDF6D170BDD /* StatusParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusParserTests.swift; sourceTree = "<group>"; };
+		DC3328C0EF905A8AC6F6F34D /* MarkdownViewModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownViewModeTests.swift; sourceTree = "<group>"; };
 		DE7675D7F75E36E9C81193C8 /* LSPMessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPMessagesTests.swift; sourceTree = "<group>"; };
 		E1703FC5CD7DF16F4450E274 /* DiffParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffParser.swift; sourceTree = "<group>"; };
 		E1D1797A096A39AE6CB5EA00 /* FileIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIndex.swift; sourceTree = "<group>"; };
@@ -481,6 +485,7 @@
 				954060BD47A1EFF3105F44EB /* HookInstallerTests.swift */,
 				EB52B59655B85764D85CFB7F /* LineEndingTests.swift */,
 				19C327BB65463E878DDCDA5E /* MarkdownFileTypeTests.swift */,
+				DC3328C0EF905A8AC6F6F34D /* MarkdownViewModeTests.swift */,
 				4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */,
 				0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */,
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
@@ -704,6 +709,7 @@
 			isa = PBXGroup;
 			children = (
 				5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */,
+				CC83C13F9F6391F9CE8BF2CA /* MarkdownViewMode.swift */,
 			);
 			path = Markdown;
 			sourceTree = "<group>";
@@ -1171,6 +1177,7 @@
 				C45F78462F404C64D02C413B /* LanguageServerRegistry.swift in Sources */,
 				6866301B0A6F1F7488819B98 /* LineEnding.swift in Sources */,
 				2C96C81EBF3C4B0951FA2A57 /* MarkdownFileType.swift in Sources */,
+				A98F3436BE8AB680178B341C /* MarkdownViewMode.swift in Sources */,
 				82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */,
 				02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */,
 				11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */,
@@ -1270,6 +1277,7 @@
 				9422B6F8F6C1E3E64B259712 /* LanguageServerRegistryTests.swift in Sources */,
 				DE41CB04CDC89D09346494A5 /* LineEndingTests.swift in Sources */,
 				165300DDFFB445D8AAE7A5E5 /* MarkdownFileTypeTests.swift in Sources */,
+				8B0F53A453343AF8DA0B4C0C /* MarkdownViewModeTests.swift in Sources */,
 				D55386035B99B2B1769ED47F /* NumstatParserTests.swift in Sources */,
 				43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */,
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
