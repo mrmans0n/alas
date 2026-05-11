@@ -148,20 +148,21 @@ final class MarkdownRenderer {
                 output.append(NSAttributedString(string: alt, attributes: mutedAttributes()))
             }
         case .local(let path):
-            // Root-relative paths (`/assets/logo.png`) resolve from the
-            // worktree root when available, matching how the link handler
-            // treats `/README.md`. External tabs without a worktree root
-            // fall back to standard absolute-path resolution.
-            let resolveFrom: URL
-            let usePath: String
+            // Path resolution for local images:
+            //  * `/foo.png` in an in-worktree document → worktree root + foo.png
+            //    (mirrors how the link handler treats `/README.md`).
+            //  * `/foo.png` in an external preview → real filesystem-absolute
+            //    path; load directly without prepending baseDirectory.
+            //  * everything else → resolve against the document's directory.
+            let loaded: NSImage?
             if path.hasPrefix("/"), let root = worktreeRoot {
-                resolveFrom = root
-                usePath = String(path.dropFirst())
+                loaded = imageLoader.loadLocal(src: String(path.dropFirst()), baseDirectory: root)
+            } else if path.hasPrefix("/") {
+                loaded = NSImage(contentsOf: URL(fileURLWithPath: path))
             } else {
-                resolveFrom = baseDirectory
-                usePath = path
+                loaded = imageLoader.loadLocal(src: path, baseDirectory: baseDirectory)
             }
-            if let loaded = imageLoader.loadLocal(src: usePath, baseDirectory: resolveFrom) {
+            if let loaded {
                 output.append(attachmentString(for: loaded))
             } else if !alt.isEmpty {
                 output.append(NSAttributedString(string: alt, attributes: mutedAttributes()))
