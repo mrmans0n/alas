@@ -173,7 +173,7 @@ struct NewWorktreeDialog: View {
         }
     }
 
-    static func resolvedPresetProject(
+    nonisolated static func resolvedPresetProject(
         presetProjectId: String?,
         projects: [ProjectConfig]
     ) -> ProjectConfig? {
@@ -181,7 +181,7 @@ struct NewWorktreeDialog: View {
         return projects.first { $0.id == presetProjectId }
     }
 
-    static func showsRepositorySelector(
+    nonisolated static func showsRepositorySelector(
         presetProjectId: String?,
         projects: [ProjectConfig]
     ) -> Bool {

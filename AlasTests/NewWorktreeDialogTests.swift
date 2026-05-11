@@ -6,21 +6,21 @@ struct NewWorktreeDialogTests {
     @Test func repositorySelectorShowsForGlobalCreation() {
         #expect(NewWorktreeDialog.showsRepositorySelector(
             presetProjectId: nil,
-            projects: [project(id: "repo-a")]
+            projects: [Self.project(id: "repo-a")]
         ))
     }
 
     @Test func repositorySelectorIsHiddenForValidPreset() {
         #expect(!NewWorktreeDialog.showsRepositorySelector(
             presetProjectId: "repo-a",
-            projects: [project(id: "repo-a"), project(id: "repo-b")]
+            projects: [Self.project(id: "repo-a"), Self.project(id: "repo-b")]
         ))
     }
 
     @Test func repositorySelectorShowsForStalePreset() {
         #expect(NewWorktreeDialog.showsRepositorySelector(
             presetProjectId: "missing",
-            projects: [project(id: "repo-a")]
+            projects: [Self.project(id: "repo-a")]
         ))
     }
 
@@ -32,7 +32,7 @@ struct NewWorktreeDialogTests {
     }
 
     @Test func resolvedPresetProjectReturnsMatchingProject() {
-        let projects = [project(id: "repo-a"), project(id: "repo-b")]
+        let projects = [Self.project(id: "repo-a"), Self.project(id: "repo-b")]
 
         #expect(NewWorktreeDialog.resolvedPresetProject(
             presetProjectId: "repo-b",
