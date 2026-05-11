@@ -29,6 +29,7 @@ final class MarkdownRenderer {
     private var monoFamily: String = "SF Mono"
     private var monoSize: CGFloat = 13
     private var baseDirectory: URL = URL(fileURLWithPath: "/")
+    private let imageLoader = MarkdownImageLoader()
 
     private var currentTraits: NSFontDescriptor.SymbolicTraits = []
     private var inStrikethrough: Bool = false
@@ -93,6 +94,7 @@ final class MarkdownRenderer {
         case _ as SoftBreak:            appendPlain(" ")
         case _ as LineBreak:            appendPlain("\n")
         case let l as Markdown.Link:    visitLink(l)
+        case let img as Markdown.Image: visitImage(img)
         case let h as Heading:          visitHeading(h)
         case let l as UnorderedList:    visitUnorderedList(l)
         case let l as OrderedList:      visitOrderedList(l)
@@ -124,6 +126,45 @@ final class MarkdownRenderer {
         output.addAttribute(.link, value: url, range: range)
         output.addAttribute(.foregroundColor, value: NSColor(theme.color("accent")), range: range)
         output.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+    }
+
+    private func visitImage(_ image: Markdown.Image) {
+        let alt = image.plainText
+        let src = image.source ?? ""
+        switch MarkdownImageLoader.classify(src) {
+        case .invalid:
+            if !alt.isEmpty {
+                output.append(NSAttributedString(string: alt, attributes: mutedAttributes()))
+            }
+        case .local(let path):
+            if let loaded = imageLoader.loadLocal(src: path, baseDirectory: baseDirectory) {
+                output.append(attachmentString(for: loaded))
+            } else if !alt.isEmpty {
+                output.append(NSAttributedString(string: alt, attributes: mutedAttributes()))
+            }
+        case .remote(let url):
+            let attachment = NSTextAttachment()
+            attachment.bounds = NSRect(x: 0, y: 0, width: 200, height: 16)
+            remoteImages.append(RemoteImageReference(url: url, attachment: attachment))
+            output.append(NSAttributedString(attachment: attachment))
+        }
+    }
+
+    private func attachmentString(for image: NSImage) -> NSAttributedString {
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        let maxWidth: CGFloat = 600
+        if image.size.width > maxWidth {
+            let scale = maxWidth / image.size.width
+            attachment.bounds = NSRect(x: 0, y: 0, width: maxWidth, height: image.size.height * scale)
+        } else {
+            attachment.bounds = NSRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
+        }
+        return NSAttributedString(attachment: attachment)
+    }
+
+    private func mutedAttributes() -> [NSAttributedString.Key: Any] {
+        [.foregroundColor: NSColor(theme.color("fg-muted")), .font: bodyFont()]
     }
 
     private func visitHeading(_ heading: Heading) {

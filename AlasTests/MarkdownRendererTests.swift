@@ -175,4 +175,51 @@ struct MarkdownRendererTests {
         // followed by trailing spaces before the next cell separator.
         #expect(s.contains("h1    "))
     }
+
+    @Test func rendersLocalImageAsAttachment() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-md-img-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let imageURL = tmp.appendingPathComponent("dot.png")
+        let img = NSImage(size: NSSize(width: 1, height: 1))
+        img.lockFocus(); NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 1, height: 1).fill(); img.unlockFocus()
+        if let tiff = img.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try png.write(to: imageURL)
+        }
+
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let r = MarkdownRenderer().render(
+            document: MarkdownParser.parse("![alt](dot.png)"),
+            theme: theme,
+            monospacedFontFamily: "SF Mono",
+            monospacedFontSize: 13,
+            baseDirectory: tmp
+        )
+        // Locate the attachment character (Unicode Object Replacement Character = 0xFFFC).
+        let attachChar = String(UnicodeScalar(0xFFFC)!)
+        #expect(r.attributedString.string.contains(attachChar))
+    }
+
+    @Test func rendersRemoteImagePlaceholderAndRecordsRef() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let r = MarkdownRenderer().render(
+            document: MarkdownParser.parse("![logo](https://example.com/logo.png)"),
+            theme: theme,
+            monospacedFontFamily: "SF Mono",
+            monospacedFontSize: 13,
+            baseDirectory: URL(fileURLWithPath: "/tmp")
+        )
+        #expect(r.remoteImages.count == 1)
+        #expect(r.remoteImages.first?.url.absoluteString == "https://example.com/logo.png")
+    }
+
+    @Test func brokenLocalImageRendersAltText() throws {
+        let r = try MarkdownRendererTests.render("![alt-text](nope-\(UUID().uuidString).png)")
+        let s = r.attributedString.string
+        #expect(s.contains("alt-text"))
+    }
 }
