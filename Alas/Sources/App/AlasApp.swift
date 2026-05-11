@@ -4,6 +4,10 @@ import SwiftUI
 struct AlasApp: App {
     @State private var state = AppState()
 
+    init() {
+        BundledFontRegistrar.registerFonts()
+    }
+
     var body: some Scene {
         Window("Alas", id: "main") {
             RootView(state: state)

@@ -9,7 +9,7 @@ struct ChangedRow: View {
         let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
         return Button(action: onSelect) {
             HStack(spacing: 6) {
-                FileTypeIconView(filename: basename, size: 13)
+                FileTypeIconView(filename: basename, size: 18)
                 Text(basename)
                     .font(.system(size: 11.5, design: .monospaced))
                     .lineLimit(1)
