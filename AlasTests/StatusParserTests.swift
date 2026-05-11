@@ -6,64 +6,78 @@ struct StatusParserTests {
     @Test func parsesUnstagedModifiedFile() throws {
         let raw = "1 .M N... 100644 100644 100644 deadbeef deadbeef src/foo.rs"
         let entries = try StatusParser.parse(raw + "\u{0}")
-        #expect(entries.count == 1)
-        #expect(entries[0].path == "src/foo.rs")
-        #expect(entries[0].status == "M")
-        #expect(entries[0].stage == .unstaged)
+        let entry = try #require(entries.first)
+        #expect(entry.path == "src/foo.rs")
+        #expect(entry.status == "M")
+        #expect(entry.stage == .unstaged)
     }
 
     @Test func parsesStagedModifiedFile() throws {
         let raw = "1 M. N... 100644 100644 100644 deadbeef deadbeef src/foo.rs\u{0}"
         let entries = try StatusParser.parse(raw)
-        #expect(entries.count == 1)
-        #expect(entries[0].path == "src/foo.rs")
-        #expect(entries[0].status == "M")
-        #expect(entries[0].stage == .staged)
+        let entry = try #require(entries.first)
+        #expect(entry.path == "src/foo.rs")
+        #expect(entry.status == "M")
+        #expect(entry.stage == .staged)
     }
 
     @Test func parsesPartiallyStagedModifiedFile() throws {
         let raw = "1 MM N... 100644 100644 100644 deadbeef deadbeef src/foo.rs\u{0}"
         let entries = try StatusParser.parse(raw)
         #expect(entries.count == 2)
-        #expect(entries.contains(where: { $0.path == "src/foo.rs" && $0.status == "M" && $0.stage == .staged }))
-        #expect(entries.contains(where: { $0.path == "src/foo.rs" && $0.status == "M" && $0.stage == .unstaged }))
-        #expect(Set(entries.map(\.id)).count == 2)
+        let staged = entries.first(where: { $0.stage == .staged })
+        let unstaged = entries.first(where: { $0.stage == .unstaged })
+        #expect(staged != nil)
+        #expect(unstaged != nil)
+        #expect(staged?.path == "src/foo.rs")
+        #expect(staged?.status == "M")
+        #expect(unstaged?.path == "src/foo.rs")
+        #expect(unstaged?.status == "M")
+        let ids = Set(entries.map(\.id))
+        #expect(ids.count == 2)
     }
 
     @Test func parsesAddedAndDeleted() throws {
         let raw = "1 A. N... 000000 100644 100644 0 d new.rs\u{0}1 .D N... 100644 000000 000000 d 0 old.rs\u{0}"
         let entries = try StatusParser.parse(raw)
-        #expect(entries.contains(where: { $0.status == "A" && $0.path == "new.rs" && $0.stage == .staged }))
-        #expect(entries.contains(where: { $0.status == "D" && $0.path == "old.rs" && $0.stage == .unstaged }))
+        let added = entries.first(where: { $0.path == "new.rs" })
+        let deleted = entries.first(where: { $0.path == "old.rs" })
+        #expect(added?.status == "A")
+        #expect(added?.stage == .staged)
+        #expect(deleted?.status == "D")
+        #expect(deleted?.stage == .unstaged)
     }
 
     @Test func parsesRename() throws {
         let raw = "2 R. N... 100644 100644 100644 a a R100 docs/SPLIT.md\u{0}docs/PANES.md\u{0}"
         let entries = try StatusParser.parse(raw)
-        #expect(entries.count == 1)
-        #expect(entries[0].status == "R")
-        #expect(entries[0].stage == .staged)
-        #expect(entries[0].path == "docs/SPLIT.md")
-        #expect(entries[0].renameFrom == "docs/PANES.md")
+        let entry = try #require(entries.first)
+        #expect(entry.status == "R")
+        #expect(entry.stage == .staged)
+        #expect(entry.path == "docs/SPLIT.md")
+        #expect(entry.renameFrom == "docs/PANES.md")
     }
 
     @Test func parsesRenameWithUnstagedModification() throws {
         let raw = "2 RM N... 100644 100644 100644 a a R100 docs/SPLIT.md\u{0}docs/PANES.md\u{0}"
         let entries = try StatusParser.parse(raw)
         #expect(entries.count == 2)
-        #expect(entries.contains(where: {
-            $0.status == "R" && $0.stage == .staged && $0.path == "docs/SPLIT.md" && $0.renameFrom == "docs/PANES.md"
-        }))
-        #expect(entries.contains(where: {
-            $0.status == "M" && $0.stage == .unstaged && $0.path == "docs/SPLIT.md" && $0.renameFrom == nil
-        }))
+        let staged = entries.first(where: { $0.stage == .staged })
+        let unstaged = entries.first(where: { $0.stage == .unstaged })
+        #expect(staged?.status == "R")
+        #expect(staged?.path == "docs/SPLIT.md")
+        #expect(staged?.renameFrom == "docs/PANES.md")
+        #expect(unstaged?.status == "M")
+        #expect(unstaged?.path == "docs/SPLIT.md")
+        #expect(unstaged?.renameFrom == nil)
     }
 
     @Test func parsesUntracked() throws {
         let raw = "? scratch.txt\u{0}"
         let entries = try StatusParser.parse(raw)
-        #expect(entries[0].status == "A")
-        #expect(entries[0].stage == .unstaged)
-        #expect(entries[0].path == "scratch.txt")
+        let entry = try #require(entries.first)
+        #expect(entry.status == "A")
+        #expect(entry.stage == .unstaged)
+        #expect(entry.path == "scratch.txt")
     }
 }
