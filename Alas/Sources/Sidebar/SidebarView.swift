@@ -13,7 +13,13 @@ struct SidebarView: View {
         ZStack {
             VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
             VStack(spacing: 0) {
-                SidebarHeaderView(onSettings: onSettings, onAddProject: onAddProject)
+                SidebarHeaderView(
+                    onSettings: onSettings,
+                    onAddProject: onAddProject,
+                    onSearch: {
+                        NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
+                    }
+                )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(state.projects) { project in
