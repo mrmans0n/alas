@@ -69,7 +69,7 @@ struct FilesSectionView: View {
             return AnyView(
                 Button { onSelectFile(node) } label: {
                     HStack(spacing: 6) {
-                        Icon(name: "file", size: 11, color: theme.color("fg-faint"))
+                        FileTypeIconView(filename: node.name, size: 13)
                         Text(node.name)
                             .font(.system(size: 11.5, design: .monospaced))
                             .foregroundColor(theme.color("fg"))
