@@ -151,6 +151,24 @@ struct TabsManagerTests {
         #expect(decoded.externalAbsolutePath == nil)
     }
 
+
+    @Test func diffTabStateDecodesLegacyShapeAsUnstaged() throws {
+        let json = #"""
+        {"id":"d","title":"a.txt","relativePath":"a.txt"}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(DiffTabState.self, from: json)
+        #expect(decoded.relativePath == "a.txt")
+        #expect(decoded.staged == false)
+    }
+
+    @Test func diffTabStateRoundTripsStagedFlag() throws {
+        let state = DiffTabState(id: "d", title: "a.txt (staged)", relativePath: "a.txt", staged: true)
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(DiffTabState.self, from: data)
+        #expect(decoded == state)
+        #expect(decoded.staged)
+    }
+
     @Test func editorTabStateRoundTripsExternalPath() throws {
         let s = EditorTabState(
             id: "y", title: "NSString.h",
