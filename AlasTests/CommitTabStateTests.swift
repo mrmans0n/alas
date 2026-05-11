@@ -16,7 +16,8 @@ struct CommitTabStateTests {
         let data = try JSONEncoder().encode(Tab.commit(s))
         let decoded = try JSONDecoder().decode(Tab.self, from: data)
         guard case .commit(let r) = decoded else {
-            Issue.record("decoded tab was not .commit"); return
+            Issue.record("decoded tab was not .commit")
+            return
         }
         #expect(r.id == s.id)
         #expect(r.worktreeId == "wt-1")
