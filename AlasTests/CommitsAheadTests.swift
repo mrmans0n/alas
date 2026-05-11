@@ -128,6 +128,33 @@ struct CommitsAheadTests {
         #expect(comparisonRef == nil)
     }
 
+    @Test func cascadeWorksOnDetachedHEAD() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ca-detached-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "base"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat: ahead"], cwd: tmp)
+        // Capture the "ahead" SHA, then rewind main to "base" so that HEAD
+        // ends up one commit ahead of main after detaching.
+        let aheadSha = try await Process.git(["rev-parse", "HEAD"], cwd: tmp)
+        let sha = aheadSha.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["reset", "-q", "--hard", "HEAD~1"], cwd: tmp)
+        // Detach HEAD at the "ahead" commit (now one commit past main).
+        _ = try await Process.git(["checkout", "-q", "--detach", sha], cwd: tmp)
+
+        let svc = GitService()
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: tmp, baseBranch: "main")
+        // Detached HEAD: no @{u}; base is "main" which exists and points to
+        // the first commit, so we should see exactly the "ahead" commit.
+        #expect(comparisonRef == "main")
+        #expect(commits.count == 1)
+        #expect(commits[0].subject == "ahead")
+    }
+
     @Test func upstreamTakesPrecedenceOverBaseBranch() async throws {
         let (worktree, _) = try await makeRepoWithUpstream()
         defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }

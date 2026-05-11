@@ -58,6 +58,7 @@ struct CommitDetailsTests {
 
         let details = try await GitService().commitDetails(at: repo, sha: sha)
         #expect(details.parents.count == 1)
+        #expect(details.body == "")
         let byPath = Dictionary(uniqueKeysWithValues: details.files.map { ($0.path, $0) })
         #expect(byPath["keep.txt"]?.status == "M")
         #expect(byPath["gone.txt"]?.status == "D")
@@ -125,6 +126,56 @@ struct CommitDetailsTests {
         let b = details.files.first { $0.path == "b.txt" }
         #expect(b?.status == "A")
         #expect(b?.add == 1)
+    }
+
+    @Test func parsesCommitWithRenameAndBinary() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        // Seed with a text file and a binary file.
+        try "first\nsecond\nthird\n".write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        // 16 bytes of binary data — first byte 0 makes git classify it as binary.
+        let binaryData = Data([0x00, 0xFF, 0x10, 0x80, 0x42, 0xAA, 0x33, 0x77,
+                               0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
+        try binaryData.write(to: repo.appendingPathComponent("blob.bin"))
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        // Rename the text file (git only treats it as a rename in `diff -M`
+        // / `log --follow`; for diff-tree with no rename detection, it shows
+        // as add+delete. Pass `-M` to diff-tree by using a single
+        // configured rename detection — git defaults to detecting renames
+        // when running `git mv`.) Use `git mv` to make the rename explicit.
+        _ = try await Process.git(["mv", "old.txt", "new.txt"], cwd: repo)
+        // Modify the binary file slightly so it shows up as a change.
+        let binaryData2 = Data([0x00, 0xFF, 0x10, 0x80, 0x99, 0xAA, 0x33, 0x77,
+                                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
+        try binaryData2.write(to: repo.appendingPathComponent("blob.bin"))
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "rename + binary"], cwd: repo)
+        let sha = try await currentSha(in: repo)
+
+        let details = try await GitService().commitDetails(at: repo, sha: sha)
+
+        // Binary file: numstat emits "-" for both add and del → both 0 in
+        // the stored CommitChangedFile.
+        let binary = details.files.first { $0.path == "blob.bin" }
+        #expect(binary != nil)
+        #expect(binary?.status == "M")
+        #expect(binary?.add == 0)
+        #expect(binary?.del == 0)
+
+        // Rename: name-status row starts with "R<score>"; CommitChangedFile.status
+        // is the first letter ("R"); path is the NEW path. Note: diff-tree
+        // requires rename detection enabled. By default git diff-tree does
+        // NOT detect renames. So depending on git config, the rename may
+        // surface as a separate A (new.txt) + D (old.txt) pair instead of
+        // a single R entry. Accept either outcome so the test isn't flaky
+        // across git versions.
+        let renameStatus = details.files.first { $0.path == "new.txt" }?.status
+        let oldStillThere = details.files.contains { $0.path == "old.txt" && $0.status == "D" }
+        #expect(renameStatus == "R" || (renameStatus == "A" && oldStillThere),
+                "Expected either an R-status rename or an A+D pair, got files: \(details.files)")
     }
 
     @Test func diffOfMergeCommitFollowsFirstParent() async throws {
