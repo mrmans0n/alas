@@ -219,12 +219,16 @@ extension GitService {
             parentSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"   // canonical empty tree
         }
 
-        // When originalPath is supplied (rename/copy), pass both paths in the
-        // pathspec and enable rename/copy detection so git produces a proper
-        // rename diff instead of rendering every line as an addition.
-        var args: [String] = ["diff", "--no-color"]
-        if originalPath != nil { args += ["-M", "-C"] }
-        args += [parentSha, sha, "--", file]
+        // Always enable rename/copy detection so the diff header reflects
+        // the same classification the file list shows. For renames (R),
+        // the old path is gone from <sha>'s tree, so we MUST also append
+        // it to the pathspec — otherwise git can't see both sides and
+        // renders the rename as a full new-file addition. For copies (C),
+        // the old path still exists with its own row in the file list,
+        // so we leave it out of the pathspec to avoid pulling in the
+        // source's unrelated hunks; -M -C is still enough for git to
+        // emit a "copy from old" header on the new file.
+        var args: [String] = ["diff", "--no-color", "-M", "-C", parentSha, sha, "--", file]
         if let originalPath { args.append(originalPath) }
         let result = try await Process.git(args, cwd: worktreePath)
         guard result.exitCode == 0 else {
