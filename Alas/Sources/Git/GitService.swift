@@ -154,3 +154,103 @@ extension GitService {
         return FileTreeBuilder.build(paths: paths, badges: badges)
     }
 }
+
+extension GitService {
+    /// Commits on the current branch but not on its upstream
+    /// (`@{u}..HEAD`). Returns an empty list (and `upstream == nil`) when
+    /// the branch has no configured upstream — typical for fresh local
+    /// branches and detached HEAD.
+    ///
+    /// One `git log` invocation parses subject + author + ISO date +
+    /// per-commit numstat in a single pass to avoid N round-trips.
+    func commitsAhead(at worktree: URL) async throws -> (commits: [CommitInfo], upstream: String?) {
+        // Resolve upstream first. `--symbolic-full-name @{u}` returns
+        // `refs/remotes/origin/main`; `--abbrev-ref @{u}` returns
+        // `origin/main`. Use the abbreviated form for display.
+        let up = try await Process.git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd: worktree
+        )
+        guard up.exitCode == 0 else {
+            return ([], nil)
+        }
+        let upstream = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if upstream.isEmpty || upstream == "@{u}" {
+            return ([], nil)
+        }
+
+        // %x1f = ASCII 0x1f (unit separator), %x1e = 0x1e (record
+        // separator). Avoids collisions with any text in messages.
+        //
+        // Place %x1e at the START of each commit's format line (using
+        // tformat: so git appends a LF after each record). Splitting on
+        // \x1e then yields one empty leading piece followed by one piece
+        // per commit, each containing:
+        //   <sha>\x1f<short>\x1f<author-name>\x1f<author-iso-date>\x1f<subject>\n
+        //   \n                        ← blank separator between header and numstat
+        //   <numstat lines: "A\tD\tpath" each>
+        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
+        let log = try await Process.git(
+            ["log", "\(upstream)..HEAD", "--pretty=tformat:\(format)", "--numstat"],
+            cwd: worktree
+        )
+        guard log.exitCode == 0 else {
+            return ([], upstream)
+        }
+
+        let records = log.stdout
+            .split(separator: "\u{1e}", omittingEmptySubsequences: true)
+            .map { String($0) }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        var commits: [CommitInfo] = []
+        for record in records {
+            let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+            guard let headerLine = lines.first else { continue }
+            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 4, omittingEmptySubsequences: false)
+            guard fields.count == 5 else { continue }
+            let sha = String(fields[0])
+            let short = String(fields[1])
+            let author = String(fields[2])
+            let dateStr = String(fields[3])
+            let rawSubject = String(fields[4])
+            let date = isoFormatter.date(from: dateStr) ?? Date(timeIntervalSince1970: 0)
+            let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
+
+            // Numstat lines: tab-separated "adds\tdels\tpath". For
+            // binary files git emits "-" for adds/dels; we count those
+            // files but treat their numbers as 0.
+            var filesChanged = 0
+            var adds = 0
+            var dels = 0
+            for line in lines.dropFirst() {
+                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                if trimmedLine.isEmpty { continue }
+                let parts = trimmedLine.split(separator: "\t", omittingEmptySubsequences: false)
+                guard parts.count >= 3 else { continue }
+                filesChanged += 1
+                if let a = Int(parts[0]) { adds += a }
+                if let d = Int(parts[1]) { dels += d }
+            }
+
+            commits.append(CommitInfo(
+                sha: sha,
+                shortSha: short,
+                author: author,
+                authorInitials: CommitInfo.initials(for: author),
+                date: date,
+                subject: subject,
+                conventionalTag: tag,
+                filesChanged: filesChanged,
+                insertions: adds,
+                deletions: dels
+            ))
+        }
+
+        return (commits, upstream)
+    }
+}
