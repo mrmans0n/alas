@@ -133,7 +133,10 @@ struct CommitDetailsTests {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         // Seed with a text file and a binary file.
-        try "first\nsecond\nthird\n".write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        // Use enough lines so that changing just one still meets git's rename
+        // similarity threshold (default 50%; 9/10 lines unchanged = 90%).
+        let seedContent = (1 ... 10).map { "line\($0)" }.joined(separator: "\n") + "\n"
+        try seedContent.write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
         // 16 bytes of binary data — first byte 0 makes git classify it as binary.
         let binaryData = Data([0x00, 0xFF, 0x10, 0x80, 0x42, 0xAA, 0x33, 0x77,
                                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
@@ -147,6 +150,10 @@ struct CommitDetailsTests {
         // configured rename detection — git defaults to detecting renames
         // when running `git mv`.) Use `git mv` to make the rename explicit.
         _ = try await Process.git(["mv", "old.txt", "new.txt"], cwd: repo)
+        // Modify one line so numstat reports non-zero adds/dels while keeping
+        // similarity high enough for rename detection (9/10 lines unchanged).
+        let modifiedContent = (1 ... 9).map { "line\($0)" }.joined(separator: "\n") + "\nMODIFIED\n"
+        try modifiedContent.write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
         // Modify the binary file slightly so it shows up as a change.
         let binaryData2 = Data([0x00, 0xFF, 0x10, 0x80, 0x99, 0xAA, 0x33, 0x77,
                                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
@@ -169,8 +176,41 @@ struct CommitDetailsTests {
         // R entry for new.txt. The old path must NOT appear as a separate D entry.
         let renamed = details.files.first { $0.path == "new.txt" }
         #expect(renamed?.status == "R")
+        #expect(renamed?.originalPath == "old.txt")
+        #expect((renamed?.add ?? 0) > 0)
+        #expect((renamed?.del ?? 0) > 0)
         // The old path should NOT appear as a separate D entry once rename detection fires.
         #expect(!details.files.contains { $0.path == "old.txt" })
+    }
+
+    @Test func diffOfRenamedFileShowsRenameNotFullRewrite() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Use enough lines so that changing one still meets git's rename similarity threshold.
+        let seedContent = (1 ... 10).map { "line\($0)" }.joined(separator: "\n") + "\n"
+        try seedContent.write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+        _ = try await Process.git(["mv", "old.txt", "new.txt"], cwd: repo)
+        // Tweak one line so the rename has a small content change.
+        let modifiedContent = (1 ... 9).map { "line\($0)" }.joined(separator: "\n") + "\nMODIFIED\n"
+        try modifiedContent.write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "rename + edit"], cwd: repo)
+        let sha = try await currentSha(in: repo)
+
+        let svc = GitService()
+        // Passing originalPath = "old.txt" lets git produce a proper rename diff.
+        let diff = try await svc.diff(worktreePath: repo, sha: sha, file: "new.txt", originalPath: "old.txt")
+        let kinds = diff.hunks.flatMap { $0.lines.map(\.kind) }
+        // A proper rename diff has at MOST one add and one delete (the modified
+        // line) plus context lines. A naive new-file-addition would have 3 adds
+        // and 0 deletes — assert we're in the rename regime.
+        let addCount = kinds.filter { $0 == .add }.count
+        let delCount = kinds.filter { $0 == .delete }.count
+        #expect(addCount < 3)   // would be 3 if rendered as full new-file
+        #expect(addCount >= 1)
+        #expect(delCount >= 1)
     }
 
     @Test func diffOfMergeCommitFollowsFirstParent() async throws {

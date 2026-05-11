@@ -187,7 +187,7 @@ extension GitService {
         return DiffParser.parse(result.stdout)
     }
 
-    func diff(worktreePath: URL, sha: String, file: String) async throws -> ParsedDiff {
+    func diff(worktreePath: URL, sha: String, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
         // Detect initial commit (no parent) so we can fall back to the empty
         // tree, mirroring the technique used in commitDetails. Empirically,
         // `<sha>^!` fails for parentless commits because `<sha>^` doesn't
@@ -219,10 +219,14 @@ extension GitService {
             parentSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"   // canonical empty tree
         }
 
-        let result = try await Process.git(
-            ["diff", "--no-color", parentSha, sha, "--", file],
-            cwd: worktreePath
-        )
+        // When originalPath is supplied (rename/copy), pass both paths in the
+        // pathspec and enable rename/copy detection so git produces a proper
+        // rename diff instead of rendering every line as an addition.
+        var args: [String] = ["diff", "--no-color"]
+        if originalPath != nil { args += ["-M", "-C"] }
+        args += [parentSha, sha, "--", file]
+        if let originalPath { args.append(originalPath) }
+        let result = try await Process.git(args, cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.diff(sha:file:)",
@@ -329,16 +333,21 @@ extension GitService {
         var addByPath: [String: Int] = [:]
         var delByPath: [String: Int] = [:]
         var statusByPath: [String: String] = [:]
+        var originalByPath: [String: String] = [:]
         var ordered: [String] = []
         var orderedSet: Set<String> = []
 
         // Parse numstat: "adds \t dels \t path"
+        // With -M/-C, git emits renames as a combined path field in one of two forms:
+        //   simple: "old.txt => new.txt"
+        //   brace:  "prefix/{old => new}/suffix"
+        // Normalize to the new path before keying so the dict aligns with name-status.
         for line in numstatOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
             let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
             guard parts.count >= 3 else { continue }
             let addStr = parts[0]
             let delStr = parts[1]
-            let path = parts[2]
+            let path = Self.numstatNewPath(parts[2])
             addByPath[path] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
             delByPath[path] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
         }
@@ -349,19 +358,24 @@ extension GitService {
             guard parts.count >= 2 else { continue }
             let statusLetter = String(parts[0].prefix(1))
             let newPath: String
+            let oldPath: String?
             if statusLetter == "R" || statusLetter == "C" {
                 guard parts.count >= 3 else { continue }
                 newPath = parts[2]
+                oldPath = parts[1]
             } else {
                 newPath = parts[1]
+                oldPath = nil
             }
             statusByPath[newPath] = statusLetter
+            if let oldPath { originalByPath[newPath] = oldPath }
             if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
         }
 
         let files: [CommitChangedFile] = ordered.map { path in
             CommitChangedFile(
                 path: path,
+                originalPath: originalByPath[path],
                 status: statusByPath[path] ?? "M",
                 add: addByPath[path] ?? 0,
                 del: delByPath[path] ?? 0
@@ -388,6 +402,31 @@ extension GitService {
             parents: parents,
             files: files
         )
+    }
+
+    /// Given a numstat path field that may describe a rename via `old => new`
+    /// or the brace form `prefix/{old => new}/suffix`, return the new path.
+    /// For non-rename paths, returns the input unchanged.
+    private static func numstatNewPath(_ raw: String) -> String {
+        // Brace form: prefix/{old => new}/suffix
+        if let openBrace = raw.firstIndex(of: "{"),
+           let closeBrace = raw.firstIndex(of: "}"),
+           openBrace < closeBrace {
+            let inside = raw[raw.index(after: openBrace)..<closeBrace]
+            guard let arrow = inside.range(of: " => ") else { return raw }
+            let newInside = inside[arrow.upperBound...]
+            let prefix = raw[..<openBrace]
+            let suffix = raw[raw.index(after: closeBrace)...]
+            // Collapse any double-slash that arises from an empty new-inside
+            // segment (e.g. "dir/{old => }foo" → "dir/foo").
+            let joined = String(prefix) + String(newInside) + String(suffix)
+            return joined.replacingOccurrences(of: "//", with: "/")
+        }
+        // Simple form: "old => new"
+        if let arrow = raw.range(of: " => ") {
+            return String(raw[arrow.upperBound...])
+        }
+        return raw
     }
 }
 

@@ -100,7 +100,8 @@ struct CommitTabView: View {
     }
 
     private func loadDiffIfNeeded() async {
-        guard let path = selectedPath else { return }
+        guard let path = selectedPath,
+              let file = details?.files.first(where: { $0.path == path }) else { return }
         let requestedKey = "\(sha):\(path)"
         activeDiffKey = requestedKey
         loadingDiff = true
@@ -109,7 +110,12 @@ struct CommitTabView: View {
             if activeDiffKey == requestedKey { loadingDiff = false }
         }
         do {
-            let loaded = try await git.diff(worktreePath: worktreePath, sha: sha, file: path)
+            let loaded = try await git.diff(
+                worktreePath: worktreePath,
+                sha: sha,
+                file: path,
+                originalPath: file.originalPath
+            )
             guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             self.diff = loaded
         } catch {
