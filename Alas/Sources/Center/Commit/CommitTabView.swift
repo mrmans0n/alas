@@ -85,7 +85,7 @@ struct CommitTabView: View {
         do {
             let d = try await git.commitDetails(at: worktreePath, sha: sha)
             self.details = d
-            if selectedPath == nil { selectedPath = d.files.first?.path }
+            selectedPath = d.files.first?.path
         } catch {
             self.detailsError = (error as NSError).localizedDescription
         }

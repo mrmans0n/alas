@@ -99,6 +99,7 @@ struct CenterPaneView: View {
                             sha: s.sha,
                             appState: state
                         )
+                        .id(s.sha)
                     }
                 }
             }
