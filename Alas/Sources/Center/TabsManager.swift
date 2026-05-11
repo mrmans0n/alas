@@ -58,6 +58,17 @@ final class TabsManager {
         byWorktree[id]?.activeTabId
     }
 
+    @discardableResult
+    func activateTabNumber(_ number: Int, worktreeId: String) -> TabID? {
+        guard number > 0 else { return nil }
+        let index = number - 1
+        let tabs = tabs(forWorktree: worktreeId)
+        guard tabs.indices.contains(index) else { return nil }
+        let tabId = tabs[index].id
+        activate(worktreeId: worktreeId, tabId: tabId)
+        return tabId
+    }
+
     func loadAll(worktreeIds: [String]) {
         for id in worktreeIds {
             if let file = try? store.readIfExists(TabsFile.self, from: Paths.tabsFile(forWorktreeId: id)) {

@@ -34,6 +34,58 @@ struct TabsManagerTests {
         #expect(mgr.activeTabId(forWorktree: worktreeId) == nil)
     }
 
+    @Test func activatingTabNumberUsesOneBasedWorktreeLocalOrder() {
+        let worktreeId = "tabs-manager-activate-tab-number"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let first = mgr.appendTerminal(worktreeId: worktreeId, title: "one", sessionId: "s1")
+        let second = mgr.appendTerminal(worktreeId: worktreeId, title: "two", sessionId: "s2")
+
+        #expect(mgr.activateTabNumber(1, worktreeId: worktreeId) == first.id)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
+        #expect(mgr.activateTabNumber(2, worktreeId: worktreeId) == second.id)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == second.id)
+    }
+
+    @Test func activatingTabNumberIsScopedToWorktree() {
+        let firstWorktreeId = "tabs-manager-activate-tab-number-a"
+        let secondWorktreeId = "tabs-manager-activate-tab-number-b"
+        defer {
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: firstWorktreeId))
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: secondWorktreeId))
+        }
+        let mgr = TabsManager()
+        let firstA = mgr.appendTerminal(worktreeId: firstWorktreeId, title: "a1", sessionId: "a1")
+        _ = mgr.appendTerminal(worktreeId: firstWorktreeId, title: "a2", sessionId: "a2")
+        _ = mgr.appendTerminal(worktreeId: secondWorktreeId, title: "b1", sessionId: "b1")
+        let secondB = mgr.appendTerminal(worktreeId: secondWorktreeId, title: "b2", sessionId: "b2")
+
+        #expect(mgr.activateTabNumber(1, worktreeId: firstWorktreeId) == firstA.id)
+        #expect(mgr.activeTabId(forWorktree: firstWorktreeId) == firstA.id)
+        #expect(mgr.activeTabId(forWorktree: secondWorktreeId) == secondB.id)
+    }
+
+    @Test func activatingOutOfBoundsTabNumberIsNoOp() {
+        let worktreeId = "tabs-manager-activate-tab-number-out-of-bounds"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        _ = mgr.appendTerminal(worktreeId: worktreeId, title: "one", sessionId: "s1")
+        let second = mgr.appendTerminal(worktreeId: worktreeId, title: "two", sessionId: "s2")
+
+        #expect(mgr.activateTabNumber(3, worktreeId: worktreeId) == nil)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == second.id)
+    }
+
+    @Test func activatingInvalidTabNumberIsNoOp() {
+        let worktreeId = "tabs-manager-activate-tab-number-invalid"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "one", sessionId: "s1")
+
+        #expect(mgr.activateTabNumber(0, worktreeId: worktreeId) == nil)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == tab.id)
+    }
+
     @Test func replacingTerminalSessionKeepsTabAndActiveSelection() {
         let worktreeId = "tabs-manager-replace-session"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

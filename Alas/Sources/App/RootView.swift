@@ -174,6 +174,11 @@ private struct RootCommandHandlers: ViewModifier {
                     state.closeTab(worktreeId: wt.id, tabId: active)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
+                guard let number = notification.object as? Int,
+                      let wt = selectedWorktree() else { return }
+                state.tabs.activateTabNumber(number, worktreeId: wt.id)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
                 if let wt = selectedWorktree() {
                     state.saveActiveTab(worktreeId: wt.id)
@@ -220,6 +225,7 @@ extension Notification.Name {
     static let alasNewWorktree     = Notification.Name("AlasNewWorktree")
     static let alasNewTerminalTab  = Notification.Name("AlasNewTerminalTab")
     static let alasCloseTab        = Notification.Name("AlasCloseTab")
+    static let alasActivateTabByNumber = Notification.Name("AlasActivateTabByNumber")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")
     static let alasSaveActiveTab   = Notification.Name("AlasSaveActiveTab")
