@@ -157,4 +157,22 @@ struct MarkdownRendererTests {
         let font = s.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
         #expect(font?.isFixedPitch == true)
     }
+
+    @Test func rendersTableAsAlignedMonospaceText() throws {
+        let source = """
+        | h1 | h2 |
+        | - | - |
+        | a | b |
+        | longer | x |
+        """
+        let r = try MarkdownRendererTests.render(source)
+        let s = r.attributedString.string
+        // All cells appear.
+        #expect(s.contains("h1"))
+        #expect(s.contains("h2"))
+        #expect(s.contains("longer"))
+        // Aligned: the column for h1/longer is at least 6 wide, so "h1" is
+        // followed by trailing spaces before the next cell separator.
+        #expect(s.contains("h1    "))
+    }
 }

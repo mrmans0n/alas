@@ -99,6 +99,7 @@ final class MarkdownRenderer {
         case let b as BlockQuote:       visitBlockQuote(b)
         case _ as ThematicBreak:        appendThematicBreak()
         case let c as CodeBlock:        visitCodeBlock(c)
+        case let t as Markdown.Table:   visitTable(t)
         default:
             visitChildren(markup)
         }
@@ -226,6 +227,44 @@ final class MarkdownRenderer {
                     output.addAttribute(key, value: value, range: absolute)
                 }
             }
+        }
+        appendPlain("\n")
+    }
+
+    private func visitTable(_ table: Markdown.Table) {
+        let header: [String] = table.head.cells.map { $0.plainText }
+        let bodyRows: [[String]] = table.body.rows.map { (row: Markdown.Table.Row) -> [String] in
+            row.cells.map { (cell: Markdown.Table.Cell) -> String in cell.plainText }
+        }
+        let allRows: [[String]] = [header] + bodyRows
+        let columnCount = allRows.map { (r: [String]) -> Int in r.count }.max() ?? 0
+        guard columnCount > 0 else { return }
+
+        var widths = Array(repeating: 0, count: columnCount)
+        for row in allRows {
+            for (i, cell) in row.enumerated() where i < columnCount {
+                widths[i] = max(widths[i], cell.count)
+            }
+        }
+
+        func formatRow(_ row: [String]) -> String {
+            let padded = (0..<columnCount).map { i -> String in
+                let cell = i < row.count ? row[i] : ""
+                return cell.padding(toLength: widths[i], withPad: " ", startingAt: 0)
+            }
+            return "| " + padded.joined(separator: " | ") + " |"
+        }
+
+        let separator = "|-" + widths.map { String(repeating: "-", count: $0) }.joined(separator: "-|-") + "-|"
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: monospaceFont(size: monoSize),
+            .foregroundColor: NSColor(theme.color("fg"))
+        ]
+        output.append(NSAttributedString(string: formatRow(header) + "\n", attributes: attrs))
+        output.append(NSAttributedString(string: separator + "\n", attributes: attrs))
+        for row in bodyRows {
+            output.append(NSAttributedString(string: formatRow(row) + "\n", attributes: attrs))
         }
         appendPlain("\n")
     }
