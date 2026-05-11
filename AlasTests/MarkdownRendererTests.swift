@@ -59,4 +59,30 @@ struct MarkdownRendererTests {
         let url = s.attribute(.link, at: range.location, effectiveRange: nil) as? URL
         #expect(url?.absoluteString == "https://example.com")
     }
+
+    @Test func rendersHeadingLargerThanBody() throws {
+        let r = try MarkdownRendererTests.render("# Title")
+        let s = r.attributedString
+        let range = (s.string as NSString).range(of: "Title")
+        let font = s.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+        // h1 should be visibly larger than the system body font.
+        #expect((font?.pointSize ?? 0) > NSFont.systemFontSize)
+    }
+
+    @Test func recordsAnchorSlugForHeading() throws {
+        let r = try MarkdownRendererTests.render("## Hello World")
+        let range = r.anchorRanges["hello-world"]
+        #expect(range != nil)
+        let nsString = r.attributedString.string as NSString
+        if let range {
+            #expect(nsString.substring(with: range).contains("Hello World"))
+        }
+    }
+
+    @Test func slugifyHandlesPunctuationAndCase() throws {
+        let r = try MarkdownRendererTests.render("### What's Up, Doc?")
+        // Slug rule: lowercase, spaces and punctuation collapsed to "-",
+        // edges trimmed. Apostrophes drop, comma+space collapses to "-".
+        #expect(r.anchorRanges["whats-up-doc"] != nil)
+    }
 }

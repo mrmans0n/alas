@@ -73,6 +73,7 @@ final class MarkdownRenderer {
         case _ as SoftBreak:            appendPlain(" ")
         case _ as LineBreak:            appendPlain("\n")
         case let l as Markdown.Link:    visitLink(l)
+        case let h as Heading:          visitHeading(h)
         default:
             visitChildren(markup)
         }
@@ -97,6 +98,55 @@ final class MarkdownRenderer {
         output.addAttribute(.link, value: url, range: range)
         output.addAttribute(.foregroundColor, value: NSColor(theme.color("accent")), range: range)
         output.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+    }
+
+    private func visitHeading(_ heading: Heading) {
+        let start = output.length
+        let plain = heading.plainText
+        let size = headingFontSize(level: heading.level)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: size, weight: .semibold),
+            .foregroundColor: NSColor(theme.color("fg"))
+        ]
+        output.append(NSAttributedString(string: plain, attributes: attrs))
+        let length = output.length - start
+        let slug = MarkdownRenderer.slugify(plain)
+        if !slug.isEmpty, length > 0 {
+            anchorRanges[slug] = NSRange(location: start, length: length)
+        }
+        appendPlain("\n\n")
+    }
+
+    private func headingFontSize(level: Int) -> CGFloat {
+        switch level {
+        case 1: return 28
+        case 2: return 22
+        case 3: return 18
+        case 4: return 16
+        case 5: return 14
+        default: return 13
+        }
+    }
+
+    static func slugify(_ text: String) -> String {
+        let lowered = text.lowercased()
+        var out = ""
+        var lastWasDash = false
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                out.unicodeScalars.append(scalar)
+                lastWasDash = false
+            } else if scalar == " " || scalar == "-" || scalar == "_" {
+                if !lastWasDash {
+                    out.append("-")
+                    lastWasDash = true
+                }
+            }
+            // All other punctuation (apostrophes, commas, question marks, etc) is dropped.
+        }
+        while out.hasPrefix("-") { out.removeFirst() }
+        while out.hasSuffix("-") { out.removeLast() }
+        return out
     }
 
     // MARK: - Trait scoping
