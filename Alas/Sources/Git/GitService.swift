@@ -203,6 +203,129 @@ extension GitService {
 }
 
 extension GitService {
+    func commitDetails(at worktree: URL, sha: String) async throws -> CommitDetails {
+        // Header line: <H>\u{1f}<h>\u{1f}<an>\u{1f}<ae>\u{1f}<aI>\u{1f}<P>\u{1f}<s>
+        // Body follows on a new line after the RS sentinel \u{1e}.
+        // Use the RS as an unambiguous separator since the body may contain blank lines.
+        let format = "%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%s%n%x1e%n%b"
+        let header = try await Process.git(
+            ["show", "--no-patch", "--pretty=tformat:\(format)", sha],
+            cwd: worktree
+        )
+        guard header.exitCode == 0 else {
+            throw NSError(domain: "GitService.commitDetails", code: Int(header.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: header.stderr])
+        }
+
+        let raw = header.stdout
+        let parts = raw.components(separatedBy: "\n\u{1e}\n")
+        let headerLine = parts.first ?? ""
+        let body = (parts.count > 1 ? parts[1] : "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let fields = headerLine.split(separator: "\u{1f}", omittingEmptySubsequences: false)
+        guard fields.count == 7 else {
+            throw NSError(domain: "GitService.commitDetails", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "malformed git show output: \(fields.count) fields"])
+        }
+        let fullSha = String(fields[0])
+        let shortSha = String(fields[1])
+        let author = String(fields[2])
+        let authorEmail = String(fields[3])
+        let dateStr = String(fields[4])
+        let parentsField = String(fields[5])
+        let rawSubject = String(fields[6])
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        let date = isoFormatter.date(from: dateStr) ?? Date(timeIntervalSince1970: 0)
+        let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
+
+        let parents = parentsField
+            .split(separator: " ")
+            .map { String($0).prefix(7) }
+            .map(String.init)
+
+        // Files: two separate diff-tree calls.
+        // --root is required so that initial commits (no parent) are diffed
+        // against the empty tree rather than returning nothing.
+        // --numstat and --name-status are mutually exclusive when combined in a
+        // single invocation, so we run them separately and merge the results.
+        async let numstatResult = Process.git(
+            ["diff-tree", "--root", "--no-commit-id", "-r", "--no-color", "--numstat", sha],
+            cwd: worktree
+        )
+        async let nameStatusResult = Process.git(
+            ["diff-tree", "--root", "--no-commit-id", "-r", "--no-color", "--name-status", sha],
+            cwd: worktree
+        )
+        let (numstatOut, nameStatusOut) = try await (numstatResult, nameStatusResult)
+
+        var addByPath: [String: Int] = [:]
+        var delByPath: [String: Int] = [:]
+        var statusByPath: [String: String] = [:]
+        var ordered: [String] = []
+
+        // Parse numstat: "adds \t dels \t path"
+        for line in numstatOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { continue }
+            let addStr = parts[0]
+            let delStr = parts[1]
+            let path = parts[2]
+            addByPath[path] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
+            delByPath[path] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
+        }
+
+        // Parse name-status: "status[score?] \t [old \t] new"
+        for line in nameStatusOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else { continue }
+            let statusLetter = String(parts[0].prefix(1))
+            let newPath: String
+            if statusLetter == "R" || statusLetter == "C" {
+                guard parts.count >= 3 else { continue }
+                newPath = parts[2]
+            } else {
+                newPath = parts[1]
+            }
+            statusByPath[newPath] = statusLetter
+            if !ordered.contains(newPath) { ordered.append(newPath) }
+        }
+
+        let files: [CommitChangedFile] = ordered.map { path in
+            CommitChangedFile(
+                path: path,
+                status: statusByPath[path] ?? "M",
+                add: addByPath[path] ?? 0,
+                del: delByPath[path] ?? 0
+            )
+        }
+
+        let info = CommitInfo(
+            sha: fullSha,
+            shortSha: shortSha,
+            author: author,
+            authorInitials: CommitInfo.initials(for: author),
+            date: date,
+            subject: subject,
+            conventionalTag: tag,
+            filesChanged: files.count,
+            insertions: files.reduce(0) { $0 + $1.add },
+            deletions: files.reduce(0) { $0 + $1.del }
+        )
+
+        return CommitDetails(
+            info: info,
+            body: body,
+            authorEmail: authorEmail,
+            parents: parents,
+            files: files
+        )
+    }
+}
+
+extension GitService {
     /// Commits on the current branch but not on a comparison ref, using a
     /// 2-step cascade to pick the ref:
     ///   1. `@{u}..HEAD` if an upstream tracking branch is configured.
