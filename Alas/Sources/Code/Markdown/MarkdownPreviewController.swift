@@ -99,6 +99,18 @@ final class MarkdownPreviewController: NSObject {
         textView.scrollRangeToVisible(range)
     }
 
+    /// Refresh the chrome colors that depend on the current theme. Safe to
+    /// call repeatedly; idempotent if the theme hasn't actually changed.
+    func reapplyTheme(_ theme: Theme) {
+        let bg = NSColor(theme.color("bg-1"))
+        scrollView.backgroundColor = bg
+        textView.backgroundColor = bg
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor(theme.color("accent")),
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+    }
+
     /// Install a loaded `NSImage` into the placeholder attachment, resize it
     /// to fit within the preview, and invalidate layout so the glyph
     /// re-measures.
