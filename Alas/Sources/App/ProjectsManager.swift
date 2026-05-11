@@ -36,6 +36,11 @@ final class ProjectsManager {
         worktreesByProject.removeValue(forKey: id)
     }
 
+    func renameProject(id: String, name: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx].name = name
+    }
+
     func worktrees(projectId: String) -> [Worktree] {
         worktreesByProject[projectId] ?? []
     }
