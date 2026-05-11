@@ -40,6 +40,60 @@ struct NewWorktreeDialogTests {
         )?.id == "repo-b")
     }
 
+    @Test func preferredBaseBranchChoosesMainWhenNoConfiguredDefault() {
+        let selected = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: ["trunk", "master", "main"],
+            configuredDefault: ""
+        )
+
+        #expect(selected == "main")
+    }
+
+    @Test func preferredBaseBranchUsesConfiguredDefaultOverMain() {
+        let selected = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: ["trunk", "master", "main", "develop"],
+            configuredDefault: "develop"
+        )
+
+        #expect(selected == "develop")
+    }
+
+    @Test func preferredBaseBranchChoosesMasterBeforeTrunk() {
+        let selected = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: ["trunk", "master"],
+            configuredDefault: ""
+        )
+
+        #expect(selected == "master")
+    }
+
+    @Test func preferredBaseBranchUsesConfiguredDefaultWhenAvailable() {
+        let selected = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: ["release/1.0", "develop"],
+            configuredDefault: "develop"
+        )
+
+        #expect(selected == "develop")
+    }
+
+    @Test func preferredBaseBranchUsesFirstAvailableBeforeUnavailableDefault() {
+        let selected = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: ["release/1.0", "develop"],
+            configuredDefault: "integration"
+        )
+
+        #expect(selected == "release/1.0")
+    }
+
+    @Test func preferredBaseBranchPreservesDefaultWhenNoBranchesAvailable() {
+        let selected = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: [],
+            configuredDefault: "integration"
+        )
+
+        #expect(selected == "integration")
+    }
+
     private static func project(id: String) -> ProjectConfig {
         ProjectConfig(
             id: id,
