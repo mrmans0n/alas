@@ -151,7 +151,6 @@ struct TabsManagerTests {
         #expect(decoded.externalAbsolutePath == nil)
     }
 
-
     @Test func diffTabStateDecodesLegacyShapeAsUnstaged() throws {
         let json = #"""
         {"id":"d","title":"a.txt","relativePath":"a.txt"}
