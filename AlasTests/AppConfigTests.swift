@@ -23,7 +23,18 @@ struct AppConfigTests {
         #expect(cfg.rightPaneVisible == true)
         #expect(cfg.terminal.shell == "/bin/zsh")
         #expect(cfg.harness.notifyOnFinish == true)
+        #expect(cfg.worktrees.rootPath == "~/.alas/worktrees")
         #expect(cfg.worktrees.branchPrefix == "feature/")
+    }
+
+    @Test func decodePreservesConfiguredWorktreeRoot() throws {
+        var cfg = AppConfig.defaults
+        cfg.worktrees.rootPath = "~/code/worktrees"
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.worktrees.rootPath == "~/code/worktrees")
     }
 
     @Test func warmAmberMigratesToCoolSlate() throws {

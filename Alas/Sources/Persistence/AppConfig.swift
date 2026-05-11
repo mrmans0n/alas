@@ -87,7 +87,7 @@ struct AppConfig: Codable, Equatable {
             crashReports: false, usageAnalytics: false
         ),
         worktrees: Worktrees(
-            rootPath: "~/code/.worktrees",
+            rootPath: "~/.alas/worktrees",
             pathTemplate: "{worktreeRoot}/{repo}/{branch}",
             branchPrefix: "feature/",
             baseBranch: "main",
