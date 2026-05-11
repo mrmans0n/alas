@@ -9,11 +9,13 @@ struct CommitTabView: View {
     @State private var details: CommitDetails?
     @State private var loadingDetails = true
     @State private var detailsError: String?
+    @State private var activeDetailsKey: String?
 
     @State private var selectedPath: String?
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
     @State private var loadingDiff = false
     @State private var diffError: String?
+    @State private var activeDiffKey: String?
 
     @State private var headerExpanded: Bool = false
 
@@ -79,26 +81,39 @@ struct CommitTabView: View {
     }
 
     private func loadDetails() async {
+        let requestedKey = sha
+        activeDetailsKey = requestedKey
         loadingDetails = true
         detailsError = nil
-        defer { loadingDetails = false }
+        defer {
+            if activeDetailsKey == requestedKey { loadingDetails = false }
+        }
         do {
             let d = try await git.commitDetails(at: worktreePath, sha: sha)
+            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.details = d
-            selectedPath = d.files.first?.path
+            self.selectedPath = d.files.first?.path
         } catch {
+            guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.detailsError = (error as NSError).localizedDescription
         }
     }
 
     private func loadDiffIfNeeded() async {
         guard let path = selectedPath else { return }
+        let requestedKey = "\(sha):\(path)"
+        activeDiffKey = requestedKey
         loadingDiff = true
         diffError = nil
-        defer { loadingDiff = false }
+        defer {
+            if activeDiffKey == requestedKey { loadingDiff = false }
+        }
         do {
-            self.diff = try await git.diff(worktreePath: worktreePath, sha: sha, file: path)
+            let loaded = try await git.diff(worktreePath: worktreePath, sha: sha, file: path)
+            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
+            self.diff = loaded
         } catch {
+            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             self.diffError = (error as NSError).localizedDescription
         }
     }
