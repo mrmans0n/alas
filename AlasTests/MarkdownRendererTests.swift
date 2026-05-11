@@ -142,6 +142,15 @@ struct MarkdownRendererTests {
         #expect(s.contains("• b"))
     }
 
+    @Test func blockquotePreservesLinkAttributes() throws {
+        let r = try MarkdownRendererTests.render("> see [docs](https://example.com)")
+        let s = r.attributedString
+        let range = (s.string as NSString).range(of: "docs")
+        let url = s.attribute(.link, at: range.location, effectiveRange: nil) as? URL
+        // The "│ " rebuild must not strip the inline link attribute.
+        #expect(url?.absoluteString == "https://example.com")
+    }
+
     @Test func rendersBlockquoteWithIndent() throws {
         let r = try MarkdownRendererTests.render("> quoted")
         let s = r.attributedString.string

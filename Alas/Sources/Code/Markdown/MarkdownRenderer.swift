@@ -229,20 +229,30 @@ final class MarkdownRenderer {
     private func visitBlockQuote(_ quote: BlockQuote) {
         let startOfBlock = output.length
         for child in quote.children { visit(child) }
-        // Insert a "│ " prefix on every line of the just-rendered block.
-        let nsOutput = output.string as NSString
-        let blockNS = NSRange(location: startOfBlock, length: nsOutput.length - startOfBlock)
+        let blockNS = NSRange(location: startOfBlock, length: output.length - startOfBlock)
         guard blockNS.length > 0 else { return }
-        let blockText = nsOutput.substring(with: blockNS)
-        let lines = blockText.split(separator: "\n", omittingEmptySubsequences: false)
-        let rebuilt = lines.map { "│ \($0)" }.joined(separator: "\n")
-        output.replaceCharacters(in: blockNS, with: rebuilt)
-        // Color the entire rebuilt block in muted foreground.
-        let attrs: [NSAttributedString.Key: Any] = [
+        // Insert a muted "│ " prefix at the start of every line in the just-
+        // rendered block. We work on the attributed substring so existing
+        // inline attributes (links, bold, italic, inline code) survive — a
+        // plain-`String` rebuild would drop them and turn `> see [docs](url)`
+        // into inert text.
+        let blockAttr = output.attributedSubstring(from: blockNS)
+        let prefixAttrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor(theme.color("fg-muted")),
             .font: bodyFont()
         ]
-        output.addAttributes(attrs, range: NSRange(location: startOfBlock, length: (rebuilt as NSString).length))
+        let prefix = NSAttributedString(string: "│ ", attributes: prefixAttrs)
+        let rebuilt = NSMutableAttributedString(attributedString: blockAttr)
+        let raw = rebuilt.string as NSString
+        var insertions: [Int] = [0]
+        for i in 0..<raw.length where raw.character(at: i) == 0x0A && i + 1 < raw.length {
+            insertions.append(i + 1)
+        }
+        // Insert from end to start so earlier positions stay valid.
+        for pos in insertions.reversed() {
+            rebuilt.insert(prefix, at: pos)
+        }
+        output.replaceCharacters(in: blockNS, with: rebuilt)
     }
 
     private func appendThematicBreak() {

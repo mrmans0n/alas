@@ -75,10 +75,13 @@ struct MarkdownTabView: View {
         }
         .onAppear { scheduleRender(immediate: true) }
         .onChange(of: buffer.editGeneration) { _, _ in scheduleRender(immediate: false) }
-        // Re-render when the user switches themes or changes code font settings —
-        // the renderer captures those when invoked, so a stale `renderResult`
+        // Re-render when the live theme or code font settings change — the
+        // renderer captures those when invoked, so a stale `renderResult`
         // would otherwise keep the previous colors/fonts until the next edit.
-        .onChange(of: appState.config.themeId) { _, _ in scheduleRender(immediate: true) }
+        // Watching `theme` directly catches every input that produces a new
+        // theme value (themeId, accent, matchSystemTheme, system appearance),
+        // not just config.themeId.
+        .onChange(of: theme) { _, _ in scheduleRender(immediate: true) }
         .onChange(of: appState.config.code.fontFamily) { _, _ in scheduleRender(immediate: true) }
         .onChange(of: appState.config.code.fontSize) { _, _ in scheduleRender(immediate: true) }
     }
