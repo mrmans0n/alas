@@ -4,6 +4,7 @@ struct CommitsSectionView: View {
     let commits: [CommitInfo]
     let comparisonRef: String?
     @Binding var expanded: Bool
+    let onSelect: (CommitInfo) -> Void
 
     @Environment(\.theme) private var theme
 
@@ -32,7 +33,7 @@ struct CommitsSectionView: View {
                     emptyPlaceholder
                 } else {
                     ForEach(Array(commits.enumerated()), id: \.element.id) { idx, commit in
-                        CommitRow(commit: commit, isLast: idx == commits.count - 1)
+                        CommitRow(commit: commit, isLast: idx == commits.count - 1, onSelect: { onSelect(commit) })
                     }
                 }
             }

@@ -59,6 +59,9 @@ struct RootView: View {
                                     },
                                     onSelectTreeFile: { node in
                                         openOrFocusEditor(worktree: wt, path: node.path)
+                                    },
+                                    onSelectCommit: { commit in
+                                        openOrFocusCommit(worktree: wt, commit: commit)
                                     }
                                 )
                             } else {
@@ -152,6 +155,19 @@ struct RootView: View {
 
     private func openOrFocusEditor(worktree: Worktree, path: String) {
         state.openFile(relativePath: path, worktreeId: worktree.id)
+    }
+
+    private func openOrFocusCommit(worktree: Worktree, commit: CommitInfo) {
+        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .commit(let s) = tab { return s.sha == commit.sha } else { return false }
+        }
+        if let existing {
+            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+        } else {
+            let title = "\(commit.shortSha) \(commit.subject)"
+            let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
+            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
     }
 }
 

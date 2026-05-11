@@ -3,22 +3,26 @@ import SwiftUI
 struct CommitRow: View {
     let commit: CommitInfo
     let isLast: Bool
+    let onSelect: () -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            rail
-            VStack(alignment: .leading, spacing: 2) {
-                subjectLine
-                metaLine
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 8) {
+                rail
+                VStack(alignment: .leading, spacing: 2) {
+                    subjectLine
+                    metaLine
+                }
+                .padding(.bottom, isLast ? 6 : 8)
             }
-            .padding(.bottom, isLast ? 6 : 8)
+            .padding(.leading, 14)
+            .padding(.trailing, 12)
+            .padding(.top, 4)
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 12)
-        .padding(.top, 4)
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
     }
 
     private var rail: some View {
