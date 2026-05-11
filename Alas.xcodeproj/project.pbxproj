@@ -193,6 +193,7 @@
 		CB549B27BB0E578776AA7ED0 /* WorktreeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */; };
 		CCA4B9F1FFBE1CAC99839A07 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010B026A6251DEC1BD1961C0 /* WindowConfigurator.swift */; };
 		CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29313DDC46A0CCA2FA42CDE9 /* Icon.swift */; };
+		CE24C8CA495726CD294FD223 /* CommitsSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFE12732C0D83715FC990A9 /* CommitsSectionView.swift */; };
 		CE43461FCD815780370E90D8 /* SearchKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B06AE8BA5FBDEAD4586616 /* SearchKind.swift */; };
 		D05BDEF0D8651A9C2BD8C857 /* Seg.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489C9B383554D7DAB170C2F8 /* Seg.swift */; };
 		D13AFC98364971915782491C /* ProjectConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */; };
@@ -348,6 +349,7 @@
 		6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6E8B52175A7F6144B4C52010 /* EditorTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTabView.swift; sourceTree = "<group>"; };
 		6FF73FD04363A737BB67F6E4 /* TextEditCoordinatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextEditCoordinatesTests.swift; sourceTree = "<group>"; };
+		6FFE12732C0D83715FC990A9 /* CommitsSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsSectionView.swift; sourceTree = "<group>"; };
 		70377E10CD6D08B225BDFABE /* TabsManagerBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManagerBufferTests.swift; sourceTree = "<group>"; };
 		7116359F27BF0A139E0F643B /* HookWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookWatcher.swift; sourceTree = "<group>"; };
 		711F3E7BD099EDADEA0802FD /* NewWorktreeDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWorktreeDialog.swift; sourceTree = "<group>"; };
@@ -679,6 +681,7 @@
 				3E10A1919A8DDC6A8DBB8B97 /* ChangedRow.swift */,
 				1E947E110B003FB519DAD1B3 /* ChangesSectionView.swift */,
 				3DCEFADD952DB870B8BAB890 /* CommitRow.swift */,
+				6FFE12732C0D83715FC990A9 /* CommitsSectionView.swift */,
 				B1AA2B3E548B50097C9AF9D3 /* FilesSectionView.swift */,
 				F721FB733081A583D4053DDA /* FileTypeIconView.swift */,
 				91C1705E68E97111E85D83F3 /* RightPaneState.swift */,
@@ -1202,6 +1205,7 @@
 				0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */,
 				B79D01EECD92181B710D2648 /* CommitInfo.swift in Sources */,
 				11315A703B2F9C4CBB3CABD3 /* CommitRow.swift in Sources */,
+				CE24C8CA495726CD294FD223 /* CommitsSectionView.swift in Sources */,
 				A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */,
 				A77E7290FD589BC3227ADE27 /* ContentSearcher.swift in Sources */,
 				49C8C4C8B34444953FBA1809 /* DebounceTimer.swift in Sources */,
