@@ -10,15 +10,18 @@ struct LanguageServerAvailability {
     private let environment: [String: String]
     private let fileManager: FileManager
     private let xcrunFind: (String) -> String?
+    private let additionalPathDirectories: [String]
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
-        xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.xcrunFind
+        xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.xcrunFind,
+        additionalPathDirectories: [String] = LanguageServerAvailability.defaultAdditionalPathDirectories()
     ) {
         self.environment = environment
         self.fileManager = fileManager
         self.xcrunFind = xcrunFind
+        self.additionalPathDirectories = additionalPathDirectories
     }
 
     func status(for entry: LanguageServerConfig) -> Status {
@@ -53,21 +56,73 @@ struct LanguageServerAvailability {
         return (executable: "/usr/bin/env", arguments: [resolved] + entry.args)
     }
 
-    private func executableNamed(_ name: String, env: [String: String] = [:]) -> String? {
-        let mergedPath: String
-        if let envPath = env["PATH"], !envPath.isEmpty {
-            let basePath = environment["PATH"] ?? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-            mergedPath = envPath + ":" + basePath
-        } else {
-            mergedPath = environment["PATH"] ?? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    func launchEnvironment(for entry: LanguageServerConfig) -> [String: String] {
+        var merged = environment
+        for (key, value) in entry.env {
+            merged[key] = value
         }
-        for dir in mergedPath.split(separator: ":", omittingEmptySubsequences: true) {
+        merged["PATH"] = effectivePath(env: entry.env)
+        return merged
+    }
+
+    private func executableNamed(_ name: String, env: [String: String] = [:]) -> String? {
+        for dir in effectivePath(env: env).split(separator: ":", omittingEmptySubsequences: true) {
             let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(name).path
             if fileManager.isExecutableFile(atPath: candidate) {
                 return candidate
             }
         }
         return nil
+    }
+
+    private func effectivePath(env: [String: String]) -> String {
+        var seen = Set<String>()
+        var parts: [String] = []
+        for path in [env["PATH"], environment["PATH"]] {
+            for dir in pathEntries(path) where seen.insert(dir).inserted {
+                parts.append(dir)
+            }
+        }
+        for dir in additionalPathDirectories where !dir.isEmpty && seen.insert(dir).inserted {
+            parts.append(dir)
+        }
+        return parts.joined(separator: ":")
+    }
+
+    private func pathEntries(_ path: String?) -> [String] {
+        guard let path else { return [] }
+        return path.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    private static func defaultAdditionalPathDirectories() -> [String] {
+        var dirs: [String] = [
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "\(NSHomeDirectory())/.cargo/bin",
+            "\(NSHomeDirectory())/.local/bin",
+            "\(NSHomeDirectory())/.bun/bin",
+            "\(NSHomeDirectory())/.volta/bin"
+        ]
+
+        dirs.append(contentsOf: pathFileEntries(at: "/etc/paths"))
+
+        let pathsD = "/etc/paths.d"
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: pathsD) {
+            for entry in entries.sorted() {
+                dirs.append(contentsOf: pathFileEntries(at: "\(pathsD)/\(entry)"))
+            }
+        }
+
+        var seen = Set<String>()
+        return dirs.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private static func pathFileEntries(at path: String) -> [String] {
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+        return contents
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
     private static func xcrunFind(_ tool: String) -> String? {
