@@ -86,6 +86,32 @@ struct MarkdownRendererTests {
         #expect(r.anchorRanges["whats-up-doc"] != nil)
     }
 
+    @Test func duplicateHeadingSlugsAreDisambiguated() throws {
+        let r = try MarkdownRendererTests.render("""
+        ## Install
+        first
+        ## Install
+        second
+        ## Install
+        third
+        """)
+        // First heading keeps the bare slug; later ones get -1, -2 suffixes
+        // (matching GitHub's behavior).
+        let nsString = r.attributedString.string as NSString
+        guard let first = r.anchorRanges["install"],
+              let second = r.anchorRanges["install-1"],
+              let third = r.anchorRanges["install-2"] else {
+            Issue.record("expected install / install-1 / install-2 anchors")
+            return
+        }
+        // They point at three distinct ranges, in source order.
+        #expect(first.location < second.location)
+        #expect(second.location < third.location)
+        #expect(nsString.substring(with: first).contains("Install"))
+        #expect(nsString.substring(with: second).contains("Install"))
+        #expect(nsString.substring(with: third).contains("Install"))
+    }
+
     @Test func rendersUnorderedListBullets() throws {
         let r = try MarkdownRendererTests.render("- one\n- two")
         let s = r.attributedString.string

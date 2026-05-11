@@ -34,6 +34,10 @@ final class MarkdownRenderer {
     private var currentTraits: NSFontDescriptor.SymbolicTraits = []
     private var inStrikethrough: Bool = false
     private var listDepth: Int = 0
+    /// Counts how many times each base slug has been seen so duplicate
+    /// headings get GitHub-style `-1`, `-2`, … suffixes instead of clobbering
+    /// the earlier range in `anchorRanges`.
+    private var slugCounts: [String: Int] = [:]
 
     private static let fenceLanguageToExtension: [String: String] = [
         "swift": "swift",
@@ -70,6 +74,7 @@ final class MarkdownRenderer {
         self.currentTraits = []
         self.inStrikethrough = false
         self.listDepth = 0
+        self.slugCounts = [:]
 
         for child in document.children {
             visit(child)
@@ -177,9 +182,15 @@ final class MarkdownRenderer {
         ]
         output.append(NSAttributedString(string: plain, attributes: attrs))
         let length = output.length - start
-        let slug = MarkdownRenderer.slugify(plain)
-        if !slug.isEmpty, length > 0 {
-            anchorRanges[slug] = NSRange(location: start, length: length)
+        let baseSlug = MarkdownRenderer.slugify(plain)
+        if !baseSlug.isEmpty, length > 0 {
+            // GitHub-style disambiguation: first occurrence keeps the bare slug,
+            // subsequent occurrences get `-1`, `-2`, … so `[link](#install)`
+            // resolves to the first `## Install` heading instead of the last.
+            let count = slugCounts[baseSlug, default: 0]
+            let finalSlug = count == 0 ? baseSlug : "\(baseSlug)-\(count)"
+            anchorRanges[finalSlug] = NSRange(location: start, length: length)
+            slugCounts[baseSlug] = count + 1
         }
         appendPlain("\n\n")
     }
