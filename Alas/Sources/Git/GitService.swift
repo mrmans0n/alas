@@ -68,8 +68,12 @@ extension GitService {
 
         for i in entries.indices {
             if let c = counts[entries[i].path] {
-                entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status,
-                                          add: c.add, del: c.del, renameFrom: entries[i].renameFrom)
+                entries[i] = ChangedFile(path: entries[i].path,
+                                          status: entries[i].status,
+                                          stage: entries[i].stage,
+                                          add: c.add,
+                                          del: c.del,
+                                          renameFrom: entries[i].renameFrom)
             } else if entries[i].add == 0 && entries[i].del == 0 {
                 // Numstat doesn't include unstaged untracked files, so they'd
                 // show 0/0 in the Changes pane and the totals would
@@ -83,7 +87,9 @@ extension GitService {
                         : text.split(separator: "\n", omittingEmptySubsequences: false).count
                     entries[i] = ChangedFile(path: entries[i].path,
                                              status: entries[i].status,
-                                             add: lines, del: 0,
+                                             stage: entries[i].stage,
+                                             add: lines,
+                                             del: 0,
                                              renameFrom: entries[i].renameFrom)
                 }
             }

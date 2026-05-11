@@ -3,6 +3,7 @@ import SwiftUI
 struct DiffTabView: View {
     let worktreePath: URL
     let relativePath: String
+    let staged: Bool
     @Environment(\.theme) var theme
 
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
@@ -37,7 +38,7 @@ struct DiffTabView: View {
     }
 
     private var loadKey: String {
-        "\(worktreePath.path)\u{0}\(relativePath)"
+        "\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)"
     }
 
     private var header: some View {
@@ -45,6 +46,14 @@ struct DiffTabView: View {
             Text((relativePath as NSString).lastPathComponent)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(theme.color("fg"))
+            if staged {
+                Text("STAGED")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(theme.color("info").opacity(0.18))
+                    .foregroundColor(theme.color("info"))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text((relativePath as NSString).deletingLastPathComponent)
                 .font(.system(size: 11.5))
@@ -56,8 +65,10 @@ struct DiffTabView: View {
             }
             .font(.system(size: 11.5, design: .monospaced))
             HStack(spacing: 4) {
-                AlasButton(title: "Stage hunk", style: .subtle, action: stageHunk)
-                AlasButton(title: "Discard",    style: .subtle, action: discard)
+                if !staged {
+                    AlasButton(title: "Stage hunk", style: .subtle, action: stageHunk)
+                }
+                AlasButton(title: "Discard", style: .subtle, action: discard)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -75,7 +86,7 @@ struct DiffTabView: View {
         error = nil
 
         do {
-            let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath)
+            let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
             let loadedTotalAdd = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count
             let loadedTotalDel = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count
 

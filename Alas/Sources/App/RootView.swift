@@ -55,7 +55,7 @@ struct RootView: View {
                                     state: state,
                                     worktree: wt,
                                     onSelectChangedFile: { file in
-                                        openOrFocusDiff(worktree: wt, path: file.path)
+                                        openOrFocusDiff(worktree: wt, path: file.path, staged: file.stage == .staged)
                                     },
                                     onSelectTreeFile: { node in
                                         openOrFocusEditor(worktree: wt, path: node.path)
@@ -130,17 +130,21 @@ struct RootView: View {
         return nil
     }
 
-    private func openOrFocusDiff(worktree: Worktree, path: String) {
+    private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool) {
         let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .diff(let s) = tab { return s.relativePath == path } else { return false }
+            if case .diff(let s) = tab { return s.relativePath == path && s.staged == staged } else { return false }
         }
         if let existing {
             state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
         } else {
+            let title = staged
+                ? "\((path as NSString).lastPathComponent) (staged)"
+                : (path as NSString).lastPathComponent
             let tab = state.tabs.appendDiff(
                 worktreeId: worktree.id,
-                title: (path as NSString).lastPathComponent,
-                relativePath: path
+                title: title,
+                relativePath: path,
+                staged: staged
             )
             state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
         }

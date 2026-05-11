@@ -21,12 +21,18 @@ struct Worktree: Identifiable, Equatable, Codable {
 }
 
 struct ChangedFile: Identifiable, Equatable, Codable {
-    var id: String { path }
+    var id: String { "\(stage.rawValue):\(path)" }
     let path: String
     let status: String   // "A" | "M" | "D" | "R"
+    let stage: ChangeStage
     let add: Int
     let del: Int
     let renameFrom: String?
+}
+
+enum ChangeStage: String, Codable {
+    case staged
+    case unstaged
 }
 
 struct FileTreeNode: Identifiable, Equatable, Codable {

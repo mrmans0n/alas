@@ -77,7 +77,8 @@ struct CenterPaneView: View {
                                       originatingRelativePath: s.originatingRelativePath)
                     case .diff(let s):
                         DiffTabView(worktreePath: worktree.path,
-                                    relativePath: s.relativePath)
+                                    relativePath: s.relativePath,
+                                    staged: s.staged)
                     }
                 }
             }

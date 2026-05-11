@@ -66,4 +66,24 @@ struct DiffTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
     var relativePath: String
+    var staged: Bool = false
+
+    init(id: TabID, title: String, relativePath: String, staged: Bool = false) {
+        self.id = id
+        self.title = title
+        self.relativePath = relativePath
+        self.staged = staged
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, relativePath, staged
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        relativePath = try container.decode(String.self, forKey: .relativePath)
+        staged = try container.decodeIfPresent(Bool.self, forKey: .staged) ?? false
+    }
 }

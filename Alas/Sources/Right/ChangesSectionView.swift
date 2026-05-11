@@ -10,18 +10,20 @@ struct ChangesSectionView: View {
         VStack(spacing: 0) {
             header
             List {
-                ForEach(grouped, id: \.0) { (dir, files) in
+                ForEach(stageGroups, id: \.stage) { group in
                     Section {
-                        ForEach(files) { file in
-                            ChangedRow(file: file, onSelect: { onSelect(file) })
+                        ForEach(group.directories, id: \.0) { (dir, files) in
+                            DirectoryHeader(title: dir.isEmpty ? "(root)" : dir)
                                 .listRowInsets(EdgeInsets())
                                 .listRowBackground(Color.clear)
+                            ForEach(files) { file in
+                                ChangedRow(file: file, onSelect: { onSelect(file) })
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowBackground(Color.clear)
+                            }
                         }
                     } header: {
-                        Text(dir.isEmpty ? "(root)" : dir)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundColor(theme.color("fg-faint"))
-                            .padding(.horizontal, 12).padding(.top, 6)
+                        StageHeader(title: group.title, count: group.files.count)
                     }
                 }
             }
@@ -30,12 +32,25 @@ struct ChangesSectionView: View {
         }
     }
 
-    private var grouped: [(String, [ChangedFile])] {
-        let dict = Dictionary(grouping: changes, by: { f -> String in
-            let comps = f.path.split(separator: "/")
-            return comps.dropLast().joined(separator: "/")
-        })
-        return dict.sorted { $0.key < $1.key }
+    private struct StageGroup {
+        let stage: ChangeStage
+        let title: String
+        let files: [ChangedFile]
+
+        var directories: [(String, [ChangedFile])] {
+            let dict = Dictionary(grouping: files, by: { f -> String in
+                let comps = f.path.split(separator: "/")
+                return comps.dropLast().joined(separator: "/")
+            })
+            return dict.sorted { $0.key < $1.key }
+        }
+    }
+
+    private var stageGroups: [StageGroup] {
+        [
+            StageGroup(stage: .staged, title: "STAGED CHANGES", files: changes.filter { $0.stage == .staged }),
+            StageGroup(stage: .unstaged, title: "CHANGES", files: changes.filter { $0.stage == .unstaged }),
+        ].filter { !$0.files.isEmpty }
     }
 
     private var header: some View {
@@ -68,6 +83,38 @@ struct ChangesSectionView: View {
 
     private var totalAdd: Int { changes.reduce(0) { $0 + $1.add } }
     private var totalDel: Int { changes.reduce(0) { $0 + $1.del } }
+}
+
+private struct StageHeader: View {
+    let title: String
+    let count: Int
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Text("\(count)")
+                .font(.system(size: 9.5, weight: .semibold))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(theme.color("bg-4"))
+                .clipShape(Capsule())
+        }
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundColor(theme.color("fg-muted"))
+        .padding(.horizontal, 12).padding(.top, 8)
+    }
+}
+
+private struct DirectoryHeader: View {
+    let title: String
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(theme.color("fg-faint"))
+            .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
+    }
 }
 
 private struct ChangedRow: View {
