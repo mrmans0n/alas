@@ -50,7 +50,7 @@ struct FilesTabView: View {
             return AnyView(
                 Button { onSelectFile(node) } label: {
                     HStack(spacing: 6) {
-                        FileTypeIconView(filename: node.name, size: 13)
+                        FileTypeIconView(filename: node.name, size: 18)
                         Text(node.name)
                             .font(.system(size: 11.5, design: .monospaced))
                             .foregroundColor(theme.color("fg"))

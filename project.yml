@@ -46,6 +46,9 @@ targets:
         buildPhase: resources
       - path: Alas/Resources/Assets.xcassets
         buildPhase: resources
+      - path: ThirdParty/ghostty/src/font/res/JetBrainsMonoNerdFont-Regular.ttf
+        buildPhase: resources
+        optional: true
     info:
       path: Alas/Resources/Info.plist
       properties:
