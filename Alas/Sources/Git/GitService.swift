@@ -232,11 +232,11 @@ extension GitService {
         // Step 2: If no upstream, try the base branch (if it resolves locally).
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
-            let verify = try? await Process.git(
+            let verify = try await Process.git(
                 ["rev-parse", "--verify", "--quiet", base],
                 cwd: worktree
             )
-            if verify?.exitCode == 0 { baseName = base }
+            if verify.exitCode == 0 { baseName = base }
         }
 
         // Step 3: If neither resolves, bail out.

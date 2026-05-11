@@ -127,4 +127,17 @@ struct CommitsAheadTests {
         #expect(commits.isEmpty)
         #expect(comparisonRef == nil)
     }
+
+    @Test func upstreamTakesPrecedenceOverBaseBranch() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        try "1\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feat: ahead"], cwd: worktree)
+
+        let svc = GitService()
+        // Even with baseBranch supplied, the upstream wins because @{u} is set.
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: worktree, baseBranch: "main")
+        #expect(comparisonRef == "origin/main")
+        #expect(commits.count == 1)
+    }
 }

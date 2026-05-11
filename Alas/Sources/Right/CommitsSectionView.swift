@@ -40,7 +40,7 @@ struct CommitsSectionView: View {
     }
 
     private var emptyPlaceholder: some View {
-        Text(comparisonRef.map { "up to date with \($0)" } ?? "no upstream branch")
+        Text(comparisonRef.map { "up to date with \($0)" } ?? "no comparison branch")
             .font(.system(size: 11))
             .foregroundColor(theme.color("fg-faint"))
             .padding(.horizontal, 12).padding(.vertical, 8)
