@@ -32,6 +32,7 @@ final class MarkdownRenderer {
 
     private var currentTraits: NSFontDescriptor.SymbolicTraits = []
     private var inStrikethrough: Bool = false
+    private var listDepth: Int = 0
 
     func render(
         document: Document,
@@ -49,6 +50,7 @@ final class MarkdownRenderer {
         self.baseDirectory = baseDirectory
         self.currentTraits = []
         self.inStrikethrough = false
+        self.listDepth = 0
 
         for child in document.children {
             visit(child)
@@ -74,6 +76,8 @@ final class MarkdownRenderer {
         case _ as LineBreak:            appendPlain("\n")
         case let l as Markdown.Link:    visitLink(l)
         case let h as Heading:          visitHeading(h)
+        case let l as UnorderedList:    visitUnorderedList(l)
+        case let l as OrderedList:      visitOrderedList(l)
         default:
             visitChildren(markup)
         }
@@ -125,6 +129,52 @@ final class MarkdownRenderer {
         case 4: return 16
         case 5: return 14
         default: return 13
+        }
+    }
+
+    private func visitUnorderedList(_ list: UnorderedList) {
+        listDepth += 1
+        defer { listDepth -= 1 }
+        for item in list.listItems {
+            appendListItem(item, marker: marker(for: item))
+        }
+        if listDepth == 0 { appendPlain("\n") }
+    }
+
+    private func visitOrderedList(_ list: OrderedList) {
+        listDepth += 1
+        defer { listDepth -= 1 }
+        var n = 1
+        for item in list.listItems {
+            appendListItem(item, marker: "\(n). ")
+            n += 1
+        }
+        if listDepth == 0 { appendPlain("\n") }
+    }
+
+    private func marker(for item: ListItem) -> String {
+        switch item.checkbox {
+        case .checked:   return "☑ "
+        case .unchecked: return "☐ "
+        case .none:      return "• "
+        }
+    }
+
+    private func appendListItem(_ item: ListItem, marker: String) {
+        let indent = String(repeating: "  ", count: max(0, listDepth - 1))
+        appendPlain(indent + marker)
+        // Render the first Paragraph child inline (no surrounding blank line),
+        // so the marker sits on the same line as the text. Subsequent block
+        // children (nested lists, code blocks) are visited normally.
+        var firstParagraphConsumed = false
+        for child in item.children {
+            if !firstParagraphConsumed, let p = child as? Paragraph {
+                for inline in p.children { visit(inline) }
+                appendPlain("\n")
+                firstParagraphConsumed = true
+            } else {
+                visit(child)
+            }
         }
     }
 

@@ -85,4 +85,34 @@ struct MarkdownRendererTests {
         // edges trimmed. Apostrophes drop, comma+space collapses to "-".
         #expect(r.anchorRanges["whats-up-doc"] != nil)
     }
+
+    @Test func rendersUnorderedListBullets() throws {
+        let r = try MarkdownRendererTests.render("- one\n- two")
+        let s = r.attributedString.string
+        #expect(s.contains("• one"))
+        #expect(s.contains("• two"))
+    }
+
+    @Test func rendersOrderedListNumbers() throws {
+        let r = try MarkdownRendererTests.render("1. one\n2. two")
+        let s = r.attributedString.string
+        #expect(s.contains("1. one"))
+        #expect(s.contains("2. two"))
+    }
+
+    @Test func rendersTaskListCheckboxes() throws {
+        let r = try MarkdownRendererTests.render("- [x] done\n- [ ] todo")
+        let s = r.attributedString.string
+        #expect(s.contains("☑ done"))
+        #expect(s.contains("☐ todo"))
+    }
+
+    @Test func rendersNestedUnorderedList() throws {
+        let r = try MarkdownRendererTests.render("- a\n  - b")
+        let s = r.attributedString.string
+        // Both items should appear with bullets. Nesting indentation is added
+        // via "  " before deeper bullets; checking presence of both is enough.
+        #expect(s.contains("• a"))
+        #expect(s.contains("• b"))
+    }
 }
