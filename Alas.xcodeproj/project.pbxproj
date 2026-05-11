@@ -23,6 +23,7 @@
 		11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 711F3E7BD099EDADEA0802FD /* NewWorktreeDialog.swift */; };
 		12035048B950CE0197604F89 /* GitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CE7B4DAFDB65A79308FB63 /* GitService.swift */; };
 		139F45EE390C27342C5DD734 /* CenterPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8685E5E5AC7A77D6D27A847 /* CenterPaneView.swift */; };
+		165300DDFFB445D8AAE7A5E5 /* MarkdownFileTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19C327BB65463E878DDCDA5E /* MarkdownFileTypeTests.swift */; };
 		17DE066D4BDD1F30439DA629 /* TerminalPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */; };
 		190FA1E53291D6D94CC0086C /* SidebarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */; };
 		1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */; };
@@ -32,6 +33,7 @@
 		25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */; };
 		28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93CDC9895F48619E97461875 /* CodePane.swift */; };
 		2C4EDD06B2D26DCBB18DC2D1 /* SettingsBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A190D4B29B35C457AA9829F /* SettingsBinding.swift */; };
+		2C96C81EBF3C4B0951FA2A57 /* MarkdownFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */; };
 		2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768D12909DD5233659AC4E03 /* RepoGroupView.swift */; };
 		2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */; };
 		2E1D743806714BE4CD88A240 /* ContentSearcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */; };
@@ -242,6 +244,7 @@
 		179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimerTests.swift; sourceTree = "<group>"; };
 		17C2AC0F8B3A1B75239995AC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		1841997CCBDB9611576B930C /* AlasToggle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasToggle.swift; sourceTree = "<group>"; };
+		19C327BB65463E878DDCDA5E /* MarkdownFileTypeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileTypeTests.swift; sourceTree = "<group>"; };
 		1A17A797374500E1FDD2382C /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		1AFC62A30044F71F0F16C3FB /* TerminalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalService.swift; sourceTree = "<group>"; };
 		1E947E110B003FB519DAD1B3 /* ChangesSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesSectionView.swift; sourceTree = "<group>"; };
@@ -292,6 +295,7 @@
 		563B664D082A9523260AA2EF /* RepoDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoDot.swift; sourceTree = "<group>"; };
 		5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfigTests.swift; sourceTree = "<group>"; };
 		5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeSitterHighlighter.swift; sourceTree = "<group>"; };
+		5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileType.swift; sourceTree = "<group>"; };
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
 		61C69060B922A729DD807920 /* LSPURI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPURI.swift; sourceTree = "<group>"; };
 		620C4A708CD1013DE2736A00 /* AppIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconTests.swift; sourceTree = "<group>"; };
@@ -476,6 +480,7 @@
 				A8820E4289EEB1ADCA9E490F /* HookEventTests.swift */,
 				954060BD47A1EFF3105F44EB /* HookInstallerTests.swift */,
 				EB52B59655B85764D85CFB7F /* LineEndingTests.swift */,
+				19C327BB65463E878DDCDA5E /* MarkdownFileTypeTests.swift */,
 				4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */,
 				0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */,
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
@@ -622,6 +627,7 @@
 				B99EAA756E84360237C3E3D2 /* Editor */,
 				08AFF75AE216ACC5E010B709 /* Highlight */,
 				98B31DB084754D0D15591339 /* LSP */,
+				84098DAEB1A8FCEF82386437 /* Markdown */,
 			);
 			path = Code;
 			sourceTree = "<group>";
@@ -692,6 +698,14 @@
 				05EE713DD3CACF29F206553C /* ThemeStore.swift */,
 			);
 			path = Theme;
+			sourceTree = "<group>";
+		};
+		84098DAEB1A8FCEF82386437 /* Markdown */ = {
+			isa = PBXGroup;
+			children = (
+				5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */,
+			);
+			path = Markdown;
 			sourceTree = "<group>";
 		};
 		848F1B301BB31A69DEB82615 = {
@@ -1156,6 +1170,7 @@
 				EA0EE2D3301F5D79E0C1A280 /* LanguageServerAvailability.swift in Sources */,
 				C45F78462F404C64D02C413B /* LanguageServerRegistry.swift in Sources */,
 				6866301B0A6F1F7488819B98 /* LineEnding.swift in Sources */,
+				2C96C81EBF3C4B0951FA2A57 /* MarkdownFileType.swift in Sources */,
 				82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */,
 				02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */,
 				11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */,
@@ -1254,6 +1269,7 @@
 				4153DAD75F27395D2D385BED /* LanguageServerAvailabilityTests.swift in Sources */,
 				9422B6F8F6C1E3E64B259712 /* LanguageServerRegistryTests.swift in Sources */,
 				DE41CB04CDC89D09346494A5 /* LineEndingTests.swift in Sources */,
+				165300DDFFB445D8AAE7A5E5 /* MarkdownFileTypeTests.swift in Sources */,
 				D55386035B99B2B1769ED47F /* NumstatParserTests.swift in Sources */,
 				43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */,
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
