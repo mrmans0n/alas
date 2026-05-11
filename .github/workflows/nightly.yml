@@ -1,11 +1,8 @@
 name: Nightly Build
 
 on:
-  # NOTE: cron is intentionally disabled for the initial bring-up. It is
-  # uncommented in Task 5 once a manual dispatch on main has bootstrapped the
-  # `nightly` git tag and verified the upload path.
-  # schedule:
-  #   - cron: "0 4 * * *"
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       ref:
