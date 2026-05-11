@@ -132,6 +132,7 @@ struct NewWorktreeDialog: View {
         }
 
         let selectedProjectId = project.id
+        let baseBeforeLoad = base
         isLoadingBranches = true
         branchLoadError = nil
         Task {
@@ -139,10 +140,13 @@ struct NewWorktreeDialog: View {
                 let discovered = try await GitService().branches(at: URL(fileURLWithPath: project.path))
                 guard projectId == selectedProjectId else { return }
                 branches = discovered
-                base = Self.preferredBaseBranch(
+                let preferred = Self.preferredBaseBranch(
                     availableBranches: discovered,
                     configuredDefault: state.config.worktrees.baseBranch
                 )
+                if base == baseBeforeLoad {
+                    base = preferred
+                }
             } catch {
                 guard projectId == selectedProjectId else { return }
                 branches = []
