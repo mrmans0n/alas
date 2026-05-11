@@ -6,10 +6,11 @@ struct ChangedRow: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        Button(action: onSelect) {
+        let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
+        return Button(action: onSelect) {
             HStack(spacing: 6) {
-                FileTypeIconView(filename: file.path.split(separator: "/").last.map(String.init) ?? file.path, size: 13)
-                Text(file.path.split(separator: "/").last.map(String.init) ?? file.path)
+                FileTypeIconView(filename: basename, size: 13)
+                Text(basename)
                     .font(.system(size: 11.5, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
