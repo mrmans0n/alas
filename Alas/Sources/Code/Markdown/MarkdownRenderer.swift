@@ -29,6 +29,10 @@ final class MarkdownRenderer {
     private var monoFamily: String = "SF Mono"
     private var monoSize: CGFloat = 13
     private var baseDirectory: URL = URL(fileURLWithPath: "/")
+    /// Optional worktree root, used to resolve markdown-style root-relative
+    /// paths like `/assets/logo.png`. Nil for external tabs (where there is
+    /// no worktree-rooted view of the file).
+    private var worktreeRoot: URL?
     private let imageLoader = MarkdownImageLoader()
 
     private var currentTraits: NSFontDescriptor.SymbolicTraits = []
@@ -62,7 +66,8 @@ final class MarkdownRenderer {
         theme: Theme,
         monospacedFontFamily: String,
         monospacedFontSize: Int,
-        baseDirectory: URL
+        baseDirectory: URL,
+        worktreeRoot: URL? = nil
     ) -> MarkdownRenderResult {
         self.output = NSMutableAttributedString()
         self.anchorRanges = [:]
@@ -71,6 +76,7 @@ final class MarkdownRenderer {
         self.monoFamily = monospacedFontFamily
         self.monoSize = CGFloat(monospacedFontSize)
         self.baseDirectory = baseDirectory
+        self.worktreeRoot = worktreeRoot
         self.currentTraits = []
         self.inStrikethrough = false
         self.listDepth = 0
@@ -142,7 +148,20 @@ final class MarkdownRenderer {
                 output.append(NSAttributedString(string: alt, attributes: mutedAttributes()))
             }
         case .local(let path):
-            if let loaded = imageLoader.loadLocal(src: path, baseDirectory: baseDirectory) {
+            // Root-relative paths (`/assets/logo.png`) resolve from the
+            // worktree root when available, matching how the link handler
+            // treats `/README.md`. External tabs without a worktree root
+            // fall back to standard absolute-path resolution.
+            let resolveFrom: URL
+            let usePath: String
+            if path.hasPrefix("/"), let root = worktreeRoot {
+                resolveFrom = root
+                usePath = String(path.dropFirst())
+            } else {
+                resolveFrom = baseDirectory
+                usePath = path
+            }
+            if let loaded = imageLoader.loadLocal(src: usePath, baseDirectory: resolveFrom) {
                 output.append(attachmentString(for: loaded))
             } else if !alt.isEmpty {
                 output.append(NSAttributedString(string: alt, attributes: mutedAttributes()))

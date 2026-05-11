@@ -84,6 +84,10 @@ struct MarkdownTabView: View {
         .onChange(of: theme) { _, _ in scheduleRender(immediate: true) }
         .onChange(of: appState.config.code.fontFamily) { _, _ in scheduleRender(immediate: true) }
         .onChange(of: appState.config.code.fontSize) { _, _ in scheduleRender(immediate: true) }
+        // Render kicks in when the user switches out of editor-only mode —
+        // editor mode skips rendering to avoid parsing+rendering the whole
+        // buffer on every keystroke when the preview isn't visible.
+        .onChange(of: resolvedMode) { _, _ in scheduleRender(immediate: true) }
     }
 
     private func cycleMode() {
@@ -184,12 +188,22 @@ struct MarkdownTabView: View {
     }
 
     private func scheduleRender(immediate: Bool) {
+        // No preview is visible in editor-only mode, so skip parsing and
+        // rendering entirely. Switching out of editor mode triggers
+        // scheduleRender via .onChange(of: resolvedMode).
+        guard resolvedMode != .editor else {
+            debounceTask?.cancel()
+            return
+        }
         debounceTask?.cancel()
         let buffer = self.buffer
         let theme = self.theme
         let fontFamily = appState.config.code.fontFamily
         let fontSize = appState.config.code.fontSize
         let baseDir = baseDirectory
+        // External tabs have no worktree root context, so root-relative
+        // paths (`/foo.md`) fall back to system-absolute resolution.
+        let worktreeRootOrNil: URL? = externalAbsolutePath == nil ? worktreePath : nil
         debounceTask = Task { @MainActor in
             if !immediate {
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -202,7 +216,8 @@ struct MarkdownTabView: View {
                 theme: theme,
                 monospacedFontFamily: fontFamily,
                 monospacedFontSize: fontSize,
-                baseDirectory: baseDir
+                baseDirectory: baseDir,
+                worktreeRoot: worktreeRootOrNil
             )
             if Task.isCancelled { return }
             renderResult = result
