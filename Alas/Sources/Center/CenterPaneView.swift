@@ -93,6 +93,8 @@ struct CenterPaneView: View {
                         DiffTabView(worktreePath: worktree.path,
                                     relativePath: s.relativePath,
                                     staged: s.staged)
+                    case .commit:
+                        EmptyView()
                     }
                 }
             }

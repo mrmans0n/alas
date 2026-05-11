@@ -6,12 +6,14 @@ enum Tab: Codable, Equatable, Identifiable {
     case terminal(TerminalTabState)
     case editor(EditorTabState)
     case diff(DiffTabState)
+    case commit(CommitTabState)
 
     var id: TabID {
         switch self {
         case .terminal(let s): return s.id
         case .editor(let s):   return s.id
         case .diff(let s):     return s.id
+        case .commit(let s):   return s.id
         }
     }
 
@@ -20,6 +22,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .terminal(let s): return s.title
         case .editor(let s):   return s.title
         case .diff(let s):     return s.title
+        case .commit(let s):   return s.title
         }
     }
 
@@ -28,6 +31,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .terminal: return "terminal"
         case .editor:   return "code"
         case .diff:     return "diff"
+        case .commit:   return "commit"
         }
     }
 
@@ -36,6 +40,20 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s): return s.isExternal ? nil : s.relativePath
         default:             return nil
         }
+    }
+}
+
+struct CommitTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let sha: String
+    var title: String
+
+    init(worktreeId: String, sha: String, title: String) {
+        self.id = "commit:\(worktreeId):\(sha)"
+        self.worktreeId = worktreeId
+        self.sha = sha
+        self.title = title
     }
 }
 
