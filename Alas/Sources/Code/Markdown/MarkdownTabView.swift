@@ -263,7 +263,13 @@ struct MarkdownTabView: View {
                 )
                 return
             }
-            // Outside the worktree: fall through to NSWorkspace.
+            // Outside the worktree (or external-tab previews where there is
+            // no in-worktree containment): hand the RESOLVED candidate to
+            // NSWorkspace so neighboring files open via the system handler.
+            // Falling through with the raw `url` would try to open
+            // "other.md" as if it were system-absolute.
+            NSWorkspace.shared.open(candidate)
+            return
         }
         NSWorkspace.shared.open(url)
     }
