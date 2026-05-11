@@ -30,6 +30,7 @@ struct SidebarView: View {
                                 selectedWorktreeId: state.selectedWorktreeId,
                                 onSelect: { wt in state.selectedWorktreeId = wt.id },
                                 onNewWorktree: { onNewWorktree(project.id) },
+                                onRenameProject: { state.renameProject(id: project.id) },
                                 onOpenTerminal: { wt in
                                     state.selectedWorktreeId = wt.id
                                     _ = try? state.openTerminalTab(for: wt)
