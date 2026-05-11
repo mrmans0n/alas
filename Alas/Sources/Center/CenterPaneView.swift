@@ -93,6 +93,13 @@ struct CenterPaneView: View {
                         DiffTabView(worktreePath: worktree.path,
                                     relativePath: s.relativePath,
                                     staged: s.staged)
+                    case .commit(let s):
+                        CommitTabView(
+                            worktreePath: worktree.path,
+                            sha: s.sha,
+                            appState: state
+                        )
+                        .id(s.sha)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                             relativePath: s.relativePath)

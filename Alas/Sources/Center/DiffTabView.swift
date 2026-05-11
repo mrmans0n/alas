@@ -179,7 +179,7 @@ struct DiffTabView: View {
     }
 }
 
-private struct HunkView: View {
+struct HunkView: View {
     let hunk: ParsedDiff.Hunk
     let fileExtension: String
     @Environment(\.theme) var theme

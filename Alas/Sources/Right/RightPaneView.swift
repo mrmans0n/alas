@@ -5,10 +5,11 @@ struct RightPaneView: View {
     let worktree: Worktree
     let onSelectChangedFile: (ChangedFile) -> Void
     let onSelectTreeFile: (FileTreeNode) -> Void
+    let onSelectCommit: (CommitInfo) -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
-        let rps = state.rightPaneStore.state(for: worktree)
+        let rps = state.rightPaneStore.state(for: worktree, baseBranch: state.config.worktrees.baseBranch)
         ZStack {
             VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
             VStack(spacing: 0) {
@@ -25,7 +26,7 @@ struct RightPaneView: View {
 
                 switch rps.activeTab {
                 case .changes:
-                    ChangesTabView(rps: rps, onSelect: onSelectChangedFile)
+                    ChangesTabView(rps: rps, onSelect: onSelectChangedFile, onSelectCommit: onSelectCommit)
                 case .files:
                     FilesTabView(
                         nodes: rps.fileTree,

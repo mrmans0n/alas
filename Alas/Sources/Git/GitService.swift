@@ -187,6 +187,92 @@ extension GitService {
         return DiffParser.parse(result.stdout)
     }
 
+    func diff(worktreePath: URL, sha: String, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
+        // Detect initial commit (no parent) so we can fall back to the empty
+        // tree, mirroring the technique used in commitDetails. Empirically,
+        // `<sha>^!` fails for parentless commits because `<sha>^` doesn't
+        // resolve, and `git show --root` would emit a header we don't want
+        // to feed to DiffParser. Use the explicit two-tree form against the
+        // canonical empty-tree SHA so DiffParser sees a clean diff body.
+        //
+        // For merge commits, diff against the first parent — same first-
+        // parent rule as commitDetails. `<sha>^1..<sha>` is the natural
+        // range expression for this; equivalently `<sha>^1 <sha>` as the
+        // two-tree form. We use the two-tree form for consistency.
+        let parentsResult = try await Process.git(
+            ["rev-list", "--parents", "-n", "1", sha],
+            cwd: worktreePath
+        )
+        guard parentsResult.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.diff(sha:file:)",
+                code: Int(parentsResult.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: parentsResult.stderr]
+            )
+        }
+        let parts = parentsResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        let parentSha: String
+        if parts.count > 1 {
+            parentSha = String(parts[1])     // first parent
+        } else {
+            parentSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"   // canonical empty tree
+        }
+
+        // Always enable rename/copy detection so the diff header reflects
+        // the same classification the file list shows, and ALWAYS include
+        // the old path in the pathspec when one was provided — empirically
+        // `git diff -M -C <parent> <sha> -- <new>` strips the copy header
+        // and renders a copy as a full new-file addition, so we need both
+        // paths in the pathspec to keep the "copy from old" header. The
+        // resulting multi-file diff (for copies, since the source still
+        // exists with its own modifications) is then sliced down to just
+        // the requested file's section before handing it to DiffParser.
+        // See commitDetails for the rationale on -c core.quotePath=false.
+        var args: [String] = ["-c", "core.quotePath=false",
+                              "diff", "--no-color", "-M", "-C", parentSha, sha, "--", file]
+        if let originalPath { args.append(originalPath) }
+        let result = try await Process.git(args, cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.diff(sha:file:)",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr]
+            )
+        }
+        return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
+    }
+
+    /// Given a multi-file `git diff` output and a target path, return only
+    /// the slice of lines belonging to the section whose new-side path
+    /// matches `file`. Sections start with `diff --git a/X b/Y`. When the
+    /// target file is not present in any section, returns the empty string
+    /// (DiffParser yields zero hunks). When the diff has a single section
+    /// (the common non-copy case) the whole output passes through.
+    static func sliceDiffForFile(_ raw: String, file: String) -> String {
+        let lines = raw.components(separatedBy: "\n")
+        let bMarker = "b/\(file)"
+        var sections: [(matches: Bool, lines: [String])] = []
+        var current: (matches: Bool, lines: [String])? = nil
+        for line in lines {
+            if line.hasPrefix("diff --git ") {
+                if let c = current { sections.append(c) }
+                // The header reads `diff --git a/<old> b/<new>`. Check the
+                // b/<...> token by suffix; we already know the new path
+                // doesn't contain whitespace because git emits the raw
+                // path here (no quoting unless the path contains special
+                // chars, which we don't generate in tests / typical use).
+                let matches = line.hasSuffix(" " + bMarker)
+                current = (matches: matches, lines: [line])
+            } else if current != nil {
+                current!.lines.append(line)
+            }
+        }
+        if let c = current { sections.append(c) }
+        let kept = sections.first(where: { $0.matches })?.lines ?? []
+        return kept.joined(separator: "\n")
+    }
+
     func fileTree(worktreePath: URL, statusEntries: [ChangedFile]) async throws -> [FileTreeNode] {
         let result = try await Process.git(
             ["ls-files", "--cached", "--others", "--exclude-standard"],
@@ -203,26 +289,230 @@ extension GitService {
 }
 
 extension GitService {
-    /// Commits on the current branch but not on its upstream
-    /// (`@{u}..HEAD`). Returns an empty list (and `upstream == nil`) when
-    /// the branch has no configured upstream — typical for fresh local
-    /// branches and detached HEAD.
+    func commitDetails(at worktree: URL, sha: String) async throws -> CommitDetails {
+        // Header line: <H>\u{1f}<h>\u{1f}<an>\u{1f}<ae>\u{1f}<aI>\u{1f}<P>\u{1f}<s>
+        // Body follows on a new line after the RS sentinel \u{1e}.
+        // Use the RS as an unambiguous separator since the body may contain blank lines.
+        let format = "%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%s%n%x1e%n%b"
+        let header = try await Process.git(
+            ["show", "--no-patch", "--pretty=tformat:\(format)", sha],
+            cwd: worktree
+        )
+        guard header.exitCode == 0 else {
+            throw NSError(domain: "GitService.commitDetails", code: Int(header.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: header.stderr])
+        }
+
+        let raw = header.stdout
+        let parts = raw.components(separatedBy: "\n\u{1e}\n")
+        let headerLine = parts.first ?? ""
+        let body = (parts.count > 1 ? parts[1] : "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let fields = headerLine.split(separator: "\u{1f}", omittingEmptySubsequences: false)
+        guard fields.count == 7 else {
+            throw NSError(domain: "GitService.commitDetails", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "malformed git show output: \(fields.count) fields"])
+        }
+        let fullSha = String(fields[0])
+        let shortSha = String(fields[1])
+        let author = String(fields[2])
+        let authorEmail = String(fields[3])
+        let dateStr = String(fields[4])
+        let parentsField = String(fields[5])
+        let rawSubject = String(fields[6])
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        let date = isoFormatter.date(from: dateStr) ?? Date(timeIntervalSince1970: 0)
+        let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
+
+        let parents = parentsField
+            .split(separator: " ")
+            .map { String($0).prefix(7) }
+            .map(String.init)
+
+        // Files: two separate diff-tree calls.
+        // Use the explicit two-tree form (<left> <right>) instead of the
+        // single-sha form so that:
+        //   • Merge commits: compare first parent vs. the merge commit.
+        //     The single-sha form suppresses output for merges without -m.
+        //   • Initial commits: compare the canonical empty-tree SHA vs. the
+        //     commit. The --root flag only works with the single-sha form and
+        //     is not needed here.
+        // --numstat and --name-status are mutually exclusive when combined in a
+        // single invocation, so we run them separately and merge the results.
+        let emptyTreeSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        let leftTree = parents.isEmpty ? emptyTreeSha : "\(sha)^1"
+        let rightTree = sha
+
+        // `-c core.quotePath=false` keeps non-ASCII / special characters in
+        // paths emitted as raw UTF-8 instead of git's default backslash-
+        // octal quoting (e.g. `"caf\303\251.txt"`). Without it, the parsed
+        // path is the quoted text — the file list shows the escaped name,
+        // the numstat↔name-status merge misses (key mismatch), and a later
+        // `git diff -- <quoted-path>` finds nothing on disk.
+        async let numstatResult = Process.git(
+            ["-c", "core.quotePath=false",
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
+            cwd: worktree
+        )
+        async let nameStatusResult = Process.git(
+            ["-c", "core.quotePath=false",
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
+            cwd: worktree
+        )
+        let numstatOut = try await numstatResult
+        let nameStatusOut = try await nameStatusResult
+
+        guard numstatOut.exitCode == 0 else {
+            throw NSError(domain: "GitService.commitDetails", code: Int(numstatOut.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: numstatOut.stderr])
+        }
+        guard nameStatusOut.exitCode == 0 else {
+            throw NSError(domain: "GitService.commitDetails", code: Int(nameStatusOut.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: nameStatusOut.stderr])
+        }
+
+        var addByPath: [String: Int] = [:]
+        var delByPath: [String: Int] = [:]
+        var statusByPath: [String: String] = [:]
+        var originalByPath: [String: String] = [:]
+        var ordered: [String] = []
+        var orderedSet: Set<String> = []
+
+        // Parse numstat: "adds \t dels \t path"
+        // With -M/-C, git emits renames as a combined path field in one of two forms:
+        //   simple: "old.txt => new.txt"
+        //   brace:  "prefix/{old => new}/suffix"
+        // Normalize to the new path before keying so the dict aligns with name-status.
+        for line in numstatOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { continue }
+            let addStr = parts[0]
+            let delStr = parts[1]
+            let path = Self.numstatNewPath(parts[2])
+            addByPath[path] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
+            delByPath[path] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
+        }
+
+        // Parse name-status: "status[score?] \t [old \t] new"
+        for line in nameStatusOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else { continue }
+            let statusLetter = String(parts[0].prefix(1))
+            let newPath: String
+            let oldPath: String?
+            if statusLetter == "R" || statusLetter == "C" {
+                guard parts.count >= 3 else { continue }
+                newPath = parts[2]
+                oldPath = parts[1]
+            } else {
+                newPath = parts[1]
+                oldPath = nil
+            }
+            statusByPath[newPath] = statusLetter
+            if let oldPath { originalByPath[newPath] = oldPath }
+            if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
+        }
+
+        let files: [CommitChangedFile] = ordered.map { path in
+            CommitChangedFile(
+                path: path,
+                originalPath: originalByPath[path],
+                status: statusByPath[path] ?? "M",
+                add: addByPath[path] ?? 0,
+                del: delByPath[path] ?? 0
+            )
+        }
+
+        let info = CommitInfo(
+            sha: fullSha,
+            shortSha: shortSha,
+            author: author,
+            authorInitials: CommitInfo.initials(for: author),
+            date: date,
+            subject: subject,
+            conventionalTag: tag,
+            filesChanged: files.count,
+            insertions: files.reduce(0) { $0 + $1.add },
+            deletions: files.reduce(0) { $0 + $1.del }
+        )
+
+        return CommitDetails(
+            info: info,
+            body: body,
+            authorEmail: authorEmail,
+            parents: parents,
+            files: files
+        )
+    }
+
+    /// Given a numstat path field that may describe a rename via `old => new`
+    /// or the brace form `prefix/{old => new}/suffix`, return the new path.
+    /// For non-rename paths, returns the input unchanged.
+    private static func numstatNewPath(_ raw: String) -> String {
+        // Brace form: prefix/{old => new}/suffix
+        if let openBrace = raw.firstIndex(of: "{"),
+           let closeBrace = raw.firstIndex(of: "}"),
+           openBrace < closeBrace {
+            let inside = raw[raw.index(after: openBrace)..<closeBrace]
+            guard let arrow = inside.range(of: " => ") else { return raw }
+            let newInside = inside[arrow.upperBound...]
+            let prefix = raw[..<openBrace]
+            let suffix = raw[raw.index(after: closeBrace)...]
+            // Collapse any double-slash that arises from an empty new-inside
+            // segment (e.g. "dir/{old => }foo" → "dir/foo").
+            let joined = String(prefix) + String(newInside) + String(suffix)
+            return joined.replacingOccurrences(of: "//", with: "/")
+        }
+        // Simple form: "old => new"
+        if let arrow = raw.range(of: " => ") {
+            return String(raw[arrow.upperBound...])
+        }
+        return raw
+    }
+}
+
+extension GitService {
+    /// Commits on the current branch but not on a comparison ref, using a
+    /// 2-step cascade to pick the ref:
+    ///   1. `@{u}..HEAD` if an upstream tracking branch is configured.
+    ///   2. `<baseBranch>..HEAD` if `baseBranch` is supplied and resolves
+    ///      locally (covers fresh branches with no remote upstream).
+    ///   3. Returns `([], nil)` when neither resolves — detached HEAD,
+    ///      orphan branches, etc.
     ///
     /// One `git log` invocation parses subject + author + ISO date +
     /// per-commit numstat in a single pass to avoid N round-trips.
-    func commitsAhead(at worktree: URL) async throws -> (commits: [CommitInfo], upstream: String?) {
-        // Resolve upstream first. `--symbolic-full-name @{u}` returns
+    func commitsAhead(at worktree: URL, baseBranch: String? = nil) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
+        // Step 1: Resolve upstream first. `--symbolic-full-name @{u}` returns
         // `refs/remotes/origin/main`; `--abbrev-ref @{u}` returns
         // `origin/main`. Use the abbreviated form for display.
         let up = try await Process.git(
             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
             cwd: worktree
         )
-        guard up.exitCode == 0 else {
-            return ([], nil)
+        var upstreamName: String? = nil
+        if up.exitCode == 0 {
+            let candidate = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidate.isEmpty && candidate != "@{u}" {
+                upstreamName = candidate
+            }
         }
-        let upstream = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if upstream.isEmpty || upstream == "@{u}" {
+
+        // Step 2: If no upstream, try the base branch (if it resolves locally).
+        var baseName: String? = nil
+        if upstreamName == nil, let base = baseBranch, !base.isEmpty {
+            let verify = try await Process.git(
+                ["rev-parse", "--verify", "--quiet", base],
+                cwd: worktree
+            )
+            if verify.exitCode == 0 { baseName = base }
+        }
+
+        // Step 3: If neither resolves, bail out.
+        guard let comparisonRef = upstreamName ?? baseName else {
             return ([], nil)
         }
 
@@ -238,11 +528,11 @@ extension GitService {
         //   <numstat lines: "A\tD\tpath" each>
         let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
         let log = try await Process.git(
-            ["log", "\(upstream)..HEAD", "--pretty=tformat:\(format)", "--numstat"],
+            ["log", "\(comparisonRef)..HEAD", "--pretty=tformat:\(format)", "--numstat"],
             cwd: worktree
         )
         guard log.exitCode == 0 else {
-            return ([], upstream)
+            return ([], comparisonRef)
         }
 
         let records = log.stdout
@@ -298,6 +588,6 @@ extension GitService {
             ))
         }
 
-        return (commits, upstream)
+        return (commits, comparisonRef)
     }
 }

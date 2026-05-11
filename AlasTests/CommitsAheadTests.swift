@@ -34,9 +34,9 @@ struct CommitsAheadTests {
             _ = remote
         }
         let svc = GitService()
-        let (commits, upstream) = try await svc.commitsAhead(at: worktree)
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: worktree)
         #expect(commits.isEmpty)
-        #expect(upstream == "origin/main")
+        #expect(comparisonRef == "origin/main")
     }
 
     @Test func returnsAheadCommitsNewestFirst() async throws {
@@ -48,8 +48,8 @@ struct CommitsAheadTests {
         _ = try await Process.git(["commit", "-q", "-am", "fix: second ahead"], cwd: worktree)
 
         let svc = GitService()
-        let (commits, upstream) = try await svc.commitsAhead(at: worktree)
-        #expect(upstream == "origin/main")
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: worktree)
+        #expect(comparisonRef == "origin/main")
         #expect(commits.count == 2)
         // Newest first.
         #expect(commits[0].subject == "second ahead")
@@ -73,9 +73,9 @@ struct CommitsAheadTests {
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "solo"], cwd: tmp)
 
         let svc = GitService()
-        let (commits, upstream) = try await svc.commitsAhead(at: tmp)
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: tmp)
         #expect(commits.isEmpty)
-        #expect(upstream == nil)
+        #expect(comparisonRef == nil)
     }
 
     @Test func parsesMultiCommitOutputWithoutDropping() async throws {
@@ -90,5 +90,81 @@ struct CommitsAheadTests {
         #expect(commits.count == 5)
         let subjects = commits.map(\.subject)
         #expect(subjects == ["step 5", "step 4", "step 3", "step 2", "step 1"])
+    }
+
+    @Test func fallsBackToBaseBranchWhenNoUpstream() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ca-base-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "base"], cwd: tmp)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat: branch work"], cwd: tmp)
+
+        let svc = GitService()
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: tmp, baseBranch: "main")
+        #expect(comparisonRef == "main")
+        #expect(commits.count == 1)
+        #expect(commits[0].subject == "branch work")
+        #expect(commits[0].conventionalTag == "feat")
+    }
+
+    @Test func returnsEmptyWhenNeitherUpstreamNorBaseExists() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ca-none-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try await Process.git(["init", "-q", "-b", "solo"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "only"], cwd: tmp)
+
+        let svc = GitService()
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: tmp, baseBranch: "main")
+        #expect(commits.isEmpty)
+        #expect(comparisonRef == nil)
+    }
+
+    @Test func cascadeWorksOnDetachedHEAD() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ca-detached-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "base"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat: ahead"], cwd: tmp)
+        // Capture the "ahead" SHA, then rewind main to "base" so that HEAD
+        // ends up one commit ahead of main after detaching.
+        let aheadSha = try await Process.git(["rev-parse", "HEAD"], cwd: tmp)
+        let sha = aheadSha.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["reset", "-q", "--hard", "HEAD~1"], cwd: tmp)
+        // Detach HEAD at the "ahead" commit (now one commit past main).
+        _ = try await Process.git(["checkout", "-q", "--detach", sha], cwd: tmp)
+
+        let svc = GitService()
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: tmp, baseBranch: "main")
+        // Detached HEAD: no @{u}; base is "main" which exists and points to
+        // the first commit, so we should see exactly the "ahead" commit.
+        #expect(comparisonRef == "main")
+        #expect(commits.count == 1)
+        #expect(commits[0].subject == "ahead")
+    }
+
+    @Test func upstreamTakesPrecedenceOverBaseBranch() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        try "1\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feat: ahead"], cwd: worktree)
+
+        let svc = GitService()
+        // Even with baseBranch supplied, the upstream wins because @{u} is set.
+        let (commits, comparisonRef) = try await svc.commitsAhead(at: worktree, baseBranch: "main")
+        #expect(comparisonRef == "origin/main")
+        #expect(commits.count == 1)
     }
 }

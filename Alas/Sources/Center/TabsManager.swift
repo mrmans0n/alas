@@ -295,6 +295,14 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func appendCommit(worktreeId: String, sha: String, title: String) -> Tab {
+        let state = CommitTabState(worktreeId: worktreeId, sha: sha, title: title)
+        let tab = Tab.commit(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     /// Open or focus an image preview tab for `relativePath`.
     @discardableResult
     func openImagePreview(worktreeId: String, relativePath: String) -> Tab {

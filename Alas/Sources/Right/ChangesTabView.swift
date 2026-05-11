@@ -3,6 +3,7 @@ import SwiftUI
 struct ChangesTabView: View {
     @Bindable var rps: RightPaneState
     let onSelect: (ChangedFile) -> Void
+    let onSelectCommit: (CommitInfo) -> Void
 
     var body: some View {
         ScrollView {
@@ -15,8 +16,9 @@ struct ChangesTabView: View {
                 Divider().opacity(0.4)
                 CommitsSectionView(
                     commits: rps.commits,
-                    upstreamRef: rps.upstreamRef,
-                    expanded: $rps.commitsExpanded
+                    comparisonRef: rps.comparisonRef,
+                    expanded: $rps.commitsExpanded,
+                    onSelect: onSelectCommit
                 )
             }
         }

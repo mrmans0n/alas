@@ -8,6 +8,7 @@ struct AppConfig: Codable, Equatable {
     var sidebarWidth: Double
     var rightPaneWidth: Double
     var rightPaneVisible: Bool
+    var commitDetailSplitRatio: Double
     var general: General
     var worktrees: Worktrees
     var terminal: Terminal
@@ -97,6 +98,7 @@ struct AppConfig: Codable, Equatable {
         sidebarWidth: 244,
         rightPaneWidth: 320,
         rightPaneVisible: true,
+        commitDetailSplitRatio: 0.32,
         general: General(
             launchAtLogin: false, closeToTray: true, confirmQuit: true,
             autoUpdate: true, updateChannel: "Stable",
@@ -140,6 +142,7 @@ extension AppConfig {
     enum CodingKeys: String, CodingKey {
         case themeId, accent, density, matchSystemTheme,
              sidebarWidth, rightPaneWidth, rightPaneVisible,
+             commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown
     }
 
@@ -158,6 +161,7 @@ extension AppConfig {
         sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)
         rightPaneWidth = try c.decode(Double.self, forKey: .rightPaneWidth)
         rightPaneVisible = try c.decode(Bool.self, forKey: .rightPaneVisible)
+        commitDetailSplitRatio = (try? c.decode(Double.self, forKey: .commitDetailSplitRatio)) ?? 0.32
         general = try c.decode(General.self, forKey: .general)
         worktrees = try c.decode(Worktrees.self, forKey: .worktrees)
         terminal = try c.decode(Terminal.self, forKey: .terminal)
