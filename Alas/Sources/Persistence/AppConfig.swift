@@ -54,6 +54,22 @@ struct AppConfig: Codable, Equatable {
 
     struct Harness: Codable, Equatable {
         var notifyOnFinish: Bool
+        var notifyOnAwaiting: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case notifyOnFinish, notifyOnAwaiting
+        }
+
+        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool) {
+            self.notifyOnFinish = notifyOnFinish
+            self.notifyOnAwaiting = notifyOnAwaiting
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            notifyOnFinish = (try? c.decode(Bool.self, forKey: .notifyOnFinish)) ?? true
+            notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
+        }
     }
 
     struct Code: Codable, Equatable {
@@ -112,7 +128,7 @@ struct AppConfig: Codable, Equatable {
             scrollbackLines: 10000,
             bell: "visual"
         ),
-        harness: Harness(notifyOnFinish: true),
+        harness: Harness(notifyOnFinish: true, notifyOnAwaiting: true),
         code: Code(
             fontFamily: "SF Mono",
             fontSize: 13,

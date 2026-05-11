@@ -134,6 +134,11 @@ struct RootView: View {
     }
 
     private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool) {
+        if ImageFileType.isSupported(relativePath: path) {
+            state.openFile(relativePath: path, worktreeId: worktree.id)
+            return
+        }
+
         let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
             if case .diff(let s) = tab { return s.relativePath == path && s.staged == staged } else { return false }
         }

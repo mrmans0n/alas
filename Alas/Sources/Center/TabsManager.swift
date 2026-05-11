@@ -303,6 +303,29 @@ final class TabsManager {
         return tab
     }
 
+    /// Open or focus an image preview tab for `relativePath`.
+    @discardableResult
+    func openImagePreview(worktreeId: String, relativePath: String) -> Tab {
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .imagePreview(let s) = $0 { return s.relativePath == relativePath }
+               return false
+           }) {
+            if case .imagePreview(let s) = file.tabs[idx] {
+                file.activeTabId = s.id
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+                return .imagePreview(s)
+            }
+        }
+
+        let title = (relativePath as NSString).lastPathComponent
+        let state = ImagePreviewTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
+        let tab = Tab.imagePreview(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     /// Clears the `revealLine`/`revealCharacter` hints on an editor tab.
     /// Called by the editor coordinator once it has scrolled to the target,
     /// so the hint isn't replayed on the next view re-render or app

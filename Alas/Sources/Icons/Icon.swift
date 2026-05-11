@@ -18,6 +18,7 @@ struct Icon: View {
         case "terminal":   return "terminal"
         case "code":       return "chevron.left.forwardslash.chevron.right"
         case "diff":       return "plus.forwardslash.minus"
+        case "image":      return "photo"
         case "gear":       return "gearshape"
         case "search":     return "magnifyingglass"
         case "plus":       return "plus"

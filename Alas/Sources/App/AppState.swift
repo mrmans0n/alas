@@ -176,13 +176,18 @@ final class AppState {
         // notifications off in a previous session get them again until they
         // re-toggle.
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
-        harness.start { [weak self] sessionId in
-            guard let self else { return nil }
-            for s in self.terminal.registry.all where s.id == sessionId {
-                return (projectId: s.projectId, worktreeId: s.worktreeId)
+        harness.start(
+            stateLookup: { [weak self] sessionId in
+                guard let self else { return nil }
+                for s in self.terminal.registry.all where s.id == sessionId {
+                    return (projectId: s.projectId, worktreeId: s.worktreeId)
+                }
+                return nil
+            },
+            shouldNotifyOnAwaiting: { [weak self] in
+                self?.config.harness.notifyOnAwaiting ?? true
             }
-            return nil
-        }
+        )
         harness.onClickThrough = { [weak self] _, worktreeId, _ in
             self?.selectedWorktreeId = worktreeId
             NSApp.activate(ignoringOtherApps: true)
@@ -515,6 +520,11 @@ final class AppState {
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
         if selectedWorktreeId != worktree.id { selectedWorktreeId = worktree.id }
+
+        if ImageFileType.isSupported(relativePath: relativePath) {
+            _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
+            return
+        }
 
         let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
             if case .editor(let s) = tab { return s.relativePath == relativePath } else { return false }
