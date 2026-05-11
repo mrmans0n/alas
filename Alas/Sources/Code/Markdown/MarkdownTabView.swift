@@ -229,9 +229,15 @@ struct MarkdownTabView: View {
             )
             return
         }
-        // Relative file links (no scheme + non-empty path).
+        // Relative file links (no scheme + non-empty path). A path that
+        // begins with `/` (e.g. `[link](/README.md)`) is root-relative to
+        // the worktree, not absolute on the user's filesystem; resolve it
+        // from worktreePath rather than appending to baseDirectory.
         if url.scheme == nil {
-            let candidate = baseDirectory.appendingPathComponent(url.path).standardizedFileURL
+            let path = url.path
+            let candidate: URL = path.hasPrefix("/")
+                ? worktreePath.appendingPathComponent(String(path.dropFirst())).standardizedFileURL
+                : baseDirectory.appendingPathComponent(path).standardizedFileURL
             let worktreeRootPath = worktreePath.standardizedFileURL.path
             if candidate.path.hasPrefix(worktreeRootPath + "/") {
                 let relative = String(candidate.path.dropFirst(worktreeRootPath.count + 1))
