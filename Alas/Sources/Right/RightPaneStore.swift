@@ -6,9 +6,9 @@ import Observation
 final class RightPaneStore {
     private var states: [String: RightPaneState] = [:]
 
-    func state(for worktree: Worktree) -> RightPaneState {
+    func state(for worktree: Worktree, baseBranch: String) -> RightPaneState {
         if let existing = states[worktree.id] { return existing }
-        let new = RightPaneState(worktree: worktree)
+        let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
         states[worktree.id] = new
         new.start()
         return new

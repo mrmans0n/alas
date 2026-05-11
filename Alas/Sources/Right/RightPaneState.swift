@@ -15,7 +15,7 @@ final class RightPaneState {
     // New in right-sidebar-refactor:
     var activeTab: RightPaneTab = .changes
     var commits: [CommitInfo] = []
-    var upstreamRef: String? = nil
+    var comparisonRef: String? = nil
     var workingTreeExpanded: Bool = true
     var commitsExpanded: Bool = true
 
@@ -23,11 +23,14 @@ final class RightPaneState {
     /// that, the user's tab choice is sticky and refreshes leave it alone.
     private var didInitDefaultTab: Bool = false
 
+    let baseBranch: String
+
     private let git = GitService()
     private let watcher: WorktreeWatcher
 
-    init(worktree: Worktree) {
+    init(worktree: Worktree, baseBranch: String) {
         self.worktree = worktree
+        self.baseBranch = baseBranch
         self.watcher = WorktreeWatcher(path: worktree.path)
         watcher.onChange = { [weak self] in
             Task { @MainActor in await self?.refresh() }
@@ -47,14 +50,14 @@ final class RightPaneState {
         defer { loading = false }
         do {
             async let s = git.status(worktreePath: worktree.path)
-            async let c = git.commitsAhead(at: worktree.path)
+            async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch)
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
-            let (commits, upstream) = try await c
+            let (commits, ref) = try await c
             self.changes = entries
             self.fileTree = tree
             self.commits = commits
-            self.upstreamRef = upstream
+            self.comparisonRef = ref
 
             // Smart first-open default: if there are no working-tree
             // changes AND no commits ahead of upstream, surface Files

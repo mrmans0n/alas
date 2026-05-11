@@ -2,7 +2,7 @@ import SwiftUI
 
 struct CommitsSectionView: View {
     let commits: [CommitInfo]
-    let upstreamRef: String?
+    let comparisonRef: String?
     @Binding var expanded: Bool
 
     @Environment(\.theme) private var theme
@@ -15,10 +15,10 @@ struct CommitsSectionView: View {
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
             ) {
-                if let upstreamRef {
+                if let comparisonRef {
                     HStack(spacing: 4) {
                         Icon(name: "branch", size: 10, color: theme.color("fg-faint"))
-                        Text(upstreamRef)
+                        Text(comparisonRef)
                             .font(.system(size: 10.5, design: .monospaced))
                             .foregroundColor(theme.color("fg-faint"))
                             .lineLimit(1)
@@ -40,7 +40,7 @@ struct CommitsSectionView: View {
     }
 
     private var emptyPlaceholder: some View {
-        Text(upstreamRef.map { "up to date with \($0)" } ?? "no upstream branch")
+        Text(comparisonRef.map { "up to date with \($0)" } ?? "no upstream branch")
             .font(.system(size: 11))
             .foregroundColor(theme.color("fg-faint"))
             .padding(.horizontal, 12).padding(.vertical, 8)

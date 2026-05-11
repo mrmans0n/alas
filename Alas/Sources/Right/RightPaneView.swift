@@ -8,7 +8,7 @@ struct RightPaneView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        let rps = state.rightPaneStore.state(for: worktree)
+        let rps = state.rightPaneStore.state(for: worktree, baseBranch: state.config.worktrees.baseBranch)
         ZStack {
             VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
             VStack(spacing: 0) {

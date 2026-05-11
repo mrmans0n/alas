@@ -15,7 +15,7 @@ struct ChangesTabView: View {
                 Divider().opacity(0.4)
                 CommitsSectionView(
                     commits: rps.commits,
-                    upstreamRef: rps.upstreamRef,
+                    comparisonRef: rps.comparisonRef,
                     expanded: $rps.commitsExpanded
                 )
             }

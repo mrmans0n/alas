@@ -203,26 +203,44 @@ extension GitService {
 }
 
 extension GitService {
-    /// Commits on the current branch but not on its upstream
-    /// (`@{u}..HEAD`). Returns an empty list (and `upstream == nil`) when
-    /// the branch has no configured upstream — typical for fresh local
-    /// branches and detached HEAD.
+    /// Commits on the current branch but not on a comparison ref, using a
+    /// 2-step cascade to pick the ref:
+    ///   1. `@{u}..HEAD` if an upstream tracking branch is configured.
+    ///   2. `<baseBranch>..HEAD` if `baseBranch` is supplied and resolves
+    ///      locally (covers fresh branches with no remote upstream).
+    ///   3. Returns `([], nil)` when neither resolves — detached HEAD,
+    ///      orphan branches, etc.
     ///
     /// One `git log` invocation parses subject + author + ISO date +
     /// per-commit numstat in a single pass to avoid N round-trips.
-    func commitsAhead(at worktree: URL) async throws -> (commits: [CommitInfo], upstream: String?) {
-        // Resolve upstream first. `--symbolic-full-name @{u}` returns
+    func commitsAhead(at worktree: URL, baseBranch: String? = nil) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
+        // Step 1: Resolve upstream first. `--symbolic-full-name @{u}` returns
         // `refs/remotes/origin/main`; `--abbrev-ref @{u}` returns
         // `origin/main`. Use the abbreviated form for display.
         let up = try await Process.git(
             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
             cwd: worktree
         )
-        guard up.exitCode == 0 else {
-            return ([], nil)
+        var upstreamName: String? = nil
+        if up.exitCode == 0 {
+            let candidate = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidate.isEmpty && candidate != "@{u}" {
+                upstreamName = candidate
+            }
         }
-        let upstream = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if upstream.isEmpty || upstream == "@{u}" {
+
+        // Step 2: If no upstream, try the base branch (if it resolves locally).
+        var baseName: String? = nil
+        if upstreamName == nil, let base = baseBranch, !base.isEmpty {
+            let verify = try? await Process.git(
+                ["rev-parse", "--verify", "--quiet", base],
+                cwd: worktree
+            )
+            if verify?.exitCode == 0 { baseName = base }
+        }
+
+        // Step 3: If neither resolves, bail out.
+        guard let comparisonRef = upstreamName ?? baseName else {
             return ([], nil)
         }
 
@@ -238,11 +256,11 @@ extension GitService {
         //   <numstat lines: "A\tD\tpath" each>
         let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
         let log = try await Process.git(
-            ["log", "\(upstream)..HEAD", "--pretty=tformat:\(format)", "--numstat"],
+            ["log", "\(comparisonRef)..HEAD", "--pretty=tformat:\(format)", "--numstat"],
             cwd: worktree
         )
         guard log.exitCode == 0 else {
-            return ([], upstream)
+            return ([], comparisonRef)
         }
 
         let records = log.stdout
@@ -298,6 +316,6 @@ extension GitService {
             ))
         }
 
-        return (commits, upstream)
+        return (commits, comparisonRef)
     }
 }
