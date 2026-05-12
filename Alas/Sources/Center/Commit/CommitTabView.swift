@@ -4,6 +4,7 @@ import SwiftUI
 struct CommitTabView: View {
     let worktreePath: URL
     let sha: String
+    let worktreeId: String
     @Bindable var appState: AppState
 
     @State private var details: CommitDetails?
@@ -69,7 +70,18 @@ struct CommitTabView: View {
                 })
                 Group {
                     if let path = selectedPath {
-                        CommitDiffView(path: path, diff: diff, loading: loadingDiff, error: diffError)
+                        let openAvailable = DiffOpenFileAvailability.isAvailable(
+                            worktreePath: worktreePath, relativePath: path
+                        )
+                        CommitDiffView(
+                            path: path,
+                            diff: diff,
+                            loading: loadingDiff,
+                            error: diffError,
+                            onOpenFile: openAvailable
+                                ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
+                                : nil
+                        )
                     } else {
                         Text("Select a file")
                             .foregroundColor(theme.color("fg-dim"))

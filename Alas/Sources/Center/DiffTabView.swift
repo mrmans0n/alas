@@ -4,6 +4,7 @@ struct DiffTabView: View {
     let worktreePath: URL
     let relativePath: String
     let staged: Bool
+    let onOpenFile: (() -> Void)?
     @Environment(\.theme) var theme
 
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
@@ -67,6 +68,9 @@ struct DiffTabView: View {
                 .font(.system(size: 11.5, design: .monospaced))
             }
             HStack(spacing: 4) {
+                if let onOpenFile {
+                    AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
+                }
                 if !staged {
                     AlasButton(title: "Stage hunk", style: .subtle, action: stageHunk)
                 }

@@ -90,13 +90,22 @@ struct CenterPaneView: View {
                                           originatingRelativePath: s.originatingRelativePath)
                         }
                     case .diff(let s):
-                        DiffTabView(worktreePath: worktree.path,
-                                    relativePath: s.relativePath,
-                                    staged: s.staged)
+                        let openAvailable = DiffOpenFileAvailability.isAvailable(
+                            worktreePath: worktree.path, relativePath: s.relativePath
+                        )
+                        DiffTabView(
+                            worktreePath: worktree.path,
+                            relativePath: s.relativePath,
+                            staged: s.staged,
+                            onOpenFile: openAvailable
+                                ? { state.openFile(relativePath: s.relativePath, worktreeId: worktree.id) }
+                                : nil
+                        )
                     case .commit(let s):
                         CommitTabView(
                             worktreePath: worktree.path,
                             sha: s.sha,
+                            worktreeId: worktree.id,
                             appState: state
                         )
                         .id(s.sha)

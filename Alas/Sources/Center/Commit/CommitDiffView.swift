@@ -5,6 +5,7 @@ struct CommitDiffView: View {
     let diff: ParsedDiff
     let loading: Bool
     let error: String?
+    let onOpenFile: (() -> Void)?
 
     @Environment(\.theme) private var theme
 
@@ -26,6 +27,9 @@ struct CommitDiffView: View {
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
+            if let onOpenFile {
+                AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
+            }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(theme.color("bg-2"))

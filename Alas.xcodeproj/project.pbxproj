@@ -99,6 +99,7 @@
 		5711B2BE2D70220A4BED5B2B /* DefinitionFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12340A649892955245BECB7 /* DefinitionFeature.swift */; };
 		59765FD789179C1BDC3F1BB9 /* ChangesTreeBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7D49EBCE99D6F1690646F80 /* ChangesTreeBuilderTests.swift */; };
 		59AFC96BD543D2520DBE7BB0 /* ThemeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */; };
+		5C9EB59AAA68656BD7190044 /* DiffOpenFileAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76C02E43360C0BCFEDF5428 /* DiffOpenFileAvailability.swift */; };
 		5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C486F9097A2B145D101E2C /* AlasButton.swift */; };
 		5EA1AA5C8D9DE003BACE8291 /* AlasGhostty.Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */; };
 		5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE58EF9CF8EC461667D9430 /* AppConfig.swift */; };
@@ -160,6 +161,7 @@
 		9782C5866410EFE13E670AFF /* FilesTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD4A3B9B1103346242438940 /* FilesTabView.swift */; };
 		97D86F05B3993A61A0302B97 /* DefinitionSnippetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0326789AA29BD63CC1B8F81F /* DefinitionSnippetCache.swift */; };
 		98B61C62BB4FEDCDE271FAC1 /* WorktreeWatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 321E1DBC8C06504AD3EE7D6E /* WorktreeWatcherTests.swift */; };
+		9927E3934D3CAA9055EF5E44 /* DiffOpenFileAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */; };
 		9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */; };
 		9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */; };
 		9C394F07FDB8E398A034B778 /* SessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B142F2A747C7F2D96E8BAD1 /* SessionRegistry.swift */; };
@@ -316,6 +318,7 @@
 		2975A1465CA308E9766521F2 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		2AC91D744E42A7C071268B74 /* aider.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = aider.sh; sourceTree = "<group>"; };
 		2B142F2A747C7F2D96E8BAD1 /* SessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRegistry.swift; sourceTree = "<group>"; };
+		2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffOpenFileAvailabilityTests.swift; sourceTree = "<group>"; };
 		2BFD4C762D8323B78934ECE7 /* BranchPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BranchPicker.swift; sourceTree = "<group>"; };
 		2CBAD18141C1A9B654F56982 /* FileTypeIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypeIconTests.swift; sourceTree = "<group>"; };
 		2CDC00065CA8839DA1AD0E0F /* TrafficLights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrafficLights.swift; sourceTree = "<group>"; };
@@ -483,6 +486,7 @@
 		D49B5B544A3432F8D8105268 /* SearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchModel.swift; sourceTree = "<group>"; };
 		D5BAC2BE2CEAFDD462D9116F /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		D6A9977C979705A40595FD5E /* TabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManagerTests.swift; sourceTree = "<group>"; };
+		D76C02E43360C0BCFEDF5428 /* DiffOpenFileAvailability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffOpenFileAvailability.swift; sourceTree = "<group>"; };
 		D921D1C8A44F1937769CDB60 /* EditorBufferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferStore.swift; sourceTree = "<group>"; };
 		D97EF761C70A3AF83C00879A /* VisualEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectView.swift; sourceTree = "<group>"; };
 		D9E6D61B213F3378243B4A26 /* AlasField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasField.swift; sourceTree = "<group>"; };
@@ -579,6 +583,7 @@
 				A2FC38CF24F011448A3705F9 /* CommitTabStateTests.swift */,
 				C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */,
 				179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */,
+				2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */,
 				EE26221DC8E8837FFEB87474 /* DiffParserTests.swift */,
 				1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */,
 				35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */,
@@ -811,6 +816,7 @@
 			isa = PBXGroup;
 			children = (
 				F8685E5E5AC7A77D6D27A847 /* CenterPaneView.swift */,
+				D76C02E43360C0BCFEDF5428 /* DiffOpenFileAvailability.swift */,
 				F15E14D45EC3926768DE5BD1 /* DiffTabView.swift */,
 				6E8B52175A7F6144B4C52010 /* EditorTabView.swift */,
 				008E982C8526670670425AB8 /* EmptyTabView.swift */,
@@ -1349,6 +1355,7 @@
 				97D86F05B3993A61A0302B97 /* DefinitionSnippetCache.swift in Sources */,
 				90958414931FC96F766F0C46 /* DiagnosticsFeature.swift in Sources */,
 				9FD539228216762192A02C69 /* DialogChrome.swift in Sources */,
+				5C9EB59AAA68656BD7190044 /* DiffOpenFileAvailability.swift in Sources */,
 				02425EBF61592A01B1FCC7D0 /* DiffParser.swift in Sources */,
 				AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */,
 				1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */,
@@ -1495,6 +1502,7 @@
 				25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */,
 				7EB64E55CE27886D660C5D0C /* DefinitionSnippetCacheTests.swift in Sources */,
 				BFF99F8FDEA5D05EF4E1EEC3 /* DiagnosticsRangeTests.swift in Sources */,
+				9927E3934D3CAA9055EF5E44 /* DiffOpenFileAvailabilityTests.swift in Sources */,
 				0CF488290CC525EA7C11A43C /* DiffParserTests.swift in Sources */,
 				A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */,
 				3B7D77B9E71C66ACB1E007D7 /* EditorBufferStoreTests.swift in Sources */,
