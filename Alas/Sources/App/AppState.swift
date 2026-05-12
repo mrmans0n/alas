@@ -172,10 +172,26 @@ final class AppState {
                 self?.config.harness.notifyOnAwaiting ?? true
             }
         )
-        harness.onClickThrough = { [weak self] _, worktreeId, _ in
-            self?.selectedWorktreeId = worktreeId
-            NSApp.activate(ignoringOtherApps: true)
+        harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
+            self?.activateHarnessSession(
+                projectId: projectId, worktreeId: worktreeId, sessionId: sessionId
+            )
         }
+    }
+
+    /// Activate a specific harness session: bring the app to front, select
+    /// the worktree, and activate the terminal tab hosting `sessionId`.
+    /// If the tab is no longer present (session was closed mid-flight) the
+    /// worktree is still selected so the user lands somewhere sensible.
+    func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
+        selectedWorktreeId = worktreeId
+        if let tab = tabs.tabs(forWorktree: worktreeId).first(where: {
+            if case .terminal(let s) = $0 { return s.sessionId == sessionId }
+            return false
+        }) {
+            tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @discardableResult
