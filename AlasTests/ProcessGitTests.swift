@@ -67,6 +67,18 @@ struct ProcessGitTests {
         #expect(env["HOME"] != nil)
     }
 
+    @Test func gitEnvPreservesAllParentVariables() {
+        // Stronger than the keyed tests above: a broken implementation that
+        // returned a hardcoded minimal dict (PATH/HOME only) would pass the
+        // single-key checks. Verify the whole parent env round-trips, with
+        // the single deliberate exception of GIT_OPTIONAL_LOCKS.
+        let parent = ProcessInfo.processInfo.environment
+        let env = Process.gitEnv()
+        for (key, value) in parent where key != "GIT_OPTIONAL_LOCKS" {
+            #expect(env[key] == value, "key \(key) was dropped or changed")
+        }
+    }
+
     @Test func gitConvenienceCallStillWorks() async throws {
         // Sanity: after switching to the explicit env dict (no longer
         // passing env: nil), `Process.git` must still successfully locate
