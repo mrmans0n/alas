@@ -125,3 +125,46 @@ extension WorktreeServiceTests {
         #expect(listed.count == 1) // only main remains
     }
 }
+
+extension WorktreeServiceTests {
+    @Test func addForExistingBranchSucceedsWithoutDashB() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["branch", "nacho/starfin-deprecation"], cwd: repo)
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-existing")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "nacho/starfin-deprecation",
+            destination: dest, projectId: "p"
+        )
+        #expect(wt.branch == "nacho/starfin-deprecation")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+        let listed = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(listed.count == 2)
+    }
+
+    @Test func errorMessagePropagatesGitStderr() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-conflict")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        // Create a file at the destination so git worktree add fails.
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "block".write(to: dest, atomically: true, encoding: .utf8)
+        let svc = WorktreeService()
+        do {
+            _ = try await svc.add(
+                repoPath: repo, base: "main", branch: "feat/conflict",
+                destination: dest, projectId: "p"
+            )
+            Issue.record("expected worktree add to fail")
+        } catch let error as WorktreeService.WorktreeError {
+            let msg = error.localizedDescription
+            #expect(!msg.contains("WorktreeError error"))
+            #expect(msg.count > 10)
+        } catch {
+            Issue.record("unexpected error type: \(error)")
+        }
+    }
+}
