@@ -180,18 +180,27 @@ final class AppState {
     }
 
     /// Activate a specific harness session: bring the app to front, select
-    /// the worktree, and activate the terminal tab hosting `sessionId`.
+    /// the worktree, activate the terminal tab hosting `sessionId`, and
+    /// focus the pane within that tab that owns the session (so keyboard
+    /// input and the tab-bar harness badge follow the user's intent).
     /// If the tab is no longer present (session was closed mid-flight) the
     /// worktree is still selected so the user lands somewhere sensible.
     func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
         selectedWorktreeId = worktreeId
-        if let tab = tabs.tabs(forWorktree: worktreeId).first(where: {
-            if case .terminal(let s) = $0 {
-                return s.root.leaves().contains(where: { $0.sessionId == sessionId })
+        var matchedTabId: TabID?
+        var matchedLeafId: String?
+        for tab in tabs.tabs(forWorktree: worktreeId) {
+            guard case .terminal(let s) = tab,
+                  let leaf = s.root.leaves().first(where: { $0.sessionId == sessionId }) else { continue }
+            matchedTabId = tab.id
+            matchedLeafId = leaf.id
+            break
+        }
+        if let tabId = matchedTabId {
+            if let leafId = matchedLeafId {
+                _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leafId)
             }
-            return false
-        }) {
-            tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+            tabs.activate(worktreeId: worktreeId, tabId: tabId)
         }
         NSApp.activate(ignoringOtherApps: true)
     }
