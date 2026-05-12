@@ -267,8 +267,6 @@ final class AppState {
               case .terminal = tab else { return }
         guard let outcome = tabs.removeFocusedLeaf(worktreeId: worktreeId, tabId: activeId) else { return }
         if case .tabRemoved = outcome {
-            // Tab still in storage with its original single-leaf root; closeTab
-            // walks the tree and tears down every session itself.
             closeTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedSessionId = outcome.closedSessionId

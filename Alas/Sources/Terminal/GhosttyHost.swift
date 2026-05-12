@@ -14,13 +14,19 @@ struct GhosttyHost: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
         container.wantsLayer = true
-        attach(container)
+        attach(container, mayStealFromOtherContainer: true)
         return container
     }
 
     @MainActor
     func updateNSView(_ nsView: NSView, context: Context) {
-        attach(nsView)
+        // updateNSView is a passenger: it may NOT steal the surface from another
+        // container. During a structural transition (e.g. split→leaf collapse),
+        // SwiftUI fires a final updateNSView on the about-to-dismantle GhosttyHost
+        // before its dismantleNSView runs. The newly-made GhosttyHost has already
+        // adopted the surface — re-parenting it back here would orphan the surface
+        // during the imminent dismantle. Only makeNSView claims ownership.
+        attach(nsView, mayStealFromOtherContainer: false)
     }
 
     @MainActor
@@ -29,12 +35,16 @@ struct GhosttyHost: NSViewRepresentable {
     }
 
     @MainActor
-    private func attach(_ container: NSView) {
+    private func attach(_ container: NSView, mayStealFromOtherContainer: Bool) {
         for subview in container.subviews where subview !== session.surface {
             subview.removeFromSuperview()
         }
 
         if session.surface.superview !== container {
+            if session.surface.superview != nil && !mayStealFromOtherContainer {
+                // Another container owns the surface; we're a stale updateNSView.
+                return
+            }
             session.surface.removeFromSuperview()
             session.surface.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(session.surface)
