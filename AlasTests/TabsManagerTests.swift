@@ -340,12 +340,12 @@ struct TabsManagerPaneTests {
         _ = mgr.splitFocusedLeaf(worktreeId: "wt", tabId: tab.id, axis: .vertical,
                                   newLeafId: "new-leaf", newSessionId: "s2")
 
-        let updated = mgr.setFocusedLeaf(worktreeId: "wt", tabId: tab.id, leafId: originalFocus)
-        if case .terminal(let s) = updated {
-            #expect(s.focusedLeafId == originalFocus)
-        } else {
-            Issue.record("expected terminal tab")
+        _ = mgr.setFocusedLeaf(worktreeId: "wt", tabId: tab.id, leafId: originalFocus)
+        guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
+              case .terminal(let s) = reread else {
+            Issue.record("expected terminal tab in store after setFocusedLeaf"); return
         }
+        #expect(s.focusedLeafId == originalFocus)
     }
 
     @Test func splitFocusedLeafReplacesFocusedLeafWithSplit() {
@@ -363,6 +363,15 @@ struct TabsManagerPaneTests {
         #expect(split.fraction == 0.5)
         #expect(split.children.count == 2)
         #expect(s.focusedLeafId == "new")
+        // Re-read to confirm persistence
+        guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
+              case .terminal(let persisted) = reread,
+              case .split(let persistedSplit) = persisted.root else {
+            Issue.record("split did not persist into byWorktree"); return
+        }
+        #expect(persistedSplit.axis == .horizontal)
+        #expect(persistedSplit.children.count == 2)
+        #expect(persisted.focusedLeafId == "new")
     }
 
     @Test func removeFocusedLeafReturnsClosedSessionId() throws {
@@ -372,29 +381,35 @@ struct TabsManagerPaneTests {
             worktreeId: "wt", tabId: tab.id, axis: .vertical,
             newLeafId: "new", newSessionId: "s2"
         )
-        // Focus is on "new". Remove it.
         let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
-        #expect(outcome.closedSessionId == "s2")
-        #expect(outcome.tabRemoved == false)
-        // The remaining leaf with sessionId "s1" should be focused.
-        if let updated = outcome.tab, case .terminal(let s) = updated {
-            if case .leaf(let l) = s.root {
-                #expect(l.sessionId == "s1")
-                #expect(s.focusedLeafId == l.id)
-            } else {
-                Issue.record("expected leaf root after collapse")
-            }
-        } else {
-            Issue.record("outcome.tab missing")
+        guard case .leafRemoved(let outcomeTab, let closedSessionId) = outcome else {
+            Issue.record("expected .leafRemoved"); return
         }
+        #expect(closedSessionId == "s2")
+        if case .terminal(let s) = outcomeTab, case .leaf(let l) = s.root {
+            #expect(l.sessionId == "s1")
+            #expect(s.focusedLeafId == l.id)
+        } else {
+            Issue.record("expected leaf root after collapse")
+        }
+        // Re-read to confirm persistence
+        guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
+              case .terminal(let persisted) = reread,
+              case .leaf(let persistedLeaf) = persisted.root else {
+            Issue.record("collapse did not persist into byWorktree"); return
+        }
+        #expect(persistedLeaf.sessionId == "s1")
+        #expect(persisted.focusedLeafId == persistedLeaf.id)
     }
 
     @Test func removeFocusedLeafSignalsLastLeafRemoval() throws {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
         let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
-        #expect(outcome.closedSessionId == "s1")
-        #expect(outcome.tabRemoved == true)
+        guard case .tabRemoved(let closedSessionId) = outcome else {
+            Issue.record("expected .tabRemoved"); return
+        }
+        #expect(closedSessionId == "s1")
     }
 
     @Test func setSplitFractionClampsBetween0_1And0_9() {

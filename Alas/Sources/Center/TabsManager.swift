@@ -174,10 +174,17 @@ final class TabsManager {
         return tab
     }
 
-    struct RemoveFocusedLeafOutcome {
-        let tab: Tab?
-        let tabRemoved: Bool
-        let closedSessionId: String
+    enum RemoveFocusedLeafOutcome {
+        /// A non-focused-leaf sibling collapsed up; the tab persists.
+        case leafRemoved(tab: Tab, closedSessionId: String)
+        /// The focused leaf was the last leaf; caller must run the regular close-tab path.
+        case tabRemoved(closedSessionId: String)
+
+        var closedSessionId: String {
+            switch self {
+            case .leafRemoved(_, let id), .tabRemoved(let id): return id
+            }
+        }
     }
 
     /// Remove the focused leaf. If it was the last leaf, the tab is removed via
@@ -198,9 +205,9 @@ final class TabsManager {
             file.tabs[idx] = tab
             byWorktree[worktreeId] = file
             persist(worktreeId)
-            return RemoveFocusedLeafOutcome(tab: tab, tabRemoved: false, closedSessionId: closedSessionId)
+            return .leafRemoved(tab: tab, closedSessionId: closedSessionId)
         } else {
-            return RemoveFocusedLeafOutcome(tab: nil, tabRemoved: true, closedSessionId: closedSessionId)
+            return .tabRemoved(closedSessionId: closedSessionId)
         }
     }
 
@@ -254,7 +261,7 @@ final class TabsManager {
                               transform: (PaneLeaf) -> PaneLeaf) -> PaneNode {
         switch node {
         case .leaf(let l):
-            return l.id == leafId ? .leaf(transform(l)) : .leaf(l)
+            return l.id == leafId ? .leaf(transform(l)) : node
         case .split(var s):
             s.children = s.children.map { updatingLeaf($0, leafId: leafId, transform: transform) }
             return .split(s)
