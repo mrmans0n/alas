@@ -173,7 +173,15 @@ private func alasGhosttyAction(
         guard let sv = surfaceView else { return true }
         let pwd = action.action.pwd.pwd.map { String(cString: $0) } ?? ""
         guard !pwd.isEmpty else { return true }
-        let url = URL(fileURLWithPath: pwd)
+        // OSC 7 emits a file:// URL when shell integration is active. Parse
+        // it as a URL first and fall back to treating the string as a raw
+        // filesystem path for any shell that emits one directly.
+        let url: URL = {
+            if let parsed = URL(string: pwd), parsed.isFileURL {
+                return URL(fileURLWithPath: parsed.path)
+            }
+            return URL(fileURLWithPath: pwd)
+        }()
         DispatchQueue.main.async { sv.setCurrentWorkingDirectory(url) }
         return true
 
