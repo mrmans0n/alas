@@ -169,7 +169,7 @@ extension PaneNode {
 
 // MARK: - Focus-by-direction
 
-enum PaneFocusDirection { case left, right, up, down }
+enum PaneFocusDirection: Equatable, Sendable { case left, right, up, down }
 
 enum PaneFocusFinder {
     /// Find the nearest leaf in `direction` from the source leaf.
@@ -193,10 +193,10 @@ enum PaneFocusFinder {
 
     private static func isInDirection(source: CGRect, candidate: CGRect, direction: PaneFocusDirection) -> Bool {
         switch direction {
-        case .left:  return candidate.midX < source.midX
-        case .right: return candidate.midX > source.midX
-        case .up:    return candidate.midY < source.midY
-        case .down:  return candidate.midY > source.midY
+        case .left:  return candidate.maxX <= source.minX
+        case .right: return candidate.minX >= source.maxX
+        case .up:    return candidate.maxY <= source.minY
+        case .down:  return candidate.minY >= source.maxY
         }
     }
 
