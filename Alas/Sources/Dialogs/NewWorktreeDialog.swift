@@ -33,8 +33,10 @@ struct NewWorktreeDialog: View {
                     }
                 } else if showsRepositorySelector {
                     DialogField(label: "Repository") {
-                        Seg(value: $projectId,
-                            options: state.projects.map { ($0.id, $0.name) })
+                        ProjectPicker(
+                            selection: $projectId,
+                            projects: state.projects
+                        )
                     }
                 }
                 DialogField(label: "Base branch") {
