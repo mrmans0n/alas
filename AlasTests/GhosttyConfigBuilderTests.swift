@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -38,5 +39,33 @@ struct GhosttyConfigBuilderTests {
 
     @Test func posixQuoteEmptyStringIsEmptyQuotes() {
         #expect(GhosttyConfigBuilder.posixQuote("") == "''")
+    }
+
+    @Test @MainActor func writeGlobalConfigEmitsKeybindUnbinds() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ghostty-config-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let cfg = AppConfig.defaults.terminal
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        try GhosttyConfigBuilder.writeGlobalConfigFile(cfg: cfg, theme: theme, to: url)
+        let body = try String(contentsOf: url, encoding: .utf8)
+
+        let expected = [
+            "keybind = cmd+d=unbind",
+            "keybind = cmd+shift+d=unbind",
+            "keybind = cmd+w=unbind",
+            "keybind = cmd+alt+left=unbind",
+            "keybind = cmd+alt+right=unbind",
+            "keybind = cmd+alt+up=unbind",
+            "keybind = cmd+alt+down=unbind",
+            "keybind = cmd+ctrl+left=unbind",
+            "keybind = cmd+ctrl+right=unbind",
+            "keybind = cmd+ctrl+up=unbind",
+            "keybind = cmd+ctrl+down=unbind",
+        ]
+        for line in expected {
+            #expect(body.contains(line), "config missing line: \(line)")
+        }
     }
 }
