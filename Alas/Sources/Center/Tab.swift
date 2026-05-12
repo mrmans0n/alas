@@ -64,8 +64,54 @@ struct CommitTabState: Codable, Equatable, Identifiable {
 
 struct TerminalTabState: Codable, Equatable, Identifiable {
     let id: TabID
-    var title: String       // e.g. branch name, "main", or "+ N"
-    var sessionId: String   // matches TerminalSession.id (re-attached on launch)
+    var title: String
+    var root: PaneNode
+    var focusedLeafId: String
+
+    init(id: TabID, title: String, root: PaneNode, focusedLeafId: String) {
+        self.id = id
+        self.title = title
+        self.root = root
+        self.focusedLeafId = focusedLeafId
+    }
+
+    /// Convenience for callers that still create a single-leaf tab.
+    init(id: TabID, title: String, sessionId: String) {
+        let leafId = UUID().uuidString
+        self.id = id
+        self.title = title
+        self.root = .leaf(PaneLeaf(id: leafId, sessionId: sessionId, lastCwd: nil))
+        self.focusedLeafId = leafId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, root, focusedLeafId, sessionId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(TabID.self, forKey: .id)
+        self.title = try c.decode(String.self, forKey: .title)
+        if let root = try c.decodeIfPresent(PaneNode.self, forKey: .root) {
+            self.root = root
+            self.focusedLeafId = try c.decodeIfPresent(String.self, forKey: .focusedLeafId)
+                ?? root.firstLeaf().id
+        } else {
+            // Legacy shape: {id, title, sessionId}. Migrate to a single-leaf tree.
+            let legacy = try c.decode(String.self, forKey: .sessionId)
+            let leafId = UUID().uuidString
+            self.root = .leaf(PaneLeaf(id: leafId, sessionId: legacy, lastCwd: nil))
+            self.focusedLeafId = leafId
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(root, forKey: .root)
+        try c.encode(focusedLeafId, forKey: .focusedLeafId)
+    }
 }
 
 struct EditorTabState: Codable, Equatable, Identifiable {
