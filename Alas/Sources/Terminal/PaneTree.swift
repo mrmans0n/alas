@@ -165,3 +165,55 @@ extension PaneNode {
         }
     }
 }
+
+// MARK: - Focus-by-direction
+
+enum PaneFocusDirection { case left, right, up, down }
+
+enum PaneFocusFinder {
+    /// Find the nearest leaf in `direction` from the source leaf.
+    /// Returns nil if no candidate exists (e.g. source is at the edge or unknown).
+    static func nearestLeaf(
+        from sourceId: String,
+        direction: PaneFocusDirection,
+        frames: [String: CGRect]
+    ) -> String? {
+        guard let source = frames[sourceId] else { return nil }
+        let candidates = frames.filter { id, rect in
+            guard id != sourceId else { return false }
+            return isInDirection(source: source, candidate: rect, direction: direction)
+                && hasPerpendicularOverlap(source: source, candidate: rect, direction: direction)
+        }
+        return candidates.min(by: { lhs, rhs in
+            distance(source: source, target: lhs.value, direction: direction)
+                < distance(source: source, target: rhs.value, direction: direction)
+        })?.key
+    }
+
+    private static func isInDirection(source: CGRect, candidate: CGRect, direction: PaneFocusDirection) -> Bool {
+        switch direction {
+        case .left:  return candidate.midX < source.midX
+        case .right: return candidate.midX > source.midX
+        case .up:    return candidate.midY < source.midY
+        case .down:  return candidate.midY > source.midY
+        }
+    }
+
+    private static func hasPerpendicularOverlap(source: CGRect, candidate: CGRect, direction: PaneFocusDirection) -> Bool {
+        switch direction {
+        case .left, .right:
+            return max(source.minY, candidate.minY) < min(source.maxY, candidate.maxY)
+        case .up, .down:
+            return max(source.minX, candidate.minX) < min(source.maxX, candidate.maxX)
+        }
+    }
+
+    private static func distance(source: CGRect, target: CGRect, direction: PaneFocusDirection) -> CGFloat {
+        switch direction {
+        case .left, .right:
+            return abs(target.midX - source.midX)
+        case .up, .down:
+            return abs(target.midY - source.midY)
+        }
+    }
+}
