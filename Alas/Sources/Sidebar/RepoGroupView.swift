@@ -22,6 +22,10 @@ struct RepoGroupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Collapse toggle and the inline + are independent controls in the
+            // same row. Don't wrap the row in a parent Button — that nests the
+            // + inside another button's hit region and clicking the + can also
+            // fire the collapse action.
             HStack(spacing: 7) {
                 Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
                 RepoDot(color: project.color, letter: letter)
@@ -99,19 +103,21 @@ struct RepoGroupView: View {
         return after.prefix(1).uppercased()
     }
 
+    private var summaries: [HarnessService.WorktreeHarnessSummary] {
+        worktrees.compactMap { harnessSummary($0.id) }
+    }
+
     /// Project-level rollup: awaiting wins across worktrees, else running.
     /// Returns nil if no worktree in this project has any busy session.
     private func projectSummary() -> HarnessService.WorktreeHarnessSummary? {
-        let perWorktree = worktrees.compactMap { harnessSummary($0.id) }
-        if let s = perWorktree.first(where: { $0.state == .awaiting }) { return s }
-        return perWorktree.first(where: { $0.state == .running })
+        if let s = summaries.first(where: { $0.state == .awaiting }) { return s }
+        return summaries.first(where: { $0.state == .running })
     }
 
     /// Tooltip for the collapsed-header dot. Counts independently across
     /// worktrees, lists distinct harness kinds in `HarnessKind.allCases` order.
     private func headerTooltip() -> String {
-        let summaries = worktrees.compactMap { harnessSummary($0.id) }
-        let runningCount  = summaries.filter { $0.state == .running  }.count
+        let runningCount = summaries.filter { $0.state == .running }.count
         let awaitingCount = summaries.filter { $0.state == .awaiting }.count
         let distinctKinds = HarnessKind.allCases.filter { kind in
             summaries.contains { $0.kind == kind }
@@ -120,7 +126,7 @@ struct RepoGroupView: View {
 
         var parts: [String] = []
         if runningCount > 0 {
-            parts.append("\(runningCount) worktree\(runningCount == 1 ? "" : "s") running")
+            parts.append("\(runningCount) running")
         }
         if awaitingCount > 0 {
             parts.append("\(awaitingCount) awaiting")
