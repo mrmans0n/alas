@@ -76,8 +76,8 @@ struct FileSearchDialog: View {
                     .padding(.vertical, 4)
                 }
                 .frame(minHeight: 240, maxHeight: 460)
-                .onChange(of: model.selectedIndex) { _, new in
-                    proxy.scrollTo(new, anchor: .center)
+                .onChange(of: model.scrollToSelectionTick) { _, _ in
+                    proxy.scrollTo(model.selectedIndex, anchor: .center)
                 }
             }
         }
@@ -133,10 +133,10 @@ struct FileSearchDialog: View {
             close()
             return .handled
         case .upArrow:
-            model.selectedIndex = max(0, model.selectedIndex - 1)
+            model.moveSelection(to: max(0, model.selectedIndex - 1))
             return .handled
         case .downArrow:
-            model.selectedIndex = min(max(0, model.totalResultRows - 1), model.selectedIndex + 1)
+            model.moveSelection(to: min(max(0, model.totalResultRows - 1), model.selectedIndex + 1))
             return .handled
         case .return:
             // Branch on kind so a Tab → Return on a stale file row from a
