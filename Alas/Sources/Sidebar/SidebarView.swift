@@ -35,6 +35,13 @@ struct SidebarView: View {
                                     }
                                 ),
                                 selectedWorktreeId: state.selectedWorktreeId,
+                                harnessSummary: { worktreeId in
+                                    let ids = state.tabs.tabs(forWorktree: worktreeId).compactMap { tab -> String? in
+                                        if case .terminal(let s) = tab { return s.sessionId }
+                                        return nil
+                                    }
+                                    return state.harness.summary(forSessionIds: ids)
+                                },
                                 onSelect: { wt in state.selectedWorktreeId = wt.id },
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
@@ -56,7 +63,19 @@ struct SidebarView: View {
                                     NSWorkspace.shared.activateFileViewerSelecting([wt.path])
                                 },
                                 onArchive: { wt in state.archiveWorktree(wt) },
-                                onDelete: { wt in state.deleteWorktree(wt) }
+                                onDelete: { wt in state.deleteWorktree(wt) },
+                                onActivateHarness: { wt in
+                                    let ids = state.tabs.tabs(forWorktree: wt.id).compactMap { tab -> String? in
+                                        if case .terminal(let s) = tab { return s.sessionId }
+                                        return nil
+                                    }
+                                    guard let summary = state.harness.summary(forSessionIds: ids) else { return }
+                                    state.activateHarnessSession(
+                                        projectId: project.id,
+                                        worktreeId: wt.id,
+                                        sessionId: summary.primarySessionId
+                                    )
+                                }
                             )
                         }
                     }

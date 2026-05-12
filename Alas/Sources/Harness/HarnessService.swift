@@ -105,4 +105,77 @@ final class HarnessService {
         harnessBySession.removeValue(forKey: sessionId)
         stateBySession.removeValue(forKey: sessionId)
     }
+
+    enum AggregatedState: String, Equatable {
+        case running, awaiting
+    }
+
+    struct WorktreeHarnessSummary: Equatable {
+        /// Priority-resolved state for the pill/dot color: awaiting wins.
+        let state: AggregatedState
+        /// Kind of the primary session (the one click-through routes to).
+        let kind: HarnessKind
+        let primarySessionId: String
+        /// Per-state session counts, always populated regardless of which
+        /// state was chosen as the priority. Lets callers (e.g. the
+        /// collapsed-header tooltip) accurately enumerate mixed-state
+        /// activity even when one state would normally mask the other.
+        let runningSessionCount: Int
+        let awaitingSessionCount: Int
+    }
+
+    /// Roll up per-session harness state to a single summary for a worktree.
+    /// Returns nil if no session in `ids` is running or awaiting (or none have
+    /// a detected kind to attribute the summary to).
+    func summary(forSessionIds ids: [String]) -> WorktreeHarnessSummary? {
+        // Partition candidate ids by state, preserving caller order.
+        var awaitingIds: [String] = []
+        var runningIds: [String] = []
+        for id in ids {
+            switch stateBySession[id] {
+            case "awaiting": awaitingIds.append(id)
+            case "running":  runningIds.append(id)
+            default: break
+            }
+        }
+
+        // Try awaiting first; fall back to running if no awaiting session has a kind.
+        if let s = pickSummary(state: .awaiting, ids: awaitingIds,
+                               runningCount: runningIds.count, awaitingCount: awaitingIds.count) { return s }
+        if let s = pickSummary(state: .running, ids: runningIds,
+                               runningCount: runningIds.count, awaitingCount: awaitingIds.count) { return s }
+        return nil
+    }
+
+    private func pickSummary(
+        state: AggregatedState,
+        ids: [String],
+        runningCount: Int,
+        awaitingCount: Int
+    ) -> WorktreeHarnessSummary? {
+        guard !ids.isEmpty else { return nil }
+        // First id whose kind is known wins as primary. Skip ids missing a kind.
+        guard let primary = ids.first(where: { harnessBySession[$0] != nil }),
+              let kind = harnessBySession[primary] else { return nil }
+        return WorktreeHarnessSummary(
+            state: state,
+            kind: kind,
+            primarySessionId: primary,
+            runningSessionCount: runningCount,
+            awaitingSessionCount: awaitingCount
+        )
+    }
+
+    // MARK: - Test seams (debug only)
+
+    #if DEBUG
+    func setStateForTesting(sessionId: String, kind: HarnessKind, state: String) {
+        harnessBySession[sessionId] = kind
+        stateBySession[sessionId] = state
+    }
+
+    func setStateOnlyForTesting(sessionId: String, state: String) {
+        stateBySession[sessionId] = state
+    }
+    #endif
 }

@@ -42,8 +42,12 @@ final class HarnessDetector {
     }
 
     static func matchKind(processName: String) -> HarnessKind? {
-        for kind in HarnessKind.allCases where kind.processNames.contains(processName) {
-            return kind
+        for kind in HarnessKind.allCases {
+            for name in kind.processNames {
+                if processName == name || processName.hasPrefix(name + "-") {
+                    return kind
+                }
+            }
         }
         return nil
     }
