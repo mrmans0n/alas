@@ -49,7 +49,7 @@ struct TerminalTabStateCodableTests {
         }
     }
 
-    @Test func encodingAlwaysIncludesRootAndFocusedLeafId() throws {
+    @Test func encodingNeverEmitsTopLevelSessionIdKey() throws {
         let state = TerminalTabState(
             id: "tab-1",
             title: "main",
@@ -57,8 +57,18 @@ struct TerminalTabStateCodableTests {
             focusedLeafId: "leaf-1"
         )
         let data = try JSONEncoder().encode(state)
-        let raw = String(data: data, encoding: .utf8) ?? ""
-        #expect(raw.contains("\"root\""))
-        #expect(raw.contains("\"focusedLeafId\""))
+        let parsed = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(parsed["root"] != nil)
+        #expect(parsed["focusedLeafId"] != nil)
+        #expect(parsed["sessionId"] == nil,
+                "Top-level sessionId leaked into the new shape — encode(to:) should never emit it.")
+    }
+
+    @Test func decodeWithRootButNoFocusedLeafIdFallsBackToFirstLeaf() throws {
+        let json = #"""
+        {"id":"t","title":"x","root":{"kind":"leaf","id":"leaf-1","sessionId":"s","lastCwd":null}}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: json)
+        #expect(decoded.focusedLeafId == "leaf-1")
     }
 }
