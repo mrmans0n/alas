@@ -335,7 +335,8 @@ extension AlasGhostty {
                 .subtracting(.capsLock)
             guard flags == .command else { return false }
 
-            return event.charactersIgnoringModifiers?.lowercased() == "t"
+            guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+            return chars == "t" || ("1"..."9").contains(chars)
         }
 
         // MARK: - Mouse events

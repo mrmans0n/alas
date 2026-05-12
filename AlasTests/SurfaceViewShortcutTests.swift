@@ -37,6 +37,61 @@ struct SurfaceViewShortcutTests {
         #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
     }
 
+    @Test func commandDigitOneIsReservedForAppCommand() throws {
+        let event = try keyEvent(
+            characters: "1",
+            ignoringModifiers: "1",
+            modifiers: .command,
+            keyCode: 18
+        )
+
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandDigitNineIsReservedForAppCommand() throws {
+        let event = try keyEvent(
+            characters: "9",
+            ignoringModifiers: "9",
+            modifiers: .command,
+            keyCode: 25
+        )
+
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandDigitAllowsCapsLock() throws {
+        let event = try keyEvent(
+            characters: "1",
+            ignoringModifiers: "1",
+            modifiers: [.command, .capsLock],
+            keyCode: 18
+        )
+
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func modifiedCommandDigitIsNotReserved() throws {
+        let event = try keyEvent(
+            characters: "!",
+            ignoringModifiers: "1",
+            modifiers: [.command, .shift],
+            keyCode: 18
+        )
+
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandZeroIsNotReserved() throws {
+        let event = try keyEvent(
+            characters: "0",
+            ignoringModifiers: "0",
+            modifiers: .command,
+            keyCode: 29
+        )
+
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
     @Test func otherCommandKeysAreNotReserved() throws {
         let event = try keyEvent(
             characters: "w",
