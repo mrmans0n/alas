@@ -37,7 +37,11 @@ private struct ProjectDialog: View {
     @State private var isValidating = false
     @State private var errorMessage: String?
 
-    private let palette = ["#5fb7c4", "#c89d6f", "#9789c7", "#7fb978", "#d77b88"]
+    private let palette = [
+        "#5fb7c4", "#c89d6f", "#9789c7", "#7fb978", "#d77b88",
+        "#6f9bd1", "#e0b86f", "#b87fc4", "#7fc4b0", "#c4b87f",
+        "#d49960", "#8fb4d4",
+    ]
 
     var body: some View {
         DialogContainer(

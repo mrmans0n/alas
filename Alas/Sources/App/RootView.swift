@@ -4,8 +4,7 @@ import SwiftUI
 struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
-    @State private var showEditProject = false
-    @State private var editingProjectId: String?
+    @State private var editingProject: ProjectConfig?
     @State private var showNewWorktree = false
     @State private var newWorktreePresetProjectId: String?
     @State private var collapsedProjects: Set<String> = []
@@ -39,8 +38,7 @@ struct RootView: View {
                                 onSettings: { openSettingsWindow() },
                                 onAddProject: { showNewProject = true },
                                 onEditProject: { projectId in
-                                    editingProjectId = projectId
-                                    showEditProject = true
+                                    editingProject = state.projects.first { $0.id == projectId }
                                 },
                                 onNewWorktree: { projectId in
                                     newWorktreePresetProjectId = projectId
@@ -95,10 +93,15 @@ struct RootView: View {
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
         }
-        .sheet(isPresented: $showEditProject, onDismiss: { editingProjectId = nil }) {
-            if let project = editingProject() {
-                EditProjectDialog(state: state, presented: $showEditProject, project: project)
-            }
+        .sheet(item: $editingProject) { project in
+            EditProjectDialog(
+                state: state,
+                presented: Binding(
+                    get: { editingProject != nil },
+                    set: { if !$0 { editingProject = nil } }
+                ),
+                project: project
+            )
         }
         .sheet(isPresented: $showNewWorktree, onDismiss: { newWorktreePresetProjectId = nil }) {
             NewWorktreeDialog(
@@ -123,11 +126,6 @@ struct RootView: View {
 
     private func openSettingsWindow() {
         openWindow(id: "settings")
-    }
-
-    private func editingProject() -> ProjectConfig? {
-        guard let editingProjectId else { return nil }
-        return state.projects.first { $0.id == editingProjectId }
     }
 
     private func selectedWorktree() -> Worktree? {
