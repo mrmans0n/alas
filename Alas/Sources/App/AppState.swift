@@ -362,15 +362,30 @@ final class AppState {
     }
 
     @discardableResult
-    func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID, sessionId: String) throws -> Tab? {
+    func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID) throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab,
-              state.root.leaves().contains(where: { $0.sessionId == sessionId }) else { return nil }
-        if terminal.registry.session(for: sessionId) != nil { return tab }
-        // Task 3 stop-gap: only handle the focused-leaf case. Task 12 generalizes this.
-        guard let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
-              focused.sessionId == sessionId else { return nil }
-        return try replaceMissingTerminalSession(worktreeId: worktreeId, tab: state)
+              let worktree = worktree(withId: worktreeId),
+              let project = projects.first(where: { $0.id == worktree.projectId }) else { return nil }
+
+        for leaf in state.root.leaves() {
+            if terminal.registry.session(for: leaf.sessionId) != nil { continue }
+            let forcedCwd = leaf.lastCwd.map { URL(fileURLWithPath: $0) }
+            let session = try terminal.openSession(
+                worktree: worktree, project: project,
+                cfg: config.terminal, theme: themeStore.current,
+                forcedCwd: forcedCwd
+            )
+            harness.detector.unregister(sessionId: leaf.sessionId)
+            harness.forgetSession(leaf.sessionId)
+            harness.detector.register(sessionId: session.id) { [weak session] in
+                session?.surface.foregroundPid
+            }
+            _ = tabs.replaceLeafSession(
+                worktreeId: worktreeId, tabId: tabId, leafId: leaf.id, sessionId: session.id
+            )
+        }
+        return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
     }
 
     func saveActiveTab(worktreeId: String) {
@@ -557,34 +572,6 @@ final class AppState {
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
-    }
-
-    @discardableResult
-    private func replaceMissingTerminalSession(worktreeId: String, tab: TerminalTabState) throws -> Tab {
-        guard let worktree = worktree(withId: worktreeId),
-              let project = projects.first(where: { $0.id == worktree.projectId }) else {
-            throw NSError(domain: "AppState", code: 2)
-        }
-
-        let oldSessionId = tab.root.find(leafId: tab.focusedLeafId)?.leaf.sessionId ?? ""
-        let session = try terminal.openSession(
-            worktree: worktree, project: project,
-            cfg: config.terminal, theme: themeStore.current
-        )
-        harness.detector.unregister(sessionId: oldSessionId)
-        harness.forgetSession(oldSessionId)
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
-        }
-        guard let replacement = tabs.replaceTerminalSession(
-            worktreeId: worktreeId,
-            tabId: tab.id,
-            sessionId: session.id
-        ) else {
-            terminal.closeSession(id: session.id)
-            throw NSError(domain: "AppState", code: 3)
-        }
-        return replacement
     }
 
     private func defaultTerminalTitle(for worktree: Worktree) -> String {

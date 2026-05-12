@@ -18,11 +18,10 @@ struct TerminalTabView: View {
                 TerminalRecoverPlaceholder(state: state, worktreeId: worktreeId, tabId: tabId)
             }
         }
-        .task(id: sessionId) {
+        .task(id: tabId) {
             _ = try? state.restoreTerminalTabIfNeeded(
                 worktreeId: worktreeId,
-                tabId: tabId,
-                sessionId: sessionId
+                tabId: tabId
             )
         }
         .background(theme.color("bg-0"))
@@ -41,16 +40,7 @@ private struct TerminalRecoverPlaceholder: View {
                 .font(.system(size: 14))
                 .foregroundColor(theme.color("fg-muted"))
             AlasButton(title: "Open new terminal", style: .primary) {
-                Task {
-                    if case .terminal(let terminal) = state.tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
-                       let focused = terminal.root.find(leafId: terminal.focusedLeafId)?.leaf {
-                        _ = try? state.restoreTerminalTabIfNeeded(
-                            worktreeId: worktreeId,
-                            tabId: tabId,
-                            sessionId: focused.sessionId
-                        )
-                    }
-                }
+                Task { _ = try? state.restoreTerminalTabIfNeeded(worktreeId: worktreeId, tabId: tabId) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

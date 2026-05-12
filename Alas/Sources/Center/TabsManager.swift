@@ -131,6 +131,26 @@ final class TabsManager {
         return tab
     }
 
+    /// Replace a specific leaf's `sessionId` (preserving its `lastCwd`).
+    /// Used by `AppState.restoreTerminalTabIfNeeded` to patch the tree after
+    /// recreating a dropped session.
+    @discardableResult
+    func replaceLeafSession(worktreeId: String, tabId: TabID, leafId: String, sessionId: String) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx],
+              let existing = state.root.find(leafId: leafId)?.leaf else { return nil }
+        let replacement: PaneNode = .leaf(PaneLeaf(
+            id: leafId, sessionId: sessionId, lastCwd: existing.lastCwd
+        ))
+        state.root = state.root.replacingLeaf(id: leafId, with: replacement)
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
     // MARK: - Pane tree mutations
 
     @discardableResult
