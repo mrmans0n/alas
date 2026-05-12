@@ -73,9 +73,9 @@ enum HookInstaller {
             "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
             "hooks": commandHooks
         ]
-        let entries = [
-            ("Stop", stopEntry),
-            ("Notification", notificationEntry)
+        let entries: [(eventName: String, entry: [String: Any], matcher: String?)] = [
+            ("Stop", stopEntry, nil),
+            ("Notification", notificationEntry, "permission_prompt|idle_prompt|elicitation_dialog")
         ]
 
         func hasCommand(_ dict: [String: Any]) -> Bool {
@@ -88,28 +88,12 @@ enum HookInstaller {
             (current["matcher"] as? String) != (expected["matcher"] as? String)
         }
 
-        func hooksChanged(current: [String: Any], expected: [String: Any]) -> Bool {
-            guard let currentHooks = current["hooks"] as? [[String: Any]],
-                  let expectedHooks = expected["hooks"] as? [[String: Any]] else {
-                return true
-            }
-            guard currentHooks.count == expectedHooks.count else {
-                return true
-            }
-            return zip(currentHooks, expectedHooks).contains { current, expected in
-                (current["type"] as? String) != (expected["type"] as? String)
-                    || (current["command"] as? String) != (expected["command"] as? String)
-            }
-        }
-
         var changed = false
-        for (eventName, entry) in entries {
+        for (eventName, entry, matcher) in entries {
             var eventHooks = (hooks[eventName] as? [[String: Any]]) ?? []
             if let existingIndex = eventHooks.firstIndex(where: hasCommand) {
-                let existing = eventHooks[existingIndex]
-                if matcherChanged(current: existing, expected: entry)
-                    || hooksChanged(current: existing, expected: entry) {
-                    eventHooks[existingIndex] = entry
+                if let matcher, matcherChanged(current: eventHooks[existingIndex], expected: entry) {
+                    eventHooks[existingIndex]["matcher"] = matcher
                     hooks[eventName] = eventHooks
                     changed = true
                 }
