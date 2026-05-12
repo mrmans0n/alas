@@ -167,6 +167,7 @@ struct NewWorktreeDialog: View {
         let runStartupAfter = runStartup
         let openTerminalAfter = openTerminal
         Task {
+            defer { isCreating = false }
             do {
                 let svc = WorktreeService()
                 let dest = URL(fileURLWithPath: pathOverride.isEmpty ? renderedPath : pathOverride)
@@ -216,7 +217,6 @@ struct NewWorktreeDialog: View {
             } catch {
                 errorMessage = error.localizedDescription
             }
-            isCreating = false
         }
     }
 

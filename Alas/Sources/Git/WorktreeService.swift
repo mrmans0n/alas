@@ -1,7 +1,17 @@
 import Foundation
 
 struct WorktreeService {
-    enum WorktreeError: Error { case gitFailed(String) }
+    enum WorktreeError: Error, LocalizedError {
+        case gitFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .gitFailed(stderr):
+                let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                return msg.isEmpty ? "Git worktree operation failed." : msg
+            }
+        }
+    }
 
     /// Parse `git worktree list --porcelain` into Worktree records.
     func list(repoPath: URL, projectId: String) async throws -> [Worktree] {
@@ -53,10 +63,20 @@ struct WorktreeService {
         destination: URL,
         projectId: String
     ) async throws -> Worktree {
-        let result = try await Process.git(
-            ["worktree", "add", destination.path, "-b", branch, base],
+        let refCheck = try await Process.git(
+            ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
             cwd: repoPath
         )
+        let branchExists = refCheck.exitCode == 0
+
+        let args: [String]
+        if branchExists {
+            args = ["worktree", "add", destination.path, branch]
+        } else {
+            args = ["worktree", "add", destination.path, "-b", branch, base]
+        }
+
+        let result = try await Process.git(args, cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return Worktree(
             id: Worktree.makeId(path: destination),

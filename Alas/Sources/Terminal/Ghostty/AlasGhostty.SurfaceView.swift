@@ -349,6 +349,8 @@ extension AlasGhostty {
 
             // ⌘T — reserved for the app's New Terminal Tab.
             if flags == .command && chars == "t" { return true }
+            // ⌘1..⌘9 — reserved for app tab switching.
+            if flags == .command && ("1"..."9").contains(chars) { return true }
             // ⌘D / ⇧⌘D — Split Right / Split Down.
             if flags == .command && chars == "d" { return true }
             if flags == [.command, .shift] && chars == "d" { return true }

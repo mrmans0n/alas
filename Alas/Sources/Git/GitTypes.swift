@@ -36,7 +36,7 @@ enum ChangeStage: String, Codable {
 }
 
 struct FileTreeNode: Identifiable, Equatable, Codable {
-    var id: String { path }
+    var id: String { "\(kind.rawValue):\(path)" }
     let name: String
     let path: String          // relative to repo root
     let kind: Kind
