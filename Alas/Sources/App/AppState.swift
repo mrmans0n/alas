@@ -220,6 +220,7 @@ final class AppState {
     /// Per-tab cache of leaf frames, written by `SplitContainer` during layout
     /// and read by `focusPane`. Keyed by tab id; inner dictionary maps leaf id
     /// to its on-screen rect within the tab's coordinate space.
+    @ObservationIgnored
     var terminalLeafFrames: [TabID: [String: CGRect]] = [:]
 
     /// Split the focused pane of the active terminal tab on `worktreeId`. The
@@ -265,12 +266,15 @@ final class AppState {
               let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .terminal = tab else { return }
         guard let outcome = tabs.removeFocusedLeaf(worktreeId: worktreeId, tabId: activeId) else { return }
-        let closedSessionId = outcome.closedSessionId
-        terminal.closeSession(id: closedSessionId)
-        harness.detector.unregister(sessionId: closedSessionId)
-        harness.forgetSession(closedSessionId)
         if case .tabRemoved = outcome {
+            // Tab still in storage with its original single-leaf root; closeTab
+            // walks the tree and tears down every session itself.
             closeTab(worktreeId: worktreeId, tabId: activeId)
+        } else {
+            let closedSessionId = outcome.closedSessionId
+            terminal.closeSession(id: closedSessionId)
+            harness.detector.unregister(sessionId: closedSessionId)
+            harness.forgetSession(closedSessionId)
         }
     }
 
