@@ -18,8 +18,8 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable {
     /// Process names (basename of executable) used for detection.
     var processNames: [String] {
         switch self {
-        case .claudeCode: return ["claude", "claude-code"]
-        case .codex:      return ["codex", "codex-cli"]
+        case .claudeCode: return ["claude"]
+        case .codex:      return ["codex"]
         case .aider:      return ["aider"]
         }
     }
