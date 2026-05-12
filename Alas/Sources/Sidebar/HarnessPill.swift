@@ -9,12 +9,14 @@ struct HarnessPill: View {
     let summary: HarnessService.WorktreeHarnessSummary
     let variant: Variant
     let tooltip: String
+    var isSelected: Bool = false
 
     @Environment(\.theme) var theme
 
     var body: some View {
         switch variant {
         case .full:
+            let background = isSelected ? theme.color("bg-3") : theme.color("bg-4")
             HStack(spacing: 4) {
                 Circle()
                     .fill(dotColor)
@@ -25,7 +27,7 @@ struct HarnessPill: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(theme.color("bg-4"))
+            .background(background)
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .help(tooltip)
 

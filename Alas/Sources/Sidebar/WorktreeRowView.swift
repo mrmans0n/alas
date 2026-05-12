@@ -54,7 +54,8 @@ struct WorktreeRowView: View {
                             HarnessPill(
                                 summary: summary,
                                 variant: .full,
-                                tooltip: pillTooltip(for: summary)
+                                tooltip: pillTooltip(for: summary),
+                                isSelected: isSelected
                             )
                         }
                         .buttonStyle(.plain)
@@ -89,7 +90,7 @@ struct WorktreeRowView: View {
         let stateText: String
         switch summary.state {
         case .running:  stateText = "running"
-        case .awaiting: stateText = "awaiting input"
+        case .awaiting: stateText = "awaiting"
         }
         return "\(summary.kind.displayName) · \(stateText)"
     }
