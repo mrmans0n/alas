@@ -61,11 +61,10 @@ struct CenterPaneView: View {
                 } else if let activeId = active,
                           let tab = tabs.first(where: { $0.id == activeId }) {
                     switch tab {
-                    case .terminal(let s):
+                    case .terminal:
                         TerminalTabView(state: state,
                                         worktreeId: worktree.id,
-                                        tabId: tab.id,
-                                        sessionId: s.root.find(leafId: s.focusedLeafId)?.leaf.sessionId ?? "")
+                                        tabId: tab.id)
                     case .editor(let s):
                         if MarkdownFileType.isMarkdown(relativePath: s.isExternal
                                                         ? (s.externalAbsolutePath ?? "")
