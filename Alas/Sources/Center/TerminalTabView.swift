@@ -126,6 +126,7 @@ private struct SplitContainer: View {
     @Environment(\.theme) var theme
 
     private let dividerThickness: CGFloat = 4
+    @State private var isDividerHovering = false
 
     var body: some View {
         GeometryReader { geo in
@@ -133,7 +134,7 @@ private struct SplitContainer: View {
             let usable = max(0, total - dividerThickness)
             let firstSize = max(20, usable * split.fraction)
             let secondSize = max(20, usable - firstSize)
-            let totalForFraction = total
+            let totalForFraction = usable
             content(firstSize: firstSize, secondSize: secondSize, totalForFraction: totalForFraction)
         }
     }
@@ -145,20 +146,24 @@ private struct SplitContainer: View {
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
                              node: split.children[0], focusedLeafId: focusedLeafId)
                     .frame(width: firstSize)
+                    .clipped()
                 dividerView(totalForFraction: totalForFraction)
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
                              node: split.children[1], focusedLeafId: focusedLeafId)
                     .frame(width: secondSize)
+                    .clipped()
             }
         } else {
             VStack(spacing: 0) {
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
                              node: split.children[0], focusedLeafId: focusedLeafId)
                     .frame(height: firstSize)
+                    .clipped()
                 dividerView(totalForFraction: totalForFraction)
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
                              node: split.children[1], focusedLeafId: focusedLeafId)
                     .frame(height: secondSize)
+                    .clipped()
             }
         }
     }
@@ -172,8 +177,10 @@ private struct SplitContainer: View {
                 height: isVertical ? nil : dividerThickness
             )
             .contentShape(Rectangle())
-            .onHover { hovering in
-                if hovering {
+            .onHover { nowHovering in
+                guard nowHovering != isDividerHovering else { return }
+                isDividerHovering = nowHovering
+                if nowHovering {
                     if isVertical { NSCursor.resizeLeftRight.push() }
                     else          { NSCursor.resizeUpDown.push() }
                 } else {
