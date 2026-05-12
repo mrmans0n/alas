@@ -130,6 +130,55 @@ extension ProjectsManagerTests {
         #expect(!mgr.isWorktreeHidden(projectId: project.id, path: bogus))
     }
 
+    @Test func refreshAllPopulatesMultipleProjects() async throws {
+        let repoA = try await makeRepo(name: "eta")
+        defer { try? FileManager.default.removeItem(at: repoA) }
+        let repoB = try await makeRepo(name: "theta")
+        defer { try? FileManager.default.removeItem(at: repoB) }
+
+        let mgr = ProjectsManager(persistedProjects: [])
+        let projectA = try await mgr.addProject(path: repoA, displayName: "eta", color: "#5fb7c4")
+        let projectB = try await mgr.addProject(path: repoB, displayName: "theta", color: "#c89d6f")
+
+        // Verify no worktrees are loaded yet.
+        #expect(mgr.worktrees(projectId: projectA.id).isEmpty)
+        #expect(mgr.worktrees(projectId: projectB.id).isEmpty)
+
+        let gcDropped = await mgr.refreshAll()
+
+        let treesA = mgr.worktrees(projectId: projectA.id)
+        let treesB = mgr.worktrees(projectId: projectB.id)
+        #expect(treesA.count == 1)
+        #expect(treesA.first?.branch == "main")
+        #expect(treesB.count == 1)
+        #expect(treesB.first?.branch == "main")
+        #expect(!gcDropped)
+    }
+
+    @Test func refreshAllReturnsTrueWhenAnyProjectGarbageCollects() async throws {
+        let repoA = try await makeRepo(name: "iota")
+        defer { try? FileManager.default.removeItem(at: repoA) }
+        let repoB = try await makeRepo(name: "kappa")
+        defer { try? FileManager.default.removeItem(at: repoB) }
+
+        let mgr = ProjectsManager(persistedProjects: [])
+        let projectA = try await mgr.addProject(path: repoA, displayName: "iota", color: "#5fb7c4")
+        let projectB = try await mgr.addProject(path: repoB, displayName: "kappa", color: "#c89d6f")
+
+        // Seed an orphan hidden path only on projectA.
+        let bogus = URL(fileURLWithPath: "/nonexistent/orphan-worktree")
+        mgr.setWorktreeHidden(projectId: projectA.id, path: bogus, hidden: true)
+
+        let gcDropped = await mgr.refreshAll()
+
+        // Should return true because projectA GC'd the orphan.
+        #expect(gcDropped)
+        #expect(!mgr.isWorktreeHidden(projectId: projectA.id, path: bogus))
+        // Both projects should still have their main worktree.
+        #expect(mgr.worktrees(projectId: projectA.id).count == 1)
+        #expect(mgr.worktrees(projectId: projectB.id).count == 1)
+    }
+
     @Test func refreshWithNoOrphansReturnsFalse() async throws {
         let repo = try await makeRepo(name: "zeta")
         defer { try? FileManager.default.removeItem(at: repo) }

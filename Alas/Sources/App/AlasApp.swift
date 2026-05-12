@@ -109,6 +109,22 @@ struct AlasApp: App {
                 }
                 .keyboardShortcut("9", modifiers: .command)
             }
+            CommandMenu("Projects") {
+                Button("Create Project…") {
+                    NotificationCenter.default.post(name: .alasCreateProject, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("New Worktree…") {
+                    NotificationCenter.default.post(name: .alasNewWorktree, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(state.projects.isEmpty)
+                Divider()
+                Button("Refresh Worktrees") {
+                    NotificationCenter.default.post(name: .alasRefreshWorktrees, object: nil)
+                }
+                .disabled(state.projects.isEmpty)
+            }
             CommandMenu("Terminal") {
                 Button("Split Right") {
                     NotificationCenter.default.post(name: .alasSplitRight, object: nil)
