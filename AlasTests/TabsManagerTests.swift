@@ -332,7 +332,8 @@ struct TabsManagerPaneTests {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
         guard case .terminal(let initialState) = tab else {
-            Issue.record("expected terminal tab"); return
+            Issue.record("expected terminal tab")
+            return
         }
         let originalFocus = initialState.focusedLeafId
 
@@ -343,7 +344,8 @@ struct TabsManagerPaneTests {
         _ = mgr.setFocusedLeaf(worktreeId: "wt", tabId: tab.id, leafId: originalFocus)
         guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
               case .terminal(let s) = reread else {
-            Issue.record("expected terminal tab in store after setFocusedLeaf"); return
+            Issue.record("expected terminal tab in store after setFocusedLeaf")
+            return
         }
         #expect(s.focusedLeafId == originalFocus)
     }
@@ -357,7 +359,8 @@ struct TabsManagerPaneTests {
         )
         guard case .terminal(let s) = result,
               case .split(let split) = s.root else {
-            Issue.record("expected a split at root"); return
+            Issue.record("expected a split at root")
+            return
         }
         #expect(split.axis == .horizontal)
         #expect(split.fraction == 0.5)
@@ -367,7 +370,8 @@ struct TabsManagerPaneTests {
         guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
               case .terminal(let persisted) = reread,
               case .split(let persistedSplit) = persisted.root else {
-            Issue.record("split did not persist into byWorktree"); return
+            Issue.record("split did not persist into byWorktree")
+            return
         }
         #expect(persistedSplit.axis == .horizontal)
         #expect(persistedSplit.children.count == 2)
@@ -383,7 +387,8 @@ struct TabsManagerPaneTests {
         )
         let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
         guard case .leafRemoved(let outcomeTab, let closedSessionId) = outcome else {
-            Issue.record("expected .leafRemoved"); return
+            Issue.record("expected .leafRemoved")
+            return
         }
         #expect(closedSessionId == "s2")
         if case .terminal(let s) = outcomeTab, case .leaf(let l) = s.root {
@@ -396,7 +401,8 @@ struct TabsManagerPaneTests {
         guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
               case .terminal(let persisted) = reread,
               case .leaf(let persistedLeaf) = persisted.root else {
-            Issue.record("collapse did not persist into byWorktree"); return
+            Issue.record("collapse did not persist into byWorktree")
+            return
         }
         #expect(persistedLeaf.sessionId == "s1")
         #expect(persisted.focusedLeafId == persistedLeaf.id)
@@ -407,7 +413,8 @@ struct TabsManagerPaneTests {
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
         let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
         guard case .tabRemoved(let closedSessionId) = outcome else {
-            Issue.record("expected .tabRemoved"); return
+            Issue.record("expected .tabRemoved")
+            return
         }
         #expect(closedSessionId == "s1")
     }
@@ -421,7 +428,8 @@ struct TabsManagerPaneTests {
         )
         guard case .terminal(let s) = (mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id })!),
               case .split(let split) = s.root else {
-            Issue.record("expected split"); return
+            Issue.record("expected split")
+            return
         }
 
         _ = mgr.setSplitFraction(worktreeId: "wt", tabId: tab.id, splitId: split.id, fraction: 1.5)
@@ -440,7 +448,8 @@ struct TabsManagerPaneTests {
     @Test func setLeafCwdUpdatesLastCwd() {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
-        guard case .terminal(let initialState) = tab else { Issue.record("not terminal"); return }
+        guard case .terminal(let initialState) = tab else { Issue.record("not terminal")
+        return }
         _ = mgr.setLeafCwd(worktreeId: "wt", tabId: tab.id,
                            leafId: initialState.focusedLeafId, cwd: "/Users/test")
         if case .terminal(let s) = (mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id })!),
@@ -452,7 +461,8 @@ struct TabsManagerPaneTests {
     @Test func replaceLeafSessionPreservesLastCwd() {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "old")
-        guard case .terminal(let initial) = tab else { Issue.record("not terminal"); return }
+        guard case .terminal(let initial) = tab else { Issue.record("not terminal")
+        return }
 
         // Seed a lastCwd on the leaf via setLeafCwd.
         _ = mgr.setLeafCwd(worktreeId: "wt", tabId: tab.id,
@@ -465,7 +475,8 @@ struct TabsManagerPaneTests {
         guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
               case .terminal(let s) = reread,
               case .leaf(let l) = s.root else {
-            Issue.record("expected single-leaf tab after replaceLeafSession"); return
+            Issue.record("expected single-leaf tab after replaceLeafSession")
+            return
         }
         #expect(l.sessionId == "new")
         #expect(l.lastCwd == "/tmp/work",
