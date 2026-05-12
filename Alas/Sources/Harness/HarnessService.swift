@@ -105,4 +105,62 @@ final class HarnessService {
         harnessBySession.removeValue(forKey: sessionId)
         stateBySession.removeValue(forKey: sessionId)
     }
+
+    enum AggregatedState: String, Equatable {
+        case running, awaiting
+    }
+
+    struct WorktreeHarnessSummary: Equatable {
+        let state: AggregatedState
+        let kind: HarnessKind
+        let primarySessionId: String
+        let sessionCount: Int
+    }
+
+    /// Roll up per-session harness state to a single summary for a worktree.
+    /// Returns nil if no session in `ids` is running or awaiting (or none have
+    /// a detected kind to attribute the summary to).
+    func summary(forSessionIds ids: [String]) -> WorktreeHarnessSummary? {
+        // Partition candidate ids by state, preserving caller order.
+        var awaitingIds: [String] = []
+        var runningIds: [String] = []
+        for id in ids {
+            switch stateBySession[id] {
+            case "awaiting": awaitingIds.append(id)
+            case "running":  runningIds.append(id)
+            default: break
+            }
+        }
+
+        // Try awaiting first; fall back to running if no awaiting session has a kind.
+        if let s = pickSummary(state: .awaiting, ids: awaitingIds) { return s }
+        if let s = pickSummary(state: .running,  ids: runningIds)  { return s }
+        return nil
+    }
+
+    private func pickSummary(state: AggregatedState, ids: [String]) -> WorktreeHarnessSummary? {
+        guard !ids.isEmpty else { return nil }
+        // First id whose kind is known wins as primary. Skip ids missing a kind.
+        guard let primary = ids.first(where: { harnessBySession[$0] != nil }),
+              let kind = harnessBySession[primary] else { return nil }
+        return WorktreeHarnessSummary(
+            state: state,
+            kind: kind,
+            primarySessionId: primary,
+            sessionCount: ids.count
+        )
+    }
+
+    // MARK: - Test seams (debug only)
+
+    #if DEBUG
+    func setStateForTesting(sessionId: String, kind: HarnessKind, state: String) {
+        harnessBySession[sessionId] = kind
+        stateBySession[sessionId] = state
+    }
+
+    func setStateOnlyForTesting(sessionId: String, state: String) {
+        stateBySession[sessionId] = state
+    }
+    #endif
 }
