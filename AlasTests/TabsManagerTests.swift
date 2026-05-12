@@ -323,3 +323,114 @@ struct TabsManagerTests {
         }
     }
 }
+
+// MARK: - Pane tree mutations
+
+@MainActor
+struct TabsManagerPaneTests {
+    @Test func setFocusedLeafUpdatesState() {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        guard case .terminal(let initialState) = tab else {
+            Issue.record("expected terminal tab"); return
+        }
+        let originalFocus = initialState.focusedLeafId
+
+        // Split the focused leaf so there's a second leaf to focus.
+        _ = mgr.splitFocusedLeaf(worktreeId: "wt", tabId: tab.id, axis: .vertical,
+                                  newLeafId: "new-leaf", newSessionId: "s2")
+
+        let updated = mgr.setFocusedLeaf(worktreeId: "wt", tabId: tab.id, leafId: originalFocus)
+        if case .terminal(let s) = updated {
+            #expect(s.focusedLeafId == originalFocus)
+        } else {
+            Issue.record("expected terminal tab")
+        }
+    }
+
+    @Test func splitFocusedLeafReplacesFocusedLeafWithSplit() {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        let result = mgr.splitFocusedLeaf(
+            worktreeId: "wt", tabId: tab.id, axis: .horizontal,
+            newLeafId: "new", newSessionId: "s2"
+        )
+        guard case .terminal(let s) = result,
+              case .split(let split) = s.root else {
+            Issue.record("expected a split at root"); return
+        }
+        #expect(split.axis == .horizontal)
+        #expect(split.fraction == 0.5)
+        #expect(split.children.count == 2)
+        #expect(s.focusedLeafId == "new")
+    }
+
+    @Test func removeFocusedLeafReturnsClosedSessionId() throws {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        _ = mgr.splitFocusedLeaf(
+            worktreeId: "wt", tabId: tab.id, axis: .vertical,
+            newLeafId: "new", newSessionId: "s2"
+        )
+        // Focus is on "new". Remove it.
+        let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
+        #expect(outcome.closedSessionId == "s2")
+        #expect(outcome.tabRemoved == false)
+        // The remaining leaf with sessionId "s1" should be focused.
+        if let updated = outcome.tab, case .terminal(let s) = updated {
+            if case .leaf(let l) = s.root {
+                #expect(l.sessionId == "s1")
+                #expect(s.focusedLeafId == l.id)
+            } else {
+                Issue.record("expected leaf root after collapse")
+            }
+        } else {
+            Issue.record("outcome.tab missing")
+        }
+    }
+
+    @Test func removeFocusedLeafSignalsLastLeafRemoval() throws {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
+        #expect(outcome.closedSessionId == "s1")
+        #expect(outcome.tabRemoved == true)
+    }
+
+    @Test func setSplitFractionClampsBetween0_1And0_9() {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        _ = mgr.splitFocusedLeaf(
+            worktreeId: "wt", tabId: tab.id, axis: .vertical,
+            newLeafId: "new", newSessionId: "s2"
+        )
+        guard case .terminal(let s) = (mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id })!),
+              case .split(let split) = s.root else {
+            Issue.record("expected split"); return
+        }
+
+        _ = mgr.setSplitFraction(worktreeId: "wt", tabId: tab.id, splitId: split.id, fraction: 1.5)
+        if case .terminal(let s2) = (mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id })!),
+           case .split(let s2split) = s2.root {
+            #expect(s2split.fraction == 0.9)
+        }
+
+        _ = mgr.setSplitFraction(worktreeId: "wt", tabId: tab.id, splitId: split.id, fraction: -0.5)
+        if case .terminal(let s3) = (mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id })!),
+           case .split(let s3split) = s3.root {
+            #expect(s3split.fraction == 0.1)
+        }
+    }
+
+    @Test func setLeafCwdUpdatesLastCwd() {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        guard case .terminal(let initialState) = tab else { Issue.record("not terminal"); return }
+        _ = mgr.setLeafCwd(worktreeId: "wt", tabId: tab.id,
+                           leafId: initialState.focusedLeafId, cwd: "/Users/test")
+        if case .terminal(let s) = (mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id })!),
+           case .leaf(let l) = s.root {
+            #expect(l.lastCwd == "/Users/test")
+        }
+    }
+}

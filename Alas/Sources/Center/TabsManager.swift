@@ -131,6 +131,136 @@ final class TabsManager {
         return tab
     }
 
+    // MARK: - Pane tree mutations
+
+    @discardableResult
+    func setFocusedLeaf(worktreeId: String, tabId: TabID, leafId: String) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx],
+              state.root.find(leafId: leafId) != nil else { return nil }
+        state.focusedLeafId = leafId
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    /// Split the focused leaf into a 2-child split. The freshly-spawned session id
+    /// is wrapped in a new leaf, which becomes the focused one.
+    @discardableResult
+    func splitFocusedLeaf(
+        worktreeId: String, tabId: TabID, axis: SplitAxis,
+        newLeafId: String, newSessionId: String
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx],
+              let existing = state.root.find(leafId: state.focusedLeafId)?.leaf else { return nil }
+        let newLeaf = PaneLeaf(id: newLeafId, sessionId: newSessionId, lastCwd: nil)
+        let replacement: PaneNode = .split(PaneSplit(
+            id: UUID().uuidString,
+            axis: axis,
+            fraction: 0.5,
+            children: [.leaf(existing), .leaf(newLeaf)]
+        ))
+        state.root = state.root.replacingLeaf(id: existing.id, with: replacement)
+        state.focusedLeafId = newLeafId
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    struct RemoveFocusedLeafOutcome {
+        let tab: Tab?
+        let tabRemoved: Bool
+        let closedSessionId: String
+    }
+
+    /// Remove the focused leaf. If it was the last leaf, the tab is removed via
+    /// the regular close-tab path and `tabRemoved` is true. Otherwise the sibling
+    /// collapses up and a sensible focus replacement is picked (first leaf in the
+    /// remaining tree).
+    @discardableResult
+    func removeFocusedLeaf(worktreeId: String, tabId: TabID) -> RemoveFocusedLeafOutcome? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx],
+              let focused = state.root.find(leafId: state.focusedLeafId)?.leaf else { return nil }
+        let closedSessionId = focused.sessionId
+        if let newRoot = state.root.removingLeaf(id: state.focusedLeafId) {
+            state.root = newRoot
+            state.focusedLeafId = newRoot.firstLeaf().id
+            let tab = Tab.terminal(state)
+            file.tabs[idx] = tab
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return RemoveFocusedLeafOutcome(tab: tab, tabRemoved: false, closedSessionId: closedSessionId)
+        } else {
+            return RemoveFocusedLeafOutcome(tab: nil, tabRemoved: true, closedSessionId: closedSessionId)
+        }
+    }
+
+    @discardableResult
+    func setSplitFraction(worktreeId: String, tabId: TabID, splitId: String, fraction: Double) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx] else { return nil }
+        state.root = updatingSplit(state.root, splitId: splitId) { s in
+            var copy = s
+            copy.fraction = max(0.1, min(0.9, fraction))
+            return copy
+        }
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func setLeafCwd(worktreeId: String, tabId: TabID, leafId: String, cwd: String) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(var state) = file.tabs[idx] else { return nil }
+        state.root = updatingLeaf(state.root, leafId: leafId) { l in
+            var copy = l
+            copy.lastCwd = cwd
+            return copy
+        }
+        let tab = Tab.terminal(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    /// Walks the tree and applies `transform` to the split with `splitId`.
+    private func updatingSplit(_ node: PaneNode, splitId: String,
+                               transform: (PaneSplit) -> PaneSplit) -> PaneNode {
+        switch node {
+        case .leaf: return node
+        case .split(var s):
+            if s.id == splitId { return .split(transform(s)) }
+            s.children = s.children.map { updatingSplit($0, splitId: splitId, transform: transform) }
+            return .split(s)
+        }
+    }
+
+    private func updatingLeaf(_ node: PaneNode, leafId: String,
+                              transform: (PaneLeaf) -> PaneLeaf) -> PaneNode {
+        switch node {
+        case .leaf(let l):
+            return l.id == leafId ? .leaf(transform(l)) : .leaf(l)
+        case .split(var s):
+            s.children = s.children.map { updatingLeaf($0, leafId: leafId, transform: transform) }
+            return .split(s)
+        }
+    }
+
     @discardableResult
     func appendEditor(worktreeId: String, title: String, relativePath: String) -> Tab {
         let state = EditorTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
