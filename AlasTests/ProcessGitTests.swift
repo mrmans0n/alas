@@ -45,4 +45,46 @@ struct ProcessGitTests {
             Issue.record("wrong error: \(error)")
         }
     }
+
+    @Test func gitEnvSetsOptionalLocksToZero() {
+        let env = Process.gitEnv()
+        #expect(env["GIT_OPTIONAL_LOCKS"] == "0")
+    }
+
+    @Test func gitEnvInheritsPath() {
+        // The parent process always has PATH set (xcodebuild guarantees this).
+        // If we accidentally clear inherited env when adding overrides, git
+        // can't be located and every git call breaks.
+        let env = Process.gitEnv()
+        #expect(env["PATH"] != nil)
+        #expect(env["PATH"]?.isEmpty == false)
+    }
+
+    @Test func gitEnvInheritsHome() {
+        // git resolves global config via HOME. Without inheritance, every
+        // `git` call would run with the wrong identity / no config.
+        let env = Process.gitEnv()
+        #expect(env["HOME"] != nil)
+    }
+
+    @Test func gitEnvPreservesAllParentVariables() {
+        // Stronger than the keyed tests above: a broken implementation that
+        // returned a hardcoded minimal dict (PATH/HOME only) would pass the
+        // single-key checks. Verify the whole parent env round-trips, with
+        // the single deliberate exception of GIT_OPTIONAL_LOCKS.
+        let parent = ProcessInfo.processInfo.environment
+        let env = Process.gitEnv()
+        for (key, value) in parent where key != "GIT_OPTIONAL_LOCKS" {
+            #expect(env[key] == value, "key \(key) was dropped or changed")
+        }
+    }
+
+    @Test func gitConvenienceCallStillWorks() async throws {
+        // Sanity: after switching to the explicit env dict (no longer
+        // passing env: nil), `Process.git` must still successfully locate
+        // and run /usr/bin/env git.
+        let result = try await Process.git(["--version"])
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.contains("git version"))
+    }
 }
