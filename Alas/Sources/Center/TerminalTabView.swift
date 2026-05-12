@@ -16,7 +16,8 @@ struct TerminalTabView: View {
                     worktreeId: worktreeId,
                     tabId: tabId,
                     node: tab.root,
-                    focusedLeafId: tab.focusedLeafId
+                    focusedLeafId: tab.focusedLeafId,
+                    inSplit: false
                 )
             } else {
                 TerminalRecoverPlaceholder(state: state, worktreeId: worktreeId, tabId: tabId)
@@ -47,6 +48,7 @@ private struct PaneNodeView: View {
     let tabId: TabID
     let node: PaneNode
     let focusedLeafId: String
+    let inSplit: Bool
 
     var body: some View {
         switch node {
@@ -56,7 +58,8 @@ private struct PaneNodeView: View {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 leaf: leaf,
-                isFocused: leaf.id == focusedLeafId
+                isFocused: leaf.id == focusedLeafId,
+                showFocusBorder: inSplit
             )
         case .split(let split):
             SplitContainer(
@@ -76,6 +79,7 @@ private struct PaneLeafView: View {
     let tabId: TabID
     let leaf: PaneLeaf
     let isFocused: Bool
+    let showFocusBorder: Bool
 
     @Environment(\.theme) var theme
 
@@ -91,7 +95,10 @@ private struct PaneLeafView: View {
         }
         .overlay(
             Rectangle()
-                .strokeBorder(isFocused ? theme.color("accent") : Color.clear, lineWidth: 1)
+                .strokeBorder(
+                    showFocusBorder && isFocused ? theme.color("accent") : Color.clear,
+                    lineWidth: 1
+                )
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -145,24 +152,24 @@ private struct SplitContainer: View {
         if split.axis == .vertical {
             HStack(spacing: 0) {
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
-                             node: split.children[0], focusedLeafId: focusedLeafId)
+                             node: split.children[0], focusedLeafId: focusedLeafId, inSplit: true)
                     .frame(width: firstSize)
                     .clipped()
                 dividerView(totalForFraction: totalForFraction)
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
-                             node: split.children[1], focusedLeafId: focusedLeafId)
+                             node: split.children[1], focusedLeafId: focusedLeafId, inSplit: true)
                     .frame(width: secondSize)
                     .clipped()
             }
         } else {
             VStack(spacing: 0) {
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
-                             node: split.children[0], focusedLeafId: focusedLeafId)
+                             node: split.children[0], focusedLeafId: focusedLeafId, inSplit: true)
                     .frame(height: firstSize)
                     .clipped()
                 dividerView(totalForFraction: totalForFraction)
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
-                             node: split.children[1], focusedLeafId: focusedLeafId)
+                             node: split.children[1], focusedLeafId: focusedLeafId, inSplit: true)
                     .frame(height: secondSize)
                     .clipped()
             }
