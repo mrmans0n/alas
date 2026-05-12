@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+struct ProjectUpdate: Equatable {
+    var name: String
+    var color: String
+}
+
 @Observable
 @MainActor
 final class ProjectsManager {
@@ -36,9 +41,10 @@ final class ProjectsManager {
         worktreesByProject.removeValue(forKey: id)
     }
 
-    func renameProject(id: String, name: String) {
+    func updateProject(id: String, update: ProjectUpdate) {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
-        projects[idx].name = name
+        projects[idx].name = update.name
+        projects[idx].color = update.color
     }
 
     func worktrees(projectId: String) -> [Worktree] {
