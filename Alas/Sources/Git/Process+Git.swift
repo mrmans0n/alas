@@ -129,13 +129,41 @@ extension Process {
         )
     }
 
-    /// Convenience wrapper that always uses `/usr/bin/env git`.
+    /// Builds the environment for every git invocation Alas spawns.
+    ///
+    /// Starts from the parent process env (so `PATH`, `HOME`, etc. work) and
+    /// sets `GIT_OPTIONAL_LOCKS=0`. The latter tells git not to take
+    /// optional locks like `.git/index.lock` on read-class commands
+    /// (`status`, `diff`, ...). Without it, alas's background monitoring
+    /// loop fights terminal git (`gg sync`, `git commit`) for the index
+    /// lock and the terminal call fails with
+    /// `fatal: Unable to create '.git/index.lock': File exists.`
+    ///
+    /// This dict is applied to the *child* process only — we never
+    /// `setenv` on Alas itself — so the embedded Ghostty terminal (which
+    /// builds its env from `ProcessInfo.processInfo.environment` via
+    /// `EnvBuilder`) is unaffected and user-typed `git` commands behave
+    /// exactly as they would in any other terminal.
+    static func gitEnv() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        return env
+    }
+
+    /// Convenience wrapper that always uses `/usr/bin/env git` with the
+    /// optional-locks-suppressed env from `gitEnv()`.
     static func git(
         _ args: [String],
         cwd: URL? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
-        try await run("/usr/bin/env", args: ["git"] + args, cwd: cwd, timeout: timeout)
+        try await run(
+            "/usr/bin/env",
+            args: ["git"] + args,
+            cwd: cwd,
+            env: gitEnv(),
+            timeout: timeout
+        )
     }
 }
 
