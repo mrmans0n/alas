@@ -56,9 +56,9 @@ struct PaneTreeTests {
         #expect(inner.id == "new-split")
     }
 
-    @Test func removingLeafCollapsesSingleChildSplit() {
+    @Test func removingLeafCollapsesSingleChildSplit() throws {
         let tree = split("s1", .vertical, 0.5, [leaf("a"), leaf("b")])
-        let result = try? #require(tree.removingLeaf(id: "b"))
+        let result = try #require(tree.removingLeaf(id: "b"))
         if case .leaf(let only) = result {
             #expect(only.id == "a")
         } else {
@@ -71,12 +71,12 @@ struct PaneTreeTests {
         #expect(tree.removingLeaf(id: "a") == nil)
     }
 
-    @Test func removingLeafFromNestedSplitCollapsesUpwards() {
+    @Test func removingLeafFromNestedSplitCollapsesUpwards() throws {
         let tree = split("s1", .vertical, 0.5, [
             leaf("a"),
             split("s2", .horizontal, 0.5, [leaf("b"), leaf("c")]),
         ])
-        let result = try? #require(tree.removingLeaf(id: "c"))
+        let result = try #require(tree.removingLeaf(id: "c"))
         if case .split(let root) = result,
            case .leaf(let l0) = root.children[0],
            case .leaf(let l1) = root.children[1] {

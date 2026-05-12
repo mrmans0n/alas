@@ -25,6 +25,9 @@ struct PaneSplit: Codable, Equatable, Identifiable {
     let id: String
     var axis: SplitAxis
     var fraction: Double
+    /// v1 always contains exactly two children. The array type leaves room for
+    /// future N-way splits; `removingLeaf` already collapses single-child splits
+    /// so callers never observe a degenerate 0/1-child state.
     var children: [PaneNode]
 }
 
