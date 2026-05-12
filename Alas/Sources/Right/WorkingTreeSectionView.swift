@@ -42,10 +42,10 @@ struct WorkingTreeSectionView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     if !staged.isEmpty {
-                        subsection(title: "Staged", files: staged, expanded: $stagedExpanded)
+                        subsection(title: "Staged", files: staged, expanded: $stagedExpanded, collapseNamespace: "staged")
                     }
                     if !unstaged.isEmpty {
-                        subsection(title: "Unstaged", files: unstaged, expanded: $unstagedExpanded)
+                        subsection(title: "Unstaged", files: unstaged, expanded: $unstagedExpanded, collapseNamespace: "unstaged")
                     }
                 }
             }
@@ -53,7 +53,12 @@ struct WorkingTreeSectionView: View {
     }
 
     @ViewBuilder
-    private func subsection(title: String, files: [ChangedFile], expanded: Binding<Bool>) -> some View {
+    private func subsection(
+        title: String,
+        files: [ChangedFile],
+        expanded: Binding<Bool>,
+        collapseNamespace: String
+    ) -> some View {
         SubHeader(
             title: title,
             count: files.count,
@@ -63,21 +68,27 @@ struct WorkingTreeSectionView: View {
         if expanded.wrappedValue {
             let filesByPath = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0) })
             ForEach(ChangesTreeBuilder.build(files: files)) { node in
-                renderNode(node, filesByPath: filesByPath, depth: 0)
+                renderNode(node, filesByPath: filesByPath, depth: 0, collapseNamespace: collapseNamespace)
             }
         }
     }
 
-    private func renderNode(_ node: FileTreeNode, filesByPath: [String: ChangedFile], depth: Int) -> AnyView {
+    private func renderNode(
+        _ node: FileTreeNode,
+        filesByPath: [String: ChangedFile],
+        depth: Int,
+        collapseNamespace: String
+    ) -> AnyView {
         if node.kind == .dir {
-            let open = !collapsedChangePaths.contains(node.path)
+            let collapseKey = "\(collapseNamespace):\(node.path)"
+            let open = !collapsedChangePaths.contains(collapseKey)
             return AnyView(
                 Group {
                     Button {
                         if open {
-                            collapsedChangePaths.insert(node.path)
+                            collapsedChangePaths.insert(collapseKey)
                         } else {
-                            collapsedChangePaths.remove(node.path)
+                            collapsedChangePaths.remove(collapseKey)
                         }
                     } label: {
                         HStack(spacing: 6) {
@@ -98,7 +109,14 @@ struct WorkingTreeSectionView: View {
                     }
                     .buttonStyle(.plain)
                     if open, let kids = node.children {
-                        ForEach(kids) { renderNode($0, filesByPath: filesByPath, depth: depth + 1) }
+                        ForEach(kids) {
+                            renderNode(
+                                $0,
+                                filesByPath: filesByPath,
+                                depth: depth + 1,
+                                collapseNamespace: collapseNamespace
+                            )
+                        }
                     }
                 }
             )

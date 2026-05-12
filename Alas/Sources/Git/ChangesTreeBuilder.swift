@@ -35,11 +35,12 @@ enum ChangesTreeBuilder {
 
         let isLeaf = parts.count == 1
         let nodePath = prefix.isEmpty ? head : "\(prefix)/\(head)"
-        let existing = map[head]
 
         if isLeaf {
+            let key = nodeKey(name: head, isDir: false)
+            let existing = map[key]
             if existing == nil {
-                map[head] = TreeBuildNode(
+                map[key] = TreeBuildNode(
                     name: head,
                     path: file.path,
                     isDir: false,
@@ -47,10 +48,16 @@ enum ChangesTreeBuilder {
                 )
             }
         } else {
+            let key = nodeKey(name: head, isDir: true)
+            let existing = map[key]
             let dir = existing ?? TreeBuildNode(name: head, path: nodePath, isDir: true, badge: nil)
-            map[head] = dir
+            map[key] = dir
             insert(parts: Array(parts.dropFirst()), into: &dir.children, file: file, prefix: nodePath)
         }
+    }
+
+    private static func nodeKey(name: String, isDir: Bool) -> String {
+        "\(isDir ? "dir" : "file"):\(name)"
     }
 
     private static func finalise(_ map: [String: TreeBuildNode]) -> [FileTreeNode] {

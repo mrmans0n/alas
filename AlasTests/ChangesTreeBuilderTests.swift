@@ -66,6 +66,35 @@ struct ChangesTreeBuilderTests {
         #expect(file.badge == "R")
     }
 
+    @Test func preservesFileAndDirectoryPathCollisions() {
+        assertPreservesFileAndDirectoryPathCollisions([
+            changedFile("foo", status: "D"),
+            changedFile("foo/bar.swift", status: "A")
+        ])
+
+        assertPreservesFileAndDirectoryPathCollisions([
+            changedFile("foo/bar.swift", status: "A"),
+            changedFile("foo", status: "D")
+        ])
+    }
+
+    private func assertPreservesFileAndDirectoryPathCollisions(_ files: [ChangedFile]) {
+        let tree = ChangesTreeBuilder.build(files: files)
+
+        #expect(tree.count == 2)
+        #expect(tree[0].name == "foo")
+        #expect(tree[0].path == "foo")
+        #expect(tree[0].kind == .dir)
+        #expect(tree[0].id == "dir:foo")
+        #expect(tree[0].children?.first?.name == "bar.swift")
+
+        #expect(tree[1].name == "foo")
+        #expect(tree[1].path == "foo")
+        #expect(tree[1].kind == .file)
+        #expect(tree[1].id == "file:foo")
+        #expect(tree[1].badge == "D")
+    }
+
     private func changedFile(
         _ path: String,
         status: String = "M",
