@@ -29,11 +29,19 @@ enum HookInstaller {
         return dest
     }
 
-    /// Install the Claude Code Stop hook into ~/.claude/settings.json.
-    /// Idempotent — does nothing if a hook with the same path already exists.
-    static func installClaudeCodeStopHook(scriptPath: URL) throws -> Bool {
+    /// Install the Claude Code Stop and Notification hooks into ~/.claude/settings.json.
+    /// Idempotent — does nothing for events that already have a hook with the same path.
+    static func installClaudeCodeHooks(scriptPath: URL) throws -> Bool {
         let settingsPath = (NSString("~/.claude/settings.json") as NSString).expandingTildeInPath
-        let url = URL(fileURLWithPath: settingsPath)
+        return try installClaudeCodeHooks(scriptPath: scriptPath, settingsURL: URL(fileURLWithPath: settingsPath))
+    }
+
+    static func installClaudeCodeStopHook(scriptPath: URL) throws -> Bool {
+        try installClaudeCodeHooks(scriptPath: scriptPath)
+    }
+
+    static func installClaudeCodeHooks(scriptPath: URL, settingsURL url: URL) throws -> Bool {
+        let settingsPath = url.path
         try FileManager.default.createDirectory(atPath: (settingsPath as NSString).deletingLastPathComponent,
                                                 withIntermediateDirectories: true)
         var json: [String: Any]
@@ -55,23 +63,54 @@ enum HookInstaller {
             json = [:]
         }
         var hooks = (json["hooks"] as? [String: Any]) ?? [:]
-        var stop = (hooks["Stop"] as? [[String: Any]]) ?? []
-        let entry: [String: Any] = [
-            "matcher": "*",
-            "hooks": [["type": "command", "command": scriptPath.path]]
+        let commandHooks: [[String: Any]] = [
+            ["type": "command", "command": scriptPath.path]
         ]
-        let alreadyInstalled = stop.contains { dict in
-            (dict["hooks"] as? [[String: Any]])?.contains { ($0["command"] as? String) == scriptPath.path } ?? false
+        let stopEntry: [String: Any] = [
+            "hooks": commandHooks
+        ]
+        let notificationEntry: [String: Any] = [
+            "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
+            "hooks": commandHooks
+        ]
+        let entries: [(eventName: String, entry: [String: Any], matcher: String?)] = [
+            ("Stop", stopEntry, nil),
+            ("Notification", notificationEntry, "permission_prompt|idle_prompt|elicitation_dialog")
+        ]
+
+        func hasCommand(_ dict: [String: Any]) -> Bool {
+            (dict["hooks"] as? [[String: Any]])?.contains {
+                ($0["command"] as? String) == scriptPath.path
+            } ?? false
         }
-        if !alreadyInstalled {
-            stop.append(entry)
-            hooks["Stop"] = stop
+
+        func matcherChanged(current: [String: Any], expected: [String: Any]) -> Bool {
+            (current["matcher"] as? String) != (expected["matcher"] as? String)
+        }
+
+        var changed = false
+        for (eventName, entry, matcher) in entries {
+            var eventHooks = (hooks[eventName] as? [[String: Any]]) ?? []
+            if let existingIndex = eventHooks.firstIndex(where: hasCommand) {
+                if let matcher, matcherChanged(current: eventHooks[existingIndex], expected: entry) {
+                    eventHooks[existingIndex]["matcher"] = matcher
+                    hooks[eventName] = eventHooks
+                    changed = true
+                }
+                continue
+            }
+
+            eventHooks.append(entry)
+            hooks[eventName] = eventHooks
+            changed = true
+        }
+
+        if changed {
             json["hooks"] = hooks
             let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: url, options: .atomic)
-            return true
         }
-        return false
+        return changed
     }
 
     /// For Codex / Aider, the install is "PATH the script and call it from the user's

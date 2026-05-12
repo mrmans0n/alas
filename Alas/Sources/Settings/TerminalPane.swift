@@ -108,8 +108,8 @@ struct TerminalPane: View {
                             state.harness.notifications.setEnabled($0) }
                         ))
                     }
-                    SettingsRow(name: "Ping when AI harness needs input",
-                                desc: "Play a short sound when a detected harness is waiting for input.") {
+                    SettingsRow(name: "Notify when AI harness needs input",
+                                desc: "Show a clickable notification when a detected harness is waiting for input.") {
                         AlasToggle(on: state.bind(\.harness.notifyOnAwaiting))
                     }
                     ForEach(HarnessKind.allCases) { kind in
@@ -134,7 +134,7 @@ struct TerminalPane: View {
             let scriptURL = try HookInstaller.installWrapper(for: kind)
             switch kind {
             case .claudeCode:
-                let added = try HookInstaller.installClaudeCodeStopHook(scriptPath: scriptURL)
+                let added = try HookInstaller.installClaudeCodeHooks(scriptPath: scriptURL)
                 hookStatus[kind] = added ? "Installed at \(scriptURL.path)"
                                           : "Already installed at \(scriptURL.path)"
             case .codex, .aider:
