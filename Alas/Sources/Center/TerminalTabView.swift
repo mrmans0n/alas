@@ -42,11 +42,12 @@ private struct TerminalRecoverPlaceholder: View {
                 .foregroundColor(theme.color("fg-muted"))
             AlasButton(title: "Open new terminal", style: .primary) {
                 Task {
-                    if case .terminal(let terminal) = state.tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) {
+                    if case .terminal(let terminal) = state.tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+                       let focused = terminal.root.find(leafId: terminal.focusedLeafId)?.leaf {
                         _ = try? state.restoreTerminalTabIfNeeded(
                             worktreeId: worktreeId,
                             tabId: tabId,
-                            sessionId: terminal.sessionId
+                            sessionId: focused.sessionId
                         )
                     }
                 }

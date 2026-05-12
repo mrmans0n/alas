@@ -36,9 +36,9 @@ struct SidebarView: View {
                                 ),
                                 selectedWorktreeId: state.selectedWorktreeId,
                                 harnessSummary: { worktreeId in
-                                    let ids = state.tabs.tabs(forWorktree: worktreeId).compactMap { tab -> String? in
-                                        if case .terminal(let s) = tab { return s.sessionId }
-                                        return nil
+                                    let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+                                        if case .terminal(let s) = tab { return s.root.leaves().map(\.sessionId) }
+                                        return []
                                     }
                                     return state.harness.summary(forSessionIds: ids)
                                 },
@@ -65,9 +65,9 @@ struct SidebarView: View {
                                 onArchive: { wt in state.archiveWorktree(wt) },
                                 onDelete: { wt in state.deleteWorktree(wt) },
                                 onActivateHarness: { wt in
-                                    let ids = state.tabs.tabs(forWorktree: wt.id).compactMap { tab -> String? in
-                                        if case .terminal(let s) = tab { return s.sessionId }
-                                        return nil
+                                    let ids = state.tabs.tabs(forWorktree: wt.id).flatMap { tab -> [String] in
+                                        if case .terminal(let s) = tab { return s.root.leaves().map(\.sessionId) }
+                                        return []
                                     }
                                     guard let summary = state.harness.summary(forSessionIds: ids) else { return }
                                     state.activateHarnessSession(

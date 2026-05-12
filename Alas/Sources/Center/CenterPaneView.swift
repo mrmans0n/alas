@@ -15,8 +15,9 @@ struct CenterPaneView: View {
                 activeId: active,
                 harnessLookup: { tabId in
                     if case .terminal(let s) = tabs.first(where: { $0.id == tabId }),
-                       let kind = state.harness.harnessBySession[s.sessionId] {
-                        let st = state.harness.stateBySession[s.sessionId] ?? "running"
+                       let focusedSessionId = s.root.find(leafId: s.focusedLeafId)?.leaf.sessionId,
+                       let kind = state.harness.harnessBySession[focusedSessionId] {
+                        let st = state.harness.stateBySession[focusedSessionId] ?? "running"
                         return (kind: kind, state: st)
                     }
                     return nil
@@ -64,7 +65,7 @@ struct CenterPaneView: View {
                         TerminalTabView(state: state,
                                         worktreeId: worktree.id,
                                         tabId: tab.id,
-                                        sessionId: s.sessionId)
+                                        sessionId: s.root.find(leafId: s.focusedLeafId)?.leaf.sessionId ?? "")
                     case .editor(let s):
                         if MarkdownFileType.isMarkdown(relativePath: s.isExternal
                                                         ? (s.externalAbsolutePath ?? "")

@@ -186,7 +186,9 @@ final class AppState {
     func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
         selectedWorktreeId = worktreeId
         if let tab = tabs.tabs(forWorktree: worktreeId).first(where: {
-            if case .terminal(let s) = $0 { return s.sessionId == sessionId }
+            if case .terminal(let s) = $0 {
+                return s.root.leaves().contains(where: { $0.sessionId == sessionId })
+            }
             return false
         }) {
             tabs.activate(worktreeId: worktreeId, tabId: tab.id)
@@ -217,8 +219,11 @@ final class AppState {
     func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID, sessionId: String) throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab,
-              state.sessionId == sessionId else { return nil }
+              state.root.leaves().contains(where: { $0.sessionId == sessionId }) else { return nil }
         if terminal.registry.session(for: sessionId) != nil { return tab }
+        // Task 3 stop-gap: only handle the focused-leaf case. Task 12 generalizes this.
+        guard let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
+              focused.sessionId == sessionId else { return nil }
         return try replaceMissingTerminalSession(worktreeId: worktreeId, tab: state)
     }
 
@@ -339,9 +344,11 @@ final class AppState {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
-                harness.detector.unregister(sessionId: s.sessionId)
-                harness.forgetSession(s.sessionId)
-                terminal.closeSession(id: s.sessionId)
+                for leaf in s.root.leaves() {
+                    harness.detector.unregister(sessionId: leaf.sessionId)
+                    harness.forgetSession(leaf.sessionId)
+                    terminal.closeSession(id: leaf.sessionId)
+                }
             }
             if case .editor = tab {
                 tabs.discardBuffer(worktreeId: worktreeId, tabId: tabId)
@@ -354,9 +361,11 @@ final class AppState {
         for id in tabIds {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
-                harness.detector.unregister(sessionId: s.sessionId)
-                harness.forgetSession(s.sessionId)
-                terminal.closeSession(id: s.sessionId)
+                for leaf in s.root.leaves() {
+                    harness.detector.unregister(sessionId: leaf.sessionId)
+                    harness.forgetSession(leaf.sessionId)
+                    terminal.closeSession(id: leaf.sessionId)
+                }
             }
         }
     }
@@ -411,7 +420,7 @@ final class AppState {
             throw NSError(domain: "AppState", code: 2)
         }
 
-        let oldSessionId = tab.sessionId
+        let oldSessionId = tab.root.find(leafId: tab.focusedLeafId)?.leaf.sessionId ?? ""
         let session = try terminal.openSession(
             worktree: worktree, project: project,
             cfg: config.terminal, theme: themeStore.current

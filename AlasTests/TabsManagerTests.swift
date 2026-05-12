@@ -100,7 +100,7 @@ struct TabsManagerTests {
             Issue.record("Expected terminal tab")
             return
         }
-        #expect(state.sessionId == "new")
+        #expect(state.root.find(leafId: state.focusedLeafId)?.leaf.sessionId == "new")
         #expect(state.title == "x")
     }
 

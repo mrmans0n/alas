@@ -121,7 +121,9 @@ final class TabsManager {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .terminal(var state) = file.tabs[idx] else { return nil }
-        state.sessionId = sessionId
+        state.root = state.root.replacingLeaf(id: state.focusedLeafId, with: .leaf(
+            PaneLeaf(id: state.focusedLeafId, sessionId: sessionId, lastCwd: nil)
+        ))
         let tab = Tab.terminal(state)
         file.tabs[idx] = tab
         byWorktree[worktreeId] = file
