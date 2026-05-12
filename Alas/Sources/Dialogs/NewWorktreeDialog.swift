@@ -11,7 +11,6 @@ struct NewWorktreeDialog: View {
     // state.config.worktrees.{baseBranch,branchPrefix}).
     @State private var base: String = ""
     @State private var branch: String = ""
-    @State private var pathOverride: String = ""
     @State private var runStartup: Bool = true
     @State private var openTerminal: Bool = true
     @State private var branches: [String] = []
@@ -48,12 +47,6 @@ struct NewWorktreeDialog: View {
                 }
                 DialogField(label: "Branch name") {
                     AlasField(text: $branch, monospaced: true)
-                }
-                DialogField(label: "Path on disk") {
-                    AlasField(text: Binding(
-                        get: { pathOverride.isEmpty ? renderedPath : pathOverride },
-                        set: { pathOverride = $0 }
-                    ), monospaced: true)
                 }
                 HStack(spacing: 10) {
                     AlasToggle(on: $runStartup)
@@ -170,7 +163,7 @@ struct NewWorktreeDialog: View {
             defer { isCreating = false }
             do {
                 let svc = WorktreeService()
-                let dest = URL(fileURLWithPath: pathOverride.isEmpty ? renderedPath : pathOverride)
+                let dest = URL(fileURLWithPath: renderedPath)
                 try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                 let newWorktree = try await svc.add(
                     repoPath: URL(fileURLWithPath: project.path),
