@@ -78,6 +78,25 @@ final class WorktreeWatcher {
         )
     }
 
+    /// Returns `true` iff at least one event path represents a change we want
+    /// to react to. Git lockfiles (`*.lock` inside any `.git/` directory) are
+    /// filtered out: they appear when another git process is mid-write
+    /// (commit, rebase, fetch); reacting would (a) trigger a redundant
+    /// refresh during the user's operation and (b) historically caused
+    /// `.git/index.lock` contention with terminal git. Project lockfiles
+    /// outside `.git/` (e.g. `Cargo.lock`, `package-lock.json`) are real
+    /// changes and DO trigger a refresh.
+    static func shouldRefresh(forEventPaths paths: [String]) -> Bool {
+        for path in paths {
+            let base = (path as NSString).lastPathComponent
+            if base.hasSuffix(".lock") && path.contains("/.git/") {
+                continue
+            }
+            return true
+        }
+        return false
+    }
+
     /// Resolves the real git-dir for a worktree. For a normal repo this is
     /// `<worktree>/.git`; for a linked worktree it points into
     /// `<repo>/.git/worktrees/<name>/` instead. Returns nil if `git
