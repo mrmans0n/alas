@@ -127,6 +127,7 @@ private struct SplitContainer: View {
 
     private let dividerThickness: CGFloat = 4
     @State private var isDividerHovering = false
+    @State private var dragStartFraction: Double? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -190,13 +191,19 @@ private struct SplitContainer: View {
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
+                        // Capture the fraction at drag start so subsequent events that
+                        // re-render the view with an updated fraction don't compound.
+                        let start = dragStartFraction ?? split.fraction
+                        if dragStartFraction == nil { dragStartFraction = start }
                         let delta: CGFloat = isVertical ? value.translation.width : value.translation.height
-                        let initialFirst = split.fraction * totalForFraction
-                        let newFraction = (initialFirst + delta) / totalForFraction
+                        let newFraction = start + Double(delta / totalForFraction)
                         _ = state.tabs.setSplitFraction(
                             worktreeId: worktreeId, tabId: tabId,
                             splitId: split.id, fraction: newFraction
                         )
+                    }
+                    .onEnded { _ in
+                        dragStartFraction = nil
                     }
             )
     }

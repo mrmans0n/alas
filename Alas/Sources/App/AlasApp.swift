@@ -118,6 +118,9 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasSplitDown, object: nil)
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Close Pane") {
+                    NotificationCenter.default.post(name: .alasCloseTab, object: nil)
+                }
                 Divider()
                 Button("Focus Pane Left") {
                     NotificationCenter.default.post(name: .alasFocusPaneLeft, object: nil)
