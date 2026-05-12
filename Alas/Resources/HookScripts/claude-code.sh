@@ -17,10 +17,18 @@ except Exception:
     payload = {}
 event = payload.get("hook_event_name")
 if event == "Notification":
-    print("awaiting")
+    notification_type = payload.get("notification_type")
+    if notification_type in ("permission_prompt", "idle_prompt", "elicitation_dialog"):
+        print("awaiting")
+    else:
+        print("ignore")
 else:
     print("stop")
 ')
+
+if [ "$KIND" = "ignore" ]; then
+    exit 0
+fi
 
 SUMMARY=$(INPUT="$INPUT" python3 -c '
 import json, os

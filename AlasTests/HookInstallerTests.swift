@@ -41,5 +41,35 @@ struct HookInstallerTests {
             #expect(commands[0]["type"] as? String == "command")
             #expect(commands[0]["command"] as? String == scriptURL.path)
         }
+        let notificationEntries = try #require(hooks["Notification"] as? [[String: Any]])
+        #expect(notificationEntries[0]["matcher"] as? String == "permission_prompt|idle_prompt|elicitation_dialog")
+    }
+
+    @Test func installClaudeCodeHooksRestrictsExistingMatcherlessNotificationEntry() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let settingsURL = tempDir.appendingPathComponent("settings.json")
+        let scriptURL = URL(fileURLWithPath: "/tmp/alas-claude-code.sh")
+        let legacySettings: [String: Any] = [
+            "hooks": [
+                "Notification": [
+                    [
+                        "hooks": [["type": "command", "command": scriptURL.path]]
+                    ]
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: legacySettings, options: [.prettyPrinted])
+        try data.write(to: settingsURL)
+
+        let changed = try HookInstaller.installClaudeCodeHooks(scriptPath: scriptURL, settingsURL: settingsURL)
+
+        #expect(changed)
+        let updatedData = try Data(contentsOf: settingsURL)
+        let json = try #require(JSONSerialization.jsonObject(with: updatedData) as? [String: Any])
+        let hooks = try #require(json["hooks"] as? [String: Any])
+        let notificationEntries = try #require(hooks["Notification"] as? [[String: Any]])
+        #expect(notificationEntries[0]["matcher"] as? String == "permission_prompt|idle_prompt|elicitation_dialog")
     }
 }

@@ -63,21 +63,62 @@ enum HookInstaller {
             json = [:]
         }
         var hooks = (json["hooks"] as? [String: Any]) ?? [:]
-        let entry: [String: Any] = [
-            "hooks": [["type": "command", "command": scriptPath.path]]
+        let commandHooks: [[String: Any]] = [
+            ["type": "command", "command": scriptPath.path]
+        ]
+        let stopEntry: [String: Any] = [
+            "hooks": commandHooks
+        ]
+        let notificationEntry: [String: Any] = [
+            "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
+            "hooks": commandHooks
+        ]
+        let entries = [
+            ("Stop", stopEntry),
+            ("Notification", notificationEntry)
         ]
 
+        func hasCommand(_ dict: [String: Any]) -> Bool {
+            (dict["hooks"] as? [[String: Any]])?.contains {
+                ($0["command"] as? String) == scriptPath.path
+            } ?? false
+        }
+
+        func matcherChanged(current: [String: Any], expected: [String: Any]) -> Bool {
+            (current["matcher"] as? String) != (expected["matcher"] as? String)
+        }
+
+        func hooksChanged(current: [String: Any], expected: [String: Any]) -> Bool {
+            guard let currentHooks = current["hooks"] as? [[String: Any]],
+                  let expectedHooks = expected["hooks"] as? [[String: Any]] else {
+                return true
+            }
+            guard currentHooks.count == expectedHooks.count else {
+                return true
+            }
+            return zip(currentHooks, expectedHooks).contains { current, expected in
+                (current["type"] as? String) != (expected["type"] as? String)
+                    || (current["command"] as? String) != (expected["command"] as? String)
+            }
+        }
+
         var changed = false
-        for eventName in ["Stop", "Notification"] {
+        for (eventName, entry) in entries {
             var eventHooks = (hooks[eventName] as? [[String: Any]]) ?? []
-            let alreadyInstalled = eventHooks.contains { dict in
-                (dict["hooks"] as? [[String: Any]])?.contains { ($0["command"] as? String) == scriptPath.path } ?? false
+            if let existingIndex = eventHooks.firstIndex(where: hasCommand) {
+                let existing = eventHooks[existingIndex]
+                if matcherChanged(current: existing, expected: entry)
+                    || hooksChanged(current: existing, expected: entry) {
+                    eventHooks[existingIndex] = entry
+                    hooks[eventName] = eventHooks
+                    changed = true
+                }
+                continue
             }
-            if !alreadyInstalled {
-                eventHooks.append(entry)
-                hooks[eventName] = eventHooks
-                changed = true
-            }
+
+            eventHooks.append(entry)
+            hooks[eventName] = eventHooks
+            changed = true
         }
 
         if changed {
