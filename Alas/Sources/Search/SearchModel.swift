@@ -59,17 +59,18 @@ final class SearchModel {
         didSet { if isOpen { reschedule() } }
     }
     var selectedIndex: Int = 0
-    /// Bumped when selection moves via keyboard. The dialog scrolls to
-    /// `selectedIndex` on changes to this, not on `selectedIndex` itself, so
-    /// hover-driven selection updates don't trigger scroll-to-center and
-    /// fight the user's scroll input.
-    private(set) var keyboardSelectionTick: Int = 0
+    /// Bumped when selection moves deliberately (keyboard nav, or the
+    /// post-search clamp that pulls a stale out-of-range selection back to
+    /// row 0). The dialog scrolls to `selectedIndex` on changes to this, not
+    /// on `selectedIndex` itself, so hover-driven selection updates don't
+    /// trigger scroll-to-center and fight the user's scroll input.
+    private(set) var scrollToSelectionTick: Int = 0
     private(set) var results: SearchResults = SearchResults()
     private(set) var isLoading: Bool = false
 
     func moveSelection(to index: Int) {
         selectedIndex = index
-        keyboardSelectionTick &+= 1
+        scrollToSelectionTick &+= 1
     }
 
     /// Total selectable rows across both modes, used by the view's keyboard
@@ -189,7 +190,7 @@ final class SearchModel {
         }
 
         if selectedIndex >= totalResultRows {
-            selectedIndex = 0
+            moveSelection(to: 0)
         }
     }
 

@@ -76,7 +76,7 @@ struct FileSearchDialog: View {
                     .padding(.vertical, 4)
                 }
                 .frame(minHeight: 240, maxHeight: 460)
-                .onChange(of: model.keyboardSelectionTick) { _, _ in
+                .onChange(of: model.scrollToSelectionTick) { _, _ in
                     proxy.scrollTo(model.selectedIndex, anchor: .center)
                 }
             }
