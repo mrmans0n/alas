@@ -38,11 +38,12 @@ struct SurfaceViewShortcutTests {
     }
 
     @Test func otherCommandKeysAreNotReserved() throws {
+        // Cmd+E is not reserved by Alas, so libghostty should still see it.
         let event = try keyEvent(
-            characters: "w",
-            ignoringModifiers: "w",
+            characters: "e",
+            ignoringModifiers: "e",
             modifiers: .command,
-            keyCode: 13
+            keyCode: 14
         )
 
         #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
@@ -68,6 +69,54 @@ struct SurfaceViewShortcutTests {
             keyCode: 17
         )
 
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandDIsReserved() throws {
+        let event = try keyEvent(
+            characters: "d", ignoringModifiers: "d",
+            modifiers: .command, keyCode: 2
+        )
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandShiftDIsReserved() throws {
+        let event = try keyEvent(
+            characters: "D", ignoringModifiers: "d",
+            modifiers: [.command, .shift], keyCode: 2
+        )
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandWIsReserved() throws {
+        let event = try keyEvent(
+            characters: "w", ignoringModifiers: "w",
+            modifiers: .command, keyCode: 13
+        )
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandOptionLeftArrowIsReserved() throws {
+        let event = try keyEvent(
+            characters: "\u{F702}", ignoringModifiers: "\u{F702}",
+            modifiers: [.command, .option], keyCode: 123
+        )
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func commandCtrlRightArrowIsReserved() throws {
+        let event = try keyEvent(
+            characters: "\u{F703}", ignoringModifiers: "\u{F703}",
+            modifiers: [.command, .control], keyCode: 124
+        )
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+    }
+
+    @Test func plainArrowIsNotReserved() throws {
+        let event = try keyEvent(
+            characters: "\u{F702}", ignoringModifiers: "\u{F702}",
+            modifiers: [], keyCode: 123
+        )
         #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
     }
 

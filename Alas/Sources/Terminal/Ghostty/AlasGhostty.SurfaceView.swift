@@ -345,9 +345,22 @@ extension AlasGhostty {
             let flags = event.modifierFlags
                 .intersection(.deviceIndependentFlagsMask)
                 .subtracting(.capsLock)
-            guard flags == .command else { return false }
+            let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
 
-            return event.charactersIgnoringModifiers?.lowercased() == "t"
+            // ⌘T — reserved for the app's New Terminal Tab.
+            if flags == .command && chars == "t" { return true }
+            // ⌘D / ⇧⌘D — Split Right / Split Down.
+            if flags == .command && chars == "d" { return true }
+            if flags == [.command, .shift] && chars == "d" { return true }
+            // ⌘W — Close Pane / Close Tab (AppState decides).
+            if flags == .command && chars == "w" { return true }
+            // Arrow shortcuts: focus (⌥⌘) and resize (⌃⌘).
+            let arrows: Set<UInt16> = [123, 124, 125, 126]  // left, right, down, up
+            if (flags == [.command, .option] || flags == [.command, .control])
+                && arrows.contains(event.keyCode) {
+                return true
+            }
+            return false
         }
 
         // MARK: - Mouse events
