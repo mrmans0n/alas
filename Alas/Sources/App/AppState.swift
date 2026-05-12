@@ -96,27 +96,11 @@ final class AppState {
         saveProjects()
     }
 
-    func renameProject(id: String) {
-        guard let project = projects.first(where: { $0.id == id }) else { return }
+    func updateProject(id: String, name: String, color: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
 
-        let alert = NSAlert()
-        alert.messageText = "Rename Project"
-        alert.informativeText = "Choose a new name for this project."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = project.name
-        field.lineBreakMode = .byTruncatingTail
-        alert.accessoryView = field
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name != project.name else { return }
-
-        projectsManager.renameProject(id: id, name: name)
+        projectsManager.updateProject(id: id, update: ProjectUpdate(name: trimmedName, color: color))
         saveProjects()
     }
 

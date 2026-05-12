@@ -7,7 +7,7 @@ struct RepoGroupView: View {
     let selectedWorktreeId: String?
     let onSelect: (Worktree) -> Void
     let onNewWorktree: () -> Void
-    let onRenameProject: () -> Void
+    let onEditProject: () -> Void
     let onOpenTerminal: (Worktree) -> Void
     let onCopyPath: (Worktree) -> Void
     let onCopyBranch: (Worktree) -> Void
@@ -37,7 +37,7 @@ struct RepoGroupView: View {
             .contentShape(Rectangle())
             .onTapGesture { collapsed.toggle() }
             .contextMenu {
-                Button("Rename Project…", action: onRenameProject)
+                Button("Edit Project…", action: onEditProject)
             }
             .overlay(alignment: .trailing) {
                 ZStack {

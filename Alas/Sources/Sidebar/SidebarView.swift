@@ -6,6 +6,7 @@ struct SidebarView: View {
     @Binding var collapsedProjects: Set<String>
     let onSettings: () -> Void
     let onAddProject: () -> Void
+    let onEditProject: (_ projectId: String) -> Void
     let onNewWorktree: (_ projectId: String?) -> Void
     @Environment(\.theme) var theme
 
@@ -36,7 +37,7 @@ struct SidebarView: View {
                                 selectedWorktreeId: state.selectedWorktreeId,
                                 onSelect: { wt in state.selectedWorktreeId = wt.id },
                                 onNewWorktree: { onNewWorktree(project.id) },
-                                onRenameProject: { state.renameProject(id: project.id) },
+                                onEditProject: { onEditProject(project.id) },
                                 onOpenTerminal: { wt in
                                     state.selectedWorktreeId = wt.id
                                     _ = try? state.openTerminalTab(for: wt)

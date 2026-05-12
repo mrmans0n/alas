@@ -47,7 +47,7 @@ struct ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: project.id).isEmpty)
     }
 
-    @Test func renameProjectUpdatesOnlyTheProjectName() {
+    @Test func updateProjectUpdatesNameAndColorOnly() {
         let addedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let project = ProjectConfig(
             id: "project-1",
@@ -67,19 +67,26 @@ struct ProjectsManagerTests {
         )
         let mgr = ProjectsManager(persistedProjects: [project, other])
 
-        mgr.renameProject(id: project.id, name: "After")
+        mgr.updateProject(
+            id: project.id,
+            update: ProjectUpdate(name: "After", color: "#d77b88")
+        )
 
         #expect(mgr.projects[0].id == project.id)
         #expect(mgr.projects[0].name == "After")
         #expect(mgr.projects[0].path == project.path)
-        #expect(mgr.projects[0].color == project.color)
+        #expect(mgr.projects[0].color == "#d77b88")
         #expect(mgr.projects[0].addedAt == project.addedAt)
         #expect(mgr.projects[0].hiddenWorktreePaths == project.hiddenWorktreePaths)
         #expect(mgr.projects[1] == other)
 
-        mgr.renameProject(id: "missing", name: "Ignored")
+        mgr.updateProject(
+            id: "missing",
+            update: ProjectUpdate(name: "Ignored", color: "#7fb978")
+        )
 
         #expect(mgr.projects[0].name == "After")
+        #expect(mgr.projects[0].color == "#d77b88")
         #expect(mgr.projects[1] == other)
     }
 }
