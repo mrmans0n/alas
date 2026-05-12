@@ -68,6 +68,7 @@
 		3CD81DD1B1FF8C1EA849237C /* TerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C45A26ADB0D1CCFBB5BEAE8 /* TerminalSession.swift */; };
 		3D5FC516052D2F06781A3F6E /* SearchModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4309EDC99FC1F98C479115 /* SearchModelTests.swift */; };
 		3DC6518A9050D1029D4D99A4 /* aider.sh in Resources */ = {isa = PBXBuildFile; fileRef = 2AC91D744E42A7C071268B74 /* aider.sh */; };
+		3E0AA46F17D152BFDA52A79D /* NotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AEA30B7C74A39A46448AF5 /* NotificationServiceTests.swift */; };
 		3E9B50F3BA9D7273EBA50445 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */; };
 		40450134EBF5CCD5CD667327 /* ChangeSummaryVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */; };
 		4153DAD75F27395D2D385BED /* LanguageServerAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8CC42BD54479E057902D392 /* LanguageServerAvailabilityTests.swift */; };
@@ -442,6 +443,7 @@
 		BEC7CCBF8463A95EAAE9EBCE /* TabBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarView.swift; sourceTree = "<group>"; };
 		BFD267BE3F08611B376F3CC7 /* EditorConflictBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorConflictBanner.swift; sourceTree = "<group>"; };
 		C19E98A53E2B793436D2F10D /* NotificationDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDelegate.swift; sourceTree = "<group>"; };
+		C2AEA30B7C74A39A46448AF5 /* NotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationServiceTests.swift; sourceTree = "<group>"; };
 		C56EFAFF71ABDBCDECAAA305 /* StartupScriptInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptInstaller.swift; sourceTree = "<group>"; };
 		C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentSearcherTests.swift; sourceTree = "<group>"; };
 		C682FF74C86B77BDCF46CF25 /* ChangesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTabView.swift; sourceTree = "<group>"; };
@@ -586,6 +588,7 @@
 				B204EC8484F51CDC8B5D06E2 /* MarkdownRendererTests.swift */,
 				DC3328C0EF905A8AC6F6F34D /* MarkdownViewModeTests.swift */,
 				E288FF8FA00AC18E1CDD3CA2 /* NewWorktreeDialogTests.swift */,
+				C2AEA30B7C74A39A46448AF5 /* NotificationServiceTests.swift */,
 				4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */,
 				0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */,
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
@@ -1496,6 +1499,7 @@
 				8F803876128CC3199DE5DB22 /* MarkdownRendererTests.swift in Sources */,
 				8B0F53A453343AF8DA0B4C0C /* MarkdownViewModeTests.swift in Sources */,
 				1201C8A30A1A932311FA2156 /* NewWorktreeDialogTests.swift in Sources */,
+				3E0AA46F17D152BFDA52A79D /* NotificationServiceTests.swift in Sources */,
 				D55386035B99B2B1769ED47F /* NumstatParserTests.swift in Sources */,
 				43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */,
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,

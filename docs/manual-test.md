@@ -104,6 +104,15 @@
 7. Trigger another hook-backed completion, close the originating tab, then click the old notification. Confirm Alas focuses without a visible error or crash.
 8. Trigger a heuristic/unsupported harness detection without a validated hook payload. Confirm it does not route to a tab through notification click-through.
 
+## Harness Waiting Notifications
+
+1. Enable finish and awaiting harness notifications in Terminal settings.
+2. Install the Claude Code hook from Terminal settings, then restart Claude Code or reload hooks as required by Claude Code.
+3. Trigger a Claude Code permission prompt or leave the prompt input idle until Claude emits a `Notification` hook. Confirm Alas shows a clickable "needs input" macOS notification and clicking it focuses the originating worktree/session.
+4. Let Claude Code finish a response. Confirm the existing completion notification still appears and still clicks through correctly.
+5. For Codex or Aider, wire the wrapper from Terminal settings only when the local integration can reliably detect waiting. Invoke the wrapper with `--kind awaiting` for waiting states and without `--kind` for completion. If the upstream tool cannot emit reliable waiting hooks, do not synthesize waiting from terminal text scraping.
+6. OpenCode is currently supported through ACP in Alas, not as a terminal `HarnessKind`; ACP waiting-state notifications are deferred to separate ACP notification work.
+
 ## Terminal Emulator Behavior
 
 1. Shell basics: type, edit prompt, arrows/history, backspace/delete, Tab, Escape, and Ctrl-C.

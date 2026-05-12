@@ -30,18 +30,7 @@ final class HarnessService {
     ) {
         detector.onUpdate = { [weak self] sid, kind in
             guard let self else { return }
-            if let kind {
-                if self.harnessBySession[sid] != kind {
-                    self.harnessBySession[sid] = kind
-                    self.stateBySession[sid] = "running"
-                }
-            } else {
-                // Process exited but the stop-hook event may still be in
-                // flight. Drop the running-state badge so the UI reflects
-                // "not actively running", but KEEP harnessBySession so the
-                // upcoming hook can attribute its kind.
-                self.stateBySession.removeValue(forKey: sid)
-            }
+            self.recordHarnessDetection(sessionId: sid, kind: kind)
         }
         detector.start()
 
@@ -59,6 +48,21 @@ final class HarnessService {
         watcher.start()
     }
 
+    func recordHarnessDetection(sessionId: String, kind: HarnessKind?) {
+        if let kind {
+            if harnessBySession[sessionId] != kind {
+                harnessBySession[sessionId] = kind
+                stateBySession[sessionId] = "running"
+            }
+        } else {
+            // Process exited but the stop-hook event may still be in
+            // flight. Drop the running-state badge so the UI reflects
+            // "not actively running", but KEEP harnessBySession so the
+            // upcoming hook can attribute its kind.
+            stateBySession.removeValue(forKey: sessionId)
+        }
+    }
+
     func handleHookEvent(
         _ event: HookEvent,
         stateLookup: (String) -> (projectId: String, worktreeId: String)?,
@@ -68,8 +72,15 @@ final class HarnessService {
         stateBySession[event.sessionId] = event.kind == "stop" ? "done" : "awaiting"
 
         if event.kind == "awaiting" {
-            if previousState != "awaiting", shouldNotifyOnAwaiting() {
-                notifications.playAwaitingPing()
+            if previousState != "awaiting", shouldNotifyOnAwaiting(),
+               let kind = harnessBySession[event.sessionId],
+               let lookup = stateLookup(event.sessionId) {
+                notifications.notifyHarnessAwaiting(
+                    harness: kind,
+                    projectId: lookup.projectId,
+                    worktreeId: lookup.worktreeId,
+                    sessionId: event.sessionId
+                )
             }
             return
         }
