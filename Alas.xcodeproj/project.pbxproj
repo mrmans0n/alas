@@ -31,6 +31,7 @@
 		16F5212404948970EAFCFE62 /* MarkdownPreviewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D4901C499EFE969EC36D116 /* MarkdownPreviewController.swift */; };
 		17BC1BC2D81DED8B5D31DF3C /* CommitsAheadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */; };
 		17DE066D4BDD1F30439DA629 /* TerminalPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */; };
+		18FEAA97EA576EC5276D2B28 /* HarnessPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0544FCFB9BC3E26FDB57CC96 /* HarnessPill.swift */; };
 		190FA1E53291D6D94CC0086C /* SidebarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */; };
 		1B9CC3C13E96290B391E7C26 /* ImagePreviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E1AD3C6506DA5E6BFF4864 /* ImagePreviewTabView.swift */; };
 		1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */; };
@@ -270,6 +271,7 @@
 		02FCDD45C23BAE141549D03F /* AlasGhostty.SurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.SurfaceView.swift; sourceTree = "<group>"; };
 		0326789AA29BD63CC1B8F81F /* DefinitionSnippetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefinitionSnippetCache.swift; sourceTree = "<group>"; };
 		039741E1CCAEF9770D5DEE08 /* GitServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceTests.swift; sourceTree = "<group>"; };
+		0544FCFB9BC3E26FDB57CC96 /* HarnessPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessPill.swift; sourceTree = "<group>"; };
 		05EE713DD3CACF29F206553C /* ThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStore.swift; sourceTree = "<group>"; };
 		08ACB3B79B74153668DA29D8 /* LSPTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPTransportTests.swift; sourceTree = "<group>"; };
 		09D238B1262EB2BC6AFCF621 /* LanguageServerRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerRegistry.swift; sourceTree = "<group>"; };
@@ -806,6 +808,7 @@
 		697AACFEA2DCEBE4CEB2CD4E /* Sidebar */ = {
 			isa = PBXGroup;
 			children = (
+				0544FCFB9BC3E26FDB57CC96 /* HarnessPill.swift */,
 				563B664D082A9523260AA2EF /* RepoDot.swift */,
 				768D12909DD5233659AC4E03 /* RepoGroupView.swift */,
 				B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */,
@@ -1352,6 +1355,7 @@
 				7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */,
 				B1A6F39D02409339072EC164 /* HarnessDetector.swift in Sources */,
 				3AF04FB045CE3D9CAC066B27 /* HarnessKind.swift in Sources */,
+				18FEAA97EA576EC5276D2B28 /* HarnessPill.swift in Sources */,
 				90B09645EB794C287B95A5AD /* HarnessService.swift in Sources */,
 				C512EC7827D3C46907DDB7A1 /* HighlightCapture.swift in Sources */,
 				387EF12B6875648E422956F7 /* Highlighted.swift in Sources */,
