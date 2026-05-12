@@ -3,6 +3,7 @@ import SwiftUI
 struct WorktreeRowView: View {
     let worktree: Worktree
     let isSelected: Bool
+    let harnessSummary: HarnessService.WorktreeHarnessSummary?
     let onTap: () -> Void
     let onOpenTerminal: () -> Void
     let onCopyPath: () -> Void
@@ -10,6 +11,7 @@ struct WorktreeRowView: View {
     let onRevealInFinder: () -> Void
     let onArchive: () -> Void
     let onDelete: () -> Void
+    let onActivateHarness: () -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -47,6 +49,17 @@ struct WorktreeRowView: View {
                                 .font(.system(size: 10.5, design: .monospaced))
                                 .foregroundColor(theme.color("del"))
                         }
+                        if let summary = harnessSummary {
+                            Spacer(minLength: 6)
+                            Button(action: onActivateHarness) {
+                                HarnessPill(
+                                    summary: summary,
+                                    variant: .full,
+                                    tooltip: pillTooltip(for: summary)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
                 .padding(.leading, 32)
@@ -73,5 +86,14 @@ struct WorktreeRowView: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func pillTooltip(for summary: HarnessService.WorktreeHarnessSummary) -> String {
+        let stateText: String
+        switch summary.state {
+        case .running:  stateText = "running"
+        case .awaiting: stateText = "awaiting input"
+        }
+        return "\(summary.kind.displayName) · \(stateText)"
     }
 }
