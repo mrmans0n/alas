@@ -361,6 +361,13 @@ final class AppState {
         return false
     }
 
+    /// Walk every leaf in the tab's tree and recreate any session whose
+    /// `TerminalSession` is no longer alive (e.g., after relaunch).
+    ///
+    /// **Partial-failure contract:** if `openSession` throws midway through the
+    /// walk, leaves processed up to that point have already been persisted with
+    /// their new sessionIds. Re-calling this method is safe — already-restored
+    /// leaves are skipped, and the failing leaf is retried.
     @discardableResult
     func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID) throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),

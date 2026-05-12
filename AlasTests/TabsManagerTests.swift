@@ -448,4 +448,27 @@ struct TabsManagerPaneTests {
             #expect(l.lastCwd == "/Users/test")
         }
     }
+
+    @Test func replaceLeafSessionPreservesLastCwd() {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "old")
+        guard case .terminal(let initial) = tab else { Issue.record("not terminal"); return }
+
+        // Seed a lastCwd on the leaf via setLeafCwd.
+        _ = mgr.setLeafCwd(worktreeId: "wt", tabId: tab.id,
+                           leafId: initial.focusedLeafId, cwd: "/tmp/work")
+
+        // Swap the session for that leaf.
+        _ = mgr.replaceLeafSession(worktreeId: "wt", tabId: tab.id,
+                                   leafId: initial.focusedLeafId, sessionId: "new")
+
+        guard let reread = mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id }),
+              case .terminal(let s) = reread,
+              case .leaf(let l) = s.root else {
+            Issue.record("expected single-leaf tab after replaceLeafSession"); return
+        }
+        #expect(l.sessionId == "new")
+        #expect(l.lastCwd == "/tmp/work",
+                "lastCwd should be preserved across session replacement")
+    }
 }
