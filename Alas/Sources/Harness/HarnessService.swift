@@ -111,10 +111,17 @@ final class HarnessService {
     }
 
     struct WorktreeHarnessSummary: Equatable {
+        /// Priority-resolved state for the pill/dot color: awaiting wins.
         let state: AggregatedState
+        /// Kind of the primary session (the one click-through routes to).
         let kind: HarnessKind
         let primarySessionId: String
-        let sessionCount: Int
+        /// Per-state session counts, always populated regardless of which
+        /// state was chosen as the priority. Lets callers (e.g. the
+        /// collapsed-header tooltip) accurately enumerate mixed-state
+        /// activity even when one state would normally mask the other.
+        let runningSessionCount: Int
+        let awaitingSessionCount: Int
     }
 
     /// Roll up per-session harness state to a single summary for a worktree.
@@ -133,12 +140,19 @@ final class HarnessService {
         }
 
         // Try awaiting first; fall back to running if no awaiting session has a kind.
-        if let s = pickSummary(state: .awaiting, ids: awaitingIds) { return s }
-        if let s = pickSummary(state: .running,  ids: runningIds)  { return s }
+        if let s = pickSummary(state: .awaiting, ids: awaitingIds,
+                               runningCount: runningIds.count, awaitingCount: awaitingIds.count) { return s }
+        if let s = pickSummary(state: .running, ids: runningIds,
+                               runningCount: runningIds.count, awaitingCount: awaitingIds.count) { return s }
         return nil
     }
 
-    private func pickSummary(state: AggregatedState, ids: [String]) -> WorktreeHarnessSummary? {
+    private func pickSummary(
+        state: AggregatedState,
+        ids: [String],
+        runningCount: Int,
+        awaitingCount: Int
+    ) -> WorktreeHarnessSummary? {
         guard !ids.isEmpty else { return nil }
         // First id whose kind is known wins as primary. Skip ids missing a kind.
         guard let primary = ids.first(where: { harnessBySession[$0] != nil }),
@@ -147,7 +161,8 @@ final class HarnessService {
             state: state,
             kind: kind,
             primarySessionId: primary,
-            sessionCount: ids.count
+            runningSessionCount: runningCount,
+            awaitingSessionCount: awaitingCount
         )
     }
 

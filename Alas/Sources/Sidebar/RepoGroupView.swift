@@ -115,15 +115,12 @@ struct RepoGroupView: View {
     }
 
     /// Tooltip for the collapsed-header dot. Counts busy sessions (not
-    /// worktrees) independently per state, lists distinct harness kinds in
+    /// worktrees) independently per state — so mixed activity in a single
+    /// worktree still reports both states. Lists distinct harness kinds in
     /// `HarnessKind.allCases` order.
     private func headerTooltip() -> String {
-        let runningCount = summaries
-            .filter { $0.state == .running }
-            .reduce(0) { $0 + $1.sessionCount }
-        let awaitingCount = summaries
-            .filter { $0.state == .awaiting }
-            .reduce(0) { $0 + $1.sessionCount }
+        let runningCount = summaries.reduce(0) { $0 + $1.runningSessionCount }
+        let awaitingCount = summaries.reduce(0) { $0 + $1.awaitingSessionCount }
         let distinctKinds = HarnessKind.allCases.filter { kind in
             summaries.contains { $0.kind == kind }
         }

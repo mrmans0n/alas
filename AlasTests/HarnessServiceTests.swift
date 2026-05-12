@@ -97,7 +97,8 @@ struct HarnessServiceTests {
         #expect(summary?.state == .running)
         #expect(summary?.kind == .claudeCode)
         #expect(summary?.primarySessionId == "s1")
-        #expect(summary?.sessionCount == 1)
+        #expect(summary?.runningSessionCount == 1)
+        #expect(summary?.awaitingSessionCount == 0)
     }
 
     @Test func summary_prefersAwaiting_overRunning() {
@@ -108,7 +109,11 @@ struct HarnessServiceTests {
         #expect(summary?.state == .awaiting)
         #expect(summary?.kind == .codex)
         #expect(summary?.primarySessionId == "s2")
-        #expect(summary?.sessionCount == 1) // only awaiting sessions counted
+        // Both counts are populated regardless of which state was chosen, so
+        // callers (e.g. the collapsed-header tooltip) can enumerate mixed
+        // activity even when awaiting masks running.
+        #expect(summary?.runningSessionCount == 1)
+        #expect(summary?.awaitingSessionCount == 1)
     }
 
     @Test func summary_picksFirstAwaitingSession_asPrimary() {
@@ -117,7 +122,8 @@ struct HarnessServiceTests {
         service.setStateForTesting(sessionId: "b", kind: .codex,      state: "awaiting")
         let summary = service.summary(forSessionIds: ["a", "b"])
         #expect(summary?.primarySessionId == "a")
-        #expect(summary?.sessionCount == 2)
+        #expect(summary?.runningSessionCount == 0)
+        #expect(summary?.awaitingSessionCount == 2)
     }
 
     @Test func summary_skipsSession_whenKindMissing() {
