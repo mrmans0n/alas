@@ -114,11 +114,16 @@ struct RepoGroupView: View {
         return summaries.first(where: { $0.state == .running })
     }
 
-    /// Tooltip for the collapsed-header dot. Counts independently across
-    /// worktrees, lists distinct harness kinds in `HarnessKind.allCases` order.
+    /// Tooltip for the collapsed-header dot. Counts busy sessions (not
+    /// worktrees) independently per state, lists distinct harness kinds in
+    /// `HarnessKind.allCases` order.
     private func headerTooltip() -> String {
-        let runningCount = summaries.filter { $0.state == .running }.count
-        let awaitingCount = summaries.filter { $0.state == .awaiting }.count
+        let runningCount = summaries
+            .filter { $0.state == .running }
+            .reduce(0) { $0 + $1.sessionCount }
+        let awaitingCount = summaries
+            .filter { $0.state == .awaiting }
+            .reduce(0) { $0 + $1.sessionCount }
         let distinctKinds = HarnessKind.allCases.filter { kind in
             summaries.contains { $0.kind == kind }
         }
