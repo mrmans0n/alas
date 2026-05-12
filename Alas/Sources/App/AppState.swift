@@ -627,6 +627,15 @@ final class AppState {
         return nil
     }
 
+    func firstVisibleWorktreeId() -> String? {
+        for project in projects {
+            if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
+                return first.id
+            }
+        }
+        return nil
+    }
+
     private func makeSearchEnvironment() -> SearchEnvironment {
         // Invariant: the two synchronous closures below are only invoked
         // from `SearchModel`, which is `@MainActor` — so `assumeIsolated`

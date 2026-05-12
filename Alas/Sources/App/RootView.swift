@@ -140,12 +140,7 @@ struct RootView: View {
     }
 
     private func firstWorktreeId() -> String? {
-        for project in state.projects {
-            if let worktree = state.projectsManager.visibleWorktrees(projectId: project.id).first {
-                return worktree.id
-            }
-        }
-        return nil
+        state.firstVisibleWorktreeId()
     }
 
     private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool) {
@@ -297,8 +292,12 @@ private struct RootBaseHandlers: ViewModifier {
         let o = n
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 Task {
-                    if await state.projectsManager.refreshAll() {
+                    let changed = await state.projectsManager.refreshAll()
+                    if changed {
                         state.saveProjects()
+                    }
+                    if state.selectedWorktreeId != nil, selectedWorktree() == nil {
+                        state.selectedWorktreeId = state.firstVisibleWorktreeId()
                     }
                 }
             }
