@@ -170,7 +170,12 @@ private func alasGhosttyAction(
         return true
 
     case GHOSTTY_ACTION_PWD:
-        return true // Alas doesn't display CWD badges — silently accept.
+        guard let sv = surfaceView else { return true }
+        let pwd = action.action.pwd.pwd.map { String(cString: $0) } ?? ""
+        guard !pwd.isEmpty else { return true }
+        let url = URL(fileURLWithPath: pwd)
+        DispatchQueue.main.async { sv.setCurrentWorkingDirectory(url) }
+        return true
 
     case GHOSTTY_ACTION_MOUSE_SHAPE:
         guard let sv = surfaceView else { return false }

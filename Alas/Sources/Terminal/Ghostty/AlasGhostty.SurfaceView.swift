@@ -31,6 +31,18 @@ extension AlasGhostty {
         /// Called (on main thread) when the child process exits or the surface is closed.
         var processExitHandler: (() -> Void)?
 
+        // Current working directory, derived from Ghostty's GHOSTTY_ACTION_PWD events
+        // (which fire when the shell emits OSC 7). Nil until the shell reports one.
+        private(set) var currentWorkingDirectory: URL?
+
+        /// Fired on the main queue when the shell reports a new working directory.
+        var cwdHandler: ((URL) -> Void)?
+
+        func setCurrentWorkingDirectory(_ url: URL) {
+            currentWorkingDirectory = url
+            cwdHandler?(url)
+        }
+
         // MARK: - Internal state
 
         /// The raw C surface pointer. Nil only if surface creation failed.
