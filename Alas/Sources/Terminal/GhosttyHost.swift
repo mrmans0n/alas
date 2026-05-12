@@ -3,9 +3,12 @@ import AppKit
 
 /// Hosts an existing AlasGhostty.SurfaceView (already attached to a TerminalSession)
 /// inside SwiftUI. The surface is never recreated — we move it between containers
-/// when the active tab changes.
+/// when the active tab changes. `isFocused` controls whether this host promotes
+/// the surface to first responder on attach; with multiple panes per tab, only
+/// the focused leaf should grab keyboard focus.
 struct GhosttyHost: NSViewRepresentable {
     let session: TerminalSession
+    var isFocused: Bool = true
 
     @MainActor
     func makeNSView(context: Context) -> NSView {
@@ -42,7 +45,7 @@ struct GhosttyHost: NSViewRepresentable {
                 session.surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             ])
         }
-        // Make the surface first responder when displayed
+        guard isFocused else { return }
         DispatchQueue.main.async {
             container.window?.makeFirstResponder(session.surface)
         }
