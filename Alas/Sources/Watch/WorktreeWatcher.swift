@@ -108,8 +108,7 @@ final class WorktreeWatcher {
     /// changes and DO trigger a refresh.
     static func shouldRefresh(forEventPaths paths: [String]) -> Bool {
         for path in paths {
-            let base = (path as NSString).lastPathComponent
-            if base.hasSuffix(".lock") && path.contains("/.git/") {
+            if path.hasSuffix(".lock") && path.contains("/.git/") {
                 continue
             }
             return true
