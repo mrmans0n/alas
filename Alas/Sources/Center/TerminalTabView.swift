@@ -87,7 +87,6 @@ private struct PaneLeafView: View {
         Group {
             if let session = state.terminal.registry.session(for: leaf.sessionId) {
                 GhosttyHost(session: session, isFocused: isFocused)
-                    .id(leaf.sessionId)
                     .onAppear { wireCwdHandler(session: session) }
             } else {
                 Color.clear
