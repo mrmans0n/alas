@@ -9,6 +9,7 @@ struct WorkingTreeSectionView: View {
 
     @State private var stagedExpanded: Bool = true
     @State private var unstagedExpanded: Bool = true
+    @State private var collapsedChangePaths: Set<String> = []
 
     private var staged:   [ChangedFile] { changes.filter { $0.stage == .staged   } }
     private var unstaged: [ChangedFile] { changes.filter { $0.stage == .unstaged } }
@@ -60,40 +61,53 @@ struct WorkingTreeSectionView: View {
             onToggle: { expanded.wrappedValue.toggle() }
         )
         if expanded.wrappedValue {
-            ForEach(directoryGroups(files), id: \.0) { (dir, items) in
-                if !dir.isEmpty || shouldShowRootHeader(in: files) {
-                    DirectoryRowLabel(title: dir.isEmpty ? "(root)" : dir)
-                }
-                ForEach(items) { file in
-                    ChangedRow(file: file, onSelect: { onSelect(file) })
-                }
+            let filesByPath = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0) })
+            ForEach(ChangesTreeBuilder.build(files: files)) { node in
+                renderNode(node, filesByPath: filesByPath, depth: 0)
             }
         }
     }
 
-    /// Show "(root)" only when at least one file is in a subdirectory —
-    /// otherwise the lone label is noisy.
-    private func shouldShowRootHeader(in files: [ChangedFile]) -> Bool {
-        files.contains(where: { $0.path.contains("/") })
-    }
-
-    private func directoryGroups(_ files: [ChangedFile]) -> [(String, [ChangedFile])] {
-        let dict = Dictionary(grouping: files) { f -> String in
-            let comps = f.path.split(separator: "/")
-            return comps.dropLast().joined(separator: "/")
+    private func renderNode(_ node: FileTreeNode, filesByPath: [String: ChangedFile], depth: Int) -> AnyView {
+        if node.kind == .dir {
+            let open = !collapsedChangePaths.contains(node.path)
+            return AnyView(
+                Group {
+                    Button {
+                        if open {
+                            collapsedChangePaths.insert(node.path)
+                        } else {
+                            collapsedChangePaths.remove(node.path)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+                            Icon(name: "folder", size: 11, color: open ? theme.color("accent") : theme.color("fg-dim"))
+                            Text(node.name)
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundColor(theme.color("fg"))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                        }
+                        .padding(.leading, CGFloat(12 + depth * 14))
+                        .padding(.trailing, 12)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if open, let kids = node.children {
+                        ForEach(kids) { renderNode($0, filesByPath: filesByPath, depth: depth + 1) }
+                    }
+                }
+            )
+        } else if let file = filesByPath[node.path] {
+            return AnyView(
+                ChangedRow(file: file, depth: depth, onSelect: { onSelect(file) })
+            )
+        } else {
+            return AnyView(EmptyView())
         }
-        return dict.sorted { $0.key < $1.key }
-    }
-}
-
-private struct DirectoryRowLabel: View {
-    let title: String
-    @Environment(\.theme) private var theme
-    var body: some View {
-        Text(title)
-            .font(.system(size: 10.5, design: .monospaced))
-            .foregroundColor(theme.color("fg-faint"))
-            .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
