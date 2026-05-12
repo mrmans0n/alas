@@ -64,6 +64,19 @@ enum GhosttyConfigBuilder {
         lines.append("background = \(bg)")
         lines.append("foreground = \(fg)")
 
+        // Defense-in-depth: prevent libghostty from acting on shortcuts Alas owns.
+        // SurfaceView.isReservedAppKeyEquivalent already intercepts these before
+        // they reach libghostty, but emitting unbinds ensures Ghostty's own
+        // keybindings don't fire even if the wrapper changes.
+        let alasReservedKeybinds = [
+            "cmd+d", "cmd+shift+d", "cmd+w",
+            "cmd+alt+left", "cmd+alt+right", "cmd+alt+up", "cmd+alt+down",
+            "cmd+ctrl+left", "cmd+ctrl+right", "cmd+ctrl+up", "cmd+ctrl+down",
+        ]
+        for kb in alasReservedKeybinds {
+            lines.append("keybind = \(kb)=unbind")
+        }
+
         let body = lines.joined(separator: "\n") + "\n"
         try Paths.ensureDirectoryExists(destination.deletingLastPathComponent())
         try body.write(to: destination, atomically: true, encoding: .utf8)

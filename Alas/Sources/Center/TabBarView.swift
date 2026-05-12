@@ -17,6 +17,12 @@ struct TabBarView: View {
     let onNewTerminal: () -> Void
     @Environment(\.theme) var theme
 
+    private var isTerminalActive: Bool {
+        guard let activeId, let active = tabs.first(where: { $0.id == activeId }) else { return false }
+        if case .terminal = active { return true }
+        return false
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
@@ -50,6 +56,14 @@ struct TabBarView: View {
                 }
             }
             Spacer()
+            if isTerminalActive {
+                ToolbarIconButton(iconName: "split", tooltip: "Split Right (⌘D)") {
+                    NotificationCenter.default.post(name: .alasSplitRight, object: nil)
+                }
+                ToolbarIconButton(iconName: "split-down", tooltip: "Split Down (⇧⌘D)") {
+                    NotificationCenter.default.post(name: .alasSplitDown, object: nil)
+                }
+            }
             Button(action: onNewTerminal) {
                 Icon(name: "plus", size: 13)
                     .frame(width: 26, height: 22)
@@ -131,5 +145,24 @@ private struct TabButton: View {
         case "awaiting": return theme.color("mod")
         default:         return theme.color("fg-faint")
         }
+    }
+}
+
+private struct ToolbarIconButton: View {
+    let iconName: String
+    let tooltip: String
+    let action: () -> Void
+    @Environment(\.theme) var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Icon(name: iconName, size: 13,
+                 color: hovering ? theme.color("fg") : theme.color("fg-faint"))
+                .frame(width: 26, height: 22)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(tooltip)
     }
 }

@@ -109,6 +109,53 @@ struct AlasApp: App {
                 }
                 .keyboardShortcut("9", modifiers: .command)
             }
+            CommandMenu("Terminal") {
+                Button("Split Right") {
+                    NotificationCenter.default.post(name: .alasSplitRight, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                Button("Split Down") {
+                    NotificationCenter.default.post(name: .alasSplitDown, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Close Pane") {
+                    NotificationCenter.default.post(name: .alasCloseTab, object: nil)
+                }
+                Divider()
+                Button("Focus Pane Left") {
+                    NotificationCenter.default.post(name: .alasFocusPaneLeft, object: nil)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                Button("Focus Pane Right") {
+                    NotificationCenter.default.post(name: .alasFocusPaneRight, object: nil)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                Button("Focus Pane Up") {
+                    NotificationCenter.default.post(name: .alasFocusPaneUp, object: nil)
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                Button("Focus Pane Down") {
+                    NotificationCenter.default.post(name: .alasFocusPaneDown, object: nil)
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                Divider()
+                Button("Resize Pane Left") {
+                    NotificationCenter.default.post(name: .alasResizePaneLeft, object: nil)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                Button("Resize Pane Right") {
+                    NotificationCenter.default.post(name: .alasResizePaneRight, object: nil)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                Button("Resize Pane Up") {
+                    NotificationCenter.default.post(name: .alasResizePaneUp, object: nil)
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+                Button("Resize Pane Down") {
+                    NotificationCenter.default.post(name: .alasResizePaneDown, object: nil)
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+            }
             CommandGroup(after: .toolbar) {
                 Divider()
                 Button("Increase Font Size") {

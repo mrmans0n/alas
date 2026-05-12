@@ -180,16 +180,27 @@ final class AppState {
     }
 
     /// Activate a specific harness session: bring the app to front, select
-    /// the worktree, and activate the terminal tab hosting `sessionId`.
+    /// the worktree, activate the terminal tab hosting `sessionId`, and
+    /// focus the pane within that tab that owns the session (so keyboard
+    /// input and the tab-bar harness badge follow the user's intent).
     /// If the tab is no longer present (session was closed mid-flight) the
     /// worktree is still selected so the user lands somewhere sensible.
     func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
         selectedWorktreeId = worktreeId
-        if let tab = tabs.tabs(forWorktree: worktreeId).first(where: {
-            if case .terminal(let s) = $0 { return s.sessionId == sessionId }
-            return false
-        }) {
-            tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+        var matchedTabId: TabID?
+        var matchedLeafId: String?
+        for tab in tabs.tabs(forWorktree: worktreeId) {
+            guard case .terminal(let s) = tab,
+                  let leaf = s.root.leaves().first(where: { $0.sessionId == sessionId }) else { continue }
+            matchedTabId = tab.id
+            matchedLeafId = leaf.id
+            break
+        }
+        if let tabId = matchedTabId {
+            if let leafId = matchedLeafId {
+                _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leafId)
+            }
+            tabs.activate(worktreeId: worktreeId, tabId: tabId)
         }
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -213,13 +224,182 @@ final class AppState {
         return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: session.id)
     }
 
+    // MARK: - Pane splits
+
+    /// Per-tab cache of leaf frames, written by `SplitContainer` during layout
+    /// and read by `focusPane`. Keyed by tab id; inner dictionary maps leaf id
+    /// to its on-screen rect within the tab's coordinate space.
+    @ObservationIgnored
+    var terminalLeafFrames: [TabID: [String: CGRect]] = [:]
+
+    /// Split the focused pane of the active terminal tab on `worktreeId`. The
+    /// new pane gains focus, inherits the focused pane's current OSC-7 cwd
+    /// (falling back to its lastCwd, then the worktree root) and runs a plain
+    /// shell — harness state is not inherited.
+    func splitFocusedPane(worktreeId: String, axis: SplitAxis) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
+              let worktree = worktree(withId: worktreeId),
+              let project = projects.first(where: { $0.id == worktree.projectId }),
+              let focusedSession = terminal.registry.session(for: focused.sessionId) else { return }
+
+        let cwd = focusedSession.surface.currentWorkingDirectory
+            ?? focused.lastCwd.map { URL(fileURLWithPath: $0) }
+            ?? worktree.path
+
+        do {
+            let session = try terminal.openSession(
+                worktree: worktree, project: project,
+                cfg: config.terminal, theme: themeStore.current,
+                forcedCwd: cwd
+            )
+            harness.detector.register(sessionId: session.id) { [weak session] in
+                session?.surface.foregroundPid
+            }
+            _ = tabs.splitFocusedLeaf(
+                worktreeId: worktreeId, tabId: activeId, axis: axis,
+                newLeafId: UUID().uuidString, newSessionId: session.id
+            )
+        } catch {
+            AlasGhostty.logger.error("splitFocusedPane failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Close the focused pane. If it was the last leaf, also closes the tab
+    /// via the existing close-tab path (preserves today's ⌘W-on-unsplit
+    /// behavior).
+    func closeFocusedPane(worktreeId: String) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal = tab else { return }
+        guard let outcome = tabs.removeFocusedLeaf(worktreeId: worktreeId, tabId: activeId) else { return }
+        if case .tabRemoved = outcome {
+            closeTab(worktreeId: worktreeId, tabId: activeId)
+        } else {
+            let closedSessionId = outcome.closedSessionId
+            terminal.closeSession(id: closedSessionId)
+            harness.detector.unregister(sessionId: closedSessionId)
+            harness.forgetSession(closedSessionId)
+        }
+    }
+
+    /// Move focus to the geometrically nearest leaf in `direction`. No-op when
+    /// no candidate exists (no wrap-around).
+    func focusPane(worktreeId: String, direction: PaneFocusDirection) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let frames = terminalLeafFrames[activeId],
+              let next = PaneFocusFinder.nearestLeaf(
+                from: state.focusedLeafId, direction: direction, frames: frames
+              ) else { return }
+        _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: activeId, leafId: next)
+    }
+
+    /// Resize the focused leaf's enclosing split by ±0.05 toward `direction`.
+    /// Picks the innermost split on the focused-leaf's path whose axis matches
+    /// the direction's axis; nudges its fraction (positive when the focused
+    /// pane is the first child and direction is right/down).
+    func resizePane(worktreeId: String, direction: PaneFocusDirection) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let pathLeaf = state.root.find(leafId: state.focusedLeafId) else { return }
+        let axis: SplitAxis = (direction == .left || direction == .right) ? .vertical : .horizontal
+        guard let target = innermostSplit(matching: axis, path: pathLeaf.path, in: state.root) else { return }
+        let isFirstChildOfTarget = isLeafInFirstChild(of: target, leafId: state.focusedLeafId)
+        let delta = 0.05
+        let signed: Double = {
+            switch direction {
+            case .right, .down: return isFirstChildOfTarget ? delta : -delta
+            case .left, .up:    return isFirstChildOfTarget ? -delta : delta
+            }
+        }()
+        let newFraction = target.fraction + signed
+        _ = tabs.setSplitFraction(worktreeId: worktreeId, tabId: activeId, splitId: target.id, fraction: newFraction)
+    }
+
+    /// ⌘W router: if the active tab is a multi-pane terminal, close the focused
+    /// pane; otherwise fall through to the existing tab-close behavior.
+    func handleCloseShortcut(worktreeId: String) {
+        if let activeId = tabs.activeTabId(forWorktree: worktreeId),
+           let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+           case .terminal(let state) = tab,
+           case .split = state.root {
+            closeFocusedPane(worktreeId: worktreeId)
+            return
+        }
+        if let activeId = tabs.activeTabId(forWorktree: worktreeId) {
+            closeTab(worktreeId: worktreeId, tabId: activeId)
+        }
+    }
+
+    /// Walk down `path` collecting splits; return the innermost one whose
+    /// axis matches `axis`. `path` is the list of split ids from root to (but
+    /// not including) the focused leaf.
+    private func innermostSplit(matching axis: SplitAxis, path: [String], in root: PaneNode) -> PaneSplit? {
+        var current: PaneNode = root
+        var match: PaneSplit? = nil
+        for (index, splitId) in path.enumerated() {
+            guard case .split(let s) = current, s.id == splitId else { return match }
+            if s.axis == axis { match = s }
+            let nextId: String? = (index + 1 < path.count) ? path[index + 1] : nil
+            if let next = nextId {
+                guard let child = s.children.first(where: { containsNode(id: next, in: $0) }) else { return match }
+                current = child
+            } else {
+                return match
+            }
+        }
+        return match
+    }
+
+    private func isLeafInFirstChild(of split: PaneSplit, leafId: String) -> Bool {
+        split.children.first?.find(leafId: leafId) != nil
+    }
+
+    private func containsNode(id: String, in node: PaneNode) -> Bool {
+        if node.id == id { return true }
+        if case .split(let s) = node {
+            return s.children.contains(where: { containsNode(id: id, in: $0) })
+        }
+        return false
+    }
+
+    /// Walk every leaf in the tab's tree and recreate any session whose
+    /// `TerminalSession` is no longer alive (e.g., after relaunch).
+    ///
+    /// **Partial-failure contract:** if `openSession` throws midway through the
+    /// walk, leaves processed up to that point have already been persisted with
+    /// their new sessionIds. Re-calling this method is safe — already-restored
+    /// leaves are skipped, and the failing leaf is retried.
     @discardableResult
-    func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID, sessionId: String) throws -> Tab? {
+    func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID) throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab,
-              state.sessionId == sessionId else { return nil }
-        if terminal.registry.session(for: sessionId) != nil { return tab }
-        return try replaceMissingTerminalSession(worktreeId: worktreeId, tab: state)
+              let worktree = worktree(withId: worktreeId),
+              let project = projects.first(where: { $0.id == worktree.projectId }) else { return nil }
+
+        for leaf in state.root.leaves() {
+            if terminal.registry.session(for: leaf.sessionId) != nil { continue }
+            let forcedCwd = leaf.lastCwd.map { URL(fileURLWithPath: $0) }
+            let session = try terminal.openSession(
+                worktree: worktree, project: project,
+                cfg: config.terminal, theme: themeStore.current,
+                forcedCwd: forcedCwd
+            )
+            harness.detector.unregister(sessionId: leaf.sessionId)
+            harness.forgetSession(leaf.sessionId)
+            harness.detector.register(sessionId: session.id) { [weak session] in
+                session?.surface.foregroundPid
+            }
+            _ = tabs.replaceLeafSession(
+                worktreeId: worktreeId, tabId: tabId, leafId: leaf.id, sessionId: session.id
+            )
+        }
+        return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
     }
 
     func saveActiveTab(worktreeId: String) {
@@ -339,9 +519,11 @@ final class AppState {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
-                harness.detector.unregister(sessionId: s.sessionId)
-                harness.forgetSession(s.sessionId)
-                terminal.closeSession(id: s.sessionId)
+                for leaf in s.root.leaves() {
+                    harness.detector.unregister(sessionId: leaf.sessionId)
+                    harness.forgetSession(leaf.sessionId)
+                    terminal.closeSession(id: leaf.sessionId)
+                }
             }
             if case .editor = tab {
                 tabs.discardBuffer(worktreeId: worktreeId, tabId: tabId)
@@ -354,9 +536,11 @@ final class AppState {
         for id in tabIds {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
-                harness.detector.unregister(sessionId: s.sessionId)
-                harness.forgetSession(s.sessionId)
-                terminal.closeSession(id: s.sessionId)
+                for leaf in s.root.leaves() {
+                    harness.detector.unregister(sessionId: leaf.sessionId)
+                    harness.forgetSession(leaf.sessionId)
+                    terminal.closeSession(id: leaf.sessionId)
+                }
             }
         }
     }
@@ -402,34 +586,6 @@ final class AppState {
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
-    }
-
-    @discardableResult
-    private func replaceMissingTerminalSession(worktreeId: String, tab: TerminalTabState) throws -> Tab {
-        guard let worktree = worktree(withId: worktreeId),
-              let project = projects.first(where: { $0.id == worktree.projectId }) else {
-            throw NSError(domain: "AppState", code: 2)
-        }
-
-        let oldSessionId = tab.sessionId
-        let session = try terminal.openSession(
-            worktree: worktree, project: project,
-            cfg: config.terminal, theme: themeStore.current
-        )
-        harness.detector.unregister(sessionId: oldSessionId)
-        harness.forgetSession(oldSessionId)
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
-        }
-        guard let replacement = tabs.replaceTerminalSession(
-            worktreeId: worktreeId,
-            tabId: tab.id,
-            sessionId: session.id
-        ) else {
-            terminal.closeSession(id: session.id)
-            throw NSError(domain: "AppState", code: 3)
-        }
-        return replacement
     }
 
     private func defaultTerminalTitle(for worktree: Worktree) -> String {

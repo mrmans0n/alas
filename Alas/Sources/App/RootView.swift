@@ -200,6 +200,27 @@ private struct RootCommandHandlers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .modifier(RootBaseHandlers(
+                state: state,
+                showNewWorktree: $showNewWorktree,
+                selectedWorktree: selectedWorktree,
+                openSettings: openSettings
+            ))
+            .modifier(RootPaneHandlers(
+                state: state,
+                selectedWorktree: selectedWorktree
+            ))
+    }
+}
+
+private struct RootBaseHandlers: ViewModifier {
+    @Bindable var state: AppState
+    @Binding var showNewWorktree: Bool
+    let selectedWorktree: () -> Worktree?
+    let openSettings: () -> Void
+
+    func body(content: Content) -> some View {
+        content
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
                 state.config.rightPaneVisible.toggle()
                 state.saveConfig()
@@ -211,8 +232,8 @@ private struct RootCommandHandlers: ViewModifier {
                 if let wt = selectedWorktree() { _ = try? state.openTerminalTab(for: wt) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
-                if let wt = selectedWorktree(), let active = state.tabs.activeTabId(forWorktree: wt.id) {
-                    state.closeTab(worktreeId: wt.id, tabId: active)
+                if let wt = selectedWorktree() {
+                    state.handleCloseShortcut(worktreeId: wt.id)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
@@ -261,6 +282,45 @@ private struct RootCommandHandlers: ViewModifier {
     }
 }
 
+private struct RootPaneHandlers: ViewModifier {
+    @Bindable var state: AppState
+    let selectedWorktree: () -> Worktree?
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .alasSplitRight)) { _ in
+                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, axis: .vertical) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasSplitDown)) { _ in
+                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, axis: .horizontal) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneLeft)) { _ in
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .left) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneRight)) { _ in
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .right) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneUp)) { _ in
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .up) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneDown)) { _ in
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .down) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneLeft)) { _ in
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .left) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneRight)) { _ in
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .right) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneUp)) { _ in
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .up) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneDown)) { _ in
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .down) }
+            }
+    }
+}
+
 extension Notification.Name {
     static let alasToggleRightPane = Notification.Name("AlasToggleRightPane")
     static let alasNewWorktree     = Notification.Name("AlasNewWorktree")
@@ -275,4 +335,14 @@ extension Notification.Name {
     static let alasRevertActiveTab = Notification.Name("AlasRevertActiveTab")
     static let alasNewFile         = Notification.Name("AlasNewFile")
     static let alasRenameActiveFile = Notification.Name("AlasRenameActiveFile")
+    static let alasSplitRight       = Notification.Name("AlasSplitRight")
+    static let alasSplitDown        = Notification.Name("AlasSplitDown")
+    static let alasFocusPaneLeft    = Notification.Name("AlasFocusPaneLeft")
+    static let alasFocusPaneRight   = Notification.Name("AlasFocusPaneRight")
+    static let alasFocusPaneUp      = Notification.Name("AlasFocusPaneUp")
+    static let alasFocusPaneDown    = Notification.Name("AlasFocusPaneDown")
+    static let alasResizePaneLeft   = Notification.Name("AlasResizePaneLeft")
+    static let alasResizePaneRight  = Notification.Name("AlasResizePaneRight")
+    static let alasResizePaneUp     = Notification.Name("AlasResizePaneUp")
+    static let alasResizePaneDown   = Notification.Name("AlasResizePaneDown")
 }

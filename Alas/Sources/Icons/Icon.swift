@@ -30,6 +30,7 @@ struct Icon: View {
         case "file":       return "doc"
         case "menu":       return "ellipsis"
         case "split":      return "rectangle.split.2x1"
+        case "split-down": return "rectangle.split.1x2"
         case "palette":    return "paintpalette"
         case "keyboard":   return "keyboard"
         case "github":     return "circle.hexagongrid"

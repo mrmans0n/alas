@@ -1,0 +1,74 @@
+import Testing
+import Foundation
+@testable import Alas
+
+struct TerminalTabStateCodableTests {
+    @Test func newShapeRoundTripsLeafOnly() throws {
+        let state = TerminalTabState(
+            id: "tab-1",
+            title: "main",
+            root: .leaf(PaneLeaf(id: "leaf-1", sessionId: "sess-1", lastCwd: "/tmp")),
+            focusedLeafId: "leaf-1"
+        )
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: data)
+        #expect(decoded == state)
+    }
+
+    @Test func newShapeRoundTripsNestedTree() throws {
+        let nested: PaneNode = .split(PaneSplit(
+            id: "s1", axis: .vertical, fraction: 0.5,
+            children: [
+                .leaf(PaneLeaf(id: "a", sessionId: "sa", lastCwd: nil)),
+                .split(PaneSplit(id: "s2", axis: .horizontal, fraction: 0.3,
+                                 children: [
+                                    .leaf(PaneLeaf(id: "b", sessionId: "sb", lastCwd: "/home")),
+                                    .leaf(PaneLeaf(id: "c", sessionId: "sc", lastCwd: nil)),
+                                 ]))
+            ]
+        ))
+        let state = TerminalTabState(id: "tab", title: "t", root: nested, focusedLeafId: "b")
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: data)
+        #expect(decoded == state)
+    }
+
+    @Test func legacyShapeDecodesIntoSingleLeaf() throws {
+        let legacyJSON = #"""
+        {"id":"tab-1","title":"main","sessionId":"sess-1"}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: legacyJSON)
+        #expect(decoded.id == "tab-1")
+        #expect(decoded.title == "main")
+        if case .leaf(let l) = decoded.root {
+            #expect(l.sessionId == "sess-1")
+            #expect(decoded.focusedLeafId == l.id)
+            #expect(l.lastCwd == nil)
+        } else {
+            Issue.record("legacy state should decode to a single leaf")
+        }
+    }
+
+    @Test func encodingNeverEmitsTopLevelSessionIdKey() throws {
+        let state = TerminalTabState(
+            id: "tab-1",
+            title: "main",
+            root: .leaf(PaneLeaf(id: "leaf-1", sessionId: "sess-1", lastCwd: nil)),
+            focusedLeafId: "leaf-1"
+        )
+        let data = try JSONEncoder().encode(state)
+        let parsed = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(parsed["root"] != nil)
+        #expect(parsed["focusedLeafId"] != nil)
+        #expect(parsed["sessionId"] == nil,
+                "Top-level sessionId leaked into the new shape — encode(to:) should never emit it.")
+    }
+
+    @Test func decodeWithRootButNoFocusedLeafIdFallsBackToFirstLeaf() throws {
+        let json = #"""
+        {"id":"t","title":"x","root":{"kind":"leaf","id":"leaf-1","sessionId":"s","lastCwd":null}}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: json)
+        #expect(decoded.focusedLeafId == "leaf-1")
+    }
+}

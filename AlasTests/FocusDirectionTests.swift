@@ -1,0 +1,104 @@
+import Testing
+import Foundation
+@testable import Alas
+
+struct FocusDirectionTests {
+    // Layout (2-pane vertical-axis split, i.e. side-by-side):
+    //  ┌─────┬─────┐
+    //  │  A  │  B  │
+    //  └─────┴─────┘
+    private let twoPaneHorizontal: [String: CGRect] = [
+        "A": CGRect(x: 0,   y: 0, width: 100, height: 100),
+        "B": CGRect(x: 100, y: 0, width: 100, height: 100),
+    ]
+
+    // 2x2 grid:
+    //  ┌──┬──┐
+    //  │A │B │
+    //  ├──┼──┤
+    //  │C │D │
+    //  └──┴──┘
+    private let twoByTwoGrid: [String: CGRect] = [
+        "A": CGRect(x: 0,   y: 0,   width: 100, height: 100),
+        "B": CGRect(x: 100, y: 0,   width: 100, height: 100),
+        "C": CGRect(x: 0,   y: 100, width: 100, height: 100),
+        "D": CGRect(x: 100, y: 100, width: 100, height: 100),
+    ]
+
+    @Test func rightFromAReturnsB() {
+        let r = PaneFocusFinder.nearestLeaf(from: "A", direction: .right, frames: twoPaneHorizontal)
+        #expect(r == "B")
+    }
+
+    @Test func leftFromBReturnsA() {
+        let r = PaneFocusFinder.nearestLeaf(from: "B", direction: .left, frames: twoPaneHorizontal)
+        #expect(r == "A")
+    }
+
+    @Test func upFromAInTwoPaneHorizontalIsNil() {
+        let r = PaneFocusFinder.nearestLeaf(from: "A", direction: .up, frames: twoPaneHorizontal)
+        #expect(r == nil)
+    }
+
+    @Test func downFromAInGridReturnsC() {
+        let r = PaneFocusFinder.nearestLeaf(from: "A", direction: .down, frames: twoByTwoGrid)
+        #expect(r == "C")
+    }
+
+    @Test func rightFromCInGridReturnsD() {
+        let r = PaneFocusFinder.nearestLeaf(from: "C", direction: .right, frames: twoByTwoGrid)
+        #expect(r == "D")
+    }
+
+    @Test func upFromDInGridReturnsB() {
+        let r = PaneFocusFinder.nearestLeaf(from: "D", direction: .up, frames: twoByTwoGrid)
+        #expect(r == "B")
+    }
+
+    @Test func directionAtEdgeReturnsNil() {
+        let r = PaneFocusFinder.nearestLeaf(from: "B", direction: .right, frames: twoPaneHorizontal)
+        #expect(r == nil)
+    }
+
+    @Test func missingSourceReturnsNil() {
+        let r = PaneFocusFinder.nearestLeaf(from: "missing", direction: .right, frames: twoPaneHorizontal)
+        #expect(r == nil)
+    }
+
+    // L-shape (one wide pane on top, two equal panes below):
+    //  ┌─────────┐
+    //  │    T    │
+    //  ├────┬────┤
+    //  │ BL │ BR │
+    //  └────┴────┘
+    private let lShape: [String: CGRect] = [
+        "T":  CGRect(x: 0,   y: 0,   width: 200, height: 100),
+        "BL": CGRect(x: 0,   y: 100, width: 100, height: 100),
+        "BR": CGRect(x: 100, y: 100, width: 100, height: 100),
+    ]
+
+    @Test func rightFromBLInLShapeReturnsBR_notT() {
+        // Even though T's midX (100) is rightward of BL's midX (50), T is NOT
+        // to the right of BL — its rect is above. Only BR qualifies.
+        let r = PaneFocusFinder.nearestLeaf(from: "BL", direction: .right, frames: lShape)
+        #expect(r == "BR")
+    }
+
+    @Test func upFromBLInLShapeReturnsT() {
+        let r = PaneFocusFinder.nearestLeaf(from: "BL", direction: .up, frames: lShape)
+        #expect(r == "T")
+    }
+
+    @Test func downFromTInLShapeReturnsBLorBR() {
+        // T is above both BL and BR; both are equidistant. Either is a valid
+        // answer; the algorithm picks deterministically based on dictionary
+        // ordering, so we accept either.
+        let r = PaneFocusFinder.nearestLeaf(from: "T", direction: .down, frames: lShape)
+        #expect(r == "BL" || r == "BR")
+    }
+
+    @Test func leftFromBRInLShapeReturnsBL() {
+        let r = PaneFocusFinder.nearestLeaf(from: "BR", direction: .left, frames: lShape)
+        #expect(r == "BL")
+    }
+}

@@ -36,7 +36,8 @@ final class TerminalService {
         worktree: Worktree,
         project: ProjectConfig,
         cfg: AppConfig.Terminal,
-        theme: Theme
+        theme: Theme,
+        forcedCwd: URL? = nil
     ) throws -> TerminalSession {
         try ensureApp(cfg: cfg, theme: theme)
         guard let app else { throw NSError(domain: "TerminalService", code: 1) }
@@ -55,7 +56,7 @@ final class TerminalService {
         // Plan-supplied env overrides (e.g. ZDOTDIR for zsh startup scripts)
         // win over inherited env.
         for (k, v) in plan.envOverrides { env[k] = v }
-        let cwd = resolveWorkingDirectory(
+        let cwd = forcedCwd ?? resolveWorkingDirectory(
             preference: cfg.workingDirectory,
             worktree: worktree,
             project: project
