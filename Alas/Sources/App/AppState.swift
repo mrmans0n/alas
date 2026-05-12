@@ -215,6 +215,148 @@ final class AppState {
         return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: session.id)
     }
 
+    // MARK: - Pane splits
+
+    /// Per-tab cache of leaf frames, written by `SplitContainer` during layout
+    /// and read by `focusPane`. Keyed by tab id; inner dictionary maps leaf id
+    /// to its on-screen rect within the tab's coordinate space.
+    var terminalLeafFrames: [TabID: [String: CGRect]] = [:]
+
+    /// Split the focused pane of the active terminal tab on `worktreeId`. The
+    /// new pane gains focus, inherits the focused pane's current OSC-7 cwd
+    /// (falling back to its lastCwd, then the worktree root) and runs a plain
+    /// shell — harness state is not inherited.
+    func splitFocusedPane(worktreeId: String, axis: SplitAxis) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
+              let worktree = worktree(withId: worktreeId),
+              let project = projects.first(where: { $0.id == worktree.projectId }),
+              let focusedSession = terminal.registry.session(for: focused.sessionId) else { return }
+
+        let cwd = focusedSession.surface.currentWorkingDirectory
+            ?? focused.lastCwd.map { URL(fileURLWithPath: $0) }
+            ?? worktree.path
+
+        do {
+            let session = try terminal.openSession(
+                worktree: worktree, project: project,
+                cfg: config.terminal, theme: themeStore.current,
+                forcedCwd: cwd
+            )
+            harness.detector.register(sessionId: session.id) { [weak session] in
+                session?.surface.foregroundPid
+            }
+            _ = tabs.splitFocusedLeaf(
+                worktreeId: worktreeId, tabId: activeId, axis: axis,
+                newLeafId: UUID().uuidString, newSessionId: session.id
+            )
+        } catch {
+            AlasGhostty.logger.error("splitFocusedPane failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Close the focused pane. If it was the last leaf, also closes the tab
+    /// via the existing close-tab path (preserves today's ⌘W-on-unsplit
+    /// behavior).
+    func closeFocusedPane(worktreeId: String) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal = tab else { return }
+        guard let outcome = tabs.removeFocusedLeaf(worktreeId: worktreeId, tabId: activeId) else { return }
+        let closedSessionId = outcome.closedSessionId
+        terminal.closeSession(id: closedSessionId)
+        harness.detector.unregister(sessionId: closedSessionId)
+        harness.forgetSession(closedSessionId)
+        if case .tabRemoved = outcome {
+            closeTab(worktreeId: worktreeId, tabId: activeId)
+        }
+    }
+
+    /// Move focus to the geometrically nearest leaf in `direction`. No-op when
+    /// no candidate exists (no wrap-around).
+    func focusPane(worktreeId: String, direction: PaneFocusDirection) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let frames = terminalLeafFrames[activeId],
+              let next = PaneFocusFinder.nearestLeaf(
+                from: state.focusedLeafId, direction: direction, frames: frames
+              ) else { return }
+        _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: activeId, leafId: next)
+    }
+
+    /// Resize the focused leaf's enclosing split by ±0.05 toward `direction`.
+    /// Picks the innermost split on the focused-leaf's path whose axis matches
+    /// the direction's axis; nudges its fraction (positive when the focused
+    /// pane is the first child and direction is right/down).
+    func resizePane(worktreeId: String, direction: PaneFocusDirection) {
+        guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let pathLeaf = state.root.find(leafId: state.focusedLeafId) else { return }
+        let axis: SplitAxis = (direction == .left || direction == .right) ? .vertical : .horizontal
+        guard let target = innermostSplit(matching: axis, path: pathLeaf.path, in: state.root) else { return }
+        let isFirstChildOfTarget = isLeafInFirstChild(of: target, leafId: state.focusedLeafId)
+        let delta = 0.05
+        let signed: Double = {
+            switch direction {
+            case .right, .down: return isFirstChildOfTarget ? delta : -delta
+            case .left, .up:    return isFirstChildOfTarget ? -delta : delta
+            }
+        }()
+        let newFraction = target.fraction + signed
+        _ = tabs.setSplitFraction(worktreeId: worktreeId, tabId: activeId, splitId: target.id, fraction: newFraction)
+    }
+
+    /// ⌘W router: if the active tab is a multi-pane terminal, close the focused
+    /// pane; otherwise fall through to the existing tab-close behavior.
+    func handleCloseShortcut(worktreeId: String) {
+        if let activeId = tabs.activeTabId(forWorktree: worktreeId),
+           let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+           case .terminal(let state) = tab,
+           case .split = state.root {
+            closeFocusedPane(worktreeId: worktreeId)
+            return
+        }
+        if let activeId = tabs.activeTabId(forWorktree: worktreeId) {
+            closeTab(worktreeId: worktreeId, tabId: activeId)
+        }
+    }
+
+    /// Walk down `path` collecting splits; return the innermost one whose
+    /// axis matches `axis`. `path` is the list of split ids from root to (but
+    /// not including) the focused leaf.
+    private func innermostSplit(matching axis: SplitAxis, path: [String], in root: PaneNode) -> PaneSplit? {
+        var current: PaneNode = root
+        var match: PaneSplit? = nil
+        for (index, splitId) in path.enumerated() {
+            guard case .split(let s) = current, s.id == splitId else { return match }
+            if s.axis == axis { match = s }
+            let nextId: String? = (index + 1 < path.count) ? path[index + 1] : nil
+            if let next = nextId {
+                guard let child = s.children.first(where: { containsNode(id: next, in: $0) }) else { return match }
+                current = child
+            } else {
+                return match
+            }
+        }
+        return match
+    }
+
+    private func isLeafInFirstChild(of split: PaneSplit, leafId: String) -> Bool {
+        split.children.first?.find(leafId: leafId) != nil
+    }
+
+    private func containsNode(id: String, in node: PaneNode) -> Bool {
+        if node.id == id { return true }
+        if case .split(let s) = node {
+            return s.children.contains(where: { containsNode(id: id, in: $0) })
+        }
+        return false
+    }
+
     @discardableResult
     func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID, sessionId: String) throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
