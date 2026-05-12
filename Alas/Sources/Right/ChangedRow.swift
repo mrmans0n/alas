@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChangedRow: View {
     let file: ChangedFile
+    var depth: Int = 0
     let onSelect: () -> Void
     @Environment(\.theme) var theme
 
@@ -20,7 +21,9 @@ struct ChangedRow: View {
                 StatusBadge(status: file.status)
             }
             .font(.system(size: 11, design: .monospaced))
-            .padding(.horizontal, 12).padding(.vertical, 4)
+            .padding(.leading, CGFloat(12 + (depth == 0 ? 0 : depth * 14 + 14)))
+            .padding(.trailing, 12)
+            .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
