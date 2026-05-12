@@ -7,6 +7,7 @@
 // data; session lifetime is managed by `TerminalService`.
 
 import Foundation
+import CoreGraphics
 
 enum SplitAxis: String, Codable, Equatable {
     // horizontal: divider runs horizontally → children stacked top/bottom (Split Down).
