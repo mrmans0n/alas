@@ -93,6 +93,7 @@
 		4E08D715B766E9D04B4BA0B0 /* WindowAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB020862232495EC1C5ECBEA /* WindowAppearance.swift */; };
 		4E7279E8E76C7778BC686DF1 /* ProjectPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00809DCA566AAAADD7448659 /* ProjectPickerTests.swift */; };
 		4ECFD27396367A9A81D52A0D /* WorktreeRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C995611A6313FABE30508248 /* WorktreeRowView.swift */; };
+		51370BBBB2BDE992F6BA8B04 /* EventHolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25493E3B18A1AB94EA6985C3 /* EventHolder.swift */; };
 		514C75877C1C3B1D19BB5BD5 /* StartupScriptInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = C56EFAFF71ABDBCDECAAA305 /* StartupScriptInstaller.swift */; };
 		523568D4D67F61ACA677EE44 /* SubHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE8B45ECF898B83A616586D /* SubHeader.swift */; };
 		524B70F03B9A934CEEA5FA61 /* LSPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8F6FBCE1218EAB74B608A /* LSPClientTests.swift */; };
@@ -327,6 +328,7 @@
 		2119507B66D09AF3DF347280 /* AlasGhostty.App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.App.swift; sourceTree = "<group>"; };
 		215C9AE9FBCB1FD9F6D030FE /* GhosttyHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyHost.swift; sourceTree = "<group>"; };
 		23532A4B85092F720FD0E9F9 /* HookCommandShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookCommandShellTests.swift; sourceTree = "<group>"; };
+		25493E3B18A1AB94EA6985C3 /* EventHolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventHolder.swift; sourceTree = "<group>"; };
 		271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypesTests.swift; sourceTree = "<group>"; };
 		27A92711BC1D9A78D8A80561 /* GitTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypes.swift; sourceTree = "<group>"; };
 		27E7E4823B42BBA6EA7610DB /* CommitFilesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitFilesListView.swift; sourceTree = "<group>"; };
@@ -620,6 +622,7 @@
 				C6E896FEA37B4691BD16E2DD /* EditorBufferTests.swift */,
 				E98FAFF3AE36A17EE6AD029C /* EditorTabStateMarkdownCodableTests.swift */,
 				64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */,
+				25493E3B18A1AB94EA6985C3 /* EventHolder.swift */,
 				3855FBA3E4444960418639E9 /* FileIndexTests.swift */,
 				3ABD3A575FAEC381A5744BFA /* FileTreeBuilderTests.swift */,
 				2CBAD18141C1A9B654F56982 /* FileTypeIconTests.swift */,
@@ -1548,6 +1551,7 @@
 				C91AE8901B9D4B16A1EE67FB /* EditorBufferTests.swift in Sources */,
 				1EBF9B83C26B9518AF70D2F3 /* EditorTabStateMarkdownCodableTests.swift in Sources */,
 				C4D640619C91B2668340B04E /* EnvBuilderTests.swift in Sources */,
+				51370BBBB2BDE992F6BA8B04 /* EventHolder.swift in Sources */,
 				7602FDB0353222613CD39FFE /* FileIndexTests.swift in Sources */,
 				D85B5032B8F2A71AFF5A13B6 /* FileTreeBuilderTests.swift in Sources */,
 				6ED129AC9B6798F76F7D3A51 /* FileTypeIconTests.swift in Sources */,

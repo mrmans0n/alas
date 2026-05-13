@@ -35,12 +35,12 @@ struct HookCommandShellTests {
 
     @Test func claudeBusyCommand_sendsValidEvent() async throws {
         try await withTestSocket { path, server in
-            var received: AgentHookEvent?
-            server.onEvent = { received = $0 }
+            let holder = EventHolder()
+            server.onEvent = { holder.deliver($0) }
 
             let cmd = AlasHookCommand.compositeCommand(events: [.busy], agent: .claude, forwardStdinAsBody: false)
             try runBash(command: cmd, socketPath: path, sessionId: "test-session")
-            try await Task.sleep(for: .milliseconds(300))
+            let received = await holder.wait(timeoutMs: 3000)
 
             #expect(received?.event == .busy)
             #expect(received?.agent == .claude)
@@ -50,13 +50,15 @@ struct HookCommandShellTests {
 
     @Test func codexIdleCommand_extractsBody() async throws {
         try await withTestSocket { path, server in
-            var received: AgentHookEvent?
-            server.onEvent = { received = $0 }
+            let holder = EventHolder()
+            server.onEvent = { holder.deliver($0) }
 
             let cmd = AlasHookCommand.compositeCommand(events: [.idle], agent: .codex, forwardStdinAsBody: true)
             let stdinPayload = #"{"message": "All done with the refactor"}"#
             try runBash(command: cmd, socketPath: path, sessionId: "test-session", stdin: stdinPayload)
-            try await Task.sleep(for: .milliseconds(500))
+            // Composite-with-body sends two envelopes: one without body, then the
+            // body-bearing one. Wait for the body-bearing event specifically.
+            let received = await holder.wait(timeoutMs: 3000) { $0.body != nil }
 
             #expect(received?.event == .idle)
             #expect(received?.agent == .codex)
@@ -66,13 +68,13 @@ struct HookCommandShellTests {
 
     @Test func cursorAwaitingCommand_extractsBody() async throws {
         try await withTestSocket { path, server in
-            var received: AgentHookEvent?
-            server.onEvent = { received = $0 }
+            let holder = EventHolder()
+            server.onEvent = { holder.deliver($0) }
 
             let cmd = AlasHookCommand.compositeCommand(events: [.awaitingInput], agent: .cursor, forwardStdinAsBody: true)
             let stdinPayload = #"{"assistant_response": "Should I proceed?"}"#
             try runBash(command: cmd, socketPath: path, sessionId: "test-session", stdin: stdinPayload)
-            try await Task.sleep(for: .milliseconds(500))
+            let received = await holder.wait(timeoutMs: 3000) { $0.body != nil }
 
             #expect(received?.event == .awaitingInput)
             #expect(received?.agent == .cursor)

@@ -11,6 +11,21 @@ struct AgentHookSocketServerTests {
         return (dir, { try? FileManager.default.removeItem(atPath: dir) })
     }
 
+    /// Run `trigger`, then wait for the first event delivered to `server.onEvent`
+    /// (or for `timeoutMs` to elapse). Avoids `Task.sleep`-then-read races: the
+    /// dispatched-to-main handler may run after a fixed sleep under load.
+    private func awaitEvent<T>(
+        on server: AgentHookSocketServer,
+        timeoutMs: UInt64,
+        _ trigger: () throws -> T
+    ) async throws -> (T, AgentHookEvent?) {
+        let holder = EventHolder()
+        server.onEvent = { event in holder.deliver(event) }
+        let triggerResult = try trigger()
+        let received = await holder.wait(timeoutMs: timeoutMs)
+        return (triggerResult, received)
+    }
+
     private func sendToSocket(path: String, payload: String) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -27,19 +42,17 @@ struct AgentHookSocketServerTests {
         defer { cleanup() }
         let path = "\(dir)/test.sock"
         let server = AgentHookSocketServer(socketPath: path)
-
-        var received: AgentHookEvent?
-        server.onEvent = { event in received = event }
+        defer { server.shutdown() }
 
         let json = #"{"v":1,"event":"busy","agent":"claude","session_id":"s1","pid":123}"#
-        let response = try sendToSocket(path: path, payload: json)
-        try await Task.sleep(for: .milliseconds(200))
+        let (response, received) = try await awaitEvent(on: server, timeoutMs: 2000) {
+            try sendToSocket(path: path, payload: json)
+        }
 
         #expect(response.contains("\"ok\":true") || response.contains("\"ok\": true"))
         #expect(received?.event == .busy)
         #expect(received?.agent == .claude)
         #expect(received?.sessionId == "s1")
-        server.shutdown()
     }
 
     @Test func malformedJSON_returnsError() async throws {
@@ -60,12 +73,11 @@ struct AgentHookSocketServerTests {
         let server = AgentHookSocketServer(socketPath: path)
         defer { server.shutdown() }
 
-        var received: AgentHookEvent?
-        server.onEvent = { event in received = event }
-
         let json = #"{"v":1,"event":"future_event","agent":"claude","session_id":"s1"}"#
-        let response = try sendToSocket(path: path, payload: json)
-        try await Task.sleep(for: .milliseconds(200))
+        // Short timeout: we're asserting no event ever fires.
+        let (response, received) = try await awaitEvent(on: server, timeoutMs: 300) {
+            try sendToSocket(path: path, payload: json)
+        }
 
         #expect(response.contains("\"ok\":true") || response.contains("\"ok\": true"))
         #expect(received == nil)
