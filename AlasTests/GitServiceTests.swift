@@ -36,24 +36,16 @@ struct GitServiceTests {
         #expect(valid == false)
     }
 
-    @Test func suggestNameFromHttpsRemote() async throws {
-        let repo = try await makeRepo(remote: "https://github.com/nlopez/alas.git")
-        defer { try? FileManager.default.removeItem(at: repo) }
-        let svc = GitService()
-        let name = try await svc.suggestProjectName(repo)
-        #expect(name == "nlopez/alas")
-    }
-
-    @Test func suggestNameFromSshRemote() async throws {
-        let repo = try await makeRepo(remote: "git@github.com:nlopez/git-gud.git")
-        defer { try? FileManager.default.removeItem(at: repo) }
-        let svc = GitService()
-        let name = try await svc.suggestProjectName(repo)
-        #expect(name == "nlopez/git-gud")
-    }
-
-    @Test func suggestNameFallsBackToFolder() async throws {
+    @Test func suggestNameUsesDirectoryName() async throws {
         let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let svc = GitService()
+        let name = try await svc.suggestProjectName(repo)
+        #expect(name == repo.lastPathComponent)
+    }
+
+    @Test func suggestNameIgnoresOriginRemote() async throws {
+        let repo = try await makeRepo(remote: "https://github.com/nlopez/a-longer-remote-name.git")
         defer { try? FileManager.default.removeItem(at: repo) }
         let svc = GitService()
         let name = try await svc.suggestProjectName(repo)
