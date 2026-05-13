@@ -118,11 +118,18 @@ final class AppState {
         saveProjects()
     }
 
-    func updateProject(id: String, name: String, color: String) {
+    func updateProject(id: String, name: String, color: String, startupScripts: ProjectStartupScripts) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
-        projectsManager.updateProject(id: id, update: ProjectUpdate(name: trimmedName, color: color))
+        projectsManager.updateProject(
+            id: id,
+            update: ProjectUpdate(
+                name: trimmedName,
+                color: color,
+                startupScripts: startupScripts
+            )
+        )
         saveProjects()
     }
 
@@ -624,6 +631,32 @@ final class AppState {
             }
         }
         return nil
+    }
+
+    var activeTab: Tab? {
+        guard let worktreeId = selectedWorktreeId else { return nil }
+        return tabs.activeTab(forWorktree: worktreeId)
+    }
+
+    var hasActiveEditorTab: Bool {
+        guard case .editor = activeTab else { return false }
+        return true
+    }
+
+    var hasAnyDirtyEditorTab: Bool {
+        var result = false
+        for project in projects {
+            for worktree in projectsManager.worktrees(projectId: project.id) {
+                for tab in tabs.tabs(forWorktree: worktree.id) {
+                    guard case .editor(let state) = tab else { continue }
+                    if let buffer = tabs.peekBuffer(tabId: state.id) {
+                        _ = buffer.editGeneration
+                        if buffer.dirty { result = true }
+                    }
+                }
+            }
+        }
+        return result
     }
 
     /// Pick a sensible new selection after a worktree was removed (archived or
