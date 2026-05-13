@@ -21,6 +21,11 @@ enum EnvBuilder {
         env["ALAS_BRANCH"] = worktree.branch
         env["ALAS_WORKTREE"] = worktree.path.path
         env["ALAS_SESSION_ID"] = sessionId
+        // Always strip any inherited ALAS_SOCKET_PATH before deciding what to
+        // set: leaving a parent Alas's socket path in env when we have no
+        // server of our own would point this session's hooks at the wrong
+        // process and drive incorrect harness state there.
+        env.removeValue(forKey: "ALAS_SOCKET_PATH")
         if let socketPath { env["ALAS_SOCKET_PATH"] = socketPath }
         return env
     }
