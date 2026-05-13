@@ -6,7 +6,12 @@ final class WorktreeWatcher {
     private let path: URL
     private var stream: FSEventStreamRef?
     private var gitDirStream: FSEventStreamRef?
-    private let debouncer = DebounceTimer(interval: 0.5)
+    // `maxWait: 2.0` guarantees a refresh fires within 2s of the first event
+    // in a burst, even when something (agent, build, LSP) keeps poking faster
+    // than the 0.5s trailing window. Without the ceiling the trailing timer
+    // can be cancelled-and-rescheduled indefinitely, leaving the changes
+    // pane stuck on stale data.
+    private let debouncer = DebounceTimer(interval: 0.5, maxWait: 2.0)
 
     init(path: URL) {
         self.path = path
