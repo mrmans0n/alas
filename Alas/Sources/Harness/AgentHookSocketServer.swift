@@ -110,18 +110,31 @@ final class AgentHookSocketServer {
     }
 
     static func readPayload(from clientFD: Int32) -> Data? {
+        // Read in chunks; after each chunk, try to parse what we have as
+        // JSON. As soon as it parses, return — this avoids waiting for the
+        // client to close (or the SO_RCVTIMEO to fire). macOS `nc` doesn't
+        // half-close on stdin EOF without `-N` (which it doesn't support
+        // anyway), so each hook would otherwise wait the full `-w1`
+        // second per invocation, adding ~1s of latency to every Claude
+        // prompt/tool/stop event.
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
+        while data.count < maxPayloadSize {
             let bytesRead = read(clientFD, &buffer, buffer.count)
             if bytesRead < 0 {
                 guard errno == EINTR else { return nil }
                 continue
             }
-            if bytesRead == 0 { return data }
+            if bytesRead == 0 { return data.isEmpty ? nil : data }
             data.append(contentsOf: buffer.prefix(bytesRead))
-            if data.count > maxPayloadSize { return nil }
+            // Cheap parse probe: if the bytes form a complete JSON object
+            // already, we're done. Malformed bytes won't parse and we keep
+            // reading.
+            if !data.isEmpty, (try? JSONSerialization.jsonObject(with: data)) != nil {
+                return data
+            }
         }
+        return nil
     }
 
     private static func sendResponse(clientFD: Int32, ok: Bool, error: String? = nil) {
