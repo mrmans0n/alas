@@ -72,22 +72,22 @@ struct ClaudeInstallerTests {
         #expect(installer.installState() == .outdated)
     }
 
-    /// Codex review (#102): Claude reuses the same command across multiple
-    /// events (e.g. `idleAndNotify` on Stop and SessionEnd). A flat
-    /// Set<String> compare would falsely report .installed when one of those
-    /// placements is missing because the same command still exists elsewhere.
+    /// Codex review (#102): Claude reuses the same `busy` command across
+    /// UserPromptSubmit/PreToolUse/PostToolUse. A flat Set<String> compare
+    /// would falsely report `.installed` when one of those placements is
+    /// missing because the same command still exists elsewhere.
     @Test func installState_missingPlacement_outdated() async throws {
         let (url, cleanup) = tmpSettingsURL()
         defer { cleanup() }
         let installer = ClaudeInstaller(settingsURL: url)
         try await installer.install()
 
-        // Drop the entire SessionEnd event from the settings file. `Stop`
-        // still has an identical idleAndNotify command, so a set-based check
-        // would not notice. Per-event compare must catch this.
+        // Drop PostToolUse. `busy` still lives under UserPromptSubmit and
+        // PreToolUse, so a set-based check would not notice. Per-event
+        // compare must catch this.
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
         var hooks = json["hooks"] as! [String: Any]
-        hooks.removeValue(forKey: "SessionEnd")
+        hooks.removeValue(forKey: "PostToolUse")
         json["hooks"] = hooks
         try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
 
