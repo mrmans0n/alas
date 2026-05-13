@@ -125,4 +125,75 @@ struct AppStateTabAvailabilityTests {
 
         #expect(!state.hasActiveEditorTab)
     }
+
+    @Test func hasAnyDirtyEditorTabFalseWhenEmpty() {
+        let state = AppState()
+        #expect(!state.hasAnyDirtyEditorTab)
+    }
+
+    @Test func hasAnyDirtyEditorTabTrueWhenBufferDirty() async throws {
+        let repo = try await makeRepo(name: "dirty")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "hello\n".write(
+            to: repo.appendingPathComponent("a.txt"),
+            atomically: true, encoding: .utf8
+        )
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        let tab = state.tabs.appendEditor(
+            worktreeId: trees[0].id, title: "a.txt", relativePath: "a.txt"
+        )
+        let buffer = state.tabs.buffer(
+            worktreeId: trees[0].id,
+            tabId: tab.id,
+            worktreeRoot: trees[0].path,
+            relativePath: "a.txt"
+        )
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+
+        #expect(state.hasAnyDirtyEditorTab)
+    }
+
+    @Test func hasAnyDirtyEditorTabTrueEvenWhenActiveTabIsTerminal() async throws {
+        let repo = try await makeRepo(name: "dirty-terminal")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "hello\n".write(
+            to: repo.appendingPathComponent("a.txt"),
+            atomically: true, encoding: .utf8
+        )
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        let editorTab = state.tabs.appendEditor(
+            worktreeId: trees[0].id, title: "a.txt", relativePath: "a.txt"
+        )
+        let buffer = state.tabs.buffer(
+            worktreeId: trees[0].id,
+            tabId: editorTab.id,
+            worktreeRoot: trees[0].path,
+            relativePath: "a.txt"
+        )
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+        _ = state.tabs.appendTerminal(worktreeId: trees[0].id, title: "main", sessionId: "s1")
+
+        #expect(!state.hasActiveEditorTab)
+        #expect(state.hasAnyDirtyEditorTab)
+    }
 }

@@ -645,6 +645,17 @@ final class AppState {
         return true
     }
 
+    var hasAnyDirtyEditorTab: Bool {
+        for project in projects {
+            for worktree in projectsManager.worktrees(projectId: project.id) {
+                if !tabs.tabIdsWithUnsavedChanges(forWorktree: worktree.id).isEmpty {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// Pick a sensible new selection after a worktree was removed (archived or
     /// deleted) from the given project at the given index in its visible list.
     /// Prefers the entry now occupying that index in the same project (i.e.
