@@ -2,7 +2,12 @@ import Foundation
 
 enum LegacyHookSweep {
     static func sweepAll(homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser) {
-        let prefix = homeDirectoryURL.appendingPathComponent(".alas/hooks/").path
+        // URL.path drops the trailing slash, so a raw `hasPrefix` match would
+        // also catch siblings like `~/.alas/hooks-backup/...`. Force the
+        // trailing separator so only commands actually under `.alas/hooks/`
+        // qualify as legacy entries.
+        let raw = homeDirectoryURL.appendingPathComponent(".alas/hooks/").path
+        let prefix = raw.hasSuffix("/") ? raw : raw + "/"
         let targets = [
             homeDirectoryURL.appendingPathComponent(".claude/settings.json"),
             homeDirectoryURL.appendingPathComponent(".codex/hooks.json"),

@@ -70,6 +70,59 @@ struct CodexInstallerTests {
         #expect(installer.installState() == .outdated)
     }
 
+    /// Codex review (#102): `hasFeaturesFlag` must match only the top-level
+    /// `[features]` table, not `[profile.features]` or `[features_experimental]`.
+    /// Otherwise an install seems "installed" without the real flag, and
+    /// uninstall would delete the flag from an unrelated table.
+    @Test func installState_unrelatedFeaturesTable_outdated() async throws {
+        let (dir, cleanup) = tmpDir()
+        defer { cleanup() }
+        let hooksURL = dir.appendingPathComponent("hooks.json")
+        let configURL = dir.appendingPathComponent("config.toml")
+        // The real [features] table is absent; only an unrelated table sets
+        // hooks = true. Without strict matching this would pass the flag check.
+        try """
+        [profile.features]
+        hooks = true
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let installer = CodexInstaller(
+            hooksURL: hooksURL, configURL: configURL,
+            runEnableHooks: { .init(status: 0, stderr: "") }
+        )
+        try await installer.install()
+        // hooksByEvent now lives in hooks.json, but no [features].hooks flag
+        // → installState should report .outdated rather than .installed.
+        #expect(installer.installState() == .outdated)
+    }
+
+    @Test func uninstall_preservesUnrelatedFeaturesTable() async throws {
+        let (dir, cleanup) = tmpDir()
+        defer { cleanup() }
+        let hooksURL = dir.appendingPathComponent("hooks.json")
+        let configURL = dir.appendingPathComponent("config.toml")
+        let original = """
+        [features]
+        hooks = true
+
+        [features_experimental]
+        hooks = true
+        """
+        try original.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let installer = CodexInstaller(
+            hooksURL: hooksURL, configURL: configURL,
+            runEnableHooks: { .init(status: 0, stderr: "") }
+        )
+        try await installer.install()
+        try installer.uninstall()
+
+        let after = try String(contentsOf: configURL, encoding: .utf8)
+        #expect(!after.contains("[features]\nhooks = true"))
+        #expect(after.contains("[features_experimental]"))
+        #expect(after.range(of: #"\[features_experimental\]\s*\nhooks = true"#, options: .regularExpression) != nil)
+    }
+
     @Test func install_codexUnavailable_throws() async throws {
         let (dir, cleanup) = tmpDir()
         defer { cleanup() }

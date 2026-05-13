@@ -84,6 +84,31 @@ struct LegacyHookSweepTests {
         #expect(inner[0]["command"] as? String == "/usr/local/bin/my-hook")
     }
 
+    /// Codex review (#102): the legacy prefix is the literal directory
+    /// `~/.alas/hooks/` — a sibling path like `~/.alas/hooks-backup/...`
+    /// must not be swept. With the old non-separator-aware hasPrefix check,
+    /// the user's manual `hooks-backup` command would be deleted on launch.
+    @Test func doesNotSweepSiblingDirectories() throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let home = "/Users/testuser"
+        let existing: [String: Any] = [
+            "hooks": [
+                "Stop": [
+                    ["hooks": [["type": "command", "command": "\(home)/.alas/hooks-backup/my-hook"]]],
+                ],
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: existing, options: .prettyPrinted)
+        try data.write(to: url)
+        let before = try Data(contentsOf: url)
+
+        LegacyHookSweep.sweep(settingsURL: url, alasHooksPrefix: "\(home)/.alas/hooks/")
+
+        let after = try Data(contentsOf: url)
+        #expect(before == after)
+    }
+
     @Test func noopWhenFileMissing() {
         LegacyHookSweep.sweep(
             settingsURL: URL(fileURLWithPath: "/nonexistent/settings.json"),

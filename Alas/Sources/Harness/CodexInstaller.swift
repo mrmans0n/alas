@@ -115,8 +115,9 @@ struct CodexInstaller: AgentInstaller, Sendable {
         guard let contents = try? String(contentsOf: configURL, encoding: .utf8) else { return false }
         var inFeatures = false
         for line in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") {
-                inFeatures = line.contains("features")
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                inFeatures = Self.isFeaturesHeader(trimmed)
                 continue
             }
             if inFeatures, line.range(of: #"^\s*hooks\s*=\s*true\b"#, options: .regularExpression) != nil {
@@ -131,8 +132,9 @@ struct CodexInstaller: AgentInstaller, Sendable {
         var lines: [Substring] = []
         var inFeatures = false
         for line in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") {
-                inFeatures = line.contains("features")
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                inFeatures = Self.isFeaturesHeader(trimmed)
                 lines.append(line)
                 continue
             }
@@ -144,6 +146,14 @@ struct CodexInstaller: AgentInstaller, Sendable {
         let rewritten = lines.joined(separator: "\n")
         guard rewritten != contents else { return }
         try? rewritten.write(to: configURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Match exactly the top-level `[features]` table (optionally followed
+    /// by a comment). The previous loose `contains("features")` check matched
+    /// unrelated tables like `[profile.features]` or `[features_experimental]`
+    /// and would falsely associate their settings with Codex's hooks flag.
+    private static func isFeaturesHeader(_ trimmed: String) -> Bool {
+        trimmed.range(of: #"^\[\s*features\s*\](\s*#.*)?$"#, options: .regularExpression) != nil
     }
 
     private static func defaultEnableHooks() async throws -> CommandResult {
