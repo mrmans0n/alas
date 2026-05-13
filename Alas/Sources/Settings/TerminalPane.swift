@@ -137,7 +137,7 @@ struct TerminalPane: View {
                 let added = try HookInstaller.installClaudeCodeHooks(scriptPath: scriptURL)
                 hookStatus[kind] = added ? "Installed at \(scriptURL.path)"
                                           : "Already installed at \(scriptURL.path)"
-            case .codex, .aider:
+            case .codex, .cursor:
                 hookStatus[kind] = "Wrapper at \(scriptURL.path) — wire manually"
             }
         } catch {

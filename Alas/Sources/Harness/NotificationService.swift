@@ -39,11 +39,11 @@ final class NotificationService {
         awaitingPingPlayer()
     }
 
-    func notifyHarnessAwaiting(harness: HarnessKind,
+    func notifyHarnessAwaiting(agent: AgentKind, body: String?,
                                projectId: String, worktreeId: String, sessionId: String) {
         let content = UNMutableNotificationContent()
-        content.title = "\(harness.displayName) needs input"
-        content.body = "Session is waiting for you."
+        content.title = "\(agent.displayName) needs input"
+        content.body = body ?? "Session is waiting for you."
         content.userInfo = [
             "projectId": projectId,
             "worktreeId": worktreeId,
@@ -53,12 +53,12 @@ final class NotificationService {
         notificationAdder(req)
     }
 
-    func notifyHarnessFinished(harness: HarnessKind, summary: String?,
+    func notifyHarnessFinished(agent: AgentKind, body: String?,
                                projectId: String, worktreeId: String, sessionId: String) {
         guard enabled else { return }
         let content = UNMutableNotificationContent()
-        content.title = "\(harness.displayName) finished"
-        content.body = (summary?.split(separator: "\n").first.map(String.init)) ?? "Session is done."
+        content.title = "\(agent.displayName) finished"
+        content.body = body ?? "Session is done."
         content.userInfo = [
             "projectId": projectId,
             "worktreeId": worktreeId,

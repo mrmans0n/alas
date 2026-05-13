@@ -92,6 +92,6 @@ struct WorktreeRowView: View {
         case .running:  stateText = "running"
         case .awaiting: stateText = "awaiting"
         }
-        return "\(summary.kind.displayName) · \(stateText)"
+        return "\(summary.agent.displayName) · \(stateText)"
     }
 }

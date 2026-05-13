@@ -177,10 +177,7 @@ final class AppState {
     }
 
     func startHarness() {
-        // Sync the persisted preference into NotificationService BEFORE start —
-        // otherwise the service defaults to enabled and users who turned
-        // notifications off in a previous session get them again until they
-        // re-toggle.
+        LegacyHookSweep.sweepAll()
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
         harness.start(
             stateLookup: { [weak self] sessionId in
@@ -194,6 +191,7 @@ final class AppState {
                 self?.config.harness.notifyOnAwaiting ?? true
             }
         )
+        terminal.socketPath = harness.socketServer.socketPath
         harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
             self?.activateHarnessSession(
                 projectId: projectId, worktreeId: worktreeId, sessionId: sessionId

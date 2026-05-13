@@ -7,6 +7,12 @@ enum ActivityEvent: String, Sendable {
     case idle
 }
 
+enum ActivityState: String, Sendable, Equatable {
+    case busy
+    case awaitingInput = "awaiting_input"
+    case idle
+}
+
 struct AgentHookEvent: Equatable, Sendable {
     let version: Int
     let event: ActivityEvent

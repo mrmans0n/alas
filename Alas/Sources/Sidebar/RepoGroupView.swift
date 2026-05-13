@@ -117,25 +117,17 @@ struct RepoGroupView: View {
         return summaries.first(where: { $0.state == .running })
     }
 
-    /// Tooltip for the collapsed-header dot. Counts busy sessions (not
-    /// worktrees) independently per state — so mixed activity in a single
-    /// worktree still reports both states. Lists distinct harness kinds in
-    /// `HarnessKind.allCases` order.
     private func headerTooltip() -> String {
         let runningCount = summaries.reduce(0) { $0 + $1.runningSessionCount }
         let awaitingCount = summaries.reduce(0) { $0 + $1.awaitingSessionCount }
-        let distinctKinds = HarnessKind.allCases.filter { kind in
-            summaries.contains { $0.kind == kind }
+        let distinctAgents: [AgentKind] = AgentKind.allCases.filter { agent in
+            summaries.contains { $0.agent == agent }
         }
-        let kindList = distinctKinds.map(\.displayName).joined(separator: ", ")
+        let kindList = distinctAgents.map(\.displayName).joined(separator: ", ")
 
         var parts: [String] = []
-        if runningCount > 0 {
-            parts.append("\(runningCount) running")
-        }
-        if awaitingCount > 0 {
-            parts.append("\(awaitingCount) awaiting")
-        }
+        if runningCount > 0 { parts.append("\(runningCount) running") }
+        if awaitingCount > 0 { parts.append("\(awaitingCount) awaiting") }
         let head = parts.joined(separator: ", ")
         return kindList.isEmpty ? head : "\(head) (\(kindList))"
     }

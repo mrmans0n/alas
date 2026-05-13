@@ -13,7 +13,7 @@ enum HookInstaller {
         switch kind {
         case .claudeCode: scriptName = "claude-code.sh"
         case .codex:      scriptName = "codex-cli.sh"
-        case .aider:      scriptName = "aider.sh"
+        case .cursor:     scriptName = "cursor-agent.sh"
         }
         guard let bundled = bundle.url(forResource: scriptName.replacingOccurrences(of: ".sh", with: ""),
                                        withExtension: "sh") else {
@@ -122,7 +122,7 @@ enum HookInstaller {
         switch kind {
         case .claudeCode: name = "claude-code.sh"
         case .codex:      name = "codex-cli.sh"
-        case .aider:      name = "aider.sh"
+        case .cursor:     name = "cursor-agent.sh"
         }
         return URL(fileURLWithPath: destDir).appendingPathComponent(name)
     }

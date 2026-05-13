@@ -10,13 +10,13 @@ struct EnvBuilderTests {
                           path: URL(fileURLWithPath: "/tmp/wt"),
                           status: .clean, lastActivity: Date())
         let env = EnvBuilder.build(project: project, worktree: wt, sessionId: "s-1",
-                                   hookDir: URL(fileURLWithPath: "/tmp/hooks"),
+                                   socketPath: "/tmp/alas.sock",
                                    inheritParent: false, parent: ["PATH": "/x"])
         #expect(env["ALAS_REPO"] == "owner/repo")
         #expect(env["ALAS_BRANCH"] == "main")
         #expect(env["ALAS_WORKTREE"] == "/tmp/wt")
         #expect(env["ALAS_SESSION_ID"] == "s-1")
-        #expect(env["ALAS_HOOK_DIR"] == "/tmp/hooks")
+        #expect(env["ALAS_SOCKET_PATH"] == "/tmp/alas.sock")
         #expect(env["PATH"] == nil)
     }
 
@@ -26,7 +26,7 @@ struct EnvBuilderTests {
                           path: URL(fileURLWithPath: "/wt"),
                           status: .clean, lastActivity: Date())
         let env = EnvBuilder.build(project: project, worktree: wt, sessionId: "s",
-                                   hookDir: URL(fileURLWithPath: "/h"),
+                                   socketPath: nil,
                                    inheritParent: true, parent: ["PATH": "/x", "HOME": "/h"])
         #expect(env["PATH"] == "/x")
         #expect(env["HOME"] == "/h")
@@ -40,7 +40,7 @@ struct EnvBuilderTests {
                           status: .clean, lastActivity: Date())
         let env = EnvBuilder.build(
             project: project, worktree: wt, sessionId: "s",
-            hookDir: URL(fileURLWithPath: "/h"),
+            socketPath: nil,
             inheritParent: true,
             parent: [
                 "PATH": "/x",

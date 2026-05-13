@@ -16,9 +16,8 @@ struct CenterPaneView: View {
                 harnessLookup: { tabId in
                     if case .terminal(let s) = tabs.first(where: { $0.id == tabId }),
                        let focusedSessionId = s.root.find(leafId: s.focusedLeafId)?.leaf.sessionId,
-                       let kind = state.harness.harnessBySession[focusedSessionId] {
-                        let st = state.harness.stateBySession[focusedSessionId] ?? "running"
-                        return (kind: kind, state: st)
+                       let activity = state.harness.activityBySession[focusedSessionId] {
+                        return (agent: activity.agent, state: activity.state)
                     }
                     return nil
                 },

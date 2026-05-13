@@ -3,7 +3,7 @@ import SwiftUI
 struct TabBarView: View {
     let tabs: [Tab]
     let activeId: TabID?
-    let harnessLookup: (TabID) -> (kind: HarnessKind, state: String)?
+    let harnessLookup: (TabID) -> (agent: AgentKind, state: ActivityState)?
     let dirtyLookup: (TabID) -> Bool
     let onActivate: (TabID) -> Void
     let onClose: (TabID) -> Void
@@ -82,7 +82,7 @@ private struct TabButton: View {
     let tab: Tab
     let active: Bool
     let showClose: Bool
-    let harnessInfo: (kind: HarnessKind, state: String)?
+    let harnessInfo: (agent: AgentKind, state: ActivityState)?
     let dirty: Bool
     let onActivate: () -> Void
     let onClose: () -> Void
@@ -104,7 +104,7 @@ private struct TabButton: View {
             }
             if let info = harnessInfo {
                 Circle().fill(stateColor(info.state)).frame(width: 6, height: 6)
-                    .opacity(info.state == "running" ? 0.85 : 1)
+                    .opacity(info.state == .busy ? 0.85 : 1)
             }
             if showClose {
                 Button(action: onClose) {
@@ -139,11 +139,11 @@ private struct TabButton: View {
         .onTapGesture(perform: onActivate)
     }
 
-    private func stateColor(_ s: String) -> Color {
+    private func stateColor(_ s: ActivityState) -> Color {
         switch s {
-        case "running":  return theme.color("add")
-        case "awaiting": return theme.color("mod")
-        default:         return theme.color("fg-faint")
+        case .busy:          return theme.color("add")
+        case .awaitingInput: return theme.color("mod")
+        case .idle:          return theme.color("fg-faint")
         }
     }
 }

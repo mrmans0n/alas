@@ -14,6 +14,7 @@ final class TerminalService {
     let registry = SessionRegistry()
     private(set) var app: AlasGhostty.App?
     private var lastConfigSig: String?
+    var socketPath: String?
 
     /// Build the global config file for this app + theme combination, then
     /// (re)create the AlasGhostty.App if the config has changed materially.
@@ -43,10 +44,9 @@ final class TerminalService {
         guard let app else { throw NSError(domain: "TerminalService", code: 1) }
 
         let sessionId = UUID().uuidString
-        try Paths.ensureDirectoryExists(Paths.hookDir)
         var env = EnvBuilder.build(
             project: project, worktree: worktree, sessionId: sessionId,
-            hookDir: Paths.hookDir, inheritParent: cfg.inheritParentEnv
+            socketPath: socketPath, inheritParent: cfg.inheritParentEnv
         )
         let plan = try StartupScriptInstaller.plan(
             shell: cfg.shell,

@@ -4,24 +4,28 @@ import Observation
 @Observable
 final class HarnessService {
     let detector = HarnessDetector()
-    let watcher: HookWatcher
+    let socketServer: AgentHookSocketServer
     let notifications = NotificationService()
 
-    /// session id → last-known harness kind for this session. NEVER cleared
-    /// when the detector reports "no longer running" because the stop hook
-    /// often races process exit: harness exits → detector reports nil →
-    /// THEN the hook file lands and we'd have nothing to attribute it to.
-    /// Preserve the kind through the session so notifications fire reliably.
+    private(set) var activityBySession: [String: HarnessActivityState] = [:]
     private(set) var harnessBySession: [String: HarnessKind] = [:]
-    /// session id → live state ("running" | "awaiting" | "done"). Cleared
-    /// only when the detector reports nil AND we're not awaiting a hook
-    /// outcome, so the tab badge dot disappears naturally.
-    private(set) var stateBySession: [String: String] = [:]
 
     var onClickThrough: ((String, String, String) -> Void)?
 
+    struct HarnessActivityState: Equatable {
+        var agent: AgentKind
+        var state: ActivityState
+        var pid: pid_t?
+        var lastBody: String?
+        var updatedAt: Date
+    }
+
     init() {
-        watcher = HookWatcher(dir: Paths.hookDir)
+        socketServer = AgentHookSocketServer()
+    }
+
+    init(socketServer: AgentHookSocketServer) {
+        self.socketServer = socketServer
     }
 
     func start(
@@ -38,72 +42,72 @@ final class HarnessService {
             self?.onClickThrough?(p, w, s)
         }
 
-        watcher.onEvent = { [weak self] event in
-            self?.handleHookEvent(
-                event,
-                stateLookup: stateLookup,
-                shouldNotifyOnAwaiting: shouldNotifyOnAwaiting
-            )
+        socketServer.onEvent = { [weak self] event in
+            self?.handleSocketEvent(event, stateLookup: stateLookup, shouldNotifyOnAwaiting: shouldNotifyOnAwaiting)
         }
-        watcher.start()
     }
 
     func recordHarnessDetection(sessionId: String, kind: HarnessKind?) {
         if let kind {
-            if harnessBySession[sessionId] != kind {
-                harnessBySession[sessionId] = kind
-                stateBySession[sessionId] = "running"
-            }
+            harnessBySession[sessionId] = kind
         } else {
-            // Process exited but the stop-hook event may still be in
-            // flight. Drop the running-state badge so the UI reflects
-            // "not actively running", but KEEP harnessBySession so the
-            // upcoming hook can attribute its kind.
-            stateBySession.removeValue(forKey: sessionId)
+            if activityBySession[sessionId] != nil {
+                activityBySession.removeValue(forKey: sessionId)
+            }
         }
     }
 
-    func handleHookEvent(
-        _ event: HookEvent,
+    func handleSocketEvent(
+        _ event: AgentHookEvent,
         stateLookup: (String) -> (projectId: String, worktreeId: String)?,
         shouldNotifyOnAwaiting: () -> Bool
     ) {
-        let previousState = stateBySession[event.sessionId]
-        stateBySession[event.sessionId] = event.kind == "stop" ? "done" : "awaiting"
+        let previousState = activityBySession[event.sessionId]?.state
 
-        if event.kind == "awaiting" {
-            if previousState != "awaiting", shouldNotifyOnAwaiting(),
-               let kind = harnessBySession[event.sessionId],
+        switch event.event {
+        case .busy:
+            activityBySession[event.sessionId] = HarnessActivityState(
+                agent: event.agent, state: .busy, pid: event.pid,
+                lastBody: nil, updatedAt: Date()
+            )
+
+        case .awaitingInput:
+            activityBySession[event.sessionId] = HarnessActivityState(
+                agent: event.agent, state: .awaitingInput, pid: event.pid,
+                lastBody: event.body, updatedAt: Date()
+            )
+            if previousState != .awaitingInput, shouldNotifyOnAwaiting(),
                let lookup = stateLookup(event.sessionId) {
                 notifications.notifyHarnessAwaiting(
-                    harness: kind,
-                    projectId: lookup.projectId,
-                    worktreeId: lookup.worktreeId,
+                    agent: event.agent, body: event.body,
+                    projectId: lookup.projectId, worktreeId: lookup.worktreeId,
                     sessionId: event.sessionId
                 )
             }
-            return
-        }
 
-        if event.kind == "stop", let kind = harnessBySession[event.sessionId],
-           let lookup = stateLookup(event.sessionId) {
-            notifications.notifyHarnessFinished(
-                harness: kind, summary: event.summary,
-                projectId: lookup.projectId, worktreeId: lookup.worktreeId, sessionId: event.sessionId
+        case .idle:
+            activityBySession[event.sessionId] = HarnessActivityState(
+                agent: event.agent, state: .idle, pid: event.pid,
+                lastBody: event.body, updatedAt: Date()
             )
+            if let lookup = stateLookup(event.sessionId) {
+                notifications.notifyHarnessFinished(
+                    agent: event.agent, body: event.body,
+                    projectId: lookup.projectId, worktreeId: lookup.worktreeId,
+                    sessionId: event.sessionId
+                )
+            }
         }
     }
 
     func stop() {
         detector.stop()
-        watcher.stop()
+        socketServer.shutdown()
     }
 
-    /// Drop all per-session harness state. Call when the terminal session is
-    /// closed so we don't leak entries forever in `harnessBySession`.
     func forgetSession(_ sessionId: String) {
         harnessBySession.removeValue(forKey: sessionId)
-        stateBySession.removeValue(forKey: sessionId)
+        activityBySession.removeValue(forKey: sessionId)
     }
 
     enum AggregatedState: String, Equatable {
@@ -111,35 +115,24 @@ final class HarnessService {
     }
 
     struct WorktreeHarnessSummary: Equatable {
-        /// Priority-resolved state for the pill/dot color: awaiting wins.
         let state: AggregatedState
-        /// Kind of the primary session (the one click-through routes to).
-        let kind: HarnessKind
+        let agent: AgentKind
         let primarySessionId: String
-        /// Per-state session counts, always populated regardless of which
-        /// state was chosen as the priority. Lets callers (e.g. the
-        /// collapsed-header tooltip) accurately enumerate mixed-state
-        /// activity even when one state would normally mask the other.
         let runningSessionCount: Int
         let awaitingSessionCount: Int
     }
 
-    /// Roll up per-session harness state to a single summary for a worktree.
-    /// Returns nil if no session in `ids` is running or awaiting (or none have
-    /// a detected kind to attribute the summary to).
     func summary(forSessionIds ids: [String]) -> WorktreeHarnessSummary? {
-        // Partition candidate ids by state, preserving caller order.
         var awaitingIds: [String] = []
         var runningIds: [String] = []
         for id in ids {
-            switch stateBySession[id] {
-            case "awaiting": awaitingIds.append(id)
-            case "running":  runningIds.append(id)
-            default: break
+            guard let activity = activityBySession[id] else { continue }
+            switch activity.state {
+            case .awaitingInput: awaitingIds.append(id)
+            case .busy:          runningIds.append(id)
+            case .idle:          break
             }
         }
-
-        // Try awaiting first; fall back to running if no awaiting session has a kind.
         if let s = pickSummary(state: .awaiting, ids: awaitingIds,
                                runningCount: runningIds.count, awaitingCount: awaitingIds.count) { return s }
         if let s = pickSummary(state: .running, ids: runningIds,
@@ -148,34 +141,24 @@ final class HarnessService {
     }
 
     private func pickSummary(
-        state: AggregatedState,
-        ids: [String],
-        runningCount: Int,
-        awaitingCount: Int
+        state: AggregatedState, ids: [String],
+        runningCount: Int, awaitingCount: Int
     ) -> WorktreeHarnessSummary? {
-        guard !ids.isEmpty else { return nil }
-        // First id whose kind is known wins as primary. Skip ids missing a kind.
-        guard let primary = ids.first(where: { harnessBySession[$0] != nil }),
-              let kind = harnessBySession[primary] else { return nil }
+        guard let primary = ids.first,
+              let activity = activityBySession[primary] else { return nil }
         return WorktreeHarnessSummary(
-            state: state,
-            kind: kind,
+            state: state, agent: activity.agent,
             primarySessionId: primary,
             runningSessionCount: runningCount,
             awaitingSessionCount: awaitingCount
         )
     }
 
-    // MARK: - Test seams (debug only)
-
     #if DEBUG
-    func setStateForTesting(sessionId: String, kind: HarnessKind, state: String) {
-        harnessBySession[sessionId] = kind
-        stateBySession[sessionId] = state
-    }
-
-    func setStateOnlyForTesting(sessionId: String, state: String) {
-        stateBySession[sessionId] = state
+    func setStateForTesting(sessionId: String, agent: AgentKind, state: ActivityState) {
+        activityBySession[sessionId] = HarnessActivityState(
+            agent: agent, state: state, pid: nil, lastBody: nil, updatedAt: Date()
+        )
     }
     #endif
 }
