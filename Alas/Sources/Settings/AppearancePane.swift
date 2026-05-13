@@ -93,6 +93,42 @@ struct AppearancePane: View {
                             }
                         ))
                     }
+                    SettingsRow(name: "Sidebar material",
+                                desc: "Applied to the left and right sidebars.") {
+                        HStack(spacing: 8) {
+                            Button {
+                                cycleSidebarMaterial(by: -1)
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Previous material")
+
+                            Picker("", selection: Binding(
+                                get: { state.config.sidebarMaterial },
+                                set: {
+                                    state.config.sidebarMaterial = $0
+                                    state.saveConfig()
+                                }
+                            )) {
+                                ForEach(SidebarMaterialChoice.allCases, id: \.self) { material in
+                                    Text(material.displayName).tag(material)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 240)
+
+                            Button {
+                                cycleSidebarMaterial(by: 1)
+                            } label: {
+                                Image(systemName: "chevron.right")
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Next material")
+                        }
+                    }
                 }
                 SettingsGroup(title: "Layout") {
                     SettingsRow(name: "Density") {
@@ -140,5 +176,17 @@ struct AppearancePane: View {
             set: { state.config[keyPath: kp] = $0
             state.saveConfig() }
         )
+    }
+
+    private func cycleSidebarMaterial(by delta: Int) {
+        let choices = SidebarMaterialChoice.allCases
+        guard let index = choices.firstIndex(of: state.config.sidebarMaterial) else {
+            state.config.sidebarMaterial = .appKitSidebar
+            state.saveConfig()
+            return
+        }
+        let next = (index + delta + choices.count) % choices.count
+        state.config.sidebarMaterial = choices[next]
+        state.saveConfig()
     }
 }

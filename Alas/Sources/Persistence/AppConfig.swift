@@ -5,6 +5,7 @@ struct AppConfig: Codable, Equatable {
     var accent: String
     var density: String          // compact | comfortable | spacious
     var matchSystemTheme: Bool
+    var sidebarMaterial: SidebarMaterialChoice
     var sidebarWidth: Double
     var rightPaneWidth: Double
     var rightPaneVisible: Bool
@@ -95,6 +96,7 @@ struct AppConfig: Codable, Equatable {
         accent: "teal",
         density: "comfortable",
         matchSystemTheme: false,
+        sidebarMaterial: .appKitSidebar,
         sidebarWidth: 244,
         rightPaneWidth: 320,
         rightPaneVisible: true,
@@ -141,7 +143,7 @@ struct AppConfig: Codable, Equatable {
 extension AppConfig {
     enum CodingKeys: String, CodingKey {
         case themeId, accent, density, matchSystemTheme,
-             sidebarWidth, rightPaneWidth, rightPaneVisible,
+             sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible,
              commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown
     }
@@ -158,6 +160,7 @@ extension AppConfig {
         accent = try c.decode(String.self, forKey: .accent)
         density = try c.decode(String.self, forKey: .density)
         matchSystemTheme = try c.decode(Bool.self, forKey: .matchSystemTheme)
+        sidebarMaterial = (try? c.decode(SidebarMaterialChoice.self, forKey: .sidebarMaterial)) ?? .appKitSidebar
         sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)
         rightPaneWidth = try c.decode(Double.self, forKey: .rightPaneWidth)
         rightPaneVisible = try c.decode(Bool.self, forKey: .rightPaneVisible)

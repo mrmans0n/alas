@@ -12,7 +12,7 @@ struct SidebarView: View {
 
     var body: some View {
         ZStack {
-            VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
+            SidebarMaterialBackground(choice: state.config.sidebarMaterial)
             VStack(spacing: 0) {
                 SidebarHeaderView(
                     onSettings: onSettings,

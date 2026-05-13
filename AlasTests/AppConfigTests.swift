@@ -18,6 +18,7 @@ struct AppConfigTests {
         let cfg = AppConfig.defaults
         #expect(cfg.themeId == "cool-slate")
         #expect(cfg.accent == "teal")
+        #expect(cfg.sidebarMaterial == .appKitSidebar)
         #expect(cfg.sidebarWidth == 244)
         #expect(cfg.rightPaneWidth == 320)
         #expect(cfg.rightPaneVisible == true)

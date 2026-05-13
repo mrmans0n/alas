@@ -11,7 +11,7 @@ struct RightPaneView: View {
     var body: some View {
         let rps = state.rightPaneStore.state(for: worktree, baseBranch: state.config.worktrees.baseBranch)
         ZStack {
-            VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
+            SidebarMaterialBackground(choice: state.config.sidebarMaterial)
             VStack(spacing: 0) {
                 RightPaneTabBar(
                     activeTab: Binding(
