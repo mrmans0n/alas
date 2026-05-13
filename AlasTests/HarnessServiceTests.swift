@@ -118,4 +118,33 @@ struct HarnessServiceTests {
         service.forgetSession("s1")
         #expect(service.activityBySession["s1"] == nil)
     }
+
+    /// Codex review (#102): when the process detector finds a harness before
+    /// any socket hook fires (or for users who haven't installed hooks at
+    /// all), the sidebar must still show that the session is running.
+    @Test func recordHarnessDetection_seedsBusyWhenNoSocketEventYet() {
+        let (service, _) = makeService()
+        service.recordHarnessDetection(sessionId: "s1", kind: .claudeCode)
+        #expect(service.activityBySession["s1"]?.state == .busy)
+        #expect(service.activityBySession["s1"]?.agent == .claude)
+        #expect(service.harnessBySession["s1"] == .claudeCode)
+    }
+
+    @Test func recordHarnessDetection_doesNotClobberSocketDrivenState() {
+        let (service, _) = makeService()
+        service.setStateForTesting(sessionId: "s1", agent: .claude, state: .awaitingInput)
+        service.recordHarnessDetection(sessionId: "s1", kind: .claudeCode)
+        #expect(service.activityBySession["s1"]?.state == .awaitingInput)
+    }
+
+    @Test func recordHarnessDetection_nil_dropsBusyButKeepsAwaiting() {
+        let (service, _) = makeService()
+        service.setStateForTesting(sessionId: "s1", agent: .claude, state: .busy)
+        service.recordHarnessDetection(sessionId: "s1", kind: nil)
+        #expect(service.activityBySession["s1"] == nil)
+
+        service.setStateForTesting(sessionId: "s2", agent: .claude, state: .awaitingInput)
+        service.recordHarnessDetection(sessionId: "s2", kind: nil)
+        #expect(service.activityBySession["s2"]?.state == .awaitingInput)
+    }
 }

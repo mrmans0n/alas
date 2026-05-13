@@ -16,17 +16,31 @@ final class AgentHookSocketServer {
 
     convenience init(uid: uid_t = getuid(), pid: pid_t = ProcessInfo.processInfo.processIdentifier) {
         let directory = "/tmp/alas-\(uid)"
-        let created = (try? FileManager.default.createDirectory(
-            atPath: directory, withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )) != nil || FileManager.default.fileExists(atPath: directory)
-        guard created else {
+        guard Self.prepareSocketDirectory(directory, ownerUid: uid) else {
             self.init(socketPath: "/dev/null")
             return
         }
         Self.sweepStaleSockets(in: directory)
         let path = "\(directory)/pid-\(pid)"
         self.init(socketPath: path)
+    }
+
+    /// Ensures `path` is a real directory (no symlink) owned by `ownerUid`
+    /// with mode `0700`. Refuses to use it otherwise: another local user
+    /// could pre-create a world-writable `/tmp/alas-<uid>` for our predictable
+    /// UID and then connect to our `pid-<pid>` socket to spoof hook events,
+    /// driving false UI state and notifications.
+    static func prepareSocketDirectory(_ path: String, ownerUid: uid_t) -> Bool {
+        var st = Darwin.stat()
+        if Darwin.lstat(path, &st) != 0 {
+            guard mkdir(path, 0o700) == 0 else { return false }
+            guard Darwin.lstat(path, &st) == 0 else { return false }
+        }
+        let isDir = (st.st_mode & S_IFMT) == S_IFDIR
+        let modeBits = st.st_mode & 0o777
+        return isDir
+            && st.st_uid == ownerUid
+            && (modeBits & 0o077) == 0
     }
 
     static func sweepStaleSockets(in directory: String) {

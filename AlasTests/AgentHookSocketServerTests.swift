@@ -1,5 +1,6 @@
-import Testing
+import Darwin
 import Foundation
+import Testing
 @testable import Alas
 
 struct AgentHookSocketServerTests {
@@ -81,6 +82,39 @@ struct AgentHookSocketServerTests {
 
         #expect(response.contains("\"ok\":true") || response.contains("\"ok\": true"))
         #expect(received == nil)
+    }
+
+    /// Codex review (#102): `/tmp/alas-<uid>` is a predictable path. If
+    /// another local user pre-creates it with permissive bits before our
+    /// first launch, we must refuse to use it instead of binding our
+    /// `pid-<pid>` socket there (where the attacker could connect and spoof
+    /// hook envelopes).
+    @Test func prepareSocketDirectory_rejectsInsecurePerms() throws {
+        let dir = "/tmp/alas-test-insecure-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        _ = chmod(dir, 0o777)
+
+        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: getuid()) == false)
+    }
+
+    @Test func prepareSocketDirectory_rejectsWrongOwner() throws {
+        let dir = "/tmp/alas-test-wrong-owner-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        _ = chmod(dir, 0o700)
+
+        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: 0xDEAD) == false)
+    }
+
+    @Test func prepareSocketDirectory_acceptsFreshDirectory() throws {
+        let dir = "/tmp/alas-test-fresh-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: getuid()) == true)
+        var st = Darwin.stat()
+        #expect(Darwin.lstat(dir, &st) == 0)
+        #expect((st.st_mode & 0o777) == 0o700)
     }
 
     @Test func staleSocketSweep_removesDeadPidFiles() throws {
