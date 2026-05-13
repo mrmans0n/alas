@@ -62,9 +62,15 @@ struct CodexInstaller: AgentInstaller, Sendable {
     func uninstall() throws {
         var json = try JSONHookSettingsFile.load(at: hooksURL)
         let existing = json["hooks"] as? [String: Any] ?? [:]
-        json["hooks"] = JSONHookSettingsFile.pruneManagedFlat(from: existing)
+        let remaining = JSONHookSettingsFile.pruneManagedFlat(from: existing)
+        json["hooks"] = remaining
         try JSONHookSettingsFile.write(json, to: hooksURL)
-        removeFeaturesFlag()
+        // Only flip the features.hooks flag back off when the user has no
+        // other Codex hooks left — otherwise we'd silently disable their
+        // unrelated hook integrations.
+        if remaining.isEmpty {
+            removeFeaturesFlag()
+        }
     }
 
     // MARK: - Codex hook map (flat format)

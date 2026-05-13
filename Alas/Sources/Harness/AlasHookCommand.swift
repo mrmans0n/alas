@@ -21,11 +21,19 @@ enum AlasHookCommand {
             return managed(envelopePipeline(event: events[0], agent: agent))
         }
 
+        // When forwardStdinAsBody is true, the LAST event carries the body and
+        // we MUST NOT also send a body-less envelope for it: HarnessService
+        // only notifies on the first transition into awaiting_input, so the
+        // earlier body-less event would consume that transition and drop the
+        // agent's message from the notification. For idle, the same race can
+        // enqueue a generic "finished" notification ahead of the body-bearing
+        // one. Preceding events (if any) still emit body-less.
         var steps: [String] = []
         if forwardStdinAsBody {
             steps.append("payload=$(cat 2>/dev/null || true)")
         }
-        for event in events {
+        let bodyless = forwardStdinAsBody ? events.dropLast() : ArraySlice(events)
+        for event in bodyless {
             steps.append(envelopePipeline(event: event, agent: agent))
         }
         if forwardStdinAsBody {
