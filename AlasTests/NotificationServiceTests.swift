@@ -11,7 +11,8 @@ struct NotificationServiceTests {
         })
 
         service.notifyHarnessAwaiting(
-            harness: .claudeCode,
+            agent: .claude,
+            body: nil,
             projectId: "project-1",
             worktreeId: "worktree-1",
             sessionId: "session-1"
@@ -32,8 +33,8 @@ struct NotificationServiceTests {
         })
 
         service.notifyHarnessFinished(
-            harness: .codex,
-            summary: "Completed\nMore details",
+            agent: .codex,
+            body: "Completed",
             projectId: "project-1",
             worktreeId: "worktree-1",
             sessionId: "session-1"
@@ -53,14 +54,15 @@ struct NotificationServiceTests {
         service.setEnabled(false)
 
         service.notifyHarnessAwaiting(
-            harness: .aider,
+            agent: .claude,
+            body: nil,
             projectId: "project-1",
             worktreeId: "worktree-1",
             sessionId: "session-1"
         )
         service.notifyHarnessFinished(
-            harness: .aider,
-            summary: nil,
+            agent: .claude,
+            body: nil,
             projectId: "project-1",
             worktreeId: "worktree-1",
             sessionId: "session-1"

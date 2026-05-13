@@ -37,13 +37,6 @@ targets:
       - path: Alas/Sources
       - path: Alas/Resources/Themes
         buildPhase: resources
-      # HookInstaller loads these via Bundle.main; they MUST land in the app
-      # bundle, otherwise harness install fails with "Bundled hook script
-      # missing" at runtime. The top-level `resources:` key xcodegen used to
-      # support is ignored on the version we're on, so add via `sources` +
-      # explicit buildPhase instead.
-      - path: Alas/Resources/HookScripts
-        buildPhase: resources
       - path: Alas/Resources/Assets.xcassets
         buildPhase: resources
       - path: ThirdParty/ghostty/src/font/res/JetBrainsMonoNerdFont-Regular.ttf

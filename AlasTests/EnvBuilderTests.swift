@@ -10,13 +10,13 @@ struct EnvBuilderTests {
                           path: URL(fileURLWithPath: "/tmp/wt"),
                           status: .clean, lastActivity: Date())
         let env = EnvBuilder.build(project: project, worktree: wt, sessionId: "s-1",
-                                   hookDir: URL(fileURLWithPath: "/tmp/hooks"),
+                                   socketPath: "/tmp/alas.sock",
                                    inheritParent: false, parent: ["PATH": "/x"])
         #expect(env["ALAS_REPO"] == "owner/repo")
         #expect(env["ALAS_BRANCH"] == "main")
         #expect(env["ALAS_WORKTREE"] == "/tmp/wt")
         #expect(env["ALAS_SESSION_ID"] == "s-1")
-        #expect(env["ALAS_HOOK_DIR"] == "/tmp/hooks")
+        #expect(env["ALAS_SOCKET_PATH"] == "/tmp/alas.sock")
         #expect(env["PATH"] == nil)
     }
 
@@ -26,11 +26,43 @@ struct EnvBuilderTests {
                           path: URL(fileURLWithPath: "/wt"),
                           status: .clean, lastActivity: Date())
         let env = EnvBuilder.build(project: project, worktree: wt, sessionId: "s",
-                                   hookDir: URL(fileURLWithPath: "/h"),
+                                   socketPath: nil,
                                    inheritParent: true, parent: ["PATH": "/x", "HOME": "/h"])
         #expect(env["PATH"] == "/x")
         #expect(env["HOME"] == "/h")
         #expect(env["ALAS_REPO"] == "x/y")
+    }
+
+    /// Codex review (#102): inherited ALAS_SOCKET_PATH must be stripped when
+    /// we have no socket of our own, otherwise hooks installed in this new
+    /// session would dispatch events to a stale/parent Alas instance and
+    /// drive false state there.
+    @Test func stripsInheritedSocketPathWhenNoServerAvailable() {
+        let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "s",
+            socketPath: nil,
+            inheritParent: true,
+            parent: ["ALAS_SOCKET_PATH": "/tmp/some-other-alas.sock"]
+        )
+        #expect(env["ALAS_SOCKET_PATH"] == nil)
+    }
+
+    @Test func ownSocketPathOverridesInheritedOne() {
+        let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "s",
+            socketPath: "/tmp/ours.sock",
+            inheritParent: true,
+            parent: ["ALAS_SOCKET_PATH": "/tmp/some-other-alas.sock"]
+        )
+        #expect(env["ALAS_SOCKET_PATH"] == "/tmp/ours.sock")
     }
 
     @Test func stripsTerminalVarsFromInheritedParent() {
@@ -40,7 +72,7 @@ struct EnvBuilderTests {
                           status: .clean, lastActivity: Date())
         let env = EnvBuilder.build(
             project: project, worktree: wt, sessionId: "s",
-            hookDir: URL(fileURLWithPath: "/h"),
+            socketPath: nil,
             inheritParent: true,
             parent: [
                 "PATH": "/x",

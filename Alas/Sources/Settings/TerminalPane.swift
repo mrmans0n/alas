@@ -4,7 +4,8 @@ struct TerminalPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
 
-    @State private var hookStatus: [HarnessKind: String] = [:]   // id → "Installed at ..." or ""
+    @State private var hookStatus: [AgentKind: String] = [:]
+    private let installerRegistry = AgentInstallerRegistry()
 
     var body: some View {
         ScrollView {
@@ -112,11 +113,18 @@ struct TerminalPane: View {
                                 desc: "Show a clickable notification when a detected harness is waiting for input.") {
                         AlasToggle(on: state.bind(\.harness.notifyOnAwaiting))
                     }
-                    ForEach(HarnessKind.allCases) { kind in
-                        SettingsRow(name: "Install hook for \(kind.displayName)") {
+                    ForEach(AgentKind.allCases) { agent in
+                        SettingsRow(name: agent.displayName) {
                             HStack {
-                                AlasButton(title: hookStatus[kind] ?? "Install", action: { install(kind) })
-                                if let status = hookStatus[kind] {
+                                let state = installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
+                                AlasButton(
+                                    title: state == .installed ? "Reinstall" : state == .outdated ? "Update" : "Install",
+                                    action: { installAgent(agent) }
+                                )
+                                if state == .installed {
+                                    AlasButton(title: "Uninstall", action: { uninstallAgent(agent) })
+                                }
+                                if let status = hookStatus[agent] {
                                     Text(status).font(.system(size: 11))
                                         .foregroundColor(theme.color("fg-dim"))
                                 }
@@ -129,19 +137,25 @@ struct TerminalPane: View {
         }
     }
 
-    private func install(_ kind: HarnessKind) {
-        do {
-            let scriptURL = try HookInstaller.installWrapper(for: kind)
-            switch kind {
-            case .claudeCode:
-                let added = try HookInstaller.installClaudeCodeHooks(scriptPath: scriptURL)
-                hookStatus[kind] = added ? "Installed at \(scriptURL.path)"
-                                          : "Already installed at \(scriptURL.path)"
-            case .codex, .aider:
-                hookStatus[kind] = "Wrapper at \(scriptURL.path) — wire manually"
+    private func installAgent(_ agent: AgentKind) {
+        guard let installer = installerRegistry.installer(for: agent) else { return }
+        Task {
+            do {
+                try await installer.install()
+                hookStatus[agent] = "Installed"
+            } catch {
+                hookStatus[agent] = "Error: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func uninstallAgent(_ agent: AgentKind) {
+        guard let installer = installerRegistry.installer(for: agent) else { return }
+        do {
+            try installer.uninstall()
+            hookStatus[agent] = nil
         } catch {
-            hookStatus[kind] = "Error: \(error.localizedDescription)"
+            hookStatus[agent] = "Error: \(error.localizedDescription)"
         }
     }
 }

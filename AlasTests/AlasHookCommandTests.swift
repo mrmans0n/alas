@@ -1,0 +1,56 @@
+import Testing
+@testable import Alas
+
+struct AlasHookCommandTests {
+    static let sentinel = "# alas-managed-hook"
+
+    @Test func busyWithoutBody_producesSimpleCommand() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy], agent: .codex, forwardStdinAsBody: false
+        )
+        #expect(cmd.contains(#""event":"busy""#))
+        #expect(cmd.contains(#""agent":"codex""#))
+        #expect(cmd.contains("$ALAS_SESSION_ID"))
+        #expect(cmd.contains("$ALAS_SOCKET_PATH"))
+        #expect(cmd.hasSuffix(Self.sentinel))
+        #expect(!cmd.contains("payload=$(cat"))
+    }
+
+    @Test func idleWithBody_includesPayloadExtraction() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.idle], agent: .claude, forwardStdinAsBody: true
+        )
+        #expect(cmd.contains(#""event":"idle""#))
+        #expect(cmd.contains(#""agent":"claude""#))
+        #expect(cmd.contains("payload=$(cat"))
+        #expect(cmd.contains("python3"))
+        #expect(cmd.hasSuffix(Self.sentinel))
+    }
+
+    @Test func multipleEvents_producesCompositeCommand() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.idle], agent: .claude, forwardStdinAsBody: true
+        )
+        #expect(cmd.contains("nc -U -w1"))
+        #expect(cmd.hasSuffix(Self.sentinel))
+    }
+
+    @Test func envCheckGuardsPrefixesCommand() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy], agent: .cursor, forwardStdinAsBody: false
+        )
+        #expect(cmd.hasPrefix(#"[ -n "${ALAS_SOCKET_PATH:-}" ]"#))
+    }
+
+    @Test func sentinel_isOwnershipMarker() {
+        #expect(AlasHookCommand.ownershipSentinel == "# alas-managed-hook")
+    }
+
+    @Test func isManaged_matchesSentinel() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy], agent: .codex, forwardStdinAsBody: false
+        )
+        #expect(AlasHookCommand.isManagedCommand(cmd))
+        #expect(!AlasHookCommand.isManagedCommand("echo hello"))
+    }
+}
