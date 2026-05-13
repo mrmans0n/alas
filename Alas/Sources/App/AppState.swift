@@ -118,11 +118,18 @@ final class AppState {
         saveProjects()
     }
 
-    func updateProject(id: String, name: String, color: String) {
+    func updateProject(id: String, name: String, color: String, startupScripts: ProjectStartupScripts) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
-        projectsManager.updateProject(id: id, update: ProjectUpdate(name: trimmedName, color: color))
+        projectsManager.updateProject(
+            id: id,
+            update: ProjectUpdate(
+                name: trimmedName,
+                color: color,
+                startupScripts: startupScripts
+            )
+        )
         saveProjects()
     }
 

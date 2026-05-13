@@ -1,10 +1,38 @@
 import Foundation
 
+// MARK: - ProjectStartupScriptMode
+/// How a project's per-repository startup script combines with the global default.
+enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable {
+    case useGlobal
+    case appendToGlobal
+    case overrideGlobal
+    case disabled
+}
+
+// MARK: - ProjectStartupScripts
+/// Per-repository startup-script configuration for terminal session open and
+/// worktree creation. Global settings in `AppConfig.Terminal` act as defaults.
+struct ProjectStartupScripts: Codable, Equatable {
+    var sessionOpenMode: ProjectStartupScriptMode
+    var sessionOpenScript: String
+    var worktreeCreateMode: ProjectStartupScriptMode
+    var worktreeCreateScript: String
+
+    static let defaults = ProjectStartupScripts(
+        sessionOpenMode: .useGlobal,
+        sessionOpenScript: "",
+        worktreeCreateMode: .useGlobal,
+        worktreeCreateScript: ""
+    )
+}
+
+// MARK: - ProjectsFile
 struct ProjectsFile: Codable, Equatable {
     var version: Int = 1
     var projects: [ProjectConfig]
 }
 
+// MARK: - ProjectConfig
 struct ProjectConfig: Codable, Equatable, Identifiable {
     let id: String           // UUID string
     var name: String         // e.g. nlopez/alas
@@ -12,9 +40,10 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var color: String        // hex string, e.g. "#5fb7c4"
     var addedAt: Date
     var hiddenWorktreePaths: [String] = []
+    var startupScripts: ProjectStartupScripts = .defaults
 
     enum CodingKeys: String, CodingKey {
-        case id, name, path, color, addedAt, hiddenWorktreePaths
+        case id, name, path, color, addedAt, hiddenWorktreePaths, startupScripts
     }
 
     init(
@@ -23,7 +52,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         path: String,
         color: String,
         addedAt: Date,
-        hiddenWorktreePaths: [String] = []
+        hiddenWorktreePaths: [String] = [],
+        startupScripts: ProjectStartupScripts = .defaults
     ) {
         self.id = id
         self.name = name
@@ -31,10 +61,11 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.color = color
         self.addedAt = addedAt
         self.hiddenWorktreePaths = hiddenWorktreePaths
+        self.startupScripts = startupScripts
     }
 
-    // Tolerant decode: older projects.json files predate hiddenWorktreePaths,
-    // so fall back to an empty array. Encode is still synthesized.
+    // Tolerant decode: older projects.json files predate hiddenWorktreePaths
+    // and startupScripts, so fall back to known defaults.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -43,5 +74,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         color = try c.decode(String.self, forKey: .color)
         addedAt = try c.decode(Date.self, forKey: .addedAt)
         hiddenWorktreePaths = (try? c.decode([String].self, forKey: .hiddenWorktreePaths)) ?? []
+        startupScripts = (try? c.decode(ProjectStartupScripts.self, forKey: .startupScripts))
+            ?? .defaults
     }
 }

@@ -192,7 +192,10 @@ struct NewWorktreeDialog: View {
                 // Run worktree-create script if requested. Best-effort: errors
                 // in the user-supplied script don't roll back the worktree.
                 if runStartupAfter {
-                    let script = state.config.terminal.worktreeCreateScript
+                    let script = StartupScriptResolver.worktreeCreateScript(
+                        global: state.config.terminal,
+                        project: project
+                    )
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !script.isEmpty {
                         _ = try? await Process.run(
