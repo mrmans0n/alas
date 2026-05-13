@@ -291,14 +291,13 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let o = n
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
+                let beforeIds = state.allWorktreeIds()
                 Task {
                     let changed = await state.projectsManager.refreshAll()
                     if changed {
                         state.saveProjects()
                     }
-                    if state.selectedWorktreeId != nil, selectedWorktree() == nil {
-                        state.selectedWorktreeId = state.firstVisibleWorktreeId()
-                    }
+                    state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
         return o

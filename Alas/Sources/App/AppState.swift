@@ -63,6 +63,28 @@ final class AppState {
         // refreshAll() returns.
     }
 
+    /// All worktree IDs currently known to the projects manager (including
+    /// hidden/archived ones).
+    func allWorktreeIds() -> Set<String> {
+        Set(projectsManager.projects.flatMap {
+            projectsManager.worktrees(projectId: $0.id).map(\.id)
+        })
+    }
+
+    /// Tear down tabs, terminals, harness state, and editor buffers for any
+    /// worktree IDs that existed in `beforeIds` but are absent after a refresh.
+    /// Also re-points selection if the selected worktree was removed.
+    func cleanupMissingWorktrees(beforeIds: Set<String>) {
+        let afterIds = allWorktreeIds()
+        let disappeared = beforeIds.subtracting(afterIds)
+        for id in disappeared {
+            cleanupWorktreeState(worktreeId: id)
+        }
+        if let current = selectedWorktreeId, !afterIds.contains(current) {
+            selectedWorktreeId = firstVisibleWorktreeId()
+        }
+    }
+
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
