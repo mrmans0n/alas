@@ -27,22 +27,27 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasSaveActiveTab, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: .command)
+                .disabled(!state.hasActiveEditorTab)
                 Button("Save As…") {
                     NotificationCenter.default.post(name: .alasSaveActiveTabAs, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(!state.hasActiveEditorTab)
                 Button("Save All") {
                     NotificationCenter.default.post(name: .alasSaveAllTabs, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(!state.hasActiveEditorTab)
                 Divider()
                 Button("Revert") {
                     NotificationCenter.default.post(name: .alasRevertActiveTab, object: nil)
                 }
+                .disabled(!state.hasActiveEditorTab)
                 Divider()
                 Button("Rename File…") {
                     NotificationCenter.default.post(name: .alasRenameActiveFile, object: nil)
                 }
+                .disabled(!state.hasActiveEditorTab)
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
@@ -50,15 +55,17 @@ struct AlasApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            CommandGroup(after: .pasteboard) {
+                Button("Search Files…") {
+                    NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
+                }
+                .keyboardShortcut("p", modifiers: .command)
+            }
             CommandGroup(after: .toolbar) {
                 Button("Toggle Right Pane") {
                     NotificationCenter.default.post(name: .alasToggleRightPane, object: nil)
                 }
                 .keyboardShortcut(.return, modifiers: [.command, .option])
-                Button("Search Files…") {
-                    NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
-                }
-                .keyboardShortcut("p", modifiers: .command)
                 Button("New Worktree…") {
                     NotificationCenter.default.post(name: .alasNewWorktree, object: nil)
                 }
@@ -71,43 +78,6 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasCloseTab, object: nil)
                 }
                 .keyboardShortcut("w", modifiers: .command)
-                Divider()
-                Button("Select Tab 1") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 1)
-                }
-                .keyboardShortcut("1", modifiers: .command)
-                Button("Select Tab 2") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 2)
-                }
-                .keyboardShortcut("2", modifiers: .command)
-                Button("Select Tab 3") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 3)
-                }
-                .keyboardShortcut("3", modifiers: .command)
-                Button("Select Tab 4") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 4)
-                }
-                .keyboardShortcut("4", modifiers: .command)
-                Button("Select Tab 5") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 5)
-                }
-                .keyboardShortcut("5", modifiers: .command)
-                Button("Select Tab 6") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 6)
-                }
-                .keyboardShortcut("6", modifiers: .command)
-                Button("Select Tab 7") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 7)
-                }
-                .keyboardShortcut("7", modifiers: .command)
-                Button("Select Tab 8") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 8)
-                }
-                .keyboardShortcut("8", modifiers: .command)
-                Button("Select Tab 9") {
-                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 9)
-                }
-                .keyboardShortcut("9", modifiers: .command)
             }
             CommandMenu("Projects") {
                 Button("Create Project…") {

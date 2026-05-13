@@ -635,6 +635,16 @@ final class AppState {
         return nil
     }
 
+    var activeTab: Tab? {
+        guard let worktreeId = selectedWorktreeId else { return nil }
+        return tabs.activeTab(forWorktree: worktreeId)
+    }
+
+    var hasActiveEditorTab: Bool {
+        guard case .editor = activeTab else { return false }
+        return true
+    }
+
     /// Pick a sensible new selection after a worktree was removed (archived or
     /// deleted) from the given project at the given index in its visible list.
     /// Prefers the entry now occupying that index in the same project (i.e.
