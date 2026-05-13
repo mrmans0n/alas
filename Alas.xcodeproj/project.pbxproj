@@ -148,6 +148,7 @@
 		86718F7E55531B8E4356D7D1 /* PaneTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2943FBB1D6371EFAC9BBE68 /* PaneTree.swift */; };
 		8744A1DB40A1EC0D01D4C895 /* AlasGhostty.Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F696636690652C48CE87D9 /* AlasGhostty.Config.swift */; };
 		8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8DD66F449B380BC74B373647 /* Carbon.framework */; };
+		87ECE63567C08B2847844EDE /* ClaudeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */; };
 		884F7EB87029E537B923191E /* DefinitionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 781B8F6F0A3085FEBFC615C2 /* DefinitionPicker.swift */; };
 		8950201500394191D7D981D2 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF52FE71B7FB41328859734 /* MarkdownRenderer.swift */; };
 		89A5E5AD13431B6C9E16669B /* ImageFileTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300F7033D91C4A0D283F75E /* ImageFileTypeTests.swift */; };
@@ -248,6 +249,7 @@
 		DEBA25FCF25D26395BD04F73 /* EditorConflictBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD267BE3F08611B376F3CC7 /* EditorConflictBanner.swift */; };
 		DEBB0627BD0426369D18CAD4 /* FileSearchDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F97EB3FA3E3C1206D76A9668 /* FileSearchDialog.swift */; };
 		E175AE346DFAD0B62827C921 /* ProjectPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CE948F94DB2759E66CD4DEF /* ProjectPicker.swift */; };
+		E1DA1C6BF9D5E157DAF6EE00 /* ClaudeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */; };
 		E2279478EBE8BF9CDC412EDE /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 373D587E3153D902EB10208B /* MarkdownParserTests.swift */; };
 		E29D10B84F406C38E2F4C457 /* FileResultRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3375A79ACFD3567389DA855C /* FileResultRow.swift */; };
 		E3B38707284D08326C3183E4 /* FuzzyMatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */; };
@@ -389,11 +391,13 @@
 		5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeSitterHighlighter.swift; sourceTree = "<group>"; };
 		5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileType.swift; sourceTree = "<group>"; };
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
+		6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeInstallerTests.swift; sourceTree = "<group>"; };
 		61C69060B922A729DD807920 /* LSPURI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPURI.swift; sourceTree = "<group>"; };
 		620C4A708CD1013DE2736A00 /* AppIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconTests.swift; sourceTree = "<group>"; };
 		642163EB929E060A878211E2 /* HookInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookInstaller.swift; sourceTree = "<group>"; };
 		64CE9A3DB2C89A5B9C970ED3 /* EnvBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvBuilderTests.swift; sourceTree = "<group>"; };
 		64E96E26D5F53F217BFD1F49 /* EditorBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBuffer.swift; sourceTree = "<group>"; };
+		65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeInstaller.swift; sourceTree = "<group>"; };
 		66E8A2A1A02BD06F4B782D03 /* Highlighted.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Highlighted.swift; sourceTree = "<group>"; };
 		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhosttySmokeTests.swift; sourceTree = "<group>"; };
@@ -602,6 +606,7 @@
 				447D95D444F6AE08FCFA27A3 /* AppStateCleanupTests.swift */,
 				E7D49EBCE99D6F1690646F80 /* ChangesTreeBuilderTests.swift */,
 				E4E465A2468376AA840ADFBC /* ChangeSummaryVisibilityTests.swift */,
+				6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */,
 				DB5A2BDAA7ABD74C42BC51F8 /* CommitDetailsTests.swift */,
 				9427B922BAFA43AF6EB21080 /* CommitInfoTests.swift */,
 				576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */,
@@ -1020,6 +1025,7 @@
 				B53B597B64DC2E72758FBE2A /* AgentInstaller.swift */,
 				53C792D59DBFFF6C28F2D426 /* AgentKind.swift */,
 				57713D7143CFD53124E0523F /* AlasHookCommand.swift */,
+				65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */,
 				F9F85B92952C963DCF136315 /* HarnessDetector.swift */,
 				76F2498E56CBAF84CB67166C /* HarnessKind.swift */,
 				155B35EBCCE7F2CA1A0E5DE5 /* HarnessService.swift */,
@@ -1371,6 +1377,7 @@
 				8147BF86F2E77D81BE885B8F /* ChangedRow.swift in Sources */,
 				23013D3D2538AC2D1BD3403D /* ChangesTabView.swift in Sources */,
 				D46F8DF1FB66AD0ED92F3DF0 /* ChangesTreeBuilder.swift in Sources */,
+				87ECE63567C08B2847844EDE /* ClaudeInstaller.swift in Sources */,
 				EF2540A211FBE06D7B30FC61 /* Code.swift in Sources */,
 				41F6712EA71CC9AF6AB7ED94 /* CodeEditorCoordinator.swift in Sources */,
 				A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */,
@@ -1537,6 +1544,7 @@
 				0EC2E8C6E5E00DD040CC4847 /* AppStateCleanupTests.swift in Sources */,
 				835AFE4A9EA0889E0AF316BD /* ChangeSummaryVisibilityTests.swift in Sources */,
 				59765FD789179C1BDC3F1BB9 /* ChangesTreeBuilderTests.swift in Sources */,
+				E1DA1C6BF9D5E157DAF6EE00 /* ClaudeInstallerTests.swift in Sources */,
 				E540B305B2426590C219622C /* CommitDetailsTests.swift in Sources */,
 				F3E7DF34D9DDA268E40575AE /* CommitInfoTests.swift in Sources */,
 				363F31C705CF7D17162E2CF6 /* CommitTabStateTests.swift in Sources */,
