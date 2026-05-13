@@ -66,10 +66,6 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasToggleRightPane, object: nil)
                 }
                 .keyboardShortcut(.return, modifiers: [.command, .option])
-                Button("New Worktree…") {
-                    NotificationCenter.default.post(name: .alasNewWorktree, object: nil)
-                }
-                .keyboardShortcut("n", modifiers: [.command, .option])
                 Button("New Terminal Tab") {
                     NotificationCenter.default.post(name: .alasNewTerminalTab, object: nil)
                 }
