@@ -17,8 +17,11 @@ struct AgentInstallerRegistry: Sendable {
     let installers: [any AgentInstaller]
 
     init() {
-        // Concrete installers added in Tasks 5 and 6.
-        installers = []
+        installers = [
+            ClaudeInstaller(),
+            CodexInstaller(),
+            CursorInstaller(),
+        ]
     }
 
     init(installers: [any AgentInstaller]) {
