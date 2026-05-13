@@ -71,7 +71,11 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
                 hookGroup(command: Self.awaitingInput, matcher: "AskUserQuestion|ExitPlanMode"),
             ],
             "PostToolUse": [hookGroup(command: Self.busy, matcher: "")],
-            "Notification": [hookGroup(command: Self.awaitingInputAndNotify, matcher: "")],
+            // Scope to input/permission-prompt notification types; an empty
+            // matcher would fire on every Claude Notification (status updates,
+            // background messages, etc.) and produce false "needs input"
+            // notifications. Mirrors the filter the old wrapper script applied.
+            "Notification": [hookGroup(command: Self.awaitingInputAndNotify, matcher: "permission_prompt|idle_prompt|elicitation_dialog")],
             "Stop": [hookGroup(command: Self.idleAndNotify)],
             "SessionEnd": [hookGroup(command: Self.idleAndNotify, matcher: "")],
         ]
