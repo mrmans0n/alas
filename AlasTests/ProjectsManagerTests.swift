@@ -78,6 +78,7 @@ struct ProjectsManagerTests {
         #expect(mgr.projects[0].color == "#d77b88")
         #expect(mgr.projects[0].addedAt == project.addedAt)
         #expect(mgr.projects[0].hiddenWorktreePaths == project.hiddenWorktreePaths)
+        #expect(mgr.projects[0].startupScripts == .defaults)
         #expect(mgr.projects[1] == other)
 
         mgr.updateProject(

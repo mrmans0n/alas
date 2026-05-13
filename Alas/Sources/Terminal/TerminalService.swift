@@ -48,9 +48,13 @@ final class TerminalService {
             project: project, worktree: worktree, sessionId: sessionId,
             hookDir: Paths.hookDir, inheritParent: cfg.inheritParentEnv
         )
+        let effectiveScript = StartupScriptResolver.sessionOpenScript(
+            global: cfg,
+            project: project
+        )
         let plan = try StartupScriptInstaller.plan(
             shell: cfg.shell,
-            startupScript: cfg.startupScript,
+            startupScript: effectiveScript,
             sessionId: sessionId
         )
         // Plan-supplied env overrides (e.g. ZDOTDIR for zsh startup scripts)

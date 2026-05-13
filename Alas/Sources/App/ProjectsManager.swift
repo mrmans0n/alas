@@ -4,6 +4,7 @@ import Observation
 struct ProjectUpdate: Equatable {
     var name: String
     var color: String
+    var startupScripts: ProjectStartupScripts = .defaults
 }
 
 @Observable
@@ -45,6 +46,7 @@ final class ProjectsManager {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         projects[idx].name = update.name
         projects[idx].color = update.color
+        projects[idx].startupScripts = update.startupScripts
     }
 
     func worktrees(projectId: String) -> [Worktree] {
