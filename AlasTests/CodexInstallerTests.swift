@@ -28,7 +28,8 @@ struct CodexInstallerTests {
         var enableCalled = false
         let installer = CodexInstaller(
             hooksURL: hooksURL, configURL: configURL,
-            runEnableHooks: { enableCalled = true; return .init(status: 0, stderr: "") }
+            runEnableHooks: { enableCalled = true
+            return .init(status: 0, stderr: "") }
         )
 
         try await installer.install()

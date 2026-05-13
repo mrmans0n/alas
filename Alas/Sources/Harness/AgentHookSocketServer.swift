@@ -133,8 +133,10 @@ final class AgentHookSocketServer {
         guard socketFD >= 0 else { return -1 }
 
         let bindResult = Self.bindSocket(socketFD, toPath: path)
-        guard bindResult == 0 else { close(socketFD); return -1 }
-        guard listen(socketFD, 8) == 0 else { close(socketFD); return -1 }
+        guard bindResult == 0 else { close(socketFD)
+        return -1 }
+        guard listen(socketFD, 8) == 0 else { close(socketFD)
+        return -1 }
         return socketFD
     }
 
