@@ -78,6 +78,43 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasCloseTab, object: nil)
                 }
                 .keyboardShortcut("w", modifiers: .command)
+                Divider()
+                Button("Select Tab 1") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 1)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+                Button("Select Tab 2") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 2)
+                }
+                .keyboardShortcut("2", modifiers: .command)
+                Button("Select Tab 3") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 3)
+                }
+                .keyboardShortcut("3", modifiers: .command)
+                Button("Select Tab 4") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 4)
+                }
+                .keyboardShortcut("4", modifiers: .command)
+                Button("Select Tab 5") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 5)
+                }
+                .keyboardShortcut("5", modifiers: .command)
+                Button("Select Tab 6") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 6)
+                }
+                .keyboardShortcut("6", modifiers: .command)
+                Button("Select Tab 7") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 7)
+                }
+                .keyboardShortcut("7", modifiers: .command)
+                Button("Select Tab 8") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 8)
+                }
+                .keyboardShortcut("8", modifiers: .command)
+                Button("Select Tab 9") {
+                    NotificationCenter.default.post(name: .alasActivateTabByNumber, object: 9)
+                }
+                .keyboardShortcut("9", modifiers: .command)
             }
             CommandMenu("Projects") {
                 Button("Create Project…") {

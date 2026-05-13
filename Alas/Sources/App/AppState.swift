@@ -646,14 +646,19 @@ final class AppState {
     }
 
     var hasAnyDirtyEditorTab: Bool {
+        var result = false
         for project in projects {
             for worktree in projectsManager.worktrees(projectId: project.id) {
-                if !tabs.tabIdsWithUnsavedChanges(forWorktree: worktree.id).isEmpty {
-                    return true
+                for tab in tabs.tabs(forWorktree: worktree.id) {
+                    guard case .editor(let state) = tab else { continue }
+                    if let buffer = tabs.peekBuffer(tabId: state.id) {
+                        _ = buffer.editGeneration
+                        if buffer.dirty { result = true }
+                    }
                 }
             }
         }
-        return false
+        return result
     }
 
     /// Pick a sensible new selection after a worktree was removed (archived or
