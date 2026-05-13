@@ -58,6 +58,11 @@ final class TabsManager {
         byWorktree[id]?.activeTabId
     }
 
+    func activeTab(forWorktree id: String) -> Tab? {
+        guard let activeId = activeTabId(forWorktree: id) else { return nil }
+        return tabs(forWorktree: id).first(where: { $0.id == activeId })
+    }
+
     @discardableResult
     func activateTabNumber(_ number: Int, worktreeId: String) -> TabID? {
         guard number > 0 else { return nil }
