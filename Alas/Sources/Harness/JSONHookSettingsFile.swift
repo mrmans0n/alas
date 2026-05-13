@@ -65,29 +65,24 @@ enum JSONHookSettingsFile {
         return result
     }
 
-    static func managedCommands(in hooks: [String: Any], flat: Bool) -> Set<String> {
-        var commands = Set<String>()
-        for (_, value) in hooks {
-            if flat {
-                guard let entries = value as? [[String: Any]] else { continue }
-                for entry in entries {
-                    if let cmd = entry["command"] as? String, AlasHookCommand.isManagedCommand(cmd) {
-                        commands.insert(cmd)
-                    }
-                }
-            } else {
-                guard let groups = value as? [[String: Any]] else { continue }
-                for group in groups {
-                    guard let innerHooks = group["hooks"] as? [[String: Any]] else { continue }
-                    for hook in innerHooks {
-                        if let cmd = hook["command"] as? String, AlasHookCommand.isManagedCommand(cmd) {
-                            commands.insert(cmd)
-                        }
-                    }
+    /// Returns the set of Alas-managed commands present under each event key
+    /// in a flat-format hooks tree (Codex / Cursor: `event → [{command,…}]`).
+    /// Comparing per-event sets catches stale installs where a command lives
+    /// under the wrong event key, which a flat-across-events set compare
+    /// would mis-report as installed.
+    static func managedCommandsByEventFlat(in hooks: [String: Any]) -> [String: Set<String>] {
+        var result: [String: Set<String>] = [:]
+        for (event, value) in hooks {
+            guard let entries = value as? [[String: Any]] else { continue }
+            var cmds = Set<String>()
+            for entry in entries {
+                if let cmd = entry["command"] as? String, AlasHookCommand.isManagedCommand(cmd) {
+                    cmds.insert(cmd)
                 }
             }
+            if !cmds.isEmpty { result[event] = cmds }
         }
-        return commands
+        return result
     }
 }
 

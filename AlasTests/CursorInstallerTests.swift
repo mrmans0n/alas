@@ -48,4 +48,26 @@ struct CursorInstallerTests {
         #expect(thirdParty.count == 1)
         #expect(thirdParty[0]["command"] as? String == "/usr/local/bin/my-hook")
     }
+
+    /// Codex review (#102): a stale install with the right managed commands
+    /// under the wrong event keys must report `.outdated`.
+    @Test func installState_commandsUnderWrongEventKeys_outdated() async throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let installer = CursorInstaller(settingsURL: url)
+        try await installer.install()
+
+        // Move `stop`'s command alongside `beforeSubmitPrompt`, drop `stop`.
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        let stop = hooks["stop"] as! [[String: Any]]
+        var before = hooks["beforeSubmitPrompt"] as! [[String: Any]]
+        before.append(contentsOf: stop)
+        hooks["beforeSubmitPrompt"] = before
+        hooks.removeValue(forKey: "stop")
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
+
+        #expect(installer.installState() == .outdated)
+    }
 }

@@ -27,13 +27,23 @@ struct CodexInstaller: AgentInstaller, Sendable {
     }
 
     func installState() -> InstallState {
-        let canonical = canonicalCommands()
+        let canonical = canonicalCommandsByEvent()
         guard !canonical.isEmpty else { return .notInstalled }
         do {
             let json = try JSONHookSettingsFile.load(at: hooksURL)
             let hooks = json["hooks"] as? [String: Any] ?? [:]
-            let actual = JSONHookSettingsFile.managedCommands(in: hooks, flat: true)
-            if actual.isEmpty { return .notInstalled }
+            // Seed every canonical event so a fully missing placement
+            // compares as empty (not as a missing key).
+            var actual: [String: Set<String>] = Dictionary(
+                uniqueKeysWithValues: canonical.keys.map { ($0, Set<String>()) }
+            )
+            for (event, cmds) in JSONHookSettingsFile.managedCommandsByEventFlat(in: hooks) {
+                actual[event, default: []].formUnion(cmds)
+            }
+            if actual.values.allSatisfy(\.isEmpty) { return .notInstalled }
+            // Per-event compare: a stale install with the right commands
+            // under the wrong event keys would otherwise be reported as
+            // installed.
             guard actual == canonical else { return .outdated }
             return hasFeaturesFlag() ? .installed : .outdated
         } catch {
@@ -91,8 +101,12 @@ struct CodexInstaller: AgentInstaller, Sendable {
         ["command": command, "timeout": timeout]
     }
 
-    private func canonicalCommands() -> Set<String> {
-        Set(hooksByEvent().values.flatMap { $0.compactMap { $0["command"] as? String } })
+    private func canonicalCommandsByEvent() -> [String: Set<String>] {
+        var result: [String: Set<String>] = [:]
+        for (event, entries) in hooksByEvent() {
+            result[event] = Set(entries.compactMap { $0["command"] as? String })
+        }
+        return result
     }
 
     // MARK: - Features flag
