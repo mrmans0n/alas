@@ -94,6 +94,28 @@ struct ClaudeInstallerTests {
         #expect(installer.installState() == .outdated)
     }
 
+    /// Codex review (#102): a stale managed hook with the same command but
+    /// an outdated matcher (e.g. an old empty Notification matcher that fires
+    /// on every notification type) must report `.outdated` so the settings UI
+    /// shows "Update" instead of "Reinstall".
+    @Test func installState_outdatedMatcher_outdated() async throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let installer = ClaudeInstaller(settingsURL: url)
+        try await installer.install()
+
+        // Tamper Notification's matcher to "" — simulating a pre-fix install.
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        var notif = hooks["Notification"] as! [[String: Any]]
+        notif[0]["matcher"] = ""
+        hooks["Notification"] = notif
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
+
+        #expect(installer.installState() == .outdated)
+    }
+
     /// Codex review (#102): if a Claude hook group contains both an Alas
     /// command and a user's own command in the same `hooks` array, uninstall
     /// must strip only the Alas entry — not drop the entire group.

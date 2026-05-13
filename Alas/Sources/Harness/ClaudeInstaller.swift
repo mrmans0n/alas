@@ -14,18 +14,19 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
     }
 
     func installState() -> InstallState {
-        let canonical = canonicalCommandsByEvent()
+        let canonical = canonicalPlacementsByEvent()
         guard !canonical.isEmpty else { return .notInstalled }
         do {
             let json = try JSONHookSettingsFile.load(at: settingsURL)
             let hooks = json["hooks"] as? [String: Any] ?? [:]
-            let actual = managedCommandsByEvent(in: hooks)
+            let actual = managedPlacementsByEvent(in: hooks)
             if actual.values.allSatisfy(\.isEmpty) { return .notInstalled }
-            // Per-event comparison: Claude reuses the same command across
-            // multiple events (busy in UserPromptSubmit/PreToolUse/PostToolUse,
-            // idleAndNotify in Stop/SessionEnd), so a flat Set<String> compare
-            // can't detect a missing placement when the same command remains
-            // elsewhere.
+            // Per-event placement compare (matcher + command, not just
+            // command). Claude reuses commands across events, AND a stale
+            // install can have the right command on an outdated matcher
+            // (e.g. an empty "" Notification matcher firing for every
+            // notification type instead of just permission/idle/elicitation
+            // prompts). Comparing matchers catches both.
             return actual == canonical ? .installed : .outdated
         } catch {
             return .notInstalled
@@ -89,40 +90,49 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
         return group
     }
 
-    private func canonicalCommandsByEvent() -> [String: Set<String>] {
-        var result: [String: Set<String>] = [:]
+    private struct Placement: Hashable {
+        let matcher: String?
+        let command: String
+    }
+
+    private func canonicalPlacementsByEvent() -> [String: Set<Placement>] {
+        var result: [String: Set<Placement>] = [:]
         for (event, groups) in hooksByEvent() {
-            var cmds = Set<String>()
+            var placements = Set<Placement>()
             for group in groups {
+                let matcher = group["matcher"] as? String
                 for hook in (group["hooks"] as? [[String: Any]]) ?? [] {
-                    if let cmd = hook["command"] as? String { cmds.insert(cmd) }
+                    if let cmd = hook["command"] as? String {
+                        placements.insert(Placement(matcher: matcher, command: cmd))
+                    }
                 }
             }
-            result[event] = cmds
+            result[event] = placements
         }
         return result
     }
 
-    private func managedCommandsByEvent(in hooks: [String: Any]) -> [String: Set<String>] {
-        var result: [String: Set<String>] = [:]
+    private func managedPlacementsByEvent(in hooks: [String: Any]) -> [String: Set<Placement>] {
+        var result: [String: Set<Placement>] = [:]
         // Seed every canonical event so a fully missing placement compares
         // as an empty set (not as a missing key), keeping the equality check
-        // tight against `canonicalCommandsByEvent`.
-        for event in canonicalCommandsByEvent().keys { result[event] = [] }
+        // tight against `canonicalPlacementsByEvent`.
+        for event in canonicalPlacementsByEvent().keys { result[event] = [] }
         for (event, value) in hooks {
             guard let groups = value as? [[String: Any]] else { continue }
-            var cmds = Set<String>()
+            var placements = Set<Placement>()
             for group in groups {
+                let matcher = group["matcher"] as? String
                 for hook in (group["hooks"] as? [[String: Any]]) ?? [] {
                     if let cmd = hook["command"] as? String,
                        AlasHookCommand.isManagedCommand(cmd)
                     {
-                        cmds.insert(cmd)
+                        placements.insert(Placement(matcher: matcher, command: cmd))
                     }
                 }
             }
-            if cmds.isEmpty { continue }
-            result[event, default: []].formUnion(cmds)
+            if placements.isEmpty { continue }
+            result[event, default: []].formUnion(placements)
         }
         return result
     }
