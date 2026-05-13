@@ -35,7 +35,7 @@ struct ProjectsFile: Codable, Equatable {
 // MARK: - ProjectConfig
 struct ProjectConfig: Codable, Equatable, Identifiable {
     let id: String           // UUID string
-    var name: String         // e.g. nlopez/alas
+    var name: String         // display name, defaulting to the repo directory name
     var path: String         // absolute repo path
     var color: String        // hex string, e.g. "#5fb7c4"
     var addedAt: Date

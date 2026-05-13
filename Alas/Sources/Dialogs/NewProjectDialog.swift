@@ -71,7 +71,7 @@ private struct ProjectDialog: View {
                     }
                 }
                 DialogField(label: "Display name") {
-                    AlasField(text: $name, placeholder: "owner/repo")
+                    AlasField(text: $name, placeholder: "repo-folder")
                 }
                 DialogField(label: "Color") {
                     HStack(spacing: 8) {
