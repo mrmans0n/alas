@@ -138,14 +138,6 @@ struct AppearancePane: View {
                             ("spacious", "spacious"),
                         ])
                     }
-                    SettingsRow(name: "Sidebar width",
-                                desc: "Width of the repos/worktrees sidebar.") {
-                        AlasField(text: Binding(
-                            get: { String(Int(state.config.sidebarWidth)) },
-                            set: { state.config.sidebarWidth = Double($0) ?? 244
-                            state.saveConfig() }
-                        ), monospaced: true).frame(width: 100)
-                    }
                 }
                 SettingsGroup(title: "Markdown") {
                     SettingsRow(name: "Default view mode",
