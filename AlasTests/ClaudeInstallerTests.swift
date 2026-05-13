@@ -71,4 +71,58 @@ struct ClaudeInstallerTests {
 
         #expect(installer.installState() == .outdated)
     }
+
+    /// Codex review (#102): Claude reuses the same command across multiple
+    /// events (e.g. `idleAndNotify` on Stop and SessionEnd). A flat
+    /// Set<String> compare would falsely report .installed when one of those
+    /// placements is missing because the same command still exists elsewhere.
+    @Test func installState_missingPlacement_outdated() async throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let installer = ClaudeInstaller(settingsURL: url)
+        try await installer.install()
+
+        // Drop the entire SessionEnd event from the settings file. `Stop`
+        // still has an identical idleAndNotify command, so a set-based check
+        // would not notice. Per-event compare must catch this.
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        hooks.removeValue(forKey: "SessionEnd")
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
+
+        #expect(installer.installState() == .outdated)
+    }
+
+    /// Codex review (#102): if a Claude hook group contains both an Alas
+    /// command and a user's own command in the same `hooks` array, uninstall
+    /// must strip only the Alas entry — not drop the entire group.
+    @Test func uninstall_preservesSiblingHookInSameGroup() async throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let installer = ClaudeInstaller(settingsURL: url)
+        try await installer.install()
+
+        // Splice a user's third-party command into the SAME inner hooks
+        // array Alas wrote for Stop.
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        var stopEntries = hooks["Stop"] as! [[String: Any]]
+        var inner = stopEntries[0]["hooks"] as! [[String: Any]]
+        inner.append(["type": "command", "command": "/usr/local/bin/my-stop-hook"])
+        stopEntries[0]["hooks"] = inner
+        hooks["Stop"] = stopEntries
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
+
+        try installer.uninstall()
+
+        let final = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let finalHooks = final["hooks"] as! [String: Any]
+        let finalStop = finalHooks["Stop"] as! [[String: Any]]
+        #expect(finalStop.count == 1)
+        let cmds = finalStop[0]["hooks"] as! [[String: Any]]
+        #expect(cmds.count == 1)
+        #expect(cmds[0]["command"] as? String == "/usr/local/bin/my-stop-hook")
+    }
 }

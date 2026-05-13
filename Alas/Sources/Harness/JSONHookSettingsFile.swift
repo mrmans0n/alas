@@ -24,15 +24,24 @@ enum JSONHookSettingsFile {
                 result[event] = value
                 continue
             }
-            let filtered = groups.filter { group in
-                guard let innerHooks = group["hooks"] as? [[String: Any]] else { return true }
-                return !innerHooks.contains { hook in
-                    guard let cmd = hook["command"] as? String else { return false }
-                    return AlasHookCommand.isManagedCommand(cmd)
+            // Strip managed entries from each group's inner `hooks` array
+            // (drop the group only if it becomes empty). The previous
+            // whole-group filter would also delete a user's third-party
+            // command that happened to share a group with an Alas entry.
+            var kept: [[String: Any]] = []
+            for var group in groups {
+                if let inner = group["hooks"] as? [[String: Any]] {
+                    let keptInner = inner.filter { hook in
+                        guard let cmd = hook["command"] as? String else { return true }
+                        return !AlasHookCommand.isManagedCommand(cmd)
+                    }
+                    if keptInner.isEmpty { continue }
+                    group["hooks"] = keptInner
                 }
+                kept.append(group)
             }
-            if !filtered.isEmpty {
-                result[event] = filtered
+            if !kept.isEmpty {
+                result[event] = kept
             }
         }
         return result

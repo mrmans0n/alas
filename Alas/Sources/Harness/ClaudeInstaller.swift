@@ -14,13 +14,18 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
     }
 
     func installState() -> InstallState {
-        let canonical = canonicalCommands()
+        let canonical = canonicalCommandsByEvent()
         guard !canonical.isEmpty else { return .notInstalled }
         do {
             let json = try JSONHookSettingsFile.load(at: settingsURL)
             let hooks = json["hooks"] as? [String: Any] ?? [:]
-            let actual = JSONHookSettingsFile.managedCommands(in: hooks, flat: false)
-            if actual.isEmpty { return .notInstalled }
+            let actual = managedCommandsByEvent(in: hooks)
+            if actual.values.allSatisfy(\.isEmpty) { return .notInstalled }
+            // Per-event comparison: Claude reuses the same command across
+            // multiple events (busy in UserPromptSubmit/PreToolUse/PostToolUse,
+            // idleAndNotify in Stop/SessionEnd), so a flat Set<String> compare
+            // can't detect a missing placement when the same command remains
+            // elsewhere.
             return actual == canonical ? .installed : .outdated
         } catch {
             return .notInstalled
@@ -80,15 +85,41 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
         return group
     }
 
-    private func canonicalCommands() -> Set<String> {
-        var cmds = Set<String>()
-        for (_, groups) in hooksByEvent() {
+    private func canonicalCommandsByEvent() -> [String: Set<String>] {
+        var result: [String: Set<String>] = [:]
+        for (event, groups) in hooksByEvent() {
+            var cmds = Set<String>()
             for group in groups {
                 for hook in (group["hooks"] as? [[String: Any]]) ?? [] {
                     if let cmd = hook["command"] as? String { cmds.insert(cmd) }
                 }
             }
+            result[event] = cmds
         }
-        return cmds
+        return result
+    }
+
+    private func managedCommandsByEvent(in hooks: [String: Any]) -> [String: Set<String>] {
+        var result: [String: Set<String>] = [:]
+        // Seed every canonical event so a fully missing placement compares
+        // as an empty set (not as a missing key), keeping the equality check
+        // tight against `canonicalCommandsByEvent`.
+        for event in canonicalCommandsByEvent().keys { result[event] = [] }
+        for (event, value) in hooks {
+            guard let groups = value as? [[String: Any]] else { continue }
+            var cmds = Set<String>()
+            for group in groups {
+                for hook in (group["hooks"] as? [[String: Any]]) ?? [] {
+                    if let cmd = hook["command"] as? String,
+                       AlasHookCommand.isManagedCommand(cmd)
+                    {
+                        cmds.insert(cmd)
+                    }
+                }
+            }
+            if cmds.isEmpty { continue }
+            result[event, default: []].formUnion(cmds)
+        }
+        return result
     }
 }
