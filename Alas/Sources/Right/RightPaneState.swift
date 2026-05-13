@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 enum RightPaneTab: String { case changes, files }
 
@@ -30,6 +31,7 @@ final class RightPaneState {
 
     private let git = GitService()
     private let watcher: WorktreeWatcher
+    private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-state")
 
     init(worktree: Worktree, baseBranch: String) {
         self.worktree = worktree
@@ -74,7 +76,11 @@ final class RightPaneState {
                 didInitDefaultTab = true
             }
         } catch {
-            print("RightPaneState refresh error: \(error)")
+            // Surface failures via os.Logger so they're visible in Console.app
+            // and the unified log. The previous `print` here silently kept
+            // `self.changes` at its last successful value, which presented as
+            // an empty Changes pane when the very first refresh failed.
+            logger.error("refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 }

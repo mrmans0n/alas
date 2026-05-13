@@ -39,5 +39,13 @@ struct RightPaneView: View {
                 }
             }
         }
+        // Force a refresh whenever the user (re-)selects this worktree. The
+        // FSEvent watcher is the primary update path, but if it ever misses
+        // a burst (debouncer starved, stream hiccup) re-selection is the
+        // user's expected escape hatch — switching away and back should
+        // surface current state.
+        .task(id: worktree.id) {
+            await rps.refresh()
+        }
     }
 }
