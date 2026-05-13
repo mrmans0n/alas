@@ -18,6 +18,7 @@ struct AppConfigTests {
         let cfg = AppConfig.defaults
         #expect(cfg.themeId == "cool-slate")
         #expect(cfg.accent == "teal")
+        #expect(cfg.sidebarMaterial == .appKitSidebar)
         #expect(cfg.sidebarWidth == 244)
         #expect(cfg.rightPaneWidth == 320)
         #expect(cfg.rightPaneVisible == true)
@@ -63,6 +64,42 @@ struct AppConfigTests {
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(cfg.harness.notifyOnFinish == false)
         #expect(cfg.harness.notifyOnAwaiting == true)
+    }
+
+    @Test func decodeOldConfigPreservesPreviousSidebarMaterial() throws {
+        let json = """
+        {
+          "themeId": "cool-slate",
+          "accent": "teal",
+          "density": "comfortable",
+          "matchSystemTheme": false,
+          "sidebarWidth": 244,
+          "rightPaneWidth": 320,
+          "rightPaneVisible": true,
+          "general": {
+            "launchAtLogin": false, "closeToTray": true, "confirmQuit": true,
+            "autoUpdate": true, "updateChannel": "Stable",
+            "crashReports": false, "usageAnalytics": false
+          },
+          "worktrees": {
+            "rootPath": "~/code/.worktrees",
+            "pathTemplate": "{worktreeRoot}/{repo}/{branch}",
+            "branchPrefix": "feature/", "baseBranch": "main",
+            "trackUpstream": true, "deleteBranchOnRemove": true,
+            "autoFetch": true, "fetchIntervalMinutes": 5, "pruneStale": false
+          },
+          "terminal": {
+            "shell": "/bin/zsh", "workingDirectory": "worktreeRoot",
+            "startupScript": "", "worktreeCreateScript": "",
+            "inheritParentEnv": true, "fontFamily": "JetBrains Mono",
+            "fontSize": 13, "cursorStyle": "beam", "cursorBlink": true,
+            "scrollbackLines": 10000, "bell": "visual"
+          },
+          "harness": {"notifyOnFinish": true}
+        }
+        """
+        let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(cfg.sidebarMaterial == .appKitFullScreenUI)
     }
 
     @Test func decodePreservesConfiguredWorktreeRoot() throws {
