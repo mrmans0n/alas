@@ -48,7 +48,7 @@ struct SettingsNavView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Text("Alas 0.5.0")
+            Text("Alas 0.1.0")
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
                 .padding(.horizontal, 10).padding(.vertical, 8)
