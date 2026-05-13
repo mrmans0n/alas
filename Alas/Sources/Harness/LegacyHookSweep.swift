@@ -27,17 +27,29 @@ enum LegacyHookSweep {
                 pruned[event] = value
                 continue
             }
-            let filtered = groups.filter { group in
-                if let innerHooks = group["hooks"] as? [[String: Any]] {
-                    return !innerHooks.contains { ($0["command"] as? String)?.hasPrefix(alasHooksPrefix) == true }
+            // Strip legacy entries from each group's inner `hooks` array
+            // instead of dropping the whole group. Otherwise a user's own
+            // command sharing a `hooks` array with the legacy wrapper would
+            // be deleted on launch.
+            var kept: [[String: Any]] = []
+            for var group in groups {
+                let isLegacyFlat = (group["command"] as? String)?.hasPrefix(alasHooksPrefix) == true
+                if isLegacyFlat {
+                    changed = true
+                    continue
                 }
-                if let cmd = group["command"] as? String {
-                    return !cmd.hasPrefix(alasHooksPrefix)
+                if let inner = group["hooks"] as? [[String: Any]] {
+                    let keptInner = inner.filter { hook in
+                        guard let cmd = hook["command"] as? String else { return true }
+                        return !cmd.hasPrefix(alasHooksPrefix)
+                    }
+                    if keptInner.count != inner.count { changed = true }
+                    if keptInner.isEmpty { continue }
+                    group["hooks"] = keptInner
                 }
-                return true
+                kept.append(group)
             }
-            if filtered.count != groups.count { changed = true }
-            if !filtered.isEmpty { pruned[event] = filtered }
+            if !kept.isEmpty { pruned[event] = kept }
         }
 
         guard changed else { return }
