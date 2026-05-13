@@ -160,7 +160,7 @@ extension AppConfig {
         accent = try c.decode(String.self, forKey: .accent)
         density = try c.decode(String.self, forKey: .density)
         matchSystemTheme = try c.decode(Bool.self, forKey: .matchSystemTheme)
-        sidebarMaterial = (try? c.decode(SidebarMaterialChoice.self, forKey: .sidebarMaterial)) ?? .appKitSidebar
+        sidebarMaterial = (try? c.decode(SidebarMaterialChoice.self, forKey: .sidebarMaterial)) ?? .appKitFullScreenUI
         sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)
         rightPaneWidth = try c.decode(Double.self, forKey: .rightPaneWidth)
         rightPaneVisible = try c.decode(Bool.self, forKey: .rightPaneVisible)
