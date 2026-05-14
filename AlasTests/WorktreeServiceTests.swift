@@ -215,4 +215,45 @@ extension WorktreeServiceTests {
         #expect(wt.branch == "feat/lfs")
         #expect(FileManager.default.fileExists(atPath: dest.path))
     }
+
+    @Test func addSucceedsWhenLfsHookFailsAfterCheckout() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        // Add a real committed file so checkout has work to do.
+        try "hello".write(
+            to: repo.appendingPathComponent("dummy.txt"),
+            atomically: true, encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add file"], cwd: repo)
+
+        // Set up a custom hooks directory with a post-checkout hook that
+        // mimics Git LFS failing because git-lfs is missing.
+        let hooksDir = repo.appendingPathComponent("custom-hooks")
+        try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+        let hook = hooksDir.appendingPathComponent("post-checkout")
+        let hookScript = """
+        #!/bin/bash
+        echo "This repository is configured for Git LFS but git-lfs was not found on your path."
+        exit 1
+        """
+        try hookScript.write(to: hook, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["config", "--local", "core.hooksPath", hooksDir.path], cwd: repo)
+        // Make the hook executable.
+        _ = try await Process.run("/bin/chmod", args: ["+x", hook.path], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-hook")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/hook",
+            destination: dest, projectId: "p"
+        )
+        #expect(wt.branch == "feat/hook")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+        let listed = try await svc.list(repoPath: repo, projectId: "p")
+        #expect(listed.count == 2)
+    }
 }

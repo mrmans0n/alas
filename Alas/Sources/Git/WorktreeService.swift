@@ -78,23 +78,20 @@ struct WorktreeService {
 
         let result = try await Process.git(args, cwd: repoPath)
         if result.exitCode == 0 {
-            return Worktree(
-                id: Worktree.makeId(path: destination),
-                projectId: projectId,
-                name: branch,
-                branch: branch,
-                path: destination,
-                status: .clean,
-                lastActivity: Date()
-            )
+            return makeWorktree(destination: destination, branch: branch, projectId: projectId)
         }
 
-        let stderr = result.stderr.lowercased()
-        let lfsMissing = (stderr.contains("command not found") || stderr.contains("not found"))
-            && (stderr.contains("git-lfs") || stderr.contains("filter-process"))
-
-        guard lfsMissing else {
+        guard Self.looksLikeMissingLFS(result.stderr) else {
             throw WorktreeError.gitFailed(result.stderr)
+        }
+
+        // The worktree may already exist if the failure came from a
+        // post-checkout hook rather than the checkout itself (e.g. LFS hook
+        // detecting missing git-lfs after files are already checked out).
+        if let existing = try await existingWorktree(
+            repoPath: repoPath, destination: destination, projectId: projectId
+        ) {
+            return existing
         }
 
         let recheck = try await Process.git(
@@ -114,19 +111,12 @@ struct WorktreeService {
             "-c", "filter.lfs.process=",
             "-c", "filter.lfs.smudge=",
             "-c", "filter.lfs.clean=",
-            "-c", "filter.lfs.required=false"
+            "-c", "filter.lfs.required=false",
+            "-c", "core.hooksPath=/dev/null"
         ]
         let fallbackResult = try await Process.git(lfsOverride + fallbackArgs, cwd: repoPath)
         guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
-        return Worktree(
-            id: Worktree.makeId(path: destination),
-            projectId: projectId,
-            name: branch,
-            branch: branch,
-            path: destination,
-            status: .clean,
-            lastActivity: Date()
-        )
+        return makeWorktree(destination: destination, branch: branch, projectId: projectId)
     }
 
     /// Remove a worktree. Pass the full `Worktree` (not just a path) so we can
@@ -154,5 +144,35 @@ struct WorktreeService {
     func prune(repoPath: URL) async throws {
         let result = try await Process.git(["worktree", "prune"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+    }
+
+    // MARK: - Helpers
+
+    private static func looksLikeMissingLFS(_ stderr: String) -> Bool {
+        let lower = stderr.lowercased()
+        return (lower.contains("command not found") || lower.contains("not found"))
+            && (lower.contains("git-lfs") || lower.contains("filter-process"))
+    }
+
+    private func existingWorktree(
+        repoPath: URL,
+        destination: URL,
+        projectId: String
+    ) async throws -> Worktree? {
+        let listed = try await list(repoPath: repoPath, projectId: projectId)
+        let normalizedDest = destination.standardizedFileURL.path
+        return listed.first { $0.path.standardizedFileURL.path == normalizedDest }
+    }
+
+    private func makeWorktree(destination: URL, branch: String, projectId: String) -> Worktree {
+        Worktree(
+            id: Worktree.makeId(path: destination),
+            projectId: projectId,
+            name: branch,
+            branch: branch,
+            path: destination,
+            status: .clean,
+            lastActivity: Date()
+        )
     }
 }
