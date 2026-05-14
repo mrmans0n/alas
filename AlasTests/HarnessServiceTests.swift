@@ -142,6 +142,17 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["s1"]?.state == .awaitingInput)
     }
 
+    @Test func recordHarnessDetection_nil_dropsBusyButKeepsAwaiting() {
+        let (service, _) = makeService()
+        service.setStateForTesting(sessionId: "s1", agent: .claude, state: .busy)
+        service.recordHarnessDetection(sessionId: "s1", kind: nil)
+        #expect(service.activityBySession["s1"] == nil)
+
+        service.setStateForTesting(sessionId: "s2", agent: .claude, state: .awaitingInput)
+        service.recordHarnessDetection(sessionId: "s2", kind: nil)
+        #expect(service.activityBySession["s2"]?.state == .awaitingInput)
+    }
+
     // MARK: - Cursor idle debounce
 
     @Test func cursorIdle_isDebounced() async throws {
