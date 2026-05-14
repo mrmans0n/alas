@@ -63,6 +63,7 @@ final class ProjectGitWatcher {
     }
 
     func start() {
+        stop()
         if let gitDir = resolvedGitDir {
             startStream(gitDir: gitDir)
             return
