@@ -53,8 +53,29 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
+      - name: Sign + notarize + staple .app
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD:   ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY:       ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_NOTARY_APPLE_ID:        ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_APP_PASSWORD:    ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+          MACOS_NOTARY_TEAM_ID:         ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: ./scripts/sign-and-notarize.sh build/Build/Products/Release/Alas.app
+
       - name: Package .app (zip + DMG)
         run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app Alas
+
+      - name: Notarize + staple DMG
+        env:
+          MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+          MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: ./scripts/notarize-and-staple-dmg.sh build/Build/Products/Release/Alas.dmg
+
+      - name: Cleanup signing keychain
+        if: always()
+        run: ./scripts/cleanup-signing-keychain.sh
 
       - name: Upload macOS artifacts to release
         uses: softprops/action-gh-release@v3
