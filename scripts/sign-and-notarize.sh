@@ -126,9 +126,9 @@ echo "==> Packaging .app into notary zip"
 ditto -c -k --keepParent "$app_path" "$notary_zip"
 
 echo "==> Submitting to notary"
-# Capture both the streamed output (so the operator sees progress) and
-# the final state for the success/failure branch. notarytool's --wait
-# blocks until Apple returns; --timeout caps the wait at 30 min.
+# notarytool's --wait blocks until Apple returns; --timeout caps the
+# wait at 30 min. --output-format json emits a single compact JSON
+# object on the final line — parsed with jq below.
 notary_log="$tmp_root/notary-submit.log"
 set +e
 xcrun notarytool submit "$notary_zip" \
@@ -138,16 +138,16 @@ xcrun notarytool submit "$notary_zip" \
   --wait \
   --timeout 30m \
   --output-format json \
-  | tee "$notary_log"
-notary_rc=${PIPESTATUS[0]}
+  > "$notary_log" 2>&1
+notary_rc=$?
 set -e
+cat "$notary_log"
 
-submission_id="$(grep -o '"id" : "[^"]*"' "$notary_log" \
-  | head -1 \
-  | sed 's/.*"id" : "\([^"]*\)"/\1/')"
+submission_id="$(jq -r '.id // empty' "$notary_log" 2>/dev/null || true)"
+status="$(jq -r '.status // empty' "$notary_log" 2>/dev/null || true)"
 
-if [ "$notary_rc" -ne 0 ] || ! grep -q '"status" : "Accepted"' "$notary_log"; then
-  echo "error: notarization failed (rc=$notary_rc, id=$submission_id)" >&2
+if [ "$notary_rc" -ne 0 ] || [ "$status" != "Accepted" ]; then
+  echo "error: notarization failed (rc=$notary_rc, id=$submission_id, status=$status)" >&2
   if [ -n "$submission_id" ]; then
     echo "==> Fetching notarytool log for submission $submission_id" >&2
     xcrun notarytool log "$submission_id" \
