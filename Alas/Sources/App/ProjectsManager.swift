@@ -147,11 +147,12 @@ final class ProjectsManager {
                     clearOperationIds.append(id)
                 }
             case .createFailed:
-                // Preserve failed rows so they remain visible.
-                if let existing = previousById[id] {
-                    if !liveIds.contains(id) {
-                        reconciled.append(existing)
-                    }
+                if liveIds.contains(id) {
+                    // Worktree exists in git — transient failure is resolved; clear state.
+                    clearOperationIds.append(id)
+                } else if let existing = previousById[id] {
+                    // Preserve failed rows so they remain visible for retry/removal.
+                    reconciled.append(existing)
                 }
             case .deleteFailed:
                 // If git still sees the worktree, keep it visible with the failed

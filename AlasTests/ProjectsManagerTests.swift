@@ -301,6 +301,32 @@ extension ProjectsManagerTests {
         #expect(mgr.operationState(for: optimistic.id) == .createFailed(message: "disk full"))
     }
 
+    @Test func refreshClearsCreateFailedWhenWorktreeAppears() async throws {
+        let repo = try await makeRepo(name: "create-failed-live")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "create-failed-live", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        let svc = WorktreeService()
+        let dest = repo.appendingPathComponent("wt-cf-live")
+        let worktree = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "cf-live-b",
+            destination: dest,
+            projectId: project.id
+        )
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        mgr.setOperationState(id: worktree.id, state: .createFailed(message: "transient"))
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(mgr.operationState(for: worktree.id) == nil)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.contains { $0.id == worktree.id })
+    }
+
     @Test func refreshClearsDeletingStateWhenWorktreeDisappears() async throws {
         let repo = try await makeRepo(name: "delete-clear")
         defer { try? FileManager.default.removeItem(at: repo) }
