@@ -111,6 +111,24 @@ struct RootView: View {
                 presetProjectId: newWorktreePresetProjectId
             )
         }
+        .alert(
+            "'\(state.pendingForceDeleteWorktree?.branch ?? "")' has uncommitted changes.",
+            isPresented: Binding(
+                get: { state.pendingForceDeleteWorktree != nil },
+                set: { if !$0 { state.cancelForceDeletePendingWorktree() } }
+            ),
+            actions: {
+                Button("Force Delete", role: .destructive) {
+                    state.confirmForceDeletePendingWorktree()
+                }
+                Button("Cancel", role: .cancel) {
+                    state.cancelForceDeletePendingWorktree()
+                }
+            },
+            message: {
+                Text("Force delete? Any uncommitted work in this worktree will be lost.")
+            }
+        )
         .task {
             state.startHarness()
             if await state.projectsManager.refreshAll() {

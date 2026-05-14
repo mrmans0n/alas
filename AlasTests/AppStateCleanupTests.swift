@@ -276,6 +276,41 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.operationState(for: wt.id) == .deleting)
     }
 
+    // MARK: - Dirty-worktree force-delete state
+
+    @Test func looksLikeDirtyWorktreeErrorMatchesKnownPatterns() {
+        #expect(AppState.looksLikeDirtyWorktreeError("Cannot delete a dirty worktree"))
+        #expect(AppState.looksLikeDirtyWorktreeError("fatal: 'foo' contains modified or untracked files"))
+        #expect(AppState.looksLikeDirtyWorktreeError("worktree is dirty and cannot be removed"))
+        #expect(!AppState.looksLikeDirtyWorktreeError("fatal: not a git repository"))
+        #expect(!AppState.looksLikeDirtyWorktreeError(""))
+    }
+
+    @Test func cancelForceDeleteClearsPendingState() async throws {
+        let repo = try await makeRepo(name: "cancel-force")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "cancel-force", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        let wt = try #require(trees.first)
+
+        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
+            id: wt.id,
+            branch: wt.branch,
+            projectId: wt.projectId,
+            repoPath: repo,
+            worktreePath: wt.path,
+            deleteBranchIfMerged: false,
+            removedIndex: 0
+        )
+        #expect(state.pendingForceDeleteWorktree != nil)
+
+        state.cancelForceDeletePendingWorktree()
+        #expect(state.pendingForceDeleteWorktree == nil)
+        #expect(state.projectsManager.operationState(for: wt.id) == nil)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,
