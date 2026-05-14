@@ -21,7 +21,12 @@ concurrency:
 jobs:
   nightly:
     runs-on: macos-26
-    timeout-minutes: 60
+    # Two notarytool --wait --timeout 30m calls in this job (one for the
+    # .app, one for the .dmg) can each consume up to 30 min if Apple's
+    # notary queue is slow, so worst-case notary time alone is 60 min.
+    # 90 min leaves ~30 min headroom for build/package/upload even when
+    # both notary submissions hit their per-call timeout.
+    timeout-minutes: 90
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v6
