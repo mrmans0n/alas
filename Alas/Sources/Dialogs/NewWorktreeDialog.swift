@@ -16,6 +16,7 @@ struct NewWorktreeDialog: View {
     @State private var branches: [String] = []
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
+    @State private var createErrorMessage: String?
 
     @Environment(\.theme) var theme
 
@@ -58,6 +59,9 @@ struct NewWorktreeDialog: View {
                     Text("Open in new terminal pane").font(.system(size: 12))
                         .foregroundColor(theme.color("fg"))
                 }
+                if let createErrorMessage {
+                    Text(createErrorMessage).font(.system(size: 11)).foregroundColor(.red)
+                }
             },
             cancelTitle: "Cancel",
             confirmTitle: "Create worktree",
@@ -84,6 +88,9 @@ struct NewWorktreeDialog: View {
         }
         .onChange(of: projectId) { _, _ in
             loadBranchesForSelectedProject()
+        }
+        .onChange(of: branch) { _, _ in
+            createErrorMessage = nil
         }
     }
 
@@ -114,6 +121,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func loadBranchesForSelectedProject() {
+        createErrorMessage = nil
         guard let project = state.projects.first(where: { $0.id == projectId }) else {
             branches = []
             branchLoadError = nil
@@ -153,7 +161,7 @@ struct NewWorktreeDialog: View {
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         let dest = URL(fileURLWithPath: renderedPath)
-        state.createWorktree(
+        let id = state.createWorktree(
             projectId: project.id,
             base: base,
             branch: branch,
@@ -161,6 +169,11 @@ struct NewWorktreeDialog: View {
             runStartup: runStartup,
             openTerminal: openTerminal
         )
+        guard !id.isEmpty else {
+            createErrorMessage = "A worktree already exists at this path."
+            return
+        }
+        createErrorMessage = nil
         presented = false
     }
 

@@ -122,7 +122,15 @@ final class AppState {
         }
         let optimisticId = Worktree.makeId(path: destination)
         if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
-            return ""
+            let isRetryingFailedCreate: Bool
+            if case .createFailed = projectsManager.operationState(for: optimisticId) {
+                isRetryingFailedCreate = true
+            } else {
+                isRetryingFailedCreate = false
+            }
+            if !isRetryingFailedCreate {
+                return ""
+            }
         }
         let optimistic = Worktree(
             id: optimisticId,

@@ -170,6 +170,32 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
     }
 
+    @Test func createWorktreeRejectsExistingDestination() async throws {
+        let repo = try await makeRepo(name: "create-existing-destination")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-existing-destination",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let existing = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+
+        let id = state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "existing-path",
+            destination: existing.path,
+            runStartup: false,
+            openTerminal: false
+        )
+
+        #expect(id.isEmpty)
+        #expect(state.projectsManager.operationState(for: existing.id) == nil)
+        #expect(state.projectsManager.worktrees(projectId: project.id).filter { $0.id == existing.id }.count == 1)
+    }
+
     @Test func createWorktreeFailureLeavesFailedRow() async throws {
         let repo = try await makeRepo(name: "create-fail")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -198,6 +224,42 @@ struct AppStateCleanupTests {
         } else {
             Issue.record("Expected createFailed state")
         }
+    }
+
+    @Test func createWorktreeRetryAllowsFailedOptimisticDestination() async throws {
+        let repo = try await makeRepo(name: "create-retry")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "create-retry", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let dest = repo.appendingPathComponent("wt-retry")
+        let failedId = state.createWorktree(
+            projectId: project.id,
+            base: "missing-base",
+            branch: "retry-b",
+            destination: dest,
+            runStartup: false,
+            openTerminal: false
+        )
+        try await waitForOperationStateMatching(state.projectsManager, id: failedId) { state in
+            if case .createFailed = state { return true }
+            return false
+        }
+
+        let retryId = state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "retry-b",
+            destination: dest,
+            runStartup: false,
+            openTerminal: false
+        )
+
+        #expect(retryId == failedId)
+        #expect(state.projectsManager.operationState(for: retryId) == .creating)
+        try await waitForOperationState(state.projectsManager, id: retryId, equals: nil)
+        #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == retryId })
     }
 
     @Test func deleteWorktreeMarksDeletingImmediately() async throws {
