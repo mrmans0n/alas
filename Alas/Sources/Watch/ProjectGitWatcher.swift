@@ -221,13 +221,27 @@ final class ProjectGitWatcher {
         self.stream = stream
     }
 
+    /// Resolves the *common* git directory shared across the main worktree
+    /// and all its linked worktrees. We use `--git-common-dir` (not
+    /// `--absolute-git-dir`) so that when a project is added pointing at a
+    /// linked worktree, the watcher still rooted at `<repo>/.git` instead
+    /// of `<repo>/.git/worktrees/<name>`. That way:
+    ///   - HEAD events for *any* worktree (main + linked) are visible to
+    ///     this watcher, not just the linked one the user happened to add.
+    ///   - `gitDir.deletingLastPathComponent()` is the repo root, so the
+    ///     main-worktree HEAD path math is correct.
+    /// `--git-common-dir` may be relative (`.git`) when run from inside the
+    /// repo, so resolve it against `repo` before standardizing.
     private static func resolveGitDir(at repo: URL) async -> URL? {
         guard let result = try? await Process.git(
-            ["rev-parse", "--absolute-git-dir"],
+            ["rev-parse", "--git-common-dir"],
             cwd: repo
         ), result.exitCode == 0 else { return nil }
         let dir = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !dir.isEmpty else { return nil }
-        return URL(fileURLWithPath: dir).standardizedFileURL
+        let url: URL = dir.hasPrefix("/")
+            ? URL(fileURLWithPath: dir)
+            : URL(fileURLWithPath: dir, relativeTo: repo)
+        return url.standardizedFileURL
     }
 }
