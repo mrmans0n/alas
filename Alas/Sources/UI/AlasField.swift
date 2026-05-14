@@ -65,8 +65,15 @@ private struct AlasNSTextField: NSViewRepresentable {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
-        if focusOnAppear, nsView.focusOnAppear, let window = nsView.window, window.firstResponder !== nsView {
-            window.makeFirstResponder(nsView)
+        if focusOnAppear, nsView.focusOnAppear, let window = nsView.window {
+            if window.firstResponder !== nsView {
+                window.makeFirstResponder(nsView)
+            }
+            nsView.focusOnAppear = false
+            DispatchQueue.main.async {
+                guard let editor = window.fieldEditor(false, for: nsView) as? NSTextView else { return }
+                editor.setSelectedRange(NSRange(location: nsView.stringValue.count, length: 0))
+            }
         }
     }
 
@@ -96,14 +103,7 @@ private struct AlasNSTextField: NSViewRepresentable {
             }
         }
 
-        func controlTextDidBeginEditing(_ obj: Notification) {
-            guard let field = obj.object as? AlasNSTextFieldView, field.focusOnAppear else { return }
-            field.focusOnAppear = false
-            DispatchQueue.main.async {
-                guard let editor = field.window?.fieldEditor(false, for: field) as? NSTextView else { return }
-                editor.setSelectedRange(NSRange(location: field.stringValue.count, length: 0))
-            }
-        }
+
     }
 }
 
