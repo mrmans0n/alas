@@ -24,6 +24,20 @@ final class AppState {
     private var lspManager: WorkspaceLSPManager?
 
     var isSearchOpen: Bool = false
+
+    /// Set when a worktree deletion fails because the tree is dirty.
+    /// The UI presents a confirmation dialog; confirming retries with force.
+    struct PendingForceDeleteWorktree: Identifiable, Equatable {
+        let id: String           // worktree id
+        let branch: String
+        let projectId: String
+        let repoPath: URL        // git root (project.path)
+        let worktreePath: URL    // actual worktree path
+        let deleteBranchIfMerged: Bool
+        let removedIndex: Int
+    }
+    var pendingForceDeleteWorktree: PendingForceDeleteWorktree?
+
     @ObservationIgnored
     lazy var search: SearchModel = SearchModel(environment: makeSearchEnvironment())
     @ObservationIgnored
@@ -921,7 +935,8 @@ final class AppState {
     }
 
     /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
-    /// failure offers a force retry. Cleans up in-app state on success.
+    /// failure sets `pendingForceDeleteWorktree` so SwiftUI can present a
+    /// state-driven confirmation. Cleans up in-app state on success.
     func deleteWorktree(_ worktree: Worktree) {
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         let saveBuffersFirst: Bool
@@ -957,69 +972,112 @@ final class AppState {
         projectsManager.setOperationState(id: worktree.id, state: .deleting)
 
         Task { @MainActor in
-            do {
-                try await Self.performRemoveWorktree(
+            await performDeleteWorktree(
+                worktree: worktree,
+                repoPath: repoPath,
+                deleteBranchIfMerged: deleteBranch,
+                force: false,
+                removedIndex: removedIndex
+            )
+        }
+    }
+
+    /// Runs the git removal off the main actor, then resumes on MainActor
+    /// for state cleanup. On dirty-worktree failure publishes
+    /// `pendingForceDeleteWorktree` instead of showing a blocking modal.
+    private func performDeleteWorktree(
+        worktree: Worktree,
+        repoPath: URL,
+        deleteBranchIfMerged: Bool,
+        force: Bool,
+        removedIndex: Int
+    ) async {
+        do {
+            try await Self.performRemoveWorktree(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force
+            )
+        } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
+            if !force && Self.looksLikeDirtyWorktreeError(stderr) {
+                // Clear deleting so the user can see the row again while deciding.
+                projectsManager.setOperationState(id: worktree.id, state: nil)
+                pendingForceDeleteWorktree = PendingForceDeleteWorktree(
+                    id: worktree.id,
+                    branch: worktree.branch,
+                    projectId: worktree.projectId,
                     repoPath: repoPath,
-                    worktree: worktree,
-                    deleteBranchIfMerged: deleteBranch,
-                    force: false
+                    worktreePath: worktree.path,
+                    deleteBranchIfMerged: deleteBranchIfMerged,
+                    removedIndex: removedIndex
                 )
-            } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
-                if Self.looksLikeDirtyWorktreeError(stderr) {
-                    // Clear deleting so the user can see the row again while deciding.
-                    projectsManager.setOperationState(id: worktree.id, state: nil)
-                    guard confirmForceDeleteWorktree(branch: worktree.branch) else { return }
-                    // Re-mark deleting before force attempt.
-                    projectsManager.setOperationState(id: worktree.id, state: .deleting)
-                    do {
-                        try await Self.performRemoveWorktree(
-                            repoPath: repoPath,
-                            worktree: worktree,
-                            deleteBranchIfMerged: deleteBranch,
-                            force: true
-                        )
-                    } catch let WorktreeService.WorktreeError.gitFailed(stderr2) {
-                        projectsManager.setOperationState(
-                            id: worktree.id,
-                            state: .deleteFailed(message: stderr2)
-                        )
-                        return
-                    } catch {
-                        projectsManager.setOperationState(
-                            id: worktree.id,
-                            state: .deleteFailed(message: "\(error)")
-                        )
-                        return
-                    }
-                } else {
-                    projectsManager.setOperationState(
-                        id: worktree.id,
-                        state: .deleteFailed(message: stderr)
-                    )
-                    return
-                }
-            } catch {
+                return
+            } else {
                 projectsManager.setOperationState(
                     id: worktree.id,
-                    state: .deleteFailed(message: "\(error)")
+                    state: .deleteFailed(message: stderr)
                 )
                 return
             }
-
-            cleanupWorktreeState(worktreeId: worktree.id)
-            // Always clear the deleting state after a successful remove,
-            // even if the subsequent refresh fails.
-            projectsManager.setOperationState(id: worktree.id, state: nil)
-            if (try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)) == true {
-                saveProjects()
-            }
-            if selectedWorktreeId == worktree.id {
-                selectedWorktreeId = selectionAfterRemoval(
-                    removedFromProjectId: worktree.projectId,
-                    removedAtIndex: removedIndex
-                )
-            }
+        } catch {
+            projectsManager.setOperationState(
+                id: worktree.id,
+                state: .deleteFailed(message: "\(error)")
+            )
+            return
         }
+
+        cleanupWorktreeState(worktreeId: worktree.id)
+        // Always clear the deleting state after a successful remove,
+        // even if the subsequent refresh fails.
+        projectsManager.setOperationState(id: worktree.id, state: nil)
+        if (try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)) == true {
+            saveProjects()
+        }
+        if selectedWorktreeId == worktree.id {
+            selectedWorktreeId = selectionAfterRemoval(
+                removedFromProjectId: worktree.projectId,
+                removedAtIndex: removedIndex
+            )
+        }
+    }
+
+    /// Called from the SwiftUI alert when the user confirms force delete.
+    func confirmForceDeletePendingWorktree() {
+        guard let pending = pendingForceDeleteWorktree else { return }
+        pendingForceDeleteWorktree = nil
+
+        guard let project = projects.first(where: { $0.id == pending.projectId }),
+              projectsManager.worktrees(projectId: pending.projectId).contains(where: { $0.id == pending.id })
+        else { return }
+
+        let worktree = Worktree(
+            id: pending.id,
+            projectId: pending.projectId,
+            name: pending.branch,
+            branch: pending.branch,
+            path: pending.worktreePath,
+            status: .clean,
+            lastActivity: Date()
+        )
+
+        projectsManager.setOperationState(id: pending.id, state: .deleting)
+
+        Task { @MainActor in
+            await performDeleteWorktree(
+                worktree: worktree,
+                repoPath: pending.repoPath,
+                deleteBranchIfMerged: pending.deleteBranchIfMerged,
+                force: true,
+                removedIndex: pending.removedIndex
+            )
+        }
+    }
+
+    /// Called from the SwiftUI alert when the user cancels force delete.
+    func cancelForceDeletePendingWorktree() {
+        pendingForceDeleteWorktree = nil
     }
 
     nonisolated private static func performRemoveWorktree(
@@ -1041,7 +1099,7 @@ final class AppState {
     /// Permissive substring check: git's exact wording around dirty/locked
     /// worktrees varies by version. If the match misses, the caller surfaces
     /// the raw stderr instead, which is acceptable degradation.
-    nonisolated private static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
+    nonisolated static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
         let s = stderr.lowercased()
         return s.contains("is dirty")
             || s.contains("contains modified or untracked files")
@@ -1056,17 +1114,6 @@ final class AppState {
         let deleteButton = alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         deleteButton.hasDestructiveAction = true
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    private func confirmForceDeleteWorktree(branch: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = "'\(branch)' has uncommitted changes."
-        alert.informativeText = "Force delete? Any uncommitted work in this worktree will be lost."
-        alert.alertStyle = .warning
-        let forceButton = alert.addButton(withTitle: "Force Delete")
-        alert.addButton(withTitle: "Cancel")
-        forceButton.hasDestructiveAction = true
         return alert.runModal() == .alertFirstButtonReturn
     }
 
