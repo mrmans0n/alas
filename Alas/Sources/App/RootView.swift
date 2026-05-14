@@ -133,6 +133,15 @@ struct RootView: View {
         guard let id = state.selectedWorktreeId else { return nil }
         for project in state.projects {
             if let wt = state.projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
+                // Do not treat a creating/deleting/failed-create row as the active worktree.
+                if let op = state.projectsManager.operationState(for: wt.id) {
+                    switch op {
+                    case .creating, .deleting, .createFailed:
+                        return nil
+                    case .deleteFailed:
+                        break
+                    }
+                }
                 return wt
             }
         }

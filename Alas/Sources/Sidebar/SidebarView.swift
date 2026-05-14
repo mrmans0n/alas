@@ -35,6 +35,9 @@ struct SidebarView: View {
                                     }
                                 ),
                                 selectedWorktreeId: state.selectedWorktreeId,
+                                operationState: { wt in
+                                    state.projectsManager.operationState(for: wt.id)
+                                },
                                 harnessSummary: { worktreeId in
                                     let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
                                         if case .terminal(let s) = tab { return s.root.leaves().map(\.sessionId) }
@@ -75,6 +78,32 @@ struct SidebarView: View {
                                         worktreeId: wt.id,
                                         sessionId: summary.primarySessionId
                                     )
+                                },
+                                onCopyError: { message in
+                                    let pb = NSPasteboard.general
+                                    pb.clearContents()
+                                    pb.setString(message, forType: .string)
+                                },
+                                onRetryCreate: { wt in
+                                    let retryBase: String
+                                    if let op = state.projectsManager.operationState(for: wt.id),
+                                       case .createFailed(_, let base) = op {
+                                        retryBase = base
+                                    } else {
+                                        retryBase = state.config.worktrees.baseBranch
+                                    }
+                                    state.createWorktree(
+                                        projectId: project.id,
+                                        base: retryBase,
+                                        branch: wt.branch,
+                                        destination: wt.path,
+                                        runStartup: false,
+                                        openTerminal: false
+                                    )
+                                },
+                                onRetryDelete: { wt in state.deleteWorktree(wt) },
+                                onRemoveFailed: { wt in
+                                    state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
                                 }
                             )
                         }

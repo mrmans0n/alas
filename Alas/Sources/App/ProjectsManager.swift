@@ -7,11 +7,19 @@ struct ProjectUpdate: Equatable {
     var startupScripts: ProjectStartupScripts = .defaults
 }
 
+enum WorktreeOperationState: Equatable {
+    case creating
+    case deleting
+    case createFailed(message: String, base: String)
+    case deleteFailed(message: String)
+}
+
 @Observable
 @MainActor
 final class ProjectsManager {
     private(set) var projects: [ProjectConfig]
     private(set) var worktreesByProject: [String: [Worktree]] = [:]
+    private(set) var worktreeOperationStates: [String: WorktreeOperationState] = [:]
 
     private let git = GitService()
     private let worktreeSvc = WorktreeService()
@@ -38,8 +46,10 @@ final class ProjectsManager {
     }
 
     func removeProject(id: String) {
+        let ids = Set(worktreesByProject[id, default: []].map(\.id))
         projects.removeAll { $0.id == id }
         worktreesByProject.removeValue(forKey: id)
+        worktreeOperationStates = worktreeOperationStates.filter { !ids.contains($0.key) }
     }
 
     func updateProject(id: String, update: ProjectUpdate) {
@@ -51,6 +61,29 @@ final class ProjectsManager {
 
     func worktrees(projectId: String) -> [Worktree] {
         worktreesByProject[projectId] ?? []
+    }
+
+    func operationState(for worktreeId: String) -> WorktreeOperationState? {
+        worktreeOperationStates[worktreeId]
+    }
+
+    func setOperationState(id: String, state: WorktreeOperationState?) {
+        if let state {
+            worktreeOperationStates[id] = state
+        } else {
+            worktreeOperationStates.removeValue(forKey: id)
+        }
+    }
+
+    func insertOptimisticWorktree(_ worktree: Worktree) {
+        let projectId = worktree.projectId
+        worktreesByProject[projectId, default: []].removeAll { $0.id == worktree.id }
+        worktreesByProject[projectId, default: []].append(worktree)
+    }
+
+    func removeOptimisticWorktree(id: String, projectId: String) {
+        worktreesByProject[projectId]?.removeAll { $0.id == id }
+        worktreeOperationStates.removeValue(forKey: id)
     }
 
     func visibleWorktrees(projectId: String) -> [Worktree] {
@@ -87,10 +120,56 @@ final class ProjectsManager {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         let url = URL(fileURLWithPath: project.path)
         let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
-        worktreesByProject[projectId] = trees
-        // GC orphan hidden entries: drop any hidden path that doesn't match a
-        // live worktree path. Prevents stale entries accumulating when worktrees
-        // get removed externally (e.g. `git worktree remove` from a terminal).
+
+        // Reconcile optimistic rows: preserve creating rows that still aren't in git,
+        // replace them with real rows when they appear, and clear operation state.
+        let previous = worktreesByProject[projectId, default: []]
+        let previousById = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
+        let liveIds = Set(trees.map(\.id))
+        var reconciled = trees
+        var clearOperationIds: [String] = []
+        for (id, opState) in Array(worktreeOperationStates) {
+            guard previousById[id] != nil || liveIds.contains(id) else { continue }
+            switch opState {
+            case .creating:
+                if !liveIds.contains(id) {
+                    // Still pending; keep the optimistic row visible.
+                    if let optimistic = previousById[id] {
+                        reconciled.append(optimistic)
+                    }
+                } else {
+                    // Creation succeeded; clear the pending state.
+                    clearOperationIds.append(id)
+                }
+            case .deleting:
+                // If the row is gone from git, the deletion succeeded.
+                if !liveIds.contains(id) {
+                    clearOperationIds.append(id)
+                }
+            case .createFailed:
+                if liveIds.contains(id) {
+                    // Worktree exists in git — transient failure is resolved; clear state.
+                    clearOperationIds.append(id)
+                } else if let existing = previousById[id] {
+                    // Preserve failed rows so they remain visible for retry/removal.
+                    reconciled.append(existing)
+                }
+            case .deleteFailed:
+                // If git still sees the worktree, keep it visible with the failed
+                // state so the user can retry or remove. If the worktree is gone
+                // (user fixed it externally), clear the ghost state.
+                if !liveIds.contains(id) {
+                    clearOperationIds.append(id)
+                }
+            }
+        }
+        for id in clearOperationIds {
+            worktreeOperationStates.removeValue(forKey: id)
+        }
+        // Sort deterministically so optimistic rows don't jump position.
+        reconciled.sort { $0.path.path < $1.path.path }
+        worktreesByProject[projectId] = reconciled
+
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return false }
         let live = Set(trees.map { canonical($0.path) })
         let before = projects[idx].hiddenWorktreePaths.count

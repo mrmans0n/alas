@@ -5,6 +5,7 @@ struct RepoGroupView: View {
     let worktrees: [Worktree]
     @Binding var collapsed: Bool
     let selectedWorktreeId: String?
+    let operationState: (Worktree) -> WorktreeOperationState?
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
     let onSelect: (Worktree) -> Void
     let onNewWorktree: () -> Void
@@ -16,6 +17,10 @@ struct RepoGroupView: View {
     let onArchive: (Worktree) -> Void
     let onDelete: (Worktree) -> Void
     let onActivateHarness: (Worktree) -> Void
+    let onCopyError: (String) -> Void
+    let onRetryCreate: (Worktree) -> Void
+    let onRetryDelete: (Worktree) -> Void
+    let onRemoveFailed: (Worktree) -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
     @State private var plusHovering = false
@@ -84,6 +89,7 @@ struct RepoGroupView: View {
                         WorktreeRowView(
                             worktree: wt,
                             isSelected: wt.id == selectedWorktreeId,
+                            operationState: operationState(wt),
                             harnessSummary: harnessSummary(wt.id),
                             onTap: { onSelect(wt) },
                             onOpenTerminal: { onOpenTerminal(wt) },
@@ -92,7 +98,11 @@ struct RepoGroupView: View {
                             onRevealInFinder: { onRevealInFinder(wt) },
                             onArchive: { onArchive(wt) },
                             onDelete: { onDelete(wt) },
-                            onActivateHarness: { onActivateHarness(wt) }
+                            onActivateHarness: { onActivateHarness(wt) },
+                            onCopyError: onCopyError,
+                            onRemoveFailed: { onRemoveFailed(wt) },
+                            onRetryCreate: { onRetryCreate(wt) },
+                            onRetryDelete: { onRetryDelete(wt) }
                         )
                     }
                 }
