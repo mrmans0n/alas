@@ -10,7 +10,7 @@ struct ProjectUpdate: Equatable {
 enum WorktreeOperationState: Equatable {
     case creating
     case deleting
-    case createFailed(message: String)
+    case createFailed(message: String, base: String)
     case deleteFailed(message: String)
 }
 

@@ -193,7 +193,7 @@ struct AppStateCleanupTests {
         }
 
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-        if case .createFailed(let message) = state.projectsManager.operationState(for: id) {
+        if case .createFailed(let message, _) = state.projectsManager.operationState(for: id) {
             #expect(!message.isEmpty)
         } else {
             Issue.record("Expected createFailed state")

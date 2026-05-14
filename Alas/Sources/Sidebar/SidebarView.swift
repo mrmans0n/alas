@@ -85,9 +85,16 @@ struct SidebarView: View {
                                     pb.setString(message, forType: .string)
                                 },
                                 onRetryCreate: { wt in
+                                    let retryBase: String
+                                    if let op = state.projectsManager.operationState(for: wt.id),
+                                       case .createFailed(_, let base) = op {
+                                        retryBase = base
+                                    } else {
+                                        retryBase = state.config.worktrees.baseBranch
+                                    }
                                     state.createWorktree(
                                         projectId: project.id,
-                                        base: state.config.worktrees.baseBranch,
+                                        base: retryBase,
                                         branch: wt.branch,
                                         destination: wt.path,
                                         runStartup: false,

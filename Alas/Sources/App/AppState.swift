@@ -175,12 +175,12 @@ final class AppState {
                 } catch {
                     projectsManager.setOperationState(
                         id: optimistic.id,
-                        state: .createFailed(message: error.localizedDescription)
+                        state: .createFailed(message: error.localizedDescription, base: base)
                     )
                 }
             } catch {
                 let msg = error.localizedDescription
-                projectsManager.setOperationState(id: optimistic.id, state: .createFailed(message: msg))
+                projectsManager.setOperationState(id: optimistic.id, state: .createFailed(message: msg, base: base))
             }
         }
         return optimistic.id

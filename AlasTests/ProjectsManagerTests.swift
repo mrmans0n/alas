@@ -293,12 +293,12 @@ extension ProjectsManagerTests {
             lastActivity: Date()
         )
         mgr.insertOptimisticWorktree(optimistic)
-        mgr.setOperationState(id: optimistic.id, state: .createFailed(message: "disk full"))
+        mgr.setOperationState(id: optimistic.id, state: .createFailed(message: "disk full", base: "main"))
 
         try await mgr.refreshWorktrees(projectId: project.id)
         let trees = mgr.worktrees(projectId: project.id)
         #expect(trees.contains { $0.id == optimistic.id })
-        #expect(mgr.operationState(for: optimistic.id) == .createFailed(message: "disk full"))
+        #expect(mgr.operationState(for: optimistic.id) == .createFailed(message: "disk full", base: "main"))
     }
 
     @Test func refreshClearsCreateFailedWhenWorktreeAppears() async throws {
@@ -319,7 +319,7 @@ extension ProjectsManagerTests {
         )
         try await mgr.refreshWorktrees(projectId: project.id)
 
-        mgr.setOperationState(id: worktree.id, state: .createFailed(message: "transient"))
+        mgr.setOperationState(id: worktree.id, state: .createFailed(message: "transient", base: "main"))
         try await mgr.refreshWorktrees(projectId: project.id)
 
         #expect(mgr.operationState(for: worktree.id) == nil)
