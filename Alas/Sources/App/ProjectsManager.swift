@@ -146,12 +146,19 @@ final class ProjectsManager {
                 if !liveIds.contains(id) {
                     clearOperationIds.append(id)
                 }
-            case .createFailed, .deleteFailed:
+            case .createFailed:
                 // Preserve failed rows so they remain visible.
                 if let existing = previousById[id] {
                     if !liveIds.contains(id) {
                         reconciled.append(existing)
                     }
+                }
+            case .deleteFailed:
+                // If git still sees the worktree, keep it visible with the failed
+                // state so the user can retry or remove. If the worktree is gone
+                // (user fixed it externally), clear the ghost state.
+                if !liveIds.contains(id) {
+                    clearOperationIds.append(id)
                 }
             }
         }

@@ -341,4 +341,31 @@ extension ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
         #expect(mgr.operationState(for: worktree.id) == .deleteFailed(message: "permission denied"))
     }
+
+    @Test func refreshClearsDeleteFailedWhenWorktreeDisappears() async throws {
+        let repo = try await makeRepo(name: "delete-failed-gone")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "delete-failed-gone", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        let svc = WorktreeService()
+        let dest = repo.appendingPathComponent("wt-delete-fail")
+        let worktree = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "delete-fail-b",
+            destination: dest,
+            projectId: project.id
+        )
+        try await mgr.refreshWorktrees(projectId: project.id)
+        mgr.setOperationState(id: worktree.id, state: .deleteFailed(message: "permission denied"))
+
+        // Simulate external removal; refresh should drop the ghost row.
+        try await svc.remove(repoPath: repo, worktree: worktree, deleteBranchIfMerged: false, force: false)
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
+        #expect(mgr.operationState(for: worktree.id) == nil)
+    }
 }
