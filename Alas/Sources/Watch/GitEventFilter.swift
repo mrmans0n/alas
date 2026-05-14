@@ -45,7 +45,7 @@ enum GitEventFilter {
 
         let parts = rel.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         if parts.count == 2 { return .topologyChange }
-        if parts.count >= 3 && parts[2] == "HEAD" {
+        if parts.count == 3 && parts[2] == "HEAD" {
             let name = parts[1]
             let gitdirFile = gitDir
                 .appendingPathComponent("worktrees")
