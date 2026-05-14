@@ -102,8 +102,6 @@ private struct AlasNSTextField: NSViewRepresentable {
                 parent.text = field.stringValue
             }
         }
-
-
     }
 }
 
