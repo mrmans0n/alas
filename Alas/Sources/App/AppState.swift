@@ -995,6 +995,9 @@ final class AppState {
             }
 
             cleanupWorktreeState(worktreeId: worktree.id)
+            // Always clear the deleting state after a successful remove,
+            // even if the subsequent refresh fails.
+            projectsManager.setOperationState(id: worktree.id, state: nil)
             if (try? await projectsManager.refreshWorktrees(projectId: worktree.projectId)) == true {
                 saveProjects()
             }
