@@ -188,4 +188,157 @@ extension ProjectsManagerTests {
         let gcDropped = try await mgr.refreshWorktrees(projectId: project.id)
         #expect(!gcDropped)
     }
+
+    @Test func optimisticWorktreeAppearsImmediately() async throws {
+        let repo = try await makeRepo(name: "optimistic")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "optimistic", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let before = mgr.worktrees(projectId: project.id)
+        #expect(before.count == 1)
+
+        let dest = repo.appendingPathComponent("wt-new")
+        let optimistic = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: project.id,
+            name: "feat-x",
+            branch: "feat-x",
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        mgr.insertOptimisticWorktree(optimistic)
+        mgr.setOperationState(id: optimistic.id, state: .creating)
+
+        let after = mgr.worktrees(projectId: project.id)
+        #expect(after.count == 2)
+        #expect(after.contains { $0.id == optimistic.id })
+        #expect(mgr.operationState(for: optimistic.id) == .creating)
+
+        mgr.insertOptimisticWorktree(optimistic)
+        #expect(mgr.worktrees(projectId: project.id).filter { $0.id == optimistic.id }.count == 1)
+    }
+
+    @Test func refreshReconcilesCreatingWorktree() async throws {
+        let repo = try await makeRepo(name: "reconcile")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "reconcile", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        let svc = WorktreeService()
+        let dest = repo.appendingPathComponent("wt-reconcile")
+        _ = try await svc.add(repoPath: repo, base: "main", branch: "reconcile-b", destination: dest, projectId: project.id)
+
+        let optimistic = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: project.id,
+            name: "reconcile-b",
+            branch: "reconcile-b",
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        mgr.insertOptimisticWorktree(optimistic)
+        mgr.setOperationState(id: optimistic.id, state: .creating)
+
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.contains { $0.id == optimistic.id })
+        #expect(mgr.operationState(for: optimistic.id) == nil)
+    }
+
+    @Test func refreshKeepsCreatingWorktreeUntilGitSeesIt() async throws {
+        let repo = try await makeRepo(name: "creating-pending")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "creating-pending", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        let dest = repo.appendingPathComponent("wt-pending")
+        let optimistic = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: project.id,
+            name: "pending-b",
+            branch: "pending-b",
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        mgr.insertOptimisticWorktree(optimistic)
+        mgr.setOperationState(id: optimistic.id, state: .creating)
+
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(mgr.worktrees(projectId: project.id).contains { $0.id == optimistic.id })
+        #expect(mgr.operationState(for: optimistic.id) == .creating)
+    }
+
+    @Test func refreshPreservesFailedWorktree() async throws {
+        let repo = try await makeRepo(name: "fail-preserve")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "fail-preserve", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        let dest = repo.appendingPathComponent("wt-fail")
+        let optimistic = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: project.id,
+            name: "fail-b",
+            branch: "fail-b",
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        mgr.insertOptimisticWorktree(optimistic)
+        mgr.setOperationState(id: optimistic.id, state: .createFailed(message: "disk full"))
+
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.contains { $0.id == optimistic.id })
+        #expect(mgr.operationState(for: optimistic.id) == .createFailed(message: "disk full"))
+    }
+
+    @Test func refreshClearsDeletingStateWhenWorktreeDisappears() async throws {
+        let repo = try await makeRepo(name: "delete-clear")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "delete-clear", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        let svc = WorktreeService()
+        let dest = repo.appendingPathComponent("wt-delete")
+        let worktree = try await svc.add(
+            repoPath: repo,
+            base: "main",
+            branch: "delete-b",
+            destination: dest,
+            projectId: project.id
+        )
+        try await mgr.refreshWorktrees(projectId: project.id)
+        mgr.setOperationState(id: worktree.id, state: .deleting)
+
+        try await svc.remove(repoPath: repo, worktree: worktree, deleteBranchIfMerged: false, force: false)
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
+        #expect(mgr.operationState(for: worktree.id) == nil)
+    }
+
+    @Test func refreshPreservesDeleteFailedStateForLiveWorktree() async throws {
+        let repo = try await makeRepo(name: "delete-failed")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "delete-failed", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(mgr.worktrees(projectId: project.id).first)
+
+        mgr.setOperationState(id: worktree.id, state: .deleteFailed(message: "permission denied"))
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
+        #expect(mgr.operationState(for: worktree.id) == .deleteFailed(message: "permission denied"))
+    }
 }

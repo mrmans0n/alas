@@ -144,4 +144,95 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: treesA[0].id).isEmpty)
         #expect(state.tabs.tabs(forWorktree: treesB[0].id).count == 1)
     }
+
+    @Test func createWorktreeInsertsOptimisticRowImmediately() async throws {
+        let repo = try await makeRepo(name: "create-opt")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "create-opt", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let dest = repo.appendingPathComponent("wt-opt")
+        let id = state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "opt-b",
+            destination: dest,
+            runStartup: false,
+            openTerminal: false
+        )
+        #expect(!id.isEmpty)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.contains { $0.id == id })
+        #expect(state.projectsManager.operationState(for: id) == .creating)
+
+        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
+    }
+
+    @Test func createWorktreeFailureLeavesFailedRow() async throws {
+        let repo = try await makeRepo(name: "create-fail")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "create-fail", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let dest = repo.appendingPathComponent("wt-fail")
+        let id = state.createWorktree(
+            projectId: project.id,
+            base: "missing-base",
+            branch: "fail-b",
+            destination: dest,
+            runStartup: false,
+            openTerminal: false
+        )
+
+        try await waitForOperationStateMatching(state.projectsManager, id: id) { state in
+            if case .createFailed = state { return true }
+            return false
+        }
+
+        #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
+        if case .createFailed(let message) = state.projectsManager.operationState(for: id) {
+            #expect(!message.isEmpty)
+        } else {
+            Issue.record("Expected createFailed state")
+        }
+    }
+
+    @Test func deleteWorktreeMarksDeletingImmediately() async throws {
+        let repo = try await makeRepo(name: "delete-mark")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "delete-mark", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        let wt = trees[0]
+
+        state.projectsManager.setOperationState(id: wt.id, state: .deleting)
+        #expect(state.projectsManager.operationState(for: wt.id) == .deleting)
+    }
+
+    private func waitForOperationState(
+        _ manager: ProjectsManager,
+        id: String,
+        equals expected: WorktreeOperationState?
+    ) async throws {
+        try await waitForOperationStateMatching(manager, id: id) { $0 == expected }
+    }
+
+    private func waitForOperationStateMatching(
+        _ manager: ProjectsManager,
+        id: String,
+        matches: (WorktreeOperationState?) -> Bool
+    ) async throws {
+        for _ in 0..<80 {
+            if matches(manager.operationState(for: id)) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        Issue.record("Timed out waiting for operation state")
+    }
 }

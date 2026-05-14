@@ -105,6 +105,117 @@ final class AppState {
         try? store.write(ProjectsFile(projects: projectsManager.projects), to: Paths.projectsFile)
     }
 
+    /// Optimistically insert a worktree row and run the git operation async.
+    /// Returns the optimistic worktree id so the dialog can close immediately.
+    @discardableResult
+    func createWorktree(
+        projectId: String,
+        base: String,
+        branch: String,
+        destination: URL,
+        runStartup: Bool,
+        openTerminal: Bool
+    ) -> String {
+        guard let project = projects.first(where: { $0.id == projectId }) else {
+            // Should not happen if the dialog validated the project; fail silently.
+            return ""
+        }
+        let optimistic = Worktree(
+            id: Worktree.makeId(path: destination),
+            projectId: projectId,
+            name: branch,
+            branch: branch,
+            path: destination,
+            status: .clean,
+            lastActivity: Date()
+        )
+        projectsManager.insertOptimisticWorktree(optimistic)
+        projectsManager.setOperationState(id: optimistic.id, state: .creating)
+
+        let repoPath = URL(fileURLWithPath: project.path)
+        let startupScript = StartupScriptResolver.worktreeCreateScript(
+            global: config.terminal,
+            project: project
+        )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        Task { @MainActor in
+            do {
+                let newWorktree = try await Self.performCreateWorktree(
+                    repoPath: repoPath,
+                    base: base, branch: branch, destination: destination, projectId: projectId
+                )
+                if runStartup && !startupScript.isEmpty {
+                    _ = try? await Process.run(
+                        "/bin/zsh",
+                        args: ["-c", startupScript],
+                        cwd: newWorktree.path
+                    )
+                }
+
+                do {
+                    let wasHidden = projectsManager.isWorktreeHidden(
+                        projectId: project.id,
+                        path: newWorktree.path
+                    )
+                    projectsManager.setWorktreeHidden(
+                        projectId: project.id,
+                        path: newWorktree.path,
+                        hidden: false
+                    )
+                    let gcDropped = try await projectsManager.refreshWorktrees(projectId: project.id)
+                    if wasHidden || gcDropped {
+                        saveProjects()
+                    }
+
+                    selectedWorktreeId = newWorktree.id
+                    if openTerminal {
+                        _ = try? openTerminalTab(for: newWorktree)
+                    }
+                } catch {
+                    projectsManager.setOperationState(
+                        id: optimistic.id,
+                        state: .createFailed(message: error.localizedDescription)
+                    )
+                }
+            } catch {
+                let msg = error.localizedDescription
+                projectsManager.setOperationState(id: optimistic.id, state: .createFailed(message: msg))
+            }
+        }
+        return optimistic.id
+    }
+
+    nonisolated private static func performCreateWorktree(
+        repoPath: URL,
+        base: String,
+        branch: String,
+        destination: URL,
+        projectId: String
+    ) async throws -> Worktree {
+        try await Task.detached {
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return try await WorktreeService().add(
+                repoPath: repoPath,
+                base: base,
+                branch: branch,
+                destination: destination,
+                projectId: projectId
+            )
+        }.value
+    }
+
+    func removeFailedOptimisticWorktree(id: String, projectId: String) {
+        cleanupWorktreeState(worktreeId: id)
+        projectsManager.removeOptimisticWorktree(id: id, projectId: projectId)
+        if selectedWorktreeId == id {
+            selectedWorktreeId = firstVisibleWorktreeId()
+        }
+    }
+
     func addProject(path: URL, displayName: String, color: String) async throws {
         _ = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
         saveProjects()
@@ -827,17 +938,15 @@ final class AppState {
         let repoPath = URL(fileURLWithPath: project.path)
         let deleteBranch = config.worktrees.deleteBranchOnRemove
 
-        // Snapshot for selection follow-up. The index must be captured BEFORE
-        // the await because the worktree won't be in `visibleWorktrees` after
-        // `refreshWorktrees`. We re-check selection (live) post-await so a
-        // selection change during the dialog/await flow isn't clobbered.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
 
+        // Mark deleting immediately so the UI dims the row.
+        projectsManager.setOperationState(id: worktree.id, state: .deleting)
+
         Task { @MainActor in
-            let svc = WorktreeService()
             do {
-                try await svc.remove(
+                try await Self.performRemoveWorktree(
                     repoPath: repoPath,
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranch,
@@ -845,27 +954,43 @@ final class AppState {
                 )
             } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
                 if Self.looksLikeDirtyWorktreeError(stderr) {
+                    // Clear deleting so the user can see the row again while deciding.
+                    projectsManager.setOperationState(id: worktree.id, state: nil)
                     guard confirmForceDeleteWorktree(branch: worktree.branch) else { return }
+                    // Re-mark deleting before force attempt.
+                    projectsManager.setOperationState(id: worktree.id, state: .deleting)
                     do {
-                        try await svc.remove(
+                        try await Self.performRemoveWorktree(
                             repoPath: repoPath,
                             worktree: worktree,
                             deleteBranchIfMerged: deleteBranch,
                             force: true
                         )
-                    } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
-                        showFileActionError(title: "Delete Failed", message: stderr)
+                    } catch let WorktreeService.WorktreeError.gitFailed(stderr2) {
+                        projectsManager.setOperationState(
+                            id: worktree.id,
+                            state: .deleteFailed(message: stderr2)
+                        )
                         return
                     } catch {
-                        showFileActionError(title: "Delete Failed", message: "\(error)")
+                        projectsManager.setOperationState(
+                            id: worktree.id,
+                            state: .deleteFailed(message: "\(error)")
+                        )
                         return
                     }
                 } else {
-                    showFileActionError(title: "Delete Failed", message: stderr)
+                    projectsManager.setOperationState(
+                        id: worktree.id,
+                        state: .deleteFailed(message: stderr)
+                    )
                     return
                 }
             } catch {
-                showFileActionError(title: "Delete Failed", message: "\(error)")
+                projectsManager.setOperationState(
+                    id: worktree.id,
+                    state: .deleteFailed(message: "\(error)")
+                )
                 return
             }
 
@@ -882,10 +1007,26 @@ final class AppState {
         }
     }
 
+    nonisolated private static func performRemoveWorktree(
+        repoPath: URL,
+        worktree: Worktree,
+        deleteBranchIfMerged: Bool,
+        force: Bool
+    ) async throws {
+        try await Task.detached {
+            try await WorktreeService().remove(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force
+            )
+        }.value
+    }
+
     /// Permissive substring check: git's exact wording around dirty/locked
     /// worktrees varies by version. If the match misses, the caller surfaces
     /// the raw stderr instead, which is acceptable degradation.
-    private static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
+    nonisolated private static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
         let s = stderr.lowercased()
         return s.contains("is dirty")
             || s.contains("contains modified or untracked files")

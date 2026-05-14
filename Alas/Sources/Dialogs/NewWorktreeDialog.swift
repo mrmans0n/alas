@@ -16,8 +16,6 @@ struct NewWorktreeDialog: View {
     @State private var branches: [String] = []
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
-    @State private var isCreating = false
-    @State private var errorMessage: String?
 
     @Environment(\.theme) var theme
 
@@ -60,16 +58,13 @@ struct NewWorktreeDialog: View {
                     Text("Open in new terminal pane").font(.system(size: 12))
                         .foregroundColor(theme.color("fg"))
                 }
-                if let errorMessage {
-                    Text(errorMessage).font(.system(size: 11)).foregroundColor(.red)
-                }
             },
             cancelTitle: "Cancel",
-            confirmTitle: isCreating ? "Creating…" : "Create worktree",
+            confirmTitle: "Create worktree",
             confirmStyle: .primary,
             onCancel: { presented = false },
             onConfirm: create,
-            confirmEnabled: Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty, isCreating: isCreating)
+            confirmEnabled: Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty)
         )
         .onAppear {
             if projectId.isEmpty {
@@ -157,67 +152,25 @@ struct NewWorktreeDialog: View {
 
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
-        isCreating = true
-        errorMessage = nil
-        let runStartupAfter = runStartup
-        let openTerminalAfter = openTerminal
-        Task {
-            defer { isCreating = false }
-            do {
-                let svc = WorktreeService()
-                let dest = URL(fileURLWithPath: renderedPath)
-                try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let newWorktree = try await svc.add(
-                    repoPath: URL(fileURLWithPath: project.path),
-                    base: base, branch: branch, destination: dest, projectId: project.id
-                )
-                let wasHidden = state.projectsManager.isWorktreeHidden(
-                    projectId: project.id,
-                    path: newWorktree.path
-                )
-                state.projectsManager.setWorktreeHidden(
-                    projectId: project.id,
-                    path: newWorktree.path,
-                    hidden: false
-                )
-                let gcDropped = try await state.projectsManager.refreshWorktrees(projectId: project.id)
-                if wasHidden || gcDropped {
-                    state.saveProjects()
-                }
-
-                if runStartupAfter {
-                    let script = StartupScriptResolver.worktreeCreateScript(
-                        global: state.config.terminal,
-                        project: project
-                    )
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !script.isEmpty {
-                        _ = try? await Process.run(
-                            "/bin/zsh",
-                            args: ["-c", script],
-                            cwd: newWorktree.path
-                        )
-                    }
-                }
-
-                state.selectedWorktreeId = newWorktree.id
-                if openTerminalAfter {
-                    _ = try? state.openTerminalTab(for: newWorktree)
-                }
-                presented = false
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
+        let dest = URL(fileURLWithPath: renderedPath)
+        state.createWorktree(
+            projectId: project.id,
+            base: base,
+            branch: branch,
+            destination: dest,
+            runStartup: runStartup,
+            openTerminal: openTerminal
+        )
+        presented = false
     }
 
     private func submitCreate() {
-        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty, isCreating: isCreating) else { return }
+        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty) else { return }
         create()
     }
 
-    nonisolated static func canCreate(projectsEmpty: Bool, branchEmpty: Bool, isCreating: Bool) -> Bool {
-        !projectsEmpty && !branchEmpty && !isCreating
+    nonisolated static func canCreate(projectsEmpty: Bool, branchEmpty: Bool) -> Bool {
+        !projectsEmpty && !branchEmpty
     }
 
     nonisolated static func resolvedPresetProject(
