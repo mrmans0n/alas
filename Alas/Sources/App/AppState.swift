@@ -54,6 +54,11 @@ final class AppState {
 
     private let store = PersistenceStore()
 
+    /// One FSEvents watcher per project, watching `<repo>/.git` to auto-refresh
+    /// the sidebar when branches flip or worktrees appear/disappear externally.
+    @ObservationIgnored
+    private var projectGitWatchers: [String: ProjectGitWatcher] = [:]
+
     init() {
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
@@ -243,16 +248,63 @@ final class AppState {
     }
 
     func addProject(path: URL, displayName: String, color: String) async throws {
-        _ = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
+        let project = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
         saveProjects()
         if await projectsManager.refreshAll() {
             saveProjects()
         }
+        startProjectGitWatcher(for: project)
     }
 
     func removeProject(id: String) {
+        stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
         saveProjects()
+    }
+
+    /// Start a ProjectGitWatcher for `project` and wire its callbacks into
+    /// the fast (HEAD-only) and slow (topology) refresh paths. Idempotent:
+    /// stops any existing watcher for the same project id first.
+    func startProjectGitWatcher(for project: ProjectConfig) {
+        stopProjectGitWatcher(projectId: project.id)
+        let watcher = ProjectGitWatcher(repoPath: URL(fileURLWithPath: project.path))
+        let projectId = project.id
+        watcher.onHeadChanged = { [weak self] map in
+            self?.projectsManager.applyHeadUpdates(
+                projectId: projectId,
+                branchByWorktreePath: map
+            )
+        }
+        watcher.onTopologyChanged = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let beforeIds = self.allWorktreeIds()
+                // refreshWorktrees returns true when the hidden-path GC dropped
+                // entries — persist so archived worktrees removed externally
+                // don't reappear after relaunch.
+                if (try? await self.projectsManager.refreshWorktrees(projectId: projectId)) == true {
+                    self.saveProjects()
+                }
+                self.cleanupMissingWorktrees(beforeIds: beforeIds)
+            }
+        }
+        watcher.start()
+        projectGitWatchers[projectId] = watcher
+    }
+
+    func stopProjectGitWatcher(projectId: String) {
+        projectGitWatchers.removeValue(forKey: projectId)?.stop()
+    }
+
+    func startAllProjectGitWatchers() {
+        for project in projectsManager.projects {
+            startProjectGitWatcher(for: project)
+        }
+    }
+
+    func stopAllProjectGitWatchers() {
+        for (_, watcher) in projectGitWatchers { watcher.stop() }
+        projectGitWatchers.removeAll()
     }
 
     func updateProject(id: String, name: String, color: String, startupScripts: ProjectStartupScripts) {

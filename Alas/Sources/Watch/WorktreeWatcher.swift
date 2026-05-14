@@ -104,13 +104,13 @@ final class WorktreeWatcher {
     }
 
     /// Returns `true` iff at least one event path represents a change we want
-    /// to react to. Git lockfiles (`*.lock` inside any `.git/` directory) are
-    /// filtered out: they appear when another git process is mid-write
-    /// (commit, rebase, fetch); reacting would (a) trigger a redundant
-    /// refresh during the user's operation and (b) historically caused
-    /// `.git/index.lock` contention with terminal git. Project lockfiles
-    /// outside `.git/` (e.g. `Cargo.lock`, `package-lock.json`) are real
-    /// changes and DO trigger a refresh.
+    /// to react to. Git lockfiles are filtered out (matching the rule in
+    /// `GitEventFilter.classify`): they appear when another git process is
+    /// mid-write (commit, rebase, fetch); reacting would (a) trigger a
+    /// redundant refresh during the user's operation and (b) historically
+    /// caused `.git/index.lock` contention with terminal git. Project
+    /// lockfiles outside `.git/` (e.g. `Cargo.lock`, `package-lock.json`) are
+    /// real changes and DO trigger a refresh.
     static func shouldRefresh(forEventPaths paths: [String]) -> Bool {
         for path in paths {
             if path.hasSuffix(".lock") && path.contains("/.git/") {

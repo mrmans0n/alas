@@ -140,6 +140,7 @@ struct RootView: View {
             if state.selectedWorktreeId == nil {
                 state.selectedWorktreeId = firstWorktreeId()
             }
+            state.startAllProjectGitWatchers()
         }
     }
 
@@ -329,6 +330,7 @@ private struct RootBaseHandlers: ViewModifier {
             }
         return o
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
             }
     }
