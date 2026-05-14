@@ -244,7 +244,10 @@ final class ProjectGitWatcher {
     /// rather than having to infer it from `gitDir.deletingLastPathComponent()`.
     ///
     /// `--git-common-dir` may be relative (`.git`) when run from inside the
-    /// repo, so we resolve it against `repo` before standardizing.
+    /// repo, so we resolve it under `repo` via `appendingPathComponent`.
+    /// `URL(fileURLWithPath:relativeTo:)` is NOT correct here — it treats the
+    /// base as a file URL, so `.git` resolves to a sibling of `repo` rather
+    /// than into it.
     private static func resolveGitInfo(at repo: URL) async -> (gitDir: URL, worktreeRoot: URL)? {
         async let common = Process.git(["rev-parse", "--git-common-dir"], cwd: repo)
         async let top = Process.git(["rev-parse", "--show-toplevel"], cwd: repo)
@@ -257,7 +260,7 @@ final class ProjectGitWatcher {
         guard !cdir.isEmpty, !tdir.isEmpty else { return nil }
         let gitDirURL: URL = cdir.hasPrefix("/")
             ? URL(fileURLWithPath: cdir)
-            : URL(fileURLWithPath: cdir, relativeTo: repo)
+            : repo.appendingPathComponent(cdir)
         let worktreeURL = URL(fileURLWithPath: tdir)
         return (gitDirURL.standardizedFileURL, worktreeURL.standardizedFileURL)
     }
