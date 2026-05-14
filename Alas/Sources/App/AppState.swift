@@ -265,7 +265,12 @@ final class AppState {
             Task { @MainActor in
                 guard let self else { return }
                 let beforeIds = self.allWorktreeIds()
-                _ = try? await self.projectsManager.refreshWorktrees(projectId: projectId)
+                // refreshWorktrees returns true when the hidden-path GC dropped
+                // entries — persist so archived worktrees removed externally
+                // don't reappear after relaunch.
+                if (try? await self.projectsManager.refreshWorktrees(projectId: projectId)) == true {
+                    self.saveProjects()
+                }
                 self.cleanupMissingWorktrees(beforeIds: beforeIds)
             }
         }
