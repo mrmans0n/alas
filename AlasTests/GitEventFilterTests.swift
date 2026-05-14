@@ -4,6 +4,7 @@ import Foundation
 
 struct GitEventFilterTests {
     private let gitDir = URL(fileURLWithPath: "/repo/.git")
+    private let worktreeRoot = URL(fileURLWithPath: "/repo")
 
     @Test func ignoresLockFilesAnywhereUnderGitDir() {
         let cases = [
@@ -13,13 +14,13 @@ struct GitEventFilterTests {
             "/repo/.git/refs/heads/main.lock",
         ]
         for path in cases {
-            let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir)
+            let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir, worktreeRoot: worktreeRoot)
             #expect(cat == .ignored, "expected .ignored for \(path), got \(cat)")
         }
     }
 
     @Test func classifiesMainWorktreeHEAD() {
-        let cat = GitEventFilter.classify(eventPath: "/repo/.git/HEAD", gitDir: gitDir)
+        let cat = GitEventFilter.classify(eventPath: "/repo/.git/HEAD", gitDir: gitDir, worktreeRoot: worktreeRoot)
         #expect(cat == .headChange(URL(fileURLWithPath: "/repo")))
     }
 
@@ -43,7 +44,8 @@ struct GitEventFilterTests {
 
         let cat = GitEventFilter.classify(
             eventPath: wtDir.appendingPathComponent("HEAD").path,
-            gitDir: repoGit
+            gitDir: repoGit,
+            worktreeRoot: tmp.appendingPathComponent("repo")
         )
         #expect(cat == .headChange(worktreeRoot.standardizedFileURL))
     }
@@ -55,7 +57,7 @@ struct GitEventFilterTests {
             "/repo/.git/worktrees/feat/",
         ]
         for path in cases {
-            let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir)
+            let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir, worktreeRoot: worktreeRoot)
             #expect(cat == .topologyChange, "expected .topologyChange for \(path), got \(cat)")
         }
     }
@@ -68,7 +70,7 @@ struct GitEventFilterTests {
             "/repo/.git/worktrees/feat/locked",
         ]
         for path in cases {
-            let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir)
+            let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir, worktreeRoot: worktreeRoot)
             #expect(cat == .other, "expected .other for \(path), got \(cat)")
         }
     }
@@ -76,8 +78,21 @@ struct GitEventFilterTests {
     @Test func ignoresPathsOutsideGitDir() {
         let cat = GitEventFilter.classify(
             eventPath: "/repo/src/main.swift",
-            gitDir: gitDir
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
         )
         #expect(cat == .other)
+    }
+
+    @Test func mainHEADResolvesToWorktreeRootEvenWhenGitDirIsOutside() {
+        // Submodule case: gitDir is /super/.git/modules/sub, worktree is /sub
+        let gitDir = URL(fileURLWithPath: "/super/.git/modules/sub")
+        let worktreeRoot = URL(fileURLWithPath: "/sub")
+        let cat = GitEventFilter.classify(
+            eventPath: "/super/.git/modules/sub/HEAD",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        )
+        #expect(cat == .headChange(worktreeRoot.standardizedFileURL))
     }
 }

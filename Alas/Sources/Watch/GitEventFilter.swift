@@ -16,7 +16,13 @@ enum GitEventFilter {
     /// the repo's `.git` directory). For linked worktrees the worktree root
     /// is resolved by reading `.git/worktrees/<name>/gitdir`, which contains
     /// the absolute path to the worktree's `.git` link file.
-    static func classify(eventPath: String, gitDir: URL) -> GitEventCategory {
+    ///
+    /// `worktreeRoot` is used only for the main-worktree HEAD case (`gitDir/HEAD`).
+    /// For projects whose `.git` is a gitfile (submodules, separate-git-dir),
+    /// `gitDir` lives outside the worktree, so we cannot infer the worktree
+    /// root from `gitDir.deletingLastPathComponent()` — caller must resolve it
+    /// via `git rev-parse --show-toplevel` and pass it explicitly.
+    static func classify(eventPath: String, gitDir: URL, worktreeRoot: URL) -> GitEventCategory {
         let gitDirPath = gitDir.standardizedFileURL.path
         let prefix = gitDirPath.hasSuffix("/") ? gitDirPath : gitDirPath + "/"
         guard eventPath == gitDirPath || eventPath.hasPrefix(prefix) else {
@@ -34,8 +40,7 @@ enum GitEventFilter {
         }
 
         if rel == "HEAD" {
-            let repoRoot = URL(fileURLWithPath: gitDir.deletingLastPathComponent().path)
-            return .headChange(repoRoot.standardizedFileURL)
+            return .headChange(worktreeRoot.standardizedFileURL)
         }
 
         if rel.hasPrefix("worktrees/") == false {

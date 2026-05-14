@@ -42,6 +42,7 @@ struct ProjectGitWatcherTests {
         ProjectGitWatcher(
             repoPath: gitDir.deletingLastPathComponent(),
             resolvedGitDir: gitDir,
+            resolvedWorktreeRoot: gitDir.deletingLastPathComponent(),
             headDebounceInterval: 0.05,
             headDebounceMaxWait: 0.2,
             topologyDebounceInterval: 0.05,
