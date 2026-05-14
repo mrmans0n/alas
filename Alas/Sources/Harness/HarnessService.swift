@@ -20,11 +20,20 @@ final class HarnessService {
         var updatedAt: Date
     }
 
-    init() {
+    /// Cursor notifications are less reliable than Claude's and frequently
+    /// flap `idle -> busy -> idle` for a single ongoing turn. We debounce
+    /// `.idle` events for Cursor so the `run` badge stays visible until
+    /// work has actually settled.
+    private var cursorIdleDebouncers: [String: DebounceTimer] = [:]
+    private let cursorIdleDebounceInterval: TimeInterval
+
+    init(cursorIdleDebounceInterval: TimeInterval = 2.0) {
+        self.cursorIdleDebounceInterval = cursorIdleDebounceInterval
         socketServer = AgentHookSocketServer()
     }
 
-    init(socketServer: AgentHookSocketServer) {
+    init(socketServer: AgentHookSocketServer, cursorIdleDebounceInterval: TimeInterval = 2.0) {
+        self.cursorIdleDebounceInterval = cursorIdleDebounceInterval
         self.socketServer = socketServer
     }
 
@@ -75,19 +84,27 @@ final class HarnessService {
 
     func handleSocketEvent(
         _ event: AgentHookEvent,
-        stateLookup: (String) -> (projectId: String, worktreeId: String)?,
+        stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
         shouldNotifyOnAwaiting: () -> Bool
     ) {
         let previousState = activityBySession[event.sessionId]?.state
 
         switch event.event {
         case .busy:
+            // Cancel any pending cursor-idle debounce — work is actually ongoing.
+            if event.agent == .cursor {
+                cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
+            }
             activityBySession[event.sessionId] = HarnessActivityState(
                 agent: event.agent, state: .busy, pid: event.pid,
                 lastBody: nil, updatedAt: Date()
             )
 
         case .awaitingInput:
+            // Cancel pending cursor-idle debounce; awaiting is a real state change.
+            if event.agent == .cursor {
+                cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
+            }
             activityBySession[event.sessionId] = HarnessActivityState(
                 agent: event.agent, state: .awaitingInput, pid: event.pid,
                 lastBody: event.body, updatedAt: Date()
@@ -102,28 +119,59 @@ final class HarnessService {
             }
 
         case .idle:
-            activityBySession[event.sessionId] = HarnessActivityState(
-                agent: event.agent, state: .idle, pid: event.pid,
-                lastBody: event.body, updatedAt: Date()
-            )
-            if let lookup = stateLookup(event.sessionId) {
-                notifications.notifyHarnessFinished(
-                    agent: event.agent, body: event.body,
-                    projectId: lookup.projectId, worktreeId: lookup.worktreeId,
-                    sessionId: event.sessionId
-                )
+            if event.agent == .cursor {
+                // Debounce cursor idle: keep the badge alive briefly in case
+                // a follow-up busy arrives (which cancels this timer).
+                let sid = event.sessionId
+                let ev = event
+                if let existing = cursorIdleDebouncers[sid] {
+                    existing.poke()
+                } else {
+                    let debouncer = DebounceTimer(
+                        interval: cursorIdleDebounceInterval,
+                        queue: .main
+                    )
+                    debouncer.onFire = { [weak self] in
+                        self?.commitIdle(event: ev, stateLookup: stateLookup)
+                        self?.cursorIdleDebouncers.removeValue(forKey: sid)
+                    }
+                    cursorIdleDebouncers[sid] = debouncer
+                    debouncer.poke()
+                }
+            } else {
+                commitIdle(event: event, stateLookup: stateLookup)
             }
+        }
+    }
+
+    private func commitIdle(
+        event: AgentHookEvent,
+        stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?
+    ) {
+        activityBySession[event.sessionId] = HarnessActivityState(
+            agent: event.agent, state: .idle, pid: event.pid,
+            lastBody: event.body, updatedAt: Date()
+        )
+        if let lookup = stateLookup(event.sessionId) {
+            notifications.notifyHarnessFinished(
+                agent: event.agent, body: event.body,
+                projectId: lookup.projectId, worktreeId: lookup.worktreeId,
+                sessionId: event.sessionId
+            )
         }
     }
 
     func stop() {
         detector.stop()
         socketServer.shutdown()
+        for debouncer in cursorIdleDebouncers.values { debouncer.cancel() }
+        cursorIdleDebouncers.removeAll()
     }
 
     func forgetSession(_ sessionId: String) {
         harnessBySession.removeValue(forKey: sessionId)
         activityBySession.removeValue(forKey: sessionId)
+        cursorIdleDebouncers.removeValue(forKey: sessionId)?.cancel()
     }
 
     enum AggregatedState: String, Equatable {

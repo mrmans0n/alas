@@ -16,8 +16,13 @@ struct HarnessServiceTests {
         var requests: [UNNotificationRequest] = []
     }
 
-    private func makeService() -> (HarnessService, RequestCollector) {
-        let service = HarnessService(socketServer: AgentHookSocketServer(socketPath: "/dev/null"))
+    private func makeService(
+        cursorIdleDebounceInterval: TimeInterval = 2.0
+    ) -> (HarnessService, RequestCollector) {
+        let service = HarnessService(
+            socketServer: AgentHookSocketServer(socketPath: "/dev/null"),
+            cursorIdleDebounceInterval: cursorIdleDebounceInterval
+        )
         let collector = RequestCollector()
         service.notifications.notificationAdder = { collector.requests.append($0) }
         return (service, collector)
@@ -137,14 +142,90 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["s1"]?.state == .awaitingInput)
     }
 
-    @Test func recordHarnessDetection_nil_dropsBusyButKeepsAwaiting() {
-        let (service, _) = makeService()
-        service.setStateForTesting(sessionId: "s1", agent: .claude, state: .busy)
-        service.recordHarnessDetection(sessionId: "s1", kind: nil)
-        #expect(service.activityBySession["s1"] == nil)
+    // MARK: - Cursor idle debounce
 
-        service.setStateForTesting(sessionId: "s2", agent: .claude, state: .awaitingInput)
-        service.recordHarnessDetection(sessionId: "s2", kind: nil)
-        #expect(service.activityBySession["s2"]?.state == .awaitingInput)
+    @Test func cursorIdle_isDebounced() async throws {
+        let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.activityBySession["session-1"]?.state == .busy)
+
+        try await Task.sleep(nanoseconds: 80_000_000) // 80 ms > 50 ms
+        #expect(service.activityBySession["session-1"]?.state == .idle)
+    }
+
+    @Test func cursorIdleDebounce_isCancelledByBusy() async throws {
+        let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        // Re-burry before the debounce fires.
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        try await Task.sleep(nanoseconds: 80_000_000)
+        #expect(service.activityBySession["session-1"]?.state == .busy)
+    }
+
+    @Test func cursorIdleDebounce_isCancelledByAwaitingInput() async throws {
+        let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .awaitingInput, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        try await Task.sleep(nanoseconds: 80_000_000)
+        #expect(service.activityBySession["session-1"]?.state == .awaitingInput)
+    }
+
+    @Test func claudeIdle_isNotDebounced() {
+        let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .claude),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .claude),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        #expect(service.activityBySession["session-1"]?.state == .idle)
+    }
+
+    @Test func forgetSession_cancelsCursorIdleDebounce() async throws {
+        let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.forgetSession("session-1")
+
+        try await Task.sleep(nanoseconds: 80_000_000)
+        #expect(service.activityBySession["session-1"] == nil)
     }
 }
