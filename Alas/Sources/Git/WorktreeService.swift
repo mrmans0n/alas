@@ -76,14 +76,47 @@ struct WorktreeService {
             args = ["worktree", "add", destination.path, "-b", branch, base]
         }
 
+        let result = try await Process.git(args, cwd: repoPath)
+        if result.exitCode == 0 {
+            return Worktree(
+                id: Worktree.makeId(path: destination),
+                projectId: projectId,
+                name: branch,
+                branch: branch,
+                path: destination,
+                status: .clean,
+                lastActivity: Date()
+            )
+        }
+
+        let stderr = result.stderr.lowercased()
+        let isLfsError = stderr.contains("git-lfs") || stderr.contains("filter-process") || stderr.contains("smudge filter")
+
+        guard isLfsError else {
+            throw WorktreeError.gitFailed(result.stderr)
+        }
+
+        let recheck = try await Process.git(
+            ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
+            cwd: repoPath
+        )
+        let branchNowExists = recheck.exitCode == 0
+
+        let fallbackArgs: [String]
+        if branchNowExists {
+            fallbackArgs = ["worktree", "add", destination.path, branch]
+        } else {
+            fallbackArgs = ["worktree", "add", destination.path, "-b", branch, base]
+        }
+
         let lfsOverride = [
             "-c", "filter.lfs.process=",
             "-c", "filter.lfs.smudge=",
             "-c", "filter.lfs.clean=",
             "-c", "filter.lfs.required=false"
         ]
-        let result = try await Process.git(lfsOverride + args, cwd: repoPath)
-        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        let fallbackResult = try await Process.git(lfsOverride + fallbackArgs, cwd: repoPath)
+        guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
         return Worktree(
             id: Worktree.makeId(path: destination),
             projectId: projectId,
