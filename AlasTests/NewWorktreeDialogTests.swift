@@ -94,6 +94,22 @@ struct NewWorktreeDialogTests {
         #expect(selected == "integration")
     }
 
+    @Test func canCreateRequiresProjects() {
+        #expect(!NewWorktreeDialog.canCreate(projectsEmpty: true, branchEmpty: false, isCreating: false))
+    }
+
+    @Test func canCreateRequiresBranch() {
+        #expect(!NewWorktreeDialog.canCreate(projectsEmpty: false, branchEmpty: true, isCreating: false))
+    }
+
+    @Test func canCreateBlockWhileCreating() {
+        #expect(!NewWorktreeDialog.canCreate(projectsEmpty: false, branchEmpty: false, isCreating: true))
+    }
+
+    @Test func canCreateSucceedsWithProjectsAndBranch() {
+        #expect(NewWorktreeDialog.canCreate(projectsEmpty: false, branchEmpty: false, isCreating: false))
+    }
+
     private static func project(id: String) -> ProjectConfig {
         ProjectConfig(
             id: id,

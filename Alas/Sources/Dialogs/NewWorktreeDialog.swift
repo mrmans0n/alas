@@ -48,7 +48,7 @@ struct NewWorktreeDialog: View {
                     )
                 }
                 DialogField(label: "Branch name") {
-                    AlasField(text: $branch, monospaced: true)
+                    AlasField(text: $branch, monospaced: true, focusOnAppear: true, onSubmit: submitCreate)
                 }
                 HStack(spacing: 10) {
                     AlasToggle(on: $runStartup)
@@ -69,7 +69,7 @@ struct NewWorktreeDialog: View {
             confirmStyle: .primary,
             onCancel: { presented = false },
             onConfirm: create,
-            confirmEnabled: !state.projects.isEmpty && !branch.isEmpty && !isCreating
+            confirmEnabled: Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty, isCreating: isCreating)
         )
         .onAppear {
             if projectId.isEmpty {
@@ -171,10 +171,6 @@ struct NewWorktreeDialog: View {
                     repoPath: URL(fileURLWithPath: project.path),
                     base: base, branch: branch, destination: dest, projectId: project.id
                 )
-                // Defensive: clear any stale hidden entry for this path. An
-                // archived worktree could have been externally removed and
-                // recreated at the same destination before any refresh/GC; the
-                // GC otherwise keeps the entry because the path is live again.
                 let wasHidden = state.projectsManager.isWorktreeHidden(
                     projectId: project.id,
                     path: newWorktree.path
@@ -189,8 +185,6 @@ struct NewWorktreeDialog: View {
                     state.saveProjects()
                 }
 
-                // Run worktree-create script if requested. Best-effort: errors
-                // in the user-supplied script don't roll back the worktree.
                 if runStartupAfter {
                     let script = StartupScriptResolver.worktreeCreateScript(
                         global: state.config.terminal,
@@ -206,7 +200,6 @@ struct NewWorktreeDialog: View {
                     }
                 }
 
-                // Auto-select the new worktree + open a terminal tab if asked.
                 state.selectedWorktreeId = newWorktree.id
                 if openTerminalAfter {
                     _ = try? state.openTerminalTab(for: newWorktree)
@@ -216,6 +209,15 @@ struct NewWorktreeDialog: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func submitCreate() {
+        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty, isCreating: isCreating) else { return }
+        create()
+    }
+
+    nonisolated static func canCreate(projectsEmpty: Bool, branchEmpty: Bool, isCreating: Bool) -> Bool {
+        !projectsEmpty && !branchEmpty && !isCreating
     }
 
     nonisolated static func resolvedPresetProject(
