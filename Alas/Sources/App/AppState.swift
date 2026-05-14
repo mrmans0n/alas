@@ -120,8 +120,12 @@ final class AppState {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
+        let optimisticId = Worktree.makeId(path: destination)
+        if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
+            return ""
+        }
         let optimistic = Worktree(
-            id: Worktree.makeId(path: destination),
+            id: optimisticId,
             projectId: projectId,
             name: branch,
             branch: branch,
