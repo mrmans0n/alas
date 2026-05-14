@@ -190,6 +190,40 @@ final class ProjectsManager {
         return changed
     }
 
+    /// Fast-path branch label update. Patches `branch` (and `name`, since
+    /// name == branch in the current model) for any worktree whose
+    /// canonicalized path matches a key in `branchByWorktreePath`. Worktrees
+    /// not present in the map are left alone.
+    ///
+    /// Skips rows whose operation state is `.creating` or `.createFailed`:
+    /// those rows show the user's intended branch name, not whatever git
+    /// has on disk yet. `.deleting` and `.deleteFailed` rows are still
+    /// updated — they correspond to real git worktrees with a pending UI
+    /// operation, so git's branch is still the truth.
+    func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
+        guard var rows = worktreesByProject[projectId], !rows.isEmpty else { return }
+        let lookup: [String: String] = Dictionary(uniqueKeysWithValues:
+            branchByWorktreePath.map { (canonical($0.key), $0.value) }
+        )
+        var changed = false
+        for i in rows.indices {
+            let key = canonical(rows[i].path)
+            guard let newBranch = lookup[key] else { continue }
+            if let op = worktreeOperationStates[rows[i].id] {
+                switch op {
+                case .creating, .createFailed: continue
+                case .deleting, .deleteFailed: break
+                }
+            }
+            if rows[i].branch != newBranch || rows[i].name != newBranch {
+                rows[i].branch = newBranch
+                rows[i].name = newBranch
+                changed = true
+            }
+        }
+        if changed { worktreesByProject[projectId] = rows }
+    }
+
     private func hiddenSet(projectId: String) -> Set<String> {
         guard let project = projects.first(where: { $0.id == projectId }) else { return [] }
         return Set(project.hiddenWorktreePaths)
