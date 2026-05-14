@@ -136,9 +136,13 @@ jobs:
         if: steps.skip-check.outputs.skip != 'true'
         run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app Alas-nightly
 
-      - name: Staple DMG
+      - name: Notarize + staple DMG
         if: steps.skip-check.outputs.skip != 'true'
-        run: xcrun stapler staple build/Build/Products/Release/Alas-nightly.dmg
+        env:
+          MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+          MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: ./scripts/notarize-and-staple-dmg.sh build/Build/Products/Release/Alas-nightly.dmg
 
       - name: Cleanup signing keychain
         if: always() && steps.skip-check.outputs.skip != 'true'
