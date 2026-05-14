@@ -290,9 +290,9 @@ struct AppStateCleanupTests {
         let repo = try await makeRepo(name: "cancel-force")
         defer { try? FileManager.default.removeItem(at: repo) }
         let state = AppState()
-        _ = try await state.projectsManager.addProject(path: repo, displayName: "cancel-force", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: state.projects.projects[0].id)
-        let trees = state.projectsManager.worktrees(projectId: state.projects.projects[0].id)
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "cancel-force", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
         let wt = try #require(trees.first)
 
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
