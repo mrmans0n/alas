@@ -90,9 +90,10 @@ struct WorktreeService {
         }
 
         let stderr = result.stderr.lowercased()
-        let isLfsError = stderr.contains("git-lfs") || stderr.contains("filter-process") || stderr.contains("smudge filter")
+        let lfsMissing = (stderr.contains("command not found") || stderr.contains("not found"))
+            && (stderr.contains("git-lfs") || stderr.contains("filter-process"))
 
-        guard isLfsError else {
+        guard lfsMissing else {
             throw WorktreeError.gitFailed(result.stderr)
         }
 
