@@ -121,8 +121,17 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
+      # Gate signing on main-built refs only — non-main workflow_dispatch
+      # checks out (and runs scripts from) the dispatched ref, so handing
+      # the Developer ID cert + notary credentials to that ref's scripts
+      # would let a modified sign-and-notarize.sh on a feature branch
+      # exfiltrate the cert. Same threat model that already restricts
+      # `Save Ghostty cache`, `Upload to rolling nightly release`, and
+      # `Move nightly tag` below. Non-main dispatches still produce a
+      # build via the artifacts-upload path — just ad-hoc-signed, as it
+      # was before this workflow learned to sign.
       - name: Sign + notarize + staple .app
-        if: steps.skip-check.outputs.skip != 'true'
+        if: steps.skip-check.outputs.skip != 'true' && (inputs.ref == '' || inputs.ref == 'main')
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD:   ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -137,7 +146,7 @@ jobs:
         run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app Alas-nightly
 
       - name: Notarize + staple DMG
-        if: steps.skip-check.outputs.skip != 'true'
+        if: steps.skip-check.outputs.skip != 'true' && (inputs.ref == '' || inputs.ref == 'main')
         env:
           MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
@@ -145,7 +154,7 @@ jobs:
         run: ./scripts/notarize-and-staple-dmg.sh build/Build/Products/Release/Alas-nightly.dmg
 
       - name: Cleanup signing keychain
-        if: always() && steps.skip-check.outputs.skip != 'true'
+        if: always() && steps.skip-check.outputs.skip != 'true' && (inputs.ref == '' || inputs.ref == 'main')
         run: ./scripts/cleanup-signing-keychain.sh
 
       - name: Compose release body
