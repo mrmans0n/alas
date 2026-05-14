@@ -76,7 +76,13 @@ struct WorktreeService {
             args = ["worktree", "add", destination.path, "-b", branch, base]
         }
 
-        let result = try await Process.git(args, cwd: repoPath)
+        let lfsOverride = [
+            "-c", "filter.lfs.process=",
+            "-c", "filter.lfs.smudge=",
+            "-c", "filter.lfs.clean=",
+            "-c", "filter.lfs.required=false"
+        ]
+        let result = try await Process.git(lfsOverride + args, cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return Worktree(
             id: Worktree.makeId(path: destination),

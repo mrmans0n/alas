@@ -168,3 +168,51 @@ extension WorktreeServiceTests {
         }
     }
 }
+
+extension WorktreeServiceTests {
+    @Test func addSucceedsWhenLfsFilterIsMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        // Configure a broken LFS filter so git would fail without overrides.
+        _ = try await Process.git(
+            ["config", "--local", "filter.lfs.process", "/nonexistent/git-lfs filter-process"],
+            cwd: repo
+        )
+        _ = try await Process.git(
+            ["config", "--local", "filter.lfs.smudge", "/nonexistent/git-lfs smudge"],
+            cwd: repo
+        )
+        _ = try await Process.git(
+            ["config", "--local", "filter.lfs.clean", "/nonexistent/git-lfs clean"],
+            cwd: repo
+        )
+        _ = try await Process.git(
+            ["config", "--local", "filter.lfs.required", "true"],
+            cwd: repo
+        )
+
+        // Add .gitattributes and a file that triggers the filter.
+        try "*.txt filter=lfs".write(
+            to: repo.appendingPathComponent(".gitattributes"),
+            atomically: true, encoding: .utf8
+        )
+        try "hello".write(
+            to: repo.appendingPathComponent("dummy.txt"),
+            atomically: true, encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add lfs file"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-lfs")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/lfs",
+            destination: dest, projectId: "p"
+        )
+        #expect(wt.branch == "feat/lfs")
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+}
