@@ -57,13 +57,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.target = context.coordinator
         field.action = #selector(Coordinator.action(_:))
-
-        if focusOnAppear {
-            DispatchQueue.main.async {
-                field.window?.makeFirstResponder(field)
-            }
-        }
-
+        field.focusOnAppear = focusOnAppear
         return field
     }
 
@@ -71,7 +65,9 @@ private struct AlasNSTextField: NSViewRepresentable {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
-        nsView.focusOnAppear = focusOnAppear
+        if focusOnAppear, nsView.focusOnAppear, let window = nsView.window, window.firstResponder !== nsView {
+            window.makeFirstResponder(nsView)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
