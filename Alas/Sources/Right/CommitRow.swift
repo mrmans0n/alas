@@ -3,7 +3,7 @@ import SwiftUI
 struct CommitRow: View {
     let commit: CommitInfo
     let isLast: Bool
-    var isDimmed: Bool = false
+    var isHistorical: Bool = false
     let onSelect: () -> Void
 
     @Environment(\.theme) private var theme
@@ -24,23 +24,23 @@ struct CommitRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(isDimmed ? 0.5 : 1.0)
     }
 
     private var rail: some View {
         GeometryReader { geo in
-            let dotSize: CGFloat = 6
-            let dotY: CGFloat = 6
-            let bottom: CGFloat = isLast ? dotY + dotSize : geo.size.height
+            let dotSize: CGFloat = 8
+            // Aligned with the vertical center of the subject text (system size 12).
+            let dotCenterY: CGFloat = 8
+            let bottom: CGFloat = isLast ? dotCenterY + dotSize / 2 : geo.size.height
             Path { p in
-                p.move(to: CGPoint(x: 4, y: dotY + dotSize / 2))
+                p.move(to: CGPoint(x: 4, y: dotCenterY + dotSize / 2))
                 p.addLine(to: CGPoint(x: 4, y: bottom))
             }
             .stroke(theme.color("line"), lineWidth: 1)
             Circle()
-                .fill(isDimmed ? theme.color("fg-muted") : theme.color("accent"))
+                .fill(isHistorical ? theme.color("warn") : theme.color("accent"))
                 .frame(width: dotSize, height: dotSize)
-                .position(x: 4, y: dotY + dotSize / 2)
+                .position(x: 4, y: dotCenterY)
         }
         .frame(width: 8)
     }

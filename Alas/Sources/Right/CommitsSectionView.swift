@@ -70,7 +70,7 @@ struct CommitsSectionView: View {
                 CommitRow(
                     commit: commit,
                     isLast: idx == olderCommits.count - 1,
-                    isDimmed: comparisonRef != nil,
+                    isHistorical: comparisonRef != nil,
                     onSelect: { onSelect(commit) }
                 )
             }
