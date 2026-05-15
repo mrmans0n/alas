@@ -9,6 +9,7 @@ enum RightPaneTab: String { case changes, files }
 final class RightPaneState {
     let worktree: Worktree
     var changes: [ChangedFile] = []
+    var composer = CommitComposerState()
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
