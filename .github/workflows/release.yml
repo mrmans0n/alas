@@ -58,6 +58,9 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
+      - name: Compute version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
       - name: Sign + notarize + staple .app
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -69,14 +72,14 @@ jobs:
         run: ./scripts/sign-and-notarize.sh build/Build/Products/Release/Alas.app
 
       - name: Package .app (zip + DMG)
-        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app Alas
+        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app "Alas-${VERSION}-arm64"
 
       - name: Notarize + staple DMG
         env:
           MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
           MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-        run: ./scripts/notarize-and-staple-dmg.sh build/Build/Products/Release/Alas.dmg
+        run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-arm64.dmg"
 
       - name: Cleanup signing keychain
         if: always()
@@ -86,5 +89,5 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            build/Build/Products/Release/Alas.app.zip
-            build/Build/Products/Release/Alas.dmg
+            build/Build/Products/Release/Alas-*-arm64.app.zip
+            build/Build/Products/Release/Alas-*-arm64.dmg
