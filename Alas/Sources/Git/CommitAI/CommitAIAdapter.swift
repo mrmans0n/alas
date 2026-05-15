@@ -99,6 +99,20 @@ enum CommitAIRunner {
         try? outPipe.fileHandleForWriting.close()
         try? errPipe.fileHandleForWriting.close()
 
+        // Drain stdout and stderr concurrently with the child, NOT after
+        // exit. If a CLI writes more than the pipe buffer (~64KB on macOS)
+        // before exiting — verbose warnings, a model that ignores the
+        // prompt and emits a long explanation, etc. — the child blocks on
+        // its own write and we'd deadlock waiting for an exit that can't
+        // happen. Detached read Tasks let the kernel drain the pipes in
+        // parallel; they finish when the child exits and the pipes EOF.
+        let outRead = Task.detached {
+            (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
+        }
+        let errRead = Task.detached {
+            (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
+        }
+
         // Watchdog. Armed BEFORE the stdin write so a CLI that stalls
         // before draining stdin (e.g. waiting on auth) and a staged diff
         // larger than the pipe buffer can't block this function past
@@ -133,8 +147,8 @@ enum CommitAIRunner {
             throw CancellationError()
         }
 
-        let outData = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
-        let errData = (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
+        let outData = await outRead.value
+        let errData = await errRead.value
         let stdout = String(data: outData, encoding: .utf8) ?? ""
         let stderr = String(data: errData, encoding: .utf8) ?? ""
 
