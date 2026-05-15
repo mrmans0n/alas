@@ -7,6 +7,7 @@ struct SubHeader: View {
     let count: Int
     let expanded: Bool
     let onToggle: () -> Void
+    var trailing: AnyView? = nil
 
     @Environment(\.theme) private var theme
 
@@ -24,6 +25,7 @@ struct SubHeader: View {
                     .clipShape(Capsule())
                     .foregroundColor(theme.color("fg-muted"))
                 Spacer()
+                if let trailing { trailing }
             }
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
             .contentShape(Rectangle())

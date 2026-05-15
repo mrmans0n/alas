@@ -4,6 +4,9 @@ struct WorkingTreeSectionView: View {
     let changes: [ChangedFile]
     @Binding var expanded: Bool
     let onSelect: (ChangedFile) -> Void
+    var onToggleStage: ((ChangedFile) -> Void)? = nil
+    var onStageAll: (([ChangedFile]) -> Void)? = nil
+    var onUnstageAll: (([ChangedFile]) -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -42,10 +45,24 @@ struct WorkingTreeSectionView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     if !staged.isEmpty {
-                        subsection(title: "Staged", files: staged, expanded: $stagedExpanded, collapseNamespace: "staged")
+                        subsection(
+                            title: "Staged",
+                            files: staged,
+                            expanded: $stagedExpanded,
+                            collapseNamespace: "staged",
+                            actionLabel: "Unstage all",
+                            onAction: { onUnstageAll?(staged) }
+                        )
                     }
                     if !unstaged.isEmpty {
-                        subsection(title: "Unstaged", files: unstaged, expanded: $unstagedExpanded, collapseNamespace: "unstaged")
+                        subsection(
+                            title: staged.isEmpty ? "Working tree" : "Changes",
+                            files: unstaged,
+                            expanded: $unstagedExpanded,
+                            collapseNamespace: "unstaged",
+                            actionLabel: "Stage all",
+                            onAction: { onStageAll?(unstaged) }
+                        )
                     }
                 }
             }
@@ -57,13 +74,20 @@ struct WorkingTreeSectionView: View {
         title: String,
         files: [ChangedFile],
         expanded: Binding<Bool>,
-        collapseNamespace: String
+        collapseNamespace: String,
+        actionLabel: String?,
+        onAction: (() -> Void)?
     ) -> some View {
         SubHeader(
             title: title,
             count: files.count,
             expanded: expanded.wrappedValue,
-            onToggle: { expanded.wrappedValue.toggle() }
+            onToggle: { expanded.wrappedValue.toggle() },
+            trailing: actionLabel.map { label in
+                AnyView(
+                    AlasButton(title: label, style: .subtle, action: { onAction?() })
+                )
+            }
         )
         if expanded.wrappedValue {
             let filesByPath = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0) })
@@ -122,7 +146,12 @@ struct WorkingTreeSectionView: View {
             )
         } else if let file = filesByPath[node.path] {
             return AnyView(
-                ChangedRow(file: file, depth: depth, onSelect: { onSelect(file) })
+                ChangedRow(
+                    file: file,
+                    depth: depth,
+                    onSelect: { onSelect(file) },
+                    onStage: onToggleStage.map { fn in { fn(file) } }
+                )
             )
         } else {
             return AnyView(EmptyView())
