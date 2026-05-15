@@ -54,7 +54,10 @@ struct ChangesPane: View {
         .frame(width: 240)
     }
 
-    private struct MenuItem: Identifiable { let id: String; let label: String }
+    private struct MenuItem: Identifiable {
+        let id: String
+        let label: String
+    }
 
     private var menuItems: [MenuItem] {
         var items: [MenuItem] = []
