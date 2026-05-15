@@ -17,6 +17,27 @@ struct ChangesPane: View {
                                 desc: "Used by the sparkle button in the commit composer.") {
                         toolPicker
                     }
+                    SettingsRow(name: "Prompt",
+                                desc: "Instructions sent to the CLI. The staged diff is appended on stdin.") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextEditor(text: state.bind(\.changes.prompt))
+                                .font(.system(size: 12, design: .monospaced))
+                                .frame(minHeight: 200, maxHeight: 320)
+                                .scrollContentBackground(.hidden)
+                                .background(theme.color("bg-2"))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(theme.color("line-soft"), lineWidth: 0.5)
+                                )
+                            HStack {
+                                Spacer()
+                                AlasButton(title: "Reset to default", style: .subtle) {
+                                    state.config.changes.prompt = AppConfig.defaultCommitPrompt
+                                    state.saveConfig()
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
