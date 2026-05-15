@@ -84,4 +84,40 @@ final class RightPaneState {
             logger.error("refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    func toggleStage(_ file: ChangedFile) {
+        let path = file.path
+        composer.pendingStageOps.insert(path)
+        Task { @MainActor in
+            do {
+                if file.stage == .staged {
+                    try await git.unstage(worktreePath: worktree.path, files: [path])
+                } else {
+                    try await git.stage(worktreePath: worktree.path, files: [path])
+                }
+            } catch {
+                self.composer.error = (error as NSError).localizedDescription
+            }
+            self.composer.pendingStageOps.remove(path)
+            await self.refresh()
+        }
+    }
+
+    func stageAll(_ files: [ChangedFile]) {
+        let paths = files.map(\.path)
+        Task { @MainActor in
+            do { try await git.stageAll(worktreePath: worktree.path, files: paths) }
+            catch { self.composer.error = (error as NSError).localizedDescription }
+            await self.refresh()
+        }
+    }
+
+    func unstageAll(_ files: [ChangedFile]) {
+        let paths = files.map(\.path)
+        Task { @MainActor in
+            do { try await git.unstageAll(worktreePath: worktree.path, files: paths) }
+            catch { self.composer.error = (error as NSError).localizedDescription }
+            await self.refresh()
+        }
+    }
 }

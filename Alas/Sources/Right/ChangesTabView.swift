@@ -11,7 +11,10 @@ struct ChangesTabView: View {
                 WorkingTreeSectionView(
                     changes: rps.changes,
                     expanded: $rps.workingTreeExpanded,
-                    onSelect: onSelect
+                    onSelect: onSelect,
+                    onToggleStage: { rps.toggleStage($0) },
+                    onStageAll: { rps.stageAll($0) },
+                    onUnstageAll: { rps.unstageAll($0) }
                 )
                 Divider().opacity(0.4)
                 CommitsSectionView(
