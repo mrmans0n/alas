@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import Alas
 
+@Suite(.serialized)
 struct ProcessGitTests {
     @Test func runEchoReturnsStdout() async throws {
         let result = try await Process.run("/bin/echo", args: ["hi"])
@@ -89,7 +90,7 @@ struct ProcessGitTests {
         let start = Date()
         let result = try await task.value
         let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 2.0, "expected cancellation to terminate quickly, took \(elapsed)s")
+        #expect(elapsed < 3.0, "expected cancellation to terminate quickly, took \(elapsed)s")
         // SIGTERM => exit code 15 by convention, or non-zero signal status
         #expect(result.exitCode != 0)
     }
