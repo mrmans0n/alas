@@ -30,6 +30,7 @@
 		14775ED3C1BC3A084B2147C1 /* HeadReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB2EB554CB6AF797545DB95D /* HeadReader.swift */; };
 		165300DDFFB445D8AAE7A5E5 /* MarkdownFileTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19C327BB65463E878DDCDA5E /* MarkdownFileTypeTests.swift */; };
 		16F5212404948970EAFCFE62 /* MarkdownPreviewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D4901C499EFE969EC36D116 /* MarkdownPreviewController.swift */; };
+		1748C3645E9B769F371F69E6 /* GitServiceUpstreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */; };
 		17BC1BC2D81DED8B5D31DF3C /* CommitsAheadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */; };
 		17DE066D4BDD1F30439DA629 /* TerminalPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */; };
 		18FEAA97EA576EC5276D2B28 /* HarnessPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0544FCFB9BC3E26FDB57CC96 /* HarnessPill.swift */; };
@@ -585,6 +586,7 @@
 		FBC01971BF41E6D0B9B317CF /* CodeTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextView.swift; sourceTree = "<group>"; };
 		FC4A215AF2876091E31F6F8A /* LineEnding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineEnding.swift; sourceTree = "<group>"; };
 		FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeEditorView.swift; sourceTree = "<group>"; };
+		FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceUpstreamTests.swift; sourceTree = "<group>"; };
 		FE66950F2226F1182DCDD39A /* RightPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneView.swift; sourceTree = "<group>"; };
 		FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalPane.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -665,6 +667,7 @@
 				38F5019E0550FA05436EFC74 /* GitServiceHeadMessageTests.swift */,
 				6DF0AEE54BDB4FC4FD5E02F4 /* GitServiceStagingTests.swift */,
 				039741E1CCAEF9770D5DEE08 /* GitServiceTests.swift */,
+				FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */,
 				B86E7E91F81AA92ED7108D82 /* GitStatusCacheTests.swift */,
 				271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */,
 				F198697EB5305E5ECE97BC61 /* HarnessDetectorTests.swift */,
@@ -1614,6 +1617,7 @@
 				1B197F39E826079635F843EB /* GitServiceHeadMessageTests.swift in Sources */,
 				CB27451157E1BF95BE47248A /* GitServiceStagingTests.swift in Sources */,
 				E8CCFE313DFCCA35BE8F93D7 /* GitServiceTests.swift in Sources */,
+				1748C3645E9B769F371F69E6 /* GitServiceUpstreamTests.swift in Sources */,
 				A2298208242B45155BA07BCD /* GitStatusCacheTests.swift in Sources */,
 				9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */,
 				D1F372532A0F9607051020F5 /* HarnessDetectorTests.swift in Sources */,
