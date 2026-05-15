@@ -21,6 +21,14 @@ final class RightPaneState {
     var workingTreeExpanded: Bool = true
     var commitsExpanded: Bool = true
 
+    // Older-history paging — populated lazily by `loadOlder()`.
+    // Cleared (and `hasMoreOlder` reset to true) on any `refresh()`
+    // that re-fetches `commits`, because the divergence cursor may
+    // have moved.
+    var olderCommits: [CommitInfo] = []
+    var hasMoreOlder: Bool = true
+    var isLoadingOlder: Bool = false
+
     /// `true` once `refresh()` has decided the initial `activeTab`. After
     /// that, the user's tab choice is sticky and refreshes leave it alone.
     private var didInitDefaultTab: Bool = false
@@ -55,6 +63,12 @@ final class RightPaneState {
         loading = true
         defer { loading = false }
         do {
+            // Any refresh re-anchors the older-history cursor; drop the
+            // accumulated pages so we don't accidentally splice an old
+            // page onto a new HEAD.
+            self.olderCommits = []
+            self.hasMoreOlder = true
+            self.isLoadingOlder = false
             async let s = git.status(worktreePath: worktree.path)
             async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch)
             let entries = try await s
@@ -267,6 +281,46 @@ final class RightPaneState {
                 self.composer.clearAmendPrefillIfUnchanged()
                 self.composer.amendWarning = false
             }
+        }
+    }
+
+    /// Load the next page of pre-divergence history. Uses the oldest
+    /// currently-visible SHA as the cursor; falls back to HEAD when the
+    /// section is sitting on base (or there's no comparison ref at all).
+    /// Concurrent re-entry is blocked by `isLoadingOlder` — the view
+    /// hides the tap target while a load is in flight.
+    @MainActor
+    func loadOlder() async {
+        guard !isLoadingOlder, hasMoreOlder else { return }
+        let cursor: String
+        if let last = olderCommits.last {
+            cursor = last.sha
+        } else if let last = commits.last {
+            cursor = last.sha
+        } else {
+            cursor = "HEAD"
+        }
+        isLoadingOlder = true
+        defer { isLoadingOlder = false }
+        do {
+            let page = try await git.commitsOlder(
+                worktreePath: worktree.path,
+                beforeSha: cursor,
+                count: 20
+            )
+            let cursorStillValid = (olderCommits.last?.sha == cursor)
+                || (olderCommits.isEmpty && commits.last?.sha == cursor)
+                || (olderCommits.isEmpty && commits.isEmpty && cursor == "HEAD")
+            guard cursorStillValid else { return }
+            self.olderCommits.append(contentsOf: page)
+            if page.count < 20 {
+                self.hasMoreOlder = false
+            }
+        } catch is CancellationError {
+            // user-cancelled
+        } catch {
+            logger.error("loadOlder failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            self.hasMoreOlder = false
         }
     }
 }
