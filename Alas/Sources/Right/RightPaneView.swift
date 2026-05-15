@@ -26,7 +26,7 @@ struct RightPaneView: View {
 
                 switch rps.activeTab {
                 case .changes:
-                    ChangesTabView(rps: rps, onSelect: onSelectChangedFile, onSelectCommit: onSelectCommit)
+                    ChangesTabView(rps: rps, appState: state, onSelect: onSelectChangedFile, onSelectCommit: onSelectCommit)
                 case .files:
                     FilesTabView(
                         nodes: rps.fileTree,

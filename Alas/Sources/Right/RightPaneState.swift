@@ -120,4 +120,130 @@ final class RightPaneState {
             await self.refresh()
         }
     }
+
+    // MARK: - Commit composer wiring
+
+    /// Run an AI commit-message CLI with the staged diff + repo context as
+    /// stdin and the user's prompt as `--prompt`. Cancellable via
+    /// `cancelGenerate()` (or by re-calling `generate` — the new Task
+    /// replaces the old). On success, populates `composer.subject`/`body`
+    /// and expands the composer so the user sees the result.
+    func generate(promptOverride: String, tool: CommitAITool) {
+        guard let adapter = tool.makeAdapter() else { return }
+        composer.error = nil
+        composer.busy = true
+        let wt = worktree.path
+        let amend = composer.amend
+        let base = self.baseBranch
+        composer.generation = Task { @MainActor in
+            defer { self.composer.busy = false }
+            do {
+                // Pull prior commit message when amending so the AI knows
+                // it's rewriting, not adding. `headMessage` is throwing +
+                // optional (nil = unborn HEAD). Flatten both into a single
+                // optional — failure or unborn both mean "no prior".
+                let priorMessage: GitService.HeadMessage?
+                if amend {
+                    priorMessage = (try? await self.git.headMessage(worktreePath: wt)) ?? nil
+                } else {
+                    priorMessage = nil
+                }
+
+                let diffResult = try await Process.git(
+                    ["diff", "--cached", "--no-color"],
+                    cwd: wt
+                )
+                let recentResult = try await Process.git(
+                    ["log", "-3", "--pretty=format:%s"],
+                    cwd: wt
+                )
+                let branchResult = try await Process.git(
+                    ["rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd: wt
+                )
+
+                try Task.checkCancellation()
+
+                let diff = diffResult.stdout
+                let recentSubjects = recentResult.stdout
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .map(String.init)
+                let branchRaw = branchResult.stdout
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let branch: String? = branchRaw == "HEAD" ? nil : branchRaw
+
+                let payload = CommitContextBuilder.build(
+                    branch: branch,
+                    base: base,
+                    recentSubjects: recentSubjects,
+                    priorMessage: priorMessage,
+                    diff: diff
+                )
+
+                let message = try await adapter.generate(
+                    input: payload,
+                    prompt: promptOverride
+                )
+                guard !Task.isCancelled else { return }
+                self.composer.subject = message.subject
+                self.composer.body = message.body
+                self.composer.expanded = true
+            } catch is CancellationError {
+                // user-cancelled
+            } catch {
+                self.composer.error = (error as NSError).localizedDescription
+            }
+        }
+    }
+
+    /// Cancel an in-flight `generate(...)` Task. Safe to call when no
+    /// generation is running.
+    func cancelGenerate() {
+        composer.generation?.cancel()
+        composer.generation = nil
+    }
+
+    /// Create the commit (or amend HEAD) using the current composer draft.
+    /// On success the composer is reset and the pane refreshes. On failure
+    /// the error is surfaced via `composer.error` (the inline error strip).
+    func runCommit() {
+        let subject = composer.subject
+        let body = composer.body
+        let amend = composer.amend
+        let wt = worktree.path
+        Task { @MainActor in
+            do {
+                try await git.commit(
+                    worktreePath: wt,
+                    subject: subject,
+                    body: body,
+                    amend: amend
+                )
+                self.composer.resetAfterCommit()
+            } catch {
+                self.composer.error = (error as NSError).localizedDescription
+            }
+            await self.refresh()
+        }
+    }
+
+    /// Wire the Amend checkbox: toggling on prefills empty drafts with the
+    /// HEAD message and surfaces a "rewrites history" warning when HEAD is
+    /// at/behind its upstream. Toggling off clears the prefill iff it
+    /// hasn't been edited, so the user's typed draft is never clobbered.
+    func amendDidChange(_ on: Bool) {
+        let wt = worktree.path
+        Task { @MainActor in
+            if on {
+                if let prior = (try? await self.git.headMessage(worktreePath: wt)) ?? nil {
+                    self.composer.applyAmendPrefill(prior)
+                }
+                let behind = (try? await self.git.isHeadAtOrBehindUpstream(worktreePath: wt)) ?? false
+                self.composer.amendWarning = behind
+            } else {
+                self.composer.clearAmendPrefillIfUnchanged()
+                self.composer.amendWarning = false
+            }
+        }
+    }
 }
