@@ -118,6 +118,7 @@
 		5FF61283B11E2696A72727D1 /* TreeSitterHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */; };
 		6140E9DE848A53A37DFB8890 /* CodexInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F59C2CF9199EC099B1814AC /* CodexInstallerTests.swift */; };
 		629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */; };
+		62CE99A2AC8B0700EB2F42A2 /* CommitAIDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8EA1E2128F7ED14F9CF61C3 /* CommitAIDetectorTests.swift */; };
 		64ADA6AFE69C52F121A163E1 /* FileTypeIconView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F721FB733081A583D4053DDA /* FileTypeIconView.swift */; };
 		671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A17A797374500E1FDD2382C /* PersistenceStore.swift */; };
 		676C9F2E4246D5E383F83F72 /* GitStatusCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4261E417947C1A21E77C1587 /* GitStatusCache.swift */; };
@@ -130,6 +131,7 @@
 		6C9E804AB246E7BFF8906C17 /* MarkdownTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E09A66AE390C7748A8847C8E /* MarkdownTabView.swift */; };
 		6D5DF06E64DA191F1EE4B057 /* RightPaneStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795056B6AD803D2B555FC866 /* RightPaneStore.swift */; };
 		6E69D87B57B23223A48AB6F7 /* ProjectsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FFC9539E615699AC90A7412 /* ProjectsManager.swift */; };
+		6E90B0C1B9D7CB647A6A1A87 /* CommitAIDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D23BACE3FCC023D818BADD /* CommitAIDetector.swift */; };
 		6ED129AC9B6798F76F7D3A51 /* FileTypeIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CBAD18141C1A9B654F56982 /* FileTypeIconTests.swift */; };
 		6EFCC2646A708D0938485654 /* TrafficLights.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CDC00065CA8839DA1AD0E0F /* TrafficLights.swift */; };
 		70FCC2B12AE446728EE7CF8D /* LSPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38499AFE31188908546EE222 /* LSPTransport.swift */; };
@@ -393,6 +395,7 @@
 		43DF691FC778F3A71CE20FBB /* StartupScriptInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptInstallerTests.swift; sourceTree = "<group>"; };
 		447D95D444F6AE08FCFA27A3 /* AppStateCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCleanupTests.swift; sourceTree = "<group>"; };
 		4575017544CD7603B3AB9069 /* GitEventFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitEventFilter.swift; sourceTree = "<group>"; };
+		46D23BACE3FCC023D818BADD /* CommitAIDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitAIDetector.swift; sourceTree = "<group>"; };
 		489C9B383554D7DAB170C2F8 /* Seg.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Seg.swift; sourceTree = "<group>"; };
 		4B450918CC98255AD9170586 /* AppearancePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePane.swift; sourceTree = "<group>"; };
 		4B4ADD529F9B64DAD2994E0B /* RightPaneTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneTabBar.swift; sourceTree = "<group>"; };
@@ -525,6 +528,7 @@
 		C6E896FEA37B4691BD16E2DD /* EditorBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferTests.swift; sourceTree = "<group>"; };
 		C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTheme.swift; sourceTree = "<group>"; };
 		C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.Surface.swift; sourceTree = "<group>"; };
+		C8EA1E2128F7ED14F9CF61C3 /* CommitAIDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitAIDetectorTests.swift; sourceTree = "<group>"; };
 		C995611A6313FABE30508248 /* WorktreeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRowView.swift; sourceTree = "<group>"; };
 		CA43AA9C8462D579E733B46C /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		CA554728676F9D3B5E2C05FA /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
@@ -644,6 +648,7 @@
 				E4E465A2468376AA840ADFBC /* ChangeSummaryVisibilityTests.swift */,
 				6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */,
 				2F59C2CF9199EC099B1814AC /* CodexInstallerTests.swift */,
+				C8EA1E2128F7ED14F9CF61C3 /* CommitAIDetectorTests.swift */,
 				DB5A2BDAA7ABD74C42BC51F8 /* CommitDetailsTests.swift */,
 				9427B922BAFA43AF6EB21080 /* CommitInfoTests.swift */,
 				576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */,
@@ -1251,6 +1256,7 @@
 		FCE6979EDAEAE45BC2A49A20 /* CommitAI */ = {
 			isa = PBXGroup;
 			children = (
+				46D23BACE3FCC023D818BADD /* CommitAIDetector.swift */,
 				913A307FB0CBEF4E3FD32BCA /* CommitAITool.swift */,
 			);
 			path = CommitAI;
@@ -1433,6 +1439,7 @@
 				28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */,
 				0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */,
 				C487C3AD43E7B5BBB45490DB /* CodexInstaller.swift in Sources */,
+				6E90B0C1B9D7CB647A6A1A87 /* CommitAIDetector.swift in Sources */,
 				427647A6DCE974E32D2F116E /* CommitAITool.swift in Sources */,
 				3BB7766DF1D9BF15098432F5 /* CommitDetails.swift in Sources */,
 				9E4B32E154B18BD2285F0D34 /* CommitDiffView.swift in Sources */,
@@ -1602,6 +1609,7 @@
 				59765FD789179C1BDC3F1BB9 /* ChangesTreeBuilderTests.swift in Sources */,
 				E1DA1C6BF9D5E157DAF6EE00 /* ClaudeInstallerTests.swift in Sources */,
 				6140E9DE848A53A37DFB8890 /* CodexInstallerTests.swift in Sources */,
+				62CE99A2AC8B0700EB2F42A2 /* CommitAIDetectorTests.swift in Sources */,
 				E540B305B2426590C219622C /* CommitDetailsTests.swift in Sources */,
 				F3E7DF34D9DDA268E40575AE /* CommitInfoTests.swift in Sources */,
 				363F31C705CF7D17162E2CF6 /* CommitTabStateTests.swift in Sources */,
