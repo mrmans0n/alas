@@ -134,7 +134,22 @@ struct WorktreeService {
         var args = ["worktree", "remove", worktree.path.path]
         if force { args.append("--force") }
         let result = try await Process.git(args, cwd: repoPath)
-        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        if result.exitCode != 0 {
+            guard !force,
+                  Self.looksLikeSubmoduleWorktreeRemoveError(result.stderr),
+                  try await isWorktreeClean(worktree.path),
+                  try await areInitializedSubmodulesClean(worktree.path),
+                  try await initializedSubmodulesHaveNoLocalState(worktree.path)
+            else {
+                throw WorktreeError.gitFailed(result.stderr)
+            }
+
+            let forceResult = try await Process.git(
+                ["worktree", "remove", worktree.path.path, "--force"],
+                cwd: repoPath
+            )
+            guard forceResult.exitCode == 0 else { throw WorktreeError.gitFailed(forceResult.stderr) }
+        }
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             // Best-effort delete. -d only succeeds if merged; ignore failures.
             _ = try? await Process.git(["branch", "-d", worktree.branch], cwd: repoPath)
@@ -152,6 +167,45 @@ struct WorktreeService {
         let lower = stderr.lowercased()
         return (lower.contains("command not found") || lower.contains("not found"))
             && (lower.contains("git-lfs") || lower.contains("filter-process"))
+    }
+
+    private static func looksLikeSubmoduleWorktreeRemoveError(_ stderr: String) -> Bool {
+        let lower = stderr.lowercased()
+        return lower.contains("working trees containing submodules")
+            && lower.contains("cannot be moved or removed")
+    }
+
+    private func isWorktreeClean(_ path: URL) async throws -> Bool {
+        let result = try await Process.git(
+            ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"],
+            cwd: path
+        )
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func areInitializedSubmodulesClean(_ path: URL) async throws -> Bool {
+        let result = try await Process.git(
+            [
+                "submodule", "foreach", "--quiet", "--recursive",
+                "git status --porcelain --ignore-submodules=none --untracked-files=all"
+            ],
+            cwd: path
+        )
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func initializedSubmodulesHaveNoLocalState(_ path: URL) async throws -> Bool {
+        let localStateScript = """
+        remote_refs=$(git for-each-ref --format="%(refname)" refs/remotes); default_branch=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's#^origin/##'); is_remote_reachable() { oid="$1"; for remote in $remote_refs; do if git merge-base --is-ancestor "$oid" "$remote"; then return 0; fi; done; return 1; }; git for-each-ref --format="%(refname:short)" refs/heads | while read -r branch; do oid=$(git rev-parse -q --verify "refs/heads/$branch^{}") || continue; if test -z "$default_branch" || test "$branch" != "$default_branch" || ! is_remote_reachable "$oid"; then echo "refs/heads/$branch"; fi; done; git for-each-ref --format="%(refname)" refs/notes refs/stash | while read -r ref; do oid=$(git rev-parse -q --verify "$ref^{}") || continue; if ! is_remote_reachable "$oid"; then echo "$ref"; fi; done; git for-each-ref --format="%(refname:short)" refs/tags | while read -r tag; do local_oid=$(git rev-parse -q --verify "refs/tags/$tag") || continue; remote_oid=$(git ls-remote --tags origin "refs/tags/$tag" | awk 'NR == 1 {print $1}'); if test -z "$remote_oid" || test "$local_oid" != "$remote_oid"; then echo "refs/tags/$tag"; fi; done; git reflog --all --format="%H" | while read -r oid; do if test -n "$oid" && ! is_remote_reachable "$oid"; then echo "reflog $oid"; fi; done
+        """
+        let result = try await Process.git(
+            ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
+            cwd: path
+        )
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func existingWorktree(
