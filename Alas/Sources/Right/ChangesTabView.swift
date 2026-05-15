@@ -44,9 +44,13 @@ struct ChangesTabView: View {
                 Divider().opacity(0.4)
                 CommitsSectionView(
                     commits: rps.commits,
+                    olderCommits: rps.olderCommits,
                     comparisonRef: rps.comparisonRef,
+                    hasMoreOlder: rps.hasMoreOlder,
+                    isLoadingOlder: rps.isLoadingOlder,
                     expanded: $rps.commitsExpanded,
-                    onSelect: onSelectCommit
+                    onSelect: onSelectCommit,
+                    onLoadOlder: { Task { @MainActor in await rps.loadOlder() } }
                 )
             }
         }
