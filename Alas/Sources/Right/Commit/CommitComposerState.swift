@@ -13,6 +13,13 @@ final class CommitComposerState {
     var amend: Bool = false
     var amendWarning: Bool = false   // soft "rewrites history" notice
 
+    // True when HEAD points to a real commit. False on an unborn branch
+    // (fresh `git init` with no commits yet) — in that state amending is
+    // impossible because there's nothing to amend, so the toggle should
+    // be disabled. Defaults to true so we don't briefly disable the
+    // control during the very first refresh.
+    var canAmend: Bool = true
+
     // Generation
     var busy: Bool = false
     var error: String? = nil

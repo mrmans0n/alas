@@ -64,6 +64,11 @@ final class RightPaneState {
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
+            // Gate the Amend toggle: an unborn branch (no commits yet)
+            // has nothing to amend. If the probe itself throws, default
+            // to `true` so we never wrongly disable the control on a
+            // transient git failure.
+            self.composer.canAmend = (try? await git.hasHead(worktreePath: worktree.path)) ?? true
 
             // Smart first-open default: if there are no working-tree
             // changes AND no commits ahead of upstream, surface Files

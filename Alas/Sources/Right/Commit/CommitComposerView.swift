@@ -133,6 +133,8 @@ struct CommitComposerView: View {
                     Text("Amend").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
                 }
                 .toggleStyle(.checkbox)
+                .disabled(!state.canAmend)
+                .help(state.canAmend ? "" : "No previous commit to amend")
 
                 Spacer()
 
