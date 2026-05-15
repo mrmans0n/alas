@@ -57,6 +57,27 @@ extension GitService {
         try Self.assertSuccess(result, op: amend ? "amend" : "commit")
     }
 
+    struct HeadMessage: Equatable {
+        let subject: String
+        let body: String
+    }
+
+    func headMessage(worktreePath: URL) async throws -> HeadMessage? {
+        guard try await hasHead(worktreePath: worktreePath) else { return nil }
+        // %s + \u{1e} + %b ensures subject can't bleed into the body even
+        // when the subject contains odd characters.
+        let result = try await Process.git(
+            ["log", "-1", "--pretty=format:%s%x1e%b", "HEAD"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { return nil }
+        let parts = result.stdout.components(separatedBy: "\u{1e}")
+        let subject = (parts.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = (parts.count > 1 ? parts[1] : "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return HeadMessage(subject: subject, body: body)
+    }
+
     static func assertSuccess(_ result: ProcessResult, op: String) throws {
         guard result.exitCode == 0 else {
             throw NSError(
