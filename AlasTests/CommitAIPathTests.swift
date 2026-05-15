@@ -65,4 +65,17 @@ struct CommitAIPathTests {
         let result = CommitAIPath.augmented()
         #expect(result.contains(processPath) || processPath.isEmpty)
     }
+
+    @Test func normalizesTrailingColonInBase() throws {
+        let dir = try makeDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let result = CommitAIPath.augment(base: "/usr/bin:", wellKnown: [dir])
+        #expect(result == "/usr/bin:\(dir)")
+    }
+
+    @Test func normalizesEmptyComponentsInBase() throws {
+        let result = CommitAIPath.augment(base: "::", wellKnown: [])
+        #expect(result == "")
+    }
 }

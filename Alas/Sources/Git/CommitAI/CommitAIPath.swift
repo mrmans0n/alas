@@ -48,8 +48,9 @@ enum CommitAIPath {
             appended.append(expanded)
             seen.insert(expanded)
         }
-        if base.isEmpty { return appended.joined(separator: ":") }
-        if appended.isEmpty { return base }
-        return base + ":" + appended.joined(separator: ":")
+        let normalizedBase = baseEntries.joined(separator: ":")
+        if normalizedBase.isEmpty { return appended.joined(separator: ":") }
+        if appended.isEmpty { return normalizedBase }
+        return normalizedBase + ":" + appended.joined(separator: ":")
     }
 }
