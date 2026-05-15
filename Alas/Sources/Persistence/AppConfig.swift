@@ -16,6 +16,7 @@ struct AppConfig: Codable, Equatable {
     var harness: Harness
     var code: Code
     var markdown: Markdown
+    var changes: Changes
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -91,6 +92,15 @@ struct AppConfig: Codable, Equatable {
         }
     }
 
+    struct Changes: Codable, Equatable {
+        var aiToolId: String   // "claude" | "codex" | "cursor-agent" | "pi" | "none"
+        var prompt: String
+
+        enum CodingKeys: String, CodingKey {
+            case aiToolId, prompt
+        }
+    }
+
     static let defaults = AppConfig(
         themeId: "cool-slate",
         accent: "teal",
@@ -136,8 +146,31 @@ struct AppConfig: Codable, Equatable {
             fontSize: 13,
             languageServers: []
         ),
-        markdown: Markdown(defaultViewMode: .editor)
+        markdown: Markdown(defaultViewMode: .editor),
+        changes: Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt)
     )
+}
+
+extension AppConfig {
+    static let defaultCommitPrompt = """
+    You are writing a git commit message for the staged changes shown below.
+
+    Output format — strict:
+      Line 1: short imperative subject (≤ 72 chars, no trailing period).
+      Line 2: blank.
+      Line 3+: optional body, wrapped at ~72 chars, explaining the why
+               rather than restating the diff. Bulleted list is fine.
+
+    Match the style of the recent commit subjects in the context header
+    (prefixes like `feat:`, `fix:`, etc. if the repo uses them).
+
+    Do not include any preamble, explanation, code fences, or markdown
+    headers. Output only the commit message.
+
+    When amending, the previous commit's message is provided — prefer
+    refining it over starting from scratch unless the diff has materially
+    changed.
+    """
 }
 
 extension AppConfig {
@@ -145,7 +178,7 @@ extension AppConfig {
         case themeId, accent, density, matchSystemTheme,
              sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible,
              commitDetailSplitRatio,
-             general, worktrees, terminal, harness, code, markdown
+             general, worktrees, terminal, harness, code, markdown, changes
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -184,6 +217,13 @@ extension AppConfig {
             markdown = Markdown(defaultViewMode: mode)
         } else {
             markdown = Markdown(defaultViewMode: .editor)
+        }
+        if let changesContainer = try? c.nestedContainer(keyedBy: AppConfig.Changes.CodingKeys.self, forKey: .changes) {
+            let toolId = (try? changesContainer.decode(String.self, forKey: .aiToolId)) ?? "none"
+            let prompt = (try? changesContainer.decode(String.self, forKey: .prompt)) ?? AppConfig.defaultCommitPrompt
+            changes = Changes(aiToolId: toolId, prompt: prompt)
+        } else {
+            changes = Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt)
         }
     }
 }
