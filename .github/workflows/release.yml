@@ -58,6 +58,9 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
+      - name: Compute version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
       - name: Sign + notarize + staple .app
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -69,14 +72,14 @@ jobs:
         run: ./scripts/sign-and-notarize.sh build/Build/Products/Release/Alas.app
 
       - name: Package .app (zip + DMG)
-        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app Alas
+        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app "Alas-${VERSION}-arm64"
 
       - name: Notarize + staple DMG
         env:
           MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
           MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-        run: ./scripts/notarize-and-staple-dmg.sh build/Build/Products/Release/Alas.dmg
+        run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-arm64.dmg"
 
       - name: Cleanup signing keychain
         if: always()
@@ -86,5 +89,48 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            build/Build/Products/Release/Alas.app.zip
-            build/Build/Products/Release/Alas.dmg
+            build/Build/Products/Release/Alas-*-arm64.app.zip
+            build/Build/Products/Release/Alas-*-arm64.dmg
+
+  update-homebrew:
+    name: Update Homebrew Cask
+    runs-on: ubuntu-latest
+    needs: macos-app
+    # Skip prereleases — those should ship a DMG for manual testing but
+    # must not bump the cask that brew users follow.
+    if: github.event.release.prerelease == false
+    steps:
+      - name: Get version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Download DMG and compute checksum
+        run: |
+          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/Alas-${VERSION}-arm64.dmg" -o alas.dmg
+          echo "SHA_ARM=$(shasum -a 256 alas.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Checkout homebrew-tap
+        run: |
+          git clone "https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/mrmans0n/homebrew-tap.git" homebrew-tap
+
+      - name: Download update script
+        # Pull the helper from this repo at the exact released tag so the
+        # cask body is reproducible from the release ref alone.
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/mrmans0n/alas/${{ github.ref_name }}/.github/workflows/update-cask.py" -o update-cask.py
+
+      - name: Update cask
+        working-directory: homebrew-tap
+        run: python3 ../update-cask.py
+
+      - name: Commit and push
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- Casks/alas.rb; then
+            echo "Cask already up to date"
+            exit 0
+          fi
+          git add Casks/alas.rb
+          git commit -m "Update alas cask to ${VERSION}"
+          git push
