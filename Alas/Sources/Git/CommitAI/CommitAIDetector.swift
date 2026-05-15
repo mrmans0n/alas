@@ -17,11 +17,11 @@ enum CommitAIDetector {
         return found
     }
 
-    /// Scan the running process's `PATH`. Used at app launch and from
-    /// Settings.
+    /// Scan the running process's `PATH`, augmented with well-known CLI
+    /// install directories that the launchd-derived PATH for a GUI app
+    /// otherwise omits. Used at app launch and from Settings.
     static func scanCurrentEnvironment() async -> [CommitAITool] {
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        return await scan(path: path)
+        return await scan(path: CommitAIPath.augmented())
     }
 
     private static func isExecutable(named name: String, in dirs: [String]) -> Bool {
