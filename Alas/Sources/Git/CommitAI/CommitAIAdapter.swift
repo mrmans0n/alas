@@ -77,6 +77,13 @@ enum CommitAIRunner {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
+        // Latch termination via a gate so an immediate exit between
+        // `process.run()` and the `await` cannot drop the resume. Set the
+        // handler BEFORE `run()` for the same reason — see ExitGate in
+        // Process+Git.swift.
+        let exit = RunnerExitGate()
+        process.terminationHandler = { _ in exit.didExit() }
+
         do {
             try process.run()
         } catch {
@@ -96,10 +103,7 @@ enum CommitAIRunner {
         }
 
         await withTaskCancellationHandler {
-            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                process.terminationHandler = { _ in cont.resume() }
-                if !process.isRunning { cont.resume() }
-            }
+            await exit.wait()
         } onCancel: {
             if process.isRunning { process.terminate() }
         }
@@ -114,6 +118,40 @@ enum CommitAIRunner {
             throw CommitAIError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }
         return CommitAIAdapterParser.parse(stdout)
+    }
+}
+
+/// Latches process termination so `wait()` resumes exactly once, even if
+/// the child exits before (or concurrently with) `wait()` being awaited.
+/// Mirrors `ExitGate` in Process+Git.swift.
+private final class RunnerExitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var exited = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func didExit() {
+        lock.lock()
+        if let c = continuation {
+            continuation = nil
+            lock.unlock()
+            c.resume()
+            return
+        }
+        exited = true
+        lock.unlock()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if exited {
+                lock.unlock()
+                cont.resume()
+                return
+            }
+            continuation = cont
+            lock.unlock()
+        }
     }
 }
 
