@@ -91,20 +91,29 @@ final class RightPaneState {
     }
 
     func toggleStage(_ file: ChangedFile) {
-        let path = file.path
         composer.error = nil
         Task { @MainActor in
             do {
                 if file.stage == .staged {
-                    try await git.unstage(worktreePath: worktree.path, files: [path])
+                    // For a staged rename, include the original path so both
+                    // sides of the rename are restored to the working tree;
+                    // otherwise the deletion of the old path remains staged.
+                    try await git.unstage(worktreePath: worktree.path, files: Self.unstagePaths(for: file))
                 } else {
-                    try await git.stage(worktreePath: worktree.path, files: [path])
+                    try await git.stage(worktreePath: worktree.path, files: [file.path])
                 }
             } catch {
                 self.composer.error = (error as NSError).localizedDescription
             }
             await self.refresh()
         }
+    }
+
+    static func unstagePaths(for file: ChangedFile) -> [String] {
+        if file.status == "R", let from = file.renameFrom, !from.isEmpty {
+            return [file.path, from]
+        }
+        return [file.path]
     }
 
     func stageAll(_ files: [ChangedFile]) {
@@ -118,7 +127,7 @@ final class RightPaneState {
     }
 
     func unstageAll(_ files: [ChangedFile]) {
-        let paths = files.map(\.path)
+        let paths = files.flatMap(Self.unstagePaths(for:))
         composer.error = nil
         Task { @MainActor in
             do { try await git.unstageAll(worktreePath: worktree.path, files: paths) }
