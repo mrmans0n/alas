@@ -300,18 +300,14 @@ final class RightPaneState {
         } else {
             cursor = "HEAD"
         }
-        let wt = worktree.path
         isLoadingOlder = true
         defer { isLoadingOlder = false }
         do {
             let page = try await git.commitsOlder(
-                worktreePath: wt,
+                worktreePath: worktree.path,
                 beforeSha: cursor,
                 count: 20
             )
-            // Discard the page if invalidation fired mid-flight (worktree
-            // changed, or refresh() wiped the cursor we were building on).
-            guard wt == self.worktree.path else { return }
             let cursorStillValid = (olderCommits.last?.sha == cursor)
                 || (olderCommits.isEmpty && commits.last?.sha == cursor)
                 || (olderCommits.isEmpty && commits.isEmpty && cursor == "HEAD")
@@ -320,6 +316,8 @@ final class RightPaneState {
             if page.count < 20 {
                 self.hasMoreOlder = false
             }
+        } catch is CancellationError {
+            // user-cancelled
         } catch {
             logger.error("loadOlder failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             self.hasMoreOlder = false
