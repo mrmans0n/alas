@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import Alas
 
+@Suite(.serialized)
 struct ProcessGitTests {
     @Test func runEchoReturnsStdout() async throws {
         let result = try await Process.run("/bin/echo", args: ["hi"])
@@ -77,6 +78,21 @@ struct ProcessGitTests {
         for (key, value) in parent where key != "GIT_OPTIONAL_LOCKS" {
             #expect(env[key] == value, "key \(key) was dropped or changed")
         }
+    }
+
+    @Test func runIsCancelledViaSIGTERM() async throws {
+        // /bin/sleep 5 should be SIGTERM'd via cancellation in < 1s.
+        let task = Task<ProcessResult, Error> {
+            try await Process.run("/bin/sleep", args: ["5"], timeout: 30)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)   // let it spawn
+        task.cancel()
+        let start = Date()
+        let result = try await task.value
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(elapsed < 3.0, "expected cancellation to terminate quickly, took \(elapsed)s")
+        // SIGTERM => exit code 15 by convention, or non-zero signal status
+        #expect(result.exitCode != 0)
     }
 
     @Test func gitConvenienceCallStillWorks() async throws {

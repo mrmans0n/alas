@@ -2,16 +2,44 @@ import SwiftUI
 
 struct ChangesTabView: View {
     @Bindable var rps: RightPaneState
+    @Bindable var appState: AppState
     let onSelect: (ChangedFile) -> Void
     let onSelectCommit: (CommitInfo) -> Void
+
+    private var stagedCount: Int {
+        rps.changes.filter { $0.stage == .staged }.count
+    }
+    private var stagedAdd: Int {
+        rps.changes.filter { $0.stage == .staged }.reduce(0) { $0 + $1.add }
+    }
+    private var stagedDel: Int {
+        rps.changes.filter { $0.stage == .staged }.reduce(0) { $0 + $1.del }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if stagedCount > 0 {
+                    CommitComposerView(
+                        state: rps.composer,
+                        stagedCount: stagedCount,
+                        stagedAdd: stagedAdd,
+                        stagedDel: stagedDel,
+                        branchName: branchName,
+                        availableTools: appState.availableCommitAITools,
+                        aiToolId: appState.bind(\.changes.aiToolId),
+                        onGenerate: handleGenerate,
+                        onCommit: { rps.runCommit() },
+                        onAmendToggle: { rps.amendDidChange($0) }
+                    )
+                }
                 WorkingTreeSectionView(
                     changes: rps.changes,
                     expanded: $rps.workingTreeExpanded,
-                    onSelect: onSelect
+                    onSelect: onSelect,
+                    onToggleStage: { rps.toggleStage($0) },
+                    onStageAll: { rps.stageAll($0) },
+                    onUnstageAll: { rps.unstageAll($0) }
                 )
                 Divider().opacity(0.4)
                 CommitsSectionView(
@@ -22,5 +50,23 @@ struct ChangesTabView: View {
                 )
             }
         }
+    }
+
+    private var branchName: String? {
+        // The worktree branch is already in `Worktree.branch`; fall back to
+        // nil so the composer renders "(detached)" when we don't have one.
+        let b = rps.worktree.branch
+        return b.isEmpty ? nil : b
+    }
+
+    private func handleGenerate() {
+        // Re-click while busy = cancel the in-flight generation.
+        if rps.composer.busy {
+            rps.cancelGenerate()
+            return
+        }
+        let toolId = appState.config.changes.aiToolId
+        guard let tool = CommitAITool(rawValue: toolId), tool != .none else { return }
+        rps.generate(promptOverride: appState.config.changes.prompt, tool: tool)
     }
 }

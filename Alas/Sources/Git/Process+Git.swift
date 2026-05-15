@@ -102,7 +102,16 @@ extension Process {
             }
         }
 
-        await exit.wait()
+        // SIGTERM the child if the awaiting Task is cancelled. The
+        // terminationHandler will fire from the kernel-delivered exit and
+        // resolve the ExitGate, so `exit.wait()` returns normally and we
+        // fall through to read accumulated output / report a non-zero exit
+        // code — same recovery path as the watchdog uses on timeout.
+        await withTaskCancellationHandler {
+            await exit.wait()
+        } onCancel: {
+            if process.isRunning { process.terminate() }
+        }
         watchdog.cancel()
 
         // Wait for both pipes to actually report EOF before we drop the

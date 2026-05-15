@@ -25,6 +25,14 @@ final class AppState {
 
     var isSearchOpen: Bool = false
 
+    var availableCommitAITools: [CommitAITool] = []
+
+    func rescanCommitAITools() {
+        Task { @MainActor in
+            self.availableCommitAITools = await CommitAIDetector.scanCurrentEnvironment()
+        }
+    }
+
     /// Set when a worktree deletion fails because the tree is dirty.
     /// The UI presents a confirmation dialog; confirming retries with force.
     struct PendingForceDeleteWorktree: Identifiable, Equatable {
