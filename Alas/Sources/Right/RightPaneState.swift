@@ -87,7 +87,6 @@ final class RightPaneState {
 
     func toggleStage(_ file: ChangedFile) {
         let path = file.path
-        composer.pendingStageOps.insert(path)
         Task { @MainActor in
             do {
                 if file.stage == .staged {
@@ -98,7 +97,6 @@ final class RightPaneState {
             } catch {
                 self.composer.error = (error as NSError).localizedDescription
             }
-            self.composer.pendingStageOps.remove(path)
             await self.refresh()
         }
     }

@@ -29,9 +29,6 @@ final class CommitComposerState {
     @ObservationIgnored
     private var prefilledBody: String = ""
 
-    // Optimistic stage/unstage paths (cleared by RightPaneState.refresh)
-    var pendingStageOps: Set<String> = []
-
     func canCommit(stagedCount: Int) -> Bool {
         stagedCount > 0
             && !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
