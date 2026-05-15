@@ -96,6 +96,15 @@ enum CommitAIRunner {
         }
         try? pipe.fileHandleForWriting.close()
 
+        // Close the parent's copies of the stdout/stderr write ends now
+        // that the child has dup'd them. Without this, `readToEnd()` below
+        // never sees EOF — the kernel keeps the read end open as long as
+        // ANY writer (including this parent's stray FD) remains — and the
+        // function blocks indefinitely after the child exits. Mirrors the
+        // same fix in Process.run; same reason.
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+
         // Watchdog.
         let watchdog = Task {
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
