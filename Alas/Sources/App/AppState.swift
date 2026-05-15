@@ -1162,6 +1162,7 @@ final class AppState {
     nonisolated static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
         let s = stderr.lowercased()
         return s.contains("is dirty")
+            || s.contains("dirty worktree")
             || s.contains("contains modified or untracked files")
             || s.contains("modified or untracked")
     }

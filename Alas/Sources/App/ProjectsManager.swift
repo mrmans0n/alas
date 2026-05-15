@@ -79,11 +79,13 @@ final class ProjectsManager {
         let projectId = worktree.projectId
         worktreesByProject[projectId, default: []].removeAll { $0.id == worktree.id }
         worktreesByProject[projectId, default: []].append(worktree)
+        applyWorktreeOrdering(projectId: projectId)
     }
 
     func removeOptimisticWorktree(id: String, projectId: String) {
         worktreesByProject[projectId]?.removeAll { $0.id == id }
         worktreeOperationStates.removeValue(forKey: id)
+        applyWorktreeOrdering(projectId: projectId)
     }
 
     func visibleWorktrees(projectId: String) -> [Worktree] {
@@ -94,6 +96,41 @@ final class ProjectsManager {
     func archivedWorktrees(projectId: String) -> [Worktree] {
         let hidden = hiddenSet(projectId: projectId)
         return worktrees(projectId: projectId).filter { hidden.contains(canonical($0.path)) }
+    }
+
+    func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {
+        guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
+              var rows = worktreesByProject[projectId],
+              rows.indices.contains(fromIndex)
+        else { return }
+
+        applyWorktreeOrdering(projectId: projectId)
+        rows = worktreesByProject[projectId, default: []]
+        guard rows.indices.contains(fromIndex),
+              !isMainWorktree(rows[fromIndex], project: projects[projectIndex])
+        else { return }
+
+        let moving = rows.remove(at: fromIndex)
+        let clampedDestination = min(max(toIndex, 1), rows.count)
+        rows.insert(moving, at: clampedDestination)
+
+        worktreesByProject[projectId] = rows
+        projects[projectIndex].worktreeOrder = normalizedWorktreeOrder(
+            rows.map(\.id),
+            rows: rows,
+            project: projects[projectIndex]
+        )
+        applyWorktreeOrdering(projectId: projectId)
+    }
+
+    func reorderWorktree(projectId: String, movingId: String, destinationId: String) {
+        applyWorktreeOrdering(projectId: projectId)
+        let rows = worktreesByProject[projectId, default: []]
+        guard let fromIndex = rows.firstIndex(where: { $0.id == movingId }),
+              let toIndex = rows.firstIndex(where: { $0.id == destinationId })
+        else { return }
+
+        reorderWorktree(projectId: projectId, fromIndex: fromIndex, toIndex: toIndex)
     }
 
     func isWorktreeHidden(projectId: String, path: URL) -> Bool {
@@ -166,15 +203,14 @@ final class ProjectsManager {
         for id in clearOperationIds {
             worktreeOperationStates.removeValue(forKey: id)
         }
-        // Sort deterministically so optimistic rows don't jump position.
-        reconciled.sort { $0.path.path < $1.path.path }
         worktreesByProject[projectId] = reconciled
+        let orderChanged = applyWorktreeOrdering(projectId: projectId)
 
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return false }
         let live = Set(trees.map { canonical($0.path) })
         let before = projects[idx].hiddenWorktreePaths.count
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
-        return projects[idx].hiddenWorktreePaths.count != before
+        return orderChanged || projects[idx].hiddenWorktreePaths.count != before
     }
 
     /// Refresh every project. Returns `true` when at least one project's
@@ -221,7 +257,10 @@ final class ProjectsManager {
                 changed = true
             }
         }
-        if changed { worktreesByProject[projectId] = rows }
+        if changed {
+            worktreesByProject[projectId] = rows
+            applyWorktreeOrdering(projectId: projectId)
+        }
     }
 
     private func hiddenSet(projectId: String) -> Set<String> {
@@ -231,5 +270,66 @@ final class ProjectsManager {
 
     private func canonical(_ url: URL) -> String {
         Worktree.makeId(path: url)
+    }
+
+    @discardableResult
+    private func applyWorktreeOrdering(projectId: String) -> Bool {
+        guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
+              let rows = worktreesByProject[projectId]
+        else { return false }
+
+        let project = projects[projectIndex]
+        let ordered = sortedWorktrees(rows, project: project)
+        worktreesByProject[projectId] = ordered
+
+        let normalized = normalizedWorktreeOrder(project.worktreeOrder, rows: ordered, project: project)
+        if projects[projectIndex].worktreeOrder != normalized {
+            projects[projectIndex].worktreeOrder = normalized
+            return true
+        }
+        return false
+    }
+
+    private func sortedWorktrees(_ rows: [Worktree], project: ProjectConfig) -> [Worktree] {
+        let order = normalizedWorktreeOrder(project.worktreeOrder, rows: rows, project: project)
+        let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
+        return rows.sorted { lhs, rhs in
+            let lhsIsMain = isMainWorktree(lhs, project: project)
+            let rhsIsMain = isMainWorktree(rhs, project: project)
+            if lhsIsMain != rhsIsMain { return lhsIsMain }
+
+            let lhsRank = rank[lhs.id]
+            let rhsRank = rank[rhs.id]
+            if let lhsRank, let rhsRank, lhsRank != rhsRank { return lhsRank < rhsRank }
+            if lhsRank != nil { return true }
+            if rhsRank != nil { return false }
+            return lhs.path.path < rhs.path.path
+        }
+    }
+
+    private func normalizedWorktreeOrder(
+        _ order: [String],
+        rows: [Worktree],
+        project: ProjectConfig
+    ) -> [String] {
+        let nonMainIds = Set(rows.filter { !isMainWorktree($0, project: project) }.map(\.id))
+        var seen: Set<String> = []
+        var normalized: [String] = []
+
+        for id in order where nonMainIds.contains(id) && !seen.contains(id) {
+            normalized.append(id)
+            seen.insert(id)
+        }
+
+        for row in rows where nonMainIds.contains(row.id) && !seen.contains(row.id) {
+            normalized.append(row.id)
+            seen.insert(row.id)
+        }
+
+        return normalized
+    }
+
+    private func isMainWorktree(_ worktree: Worktree, project: ProjectConfig) -> Bool {
+        canonical(worktree.path) == canonical(URL(fileURLWithPath: project.path))
     }
 }
