@@ -131,7 +131,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- Casks/alas.rb; then
+          if [ -z "$(git status --porcelain -- Casks/alas.rb)" ]; then
             echo "Cask already up to date"
             exit 0
           fi
