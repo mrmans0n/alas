@@ -69,7 +69,9 @@ enum CommitAIRunner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = [binary] + args
-        process.environment = ProcessInfo.processInfo.environment
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = CommitAIPath.augmented(base: env["PATH"])
+        process.environment = env
 
         let outPipe = Pipe()
         let errPipe = Pipe()
