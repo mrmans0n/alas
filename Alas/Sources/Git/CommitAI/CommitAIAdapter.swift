@@ -90,12 +90,6 @@ enum CommitAIRunner {
             throw CommitAIError.toolNotFound(binary)
         }
 
-        // Write stdin and close.
-        if let data = input.data(using: .utf8) {
-            try? pipe.fileHandleForWriting.write(contentsOf: data)
-        }
-        try? pipe.fileHandleForWriting.close()
-
         // Close the parent's copies of the stdout/stderr write ends now
         // that the child has dup'd them. Without this, `readToEnd()` below
         // never sees EOF — the kernel keeps the read end open as long as
@@ -105,13 +99,25 @@ enum CommitAIRunner {
         try? outPipe.fileHandleForWriting.close()
         try? errPipe.fileHandleForWriting.close()
 
-        // Watchdog.
+        // Watchdog. Armed BEFORE the stdin write so a CLI that stalls
+        // before draining stdin (e.g. waiting on auth) and a staged diff
+        // larger than the pipe buffer can't block this function past
+        // `timeout`: when the watchdog fires, `process.terminate()` closes
+        // the child's read end, the kernel delivers EPIPE to our blocked
+        // write, and `write(contentsOf:)` returns (via `try?`).
         let watchdog = Task {
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             if !Task.isCancelled && process.isRunning { process.terminate() }
         }
 
+        // Cancellation scope spans the stdin write too, for the same
+        // reason: if the awaiting Task is cancelled while we're blocked
+        // writing, `onCancel` terminates the child and the write unblocks.
         await withTaskCancellationHandler {
+            if let data = input.data(using: .utf8) {
+                try? pipe.fileHandleForWriting.write(contentsOf: data)
+            }
+            try? pipe.fileHandleForWriting.close()
             await exit.wait()
         } onCancel: {
             if process.isRunning { process.terminate() }
