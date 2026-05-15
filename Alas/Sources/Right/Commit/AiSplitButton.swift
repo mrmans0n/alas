@@ -12,12 +12,13 @@ struct AiSplitButton: View {
         CommitAITool(rawValue: selectedToolId)
     }
 
-    /// True when no usable tool is selected — disables the primary button.
-    /// `busy` is deliberately NOT included here: the primary button doubles
-    /// as a cancel affordance while a generation is in flight, so it must
-    /// remain clickable to let the user stop a slow CLI.
+    /// True when no usable tool is selected AND no generation is in
+    /// flight. The primary button doubles as a cancel affordance while
+    /// busy, so it must stay clickable even if the user changes the
+    /// dropdown to "None" mid-generation — otherwise the only visible
+    /// cancel control disappears.
     private var primaryDisabled: Bool {
-        selected == nil || selected == CommitAITool.none
+        !busy && (selected == nil || selected == CommitAITool.none)
     }
 
     var body: some View {
