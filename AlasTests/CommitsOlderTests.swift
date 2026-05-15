@@ -60,6 +60,7 @@ struct CommitsOlderTests {
 
         let svc = GitService()
         let result = try await svc.commitsOlder(worktreePath: repo, beforeSha: "HEAD", count: 10)
+        #expect(result.count == 3)
         #expect(!result.map(\.subject).contains("side work"))
         #expect(result.map(\.subject).contains("step 3"))
     }
@@ -70,6 +71,21 @@ struct CommitsOlderTests {
         let svc = GitService()
         await #expect(throws: (any Error).self) {
             _ = try await svc.commitsOlder(worktreePath: repo, beforeSha: "deadbeefdeadbeef", count: 5)
+        }
+    }
+
+    @Test func throwsAtRootCommit() async throws {
+        let repo = try await makeLinearRepo(commits: 3)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Resolve the root commit's SHA — there's exactly one ancestor-less commit.
+        let rootLog = try await Process.git(["rev-list", "--max-parents=0", "HEAD"], cwd: repo)
+        let rootSha = rootLog.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let svc = GitService()
+        // `git log <root>^` fails because the root has no parent. The caller
+        // in RightPaneState catches this and flips `hasMoreOlder` to false,
+        // producing the spec's "End of history" footer.
+        await #expect(throws: (any Error).self) {
+            _ = try await svc.commitsOlder(worktreePath: repo, beforeSha: rootSha, count: 5)
         }
     }
 }
