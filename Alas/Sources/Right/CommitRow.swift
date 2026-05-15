@@ -3,6 +3,7 @@ import SwiftUI
 struct CommitRow: View {
     let commit: CommitInfo
     let isLast: Bool
+    var isDimmed: Bool = false
     let onSelect: () -> Void
 
     @Environment(\.theme) private var theme
@@ -23,6 +24,7 @@ struct CommitRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .opacity(isDimmed ? 0.5 : 1.0)
     }
 
     private var rail: some View {
@@ -36,7 +38,7 @@ struct CommitRow: View {
             }
             .stroke(theme.color("line"), lineWidth: 1)
             Circle()
-                .fill(theme.color("accent"))
+                .fill(isDimmed ? theme.color("fg-muted") : theme.color("accent"))
                 .frame(width: dotSize, height: dotSize)
                 .position(x: 4, y: dotY + dotSize / 2)
         }
