@@ -87,6 +87,7 @@ final class RightPaneState {
 
     func toggleStage(_ file: ChangedFile) {
         let path = file.path
+        composer.error = nil
         Task { @MainActor in
             do {
                 if file.stage == .staged {
@@ -103,6 +104,7 @@ final class RightPaneState {
 
     func stageAll(_ files: [ChangedFile]) {
         let paths = files.map(\.path)
+        composer.error = nil
         Task { @MainActor in
             do { try await git.stageAll(worktreePath: worktree.path, files: paths) }
             catch { self.composer.error = (error as NSError).localizedDescription }
@@ -112,6 +114,7 @@ final class RightPaneState {
 
     func unstageAll(_ files: [ChangedFile]) {
         let paths = files.map(\.path)
+        composer.error = nil
         Task { @MainActor in
             do { try await git.unstageAll(worktreePath: worktree.path, files: paths) }
             catch { self.composer.error = (error as NSError).localizedDescription }
