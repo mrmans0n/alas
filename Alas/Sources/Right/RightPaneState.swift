@@ -246,14 +246,22 @@ final class RightPaneState {
     /// HEAD message and surfaces a "rewrites history" warning when HEAD is
     /// at/behind its upstream. Toggling off clears the prefill iff it
     /// hasn't been edited, so the user's typed draft is never clobbered.
+    ///
+    /// Re-checks `composer.amend` between the async hops because the user
+    /// can toggle off mid-flight (slow `git` on a large repo). Without the
+    /// guard, a stale on-task could resume after the off-path has already
+    /// cleared state and still prefill the composer.
     func amendDidChange(_ on: Bool) {
         let wt = worktree.path
         Task { @MainActor in
             if on {
-                if let prior = (try? await self.git.headMessage(worktreePath: wt)) ?? nil {
+                let priorResult = (try? await self.git.headMessage(worktreePath: wt)) ?? nil
+                guard self.composer.amend else { return }
+                if let prior = priorResult {
                     self.composer.applyAmendPrefill(prior)
                 }
                 let behind = (try? await self.git.isHeadAtOrBehindUpstream(worktreePath: wt)) ?? false
+                guard self.composer.amend else { return }
                 self.composer.amendWarning = behind
             } else {
                 self.composer.clearAmendPrefillIfUnchanged()
