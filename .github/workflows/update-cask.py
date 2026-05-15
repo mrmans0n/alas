@@ -32,5 +32,7 @@ cask "alas" do
 end
 '''
 
-pathlib.Path("Casks/alas.rb").write_text(CASK)
+path = pathlib.Path("Casks/alas.rb")
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(CASK)
 print(f"Updated cask to {VERSION}")
