@@ -116,3 +116,15 @@ enum CommitAIRunner {
         return CommitAIAdapterParser.parse(stdout)
     }
 }
+
+extension CommitAITool {
+    func makeAdapter() -> CommitAIAdapter? {
+        switch self {
+        case .none:        return nil
+        case .claude:      return ClaudeAdapter()
+        case .codex:       return CodexAdapter()
+        case .cursorAgent: return CursorAgentAdapter()
+        case .pi:          return PiAdapter()
+        }
+    }
+}
