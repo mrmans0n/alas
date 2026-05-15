@@ -565,4 +565,77 @@ extension GitService {
 
         return (commits, comparisonRef)
     }
+
+    /// Older history for the "Load older" affordance in the right sidebar.
+    /// Returns up to `count` commits reachable from `beforeSha^`, following
+    /// only the first parent so merge-side ancestry doesn't drown the list.
+    /// Same record format as `commitsAhead`, so callers can reuse the same
+    /// `CommitInfo` shape and the divider/dimming lives in the view layer.
+    func commitsOlder(worktreePath: URL, beforeSha: String, count: Int) async throws -> [CommitInfo] {
+        let range = "\(beforeSha)^"
+        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
+        let log = try await Process.git(
+            ["log", range, "-n", String(count), "--first-parent",
+             "--pretty=tformat:\(format)", "--numstat"],
+            cwd: worktreePath
+        )
+        guard log.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.commitsOlder",
+                code: Int(log.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: log.stderr.isEmpty ? "git log failed" : log.stderr]
+            )
+        }
+
+        let records = log.stdout
+            .split(separator: "\u{1e}", omittingEmptySubsequences: true)
+            .map { String($0) }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        var commits: [CommitInfo] = []
+        for record in records {
+            let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+            guard let headerLine = lines.first else { continue }
+            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 4, omittingEmptySubsequences: false)
+            guard fields.count == 5 else { continue }
+            let sha = String(fields[0])
+            let short = String(fields[1])
+            let author = String(fields[2])
+            let dateStr = String(fields[3])
+            let rawSubject = String(fields[4])
+            let date = isoFormatter.date(from: dateStr) ?? Date(timeIntervalSince1970: 0)
+            let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
+
+            var filesChanged = 0
+            var adds = 0
+            var dels = 0
+            for line in lines.dropFirst() {
+                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                if trimmedLine.isEmpty { continue }
+                let parts = trimmedLine.split(separator: "\t", omittingEmptySubsequences: false)
+                guard parts.count >= 3 else { continue }
+                filesChanged += 1
+                if let a = Int(parts[0]) { adds += a }
+                if let d = Int(parts[1]) { dels += d }
+            }
+
+            commits.append(CommitInfo(
+                sha: sha,
+                shortSha: short,
+                author: author,
+                authorInitials: CommitInfo.initials(for: author),
+                date: date,
+                subject: subject,
+                conventionalTag: tag,
+                filesChanged: filesChanged,
+                insertions: adds,
+                deletions: dels
+            ))
+        }
+        return commits
+    }
 }
