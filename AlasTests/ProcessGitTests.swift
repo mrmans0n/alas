@@ -79,6 +79,21 @@ struct ProcessGitTests {
         }
     }
 
+    @Test func runIsCancelledViaSIGTERM() async throws {
+        // /bin/sleep 5 should be SIGTERM'd via cancellation in < 1s.
+        let task = Task<ProcessResult, Error> {
+            try await Process.run("/bin/sleep", args: ["5"], timeout: 30)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)   // let it spawn
+        task.cancel()
+        let start = Date()
+        let result = try await task.value
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(elapsed < 2.0, "expected cancellation to terminate quickly, took \(elapsed)s")
+        // SIGTERM => exit code 15 by convention, or non-zero signal status
+        #expect(result.exitCode != 0)
+    }
+
     @Test func gitConvenienceCallStillWorks() async throws {
         // Sanity: after switching to the explicit env dict (no longer
         // passing env: nil), `Process.git` must still successfully locate
