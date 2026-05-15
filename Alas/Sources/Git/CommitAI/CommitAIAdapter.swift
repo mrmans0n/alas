@@ -159,8 +159,22 @@ enum CommitAIRunner {
             throw CommitAIError.timedOut(seconds: timeout)
         }
 
+        // Bound the post-exit drain: if a selected CLI spawned a helper
+        // process that inherited the stdout/stderr FDs, the parent's read
+        // end will not see EOF until that descendant closes its copy. To
+        // keep the composer from hanging on those zombies, close our read
+        // ends after a 2s grace period — `readToEnd()` then returns
+        // whatever was accumulated up to that point. Mirrors the
+        // `waitForClose(timeoutNanoseconds: 2_000_000_000)` cap in
+        // Process.run.
+        let drainCap = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? outPipe.fileHandleForReading.close()
+            try? errPipe.fileHandleForReading.close()
+        }
         let outData = await outRead.value
         let errData = await errRead.value
+        drainCap.cancel()
         let stdout = String(data: outData, encoding: .utf8) ?? ""
         let stderr = String(data: errData, encoding: .utf8) ?? ""
 
