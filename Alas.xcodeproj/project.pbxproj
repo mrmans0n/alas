@@ -86,6 +86,7 @@
 		41F7A0E0854B545F99062BDC /* EditorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */; };
 		4239885256AB11FE8207D31E /* TextEditCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8062405A67C934905EE61D98 /* TextEditCoordinates.swift */; };
 		42502D6356225A4304C93818 /* TerminalTabStateCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */; };
+		427647A6DCE974E32D2F116E /* CommitAITool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 913A307FB0CBEF4E3FD32BCA /* CommitAITool.swift */; };
 		42C0AE388E5CF8B2AAEADE3C /* SearchEmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFF914E16884DAC97F11C76 /* SearchEmptyState.swift */; };
 		42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */; };
 		43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */; };
@@ -465,6 +466,7 @@
 		8EF52FE71B7FB41328859734 /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
 		910CB5077C8E89A778F1E896 /* ChangesTreeBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTreeBuilder.swift; sourceTree = "<group>"; };
 		9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMonoNerdFont-Regular.ttf"; sourceTree = "<group>"; };
+		913A307FB0CBEF4E3FD32BCA /* CommitAITool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitAITool.swift; sourceTree = "<group>"; };
 		91C1705E68E97111E85D83F3 /* RightPaneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneState.swift; sourceTree = "<group>"; };
 		91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusParser.swift; sourceTree = "<group>"; };
 		932F0FEE5330D5B4470C1874 /* DiagnosticsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsFeature.swift; sourceTree = "<group>"; };
@@ -755,6 +757,7 @@
 				79DDEA496740F5B0B5EE808B /* Process+Git.swift */,
 				91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */,
 				6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */,
+				FCE6979EDAEAE45BC2A49A20 /* CommitAI */,
 			);
 			path = Git;
 			sourceTree = "<group>";
@@ -1245,6 +1248,14 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		FCE6979EDAEAE45BC2A49A20 /* CommitAI */ = {
+			isa = PBXGroup;
+			children = (
+				913A307FB0CBEF4E3FD32BCA /* CommitAITool.swift */,
+			);
+			path = CommitAI;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -1422,6 +1433,7 @@
 				28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */,
 				0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */,
 				C487C3AD43E7B5BBB45490DB /* CodexInstaller.swift in Sources */,
+				427647A6DCE974E32D2F116E /* CommitAITool.swift in Sources */,
 				3BB7766DF1D9BF15098432F5 /* CommitDetails.swift in Sources */,
 				9E4B32E154B18BD2285F0D34 /* CommitDiffView.swift in Sources */,
 				C55B79DC0AAE96CFA14BE76F /* CommitFilesListView.swift in Sources */,
