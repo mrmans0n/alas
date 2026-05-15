@@ -108,4 +108,52 @@ struct GitServiceStagingTests {
         let status = try await svc.status(worktreePath: repo)
         #expect(status.contains { $0.path == "a.txt" && $0.stage == .staged && $0.status == "D" })
     }
+
+    @Test func commitWritesNewHeadWithSubjectAndBody() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeFile(repo, "a.txt", "x\n")
+        let svc = GitService()
+        try await svc.stage(worktreePath: repo, files: ["a.txt"])
+        try await svc.commit(
+            worktreePath: repo,
+            subject: "feat: add a",
+            body: "explanation goes here",
+            amend: false
+        )
+        let log = try await Process.git(["log", "-1", "--pretty=format:%s%n%b"], cwd: repo)
+        #expect(log.stdout.contains("feat: add a"))
+        #expect(log.stdout.contains("explanation goes here"))
+    }
+
+    @Test func amendRewritesHead() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeFile(repo, "a.txt", "x\n")
+        let svc = GitService()
+        try await svc.stage(worktreePath: repo, files: ["a.txt"])
+        try await svc.commit(worktreePath: repo, subject: "wip", body: "", amend: false)
+
+        try writeFile(repo, "b.txt", "y\n")
+        try await svc.stage(worktreePath: repo, files: ["b.txt"])
+        try await svc.commit(
+            worktreePath: repo,
+            subject: "feat: a and b",
+            body: "single combined commit",
+            amend: true
+        )
+
+        let log = try await Process.git(["log", "--pretty=format:%s"], cwd: repo)
+        let subjects = log.stdout.split(separator: "\n").map(String.init)
+        #expect(subjects == ["feat: a and b"])
+    }
+
+    @Test func commitFailsWhenNothingStaged() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let svc = GitService()
+        await #expect(throws: (any Error).self) {
+            try await svc.commit(worktreePath: repo, subject: "noop", body: "", amend: false)
+        }
+    }
 }

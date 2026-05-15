@@ -35,6 +35,28 @@ extension GitService {
         try await unstage(worktreePath: worktreePath, files: files)
     }
 
+    /// Create a new commit (or amend HEAD) with the given subject and optional
+    /// body. The body is trimmed; an empty body skips the second `-m` so we
+    /// don't leave a trailing blank paragraph in the commit message.
+    func commit(
+        worktreePath: URL,
+        subject: String,
+        body: String,
+        amend: Bool
+    ) async throws {
+        var args: [String] = ["commit"]
+        if amend { args.append("--amend") }
+        args.append("-m")
+        args.append(subject)
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedBody.isEmpty {
+            args.append("-m")
+            args.append(trimmedBody)
+        }
+        let result = try await Process.git(args, cwd: worktreePath)
+        try Self.assertSuccess(result, op: amend ? "amend" : "commit")
+    }
+
     static func assertSuccess(_ result: ProcessResult, op: String) throws {
         guard result.exitCode == 0 else {
             throw NSError(
