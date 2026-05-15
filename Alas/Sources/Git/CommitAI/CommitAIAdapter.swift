@@ -90,12 +90,25 @@ enum CommitAIRunner {
             throw CommitAIError.toolNotFound(binary)
         }
 
-        // Close the parent's copies of the stdout/stderr write ends now
-        // that the child has dup'd them. Without this, `readToEnd()` below
-        // never sees EOF — the kernel keeps the read end open as long as
-        // ANY writer (including this parent's stray FD) remains — and the
-        // function blocks indefinitely after the child exits. Mirrors the
-        // same fix in Process.run; same reason.
+        // Close the parent's copies of the stdin read end and the
+        // stdout/stderr write ends now that the child has dup'd them.
+        // Three reasons, one symmetric rule (close anything you don't
+        // own once the fork has happened):
+        //
+        //  - outPipe / errPipe writing end: without this, `readToEnd()`
+        //    below never sees EOF (kernel keeps the read end open as long
+        //    as ANY writer — including this parent's stray FD — remains)
+        //    and the function hangs indefinitely after the child exits.
+        //
+        //  - stdin reading end: without this, terminating the child does
+        //    NOT deliver EPIPE to the parent's blocked stdin write,
+        //    because the kernel still sees a live reader (us). A
+        //    misbehaving CLI that stops reading stdin would then keep the
+        //    parent's write blocked even after our watchdog/cancel
+        //    SIGTERMs the child.
+        //
+        // Mirrors the same cleanup in Process.run.
+        try? pipe.fileHandleForReading.close()
         try? outPipe.fileHandleForWriting.close()
         try? errPipe.fileHandleForWriting.close()
 
