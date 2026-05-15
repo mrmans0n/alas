@@ -230,6 +230,7 @@
 		B8D2EB18303D58777D79CDBA /* SearchResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0FF718D68E15F539577F56 /* SearchResult.swift */; };
 		BAE4D422FC3950E61FEE1D15 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
 		BC19B95DAAC3943FF1BE5817 /* CommitTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59DBB72EE97F0E906442919B /* CommitTabView.swift */; };
+		BC98C2BCDB4F6C88C66117A6 /* InlineErrorStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7206BC51596AE2A57D8B28B /* InlineErrorStrip.swift */; };
 		BEDFCA98CA9C992302618128 /* ProjectsManagerHeadUpdatesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD708EEB35D93A7E7150981D /* ProjectsManagerHeadUpdatesTests.swift */; };
 		BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88379ACE40F42BE4A3257659 /* ThemeTests.swift */; };
 		BFB452EE7A29CF81F7A4BD8A /* RightPaneTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4ADD529F9B64DAD2994E0B /* RightPaneTabBar.swift */; };
@@ -546,6 +547,7 @@
 		C682FF74C86B77BDCF46CF25 /* ChangesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTabView.swift; sourceTree = "<group>"; };
 		C6CA79B71B4AA72697392702 /* NumstatParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParser.swift; sourceTree = "<group>"; };
 		C6E896FEA37B4691BD16E2DD /* EditorBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferTests.swift; sourceTree = "<group>"; };
+		C7206BC51596AE2A57D8B28B /* InlineErrorStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineErrorStrip.swift; sourceTree = "<group>"; };
 		C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTheme.swift; sourceTree = "<group>"; };
 		C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.Surface.swift; sourceTree = "<group>"; };
 		C8EA1E2128F7ED14F9CF61C3 /* CommitAIDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitAIDetectorTests.swift; sourceTree = "<group>"; };
@@ -1190,6 +1192,7 @@
 			isa = PBXGroup;
 			children = (
 				D733701E36E13A7A23748A37 /* CommitComposerState.swift */,
+				C7206BC51596AE2A57D8B28B /* InlineErrorStrip.swift */,
 				1874031C788ADB4398151FF1 /* StageChip.swift */,
 			);
 			path = Commit;
@@ -1553,6 +1556,7 @@
 				CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */,
 				B76AD708A9FD54304F84366A /* ImageFileType.swift in Sources */,
 				1B9CC3C13E96290B391E7C26 /* ImagePreviewTabView.swift in Sources */,
+				BC98C2BCDB4F6C88C66117A6 /* InlineErrorStrip.swift in Sources */,
 				255E9EAE89D521E08EB90918 /* JSONHookSettingsFile.swift in Sources */,
 				E433BB79E6D79DAF4532172A /* Kbd.swift in Sources */,
 				C1EBF68A32C7C1D61ECC89AC /* LSPClient.swift in Sources */,
