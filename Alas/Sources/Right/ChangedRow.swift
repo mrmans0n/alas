@@ -4,12 +4,16 @@ struct ChangedRow: View {
     let file: ChangedFile
     var depth: Int = 0
     let onSelect: () -> Void
+    var onStage: (() -> Void)? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
         let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
         return Button(action: onSelect) {
             HStack(spacing: 6) {
+                if let onStage {
+                    StageChip(staged: file.stage == .staged, action: onStage)
+                }
                 FileTypeIconView(filename: basename, size: 18)
                 Text(basename)
                     .font(.system(size: 11.5, design: .monospaced))
