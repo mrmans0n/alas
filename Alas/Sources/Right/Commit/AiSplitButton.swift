@@ -12,8 +12,12 @@ struct AiSplitButton: View {
         CommitAITool(rawValue: selectedToolId)
     }
 
+    /// True when no usable tool is selected — disables the primary button.
+    /// `busy` is deliberately NOT included here: the primary button doubles
+    /// as a cancel affordance while a generation is in flight, so it must
+    /// remain clickable to let the user stop a slow CLI.
     private var primaryDisabled: Bool {
-        busy || selected == nil || selected == CommitAITool.none
+        selected == nil || selected == CommitAITool.none
     }
 
     var body: some View {
@@ -25,7 +29,7 @@ struct AiSplitButton: View {
                     } else {
                         Text("✨").font(.system(size: 11))
                     }
-                    Text(busy ? "Generating…" : (selected?.label ?? "None"))
+                    Text(busy ? "Cancel" : (selected?.label ?? "None"))
                         .font(.system(size: 11))
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
@@ -36,7 +40,9 @@ struct AiSplitButton: View {
             .disabled(primaryDisabled)
             .help(primaryDisabled
                   ? "Pick a tool in Settings → Changes to enable"
-                  : "Generate commit message with \(selected!.label)")
+                  : busy
+                      ? "Cancel generation"
+                      : "Generate commit message with \(selected!.label)")
 
             Menu {
                 ForEach(menuTools, id: \.id) { tool in

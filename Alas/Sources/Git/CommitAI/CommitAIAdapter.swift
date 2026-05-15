@@ -109,6 +109,15 @@ enum CommitAIRunner {
         }
         watchdog.cancel()
 
+        // If the awaiting Task was cancelled, the SIGTERM above produced a
+        // non-zero exit status. Treat that as cancellation instead of a CLI
+        // error so callers' `catch is CancellationError` paths fire and the
+        // UI doesn't surface a misleading error message for an intentional
+        // cancel.
+        if Task.isCancelled {
+            throw CancellationError()
+        }
+
         let outData = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
         let errData = (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
         let stdout = String(data: outData, encoding: .utf8) ?? ""
