@@ -33,7 +33,7 @@ struct CommitsSectionView: View {
             }
 
             if expanded {
-                body_expanded
+                expandedBody
             }
         }
     }
@@ -44,14 +44,13 @@ struct CommitsSectionView: View {
     }
 
     @ViewBuilder
-    private var body_expanded: some View {
+    private var expandedBody: some View {
         // 1. Worktree commits ("your work") OR today's empty placeholder.
         if !commits.isEmpty {
             ForEach(Array(commits.enumerated()), id: \.element.id) { idx, commit in
                 CommitRow(
                     commit: commit,
                     isLast: idx == commits.count - 1 && olderCommits.isEmpty,
-                    isDimmed: false,
                     onSelect: { onSelect(commit) }
                 )
             }
