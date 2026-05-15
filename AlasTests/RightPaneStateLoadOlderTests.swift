@@ -124,4 +124,23 @@ struct RightPaneStateLoadOlderTests {
         #expect(state.olderCommits.isEmpty)
         #expect(state.isLoadingOlder == false)
     }
+
+    @Test func loadOlderWithNoComparisonRef() async throws {
+        // No remote (no upstream), and we set baseBranch to a name that
+        // doesn't resolve locally → commitsAhead returns ([], nil).
+        let repo = try await makeRepoOnMain(commits: 6)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = RightPaneState(
+            worktree: makeWorktree(at: repo, branch: "main"),
+            baseBranch: "nonexistent-branch"
+        )
+        await state.refresh()
+        #expect(state.commits.isEmpty)
+        #expect(state.comparisonRef == nil)
+
+        await state.loadOlder()
+        // Cursor falls back to "HEAD", so we get HEAD^ and older = c5..c1.
+        #expect(state.olderCommits.map(\.subject) == ["c5", "c4", "c3", "c2", "c1"])
+        #expect(state.hasMoreOlder == false)
+    }
 }

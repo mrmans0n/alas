@@ -54,7 +54,7 @@ struct CommitsSectionView: View {
                     onSelect: { onSelect(commit) }
                 )
             }
-        } else if olderCommits.isEmpty, comparisonRef != nil {
+        } else if olderCommits.isEmpty {
             emptyPlaceholder
         }
 
