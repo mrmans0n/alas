@@ -40,10 +40,11 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var color: String        // hex string, e.g. "#5fb7c4"
     var addedAt: Date
     var hiddenWorktreePaths: [String] = []
+    var worktreeOrder: [String] = []
     var startupScripts: ProjectStartupScripts = .defaults
 
     enum CodingKeys: String, CodingKey {
-        case id, name, path, color, addedAt, hiddenWorktreePaths, startupScripts
+        case id, name, path, color, addedAt, hiddenWorktreePaths, worktreeOrder, startupScripts
     }
 
     init(
@@ -53,6 +54,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         color: String,
         addedAt: Date,
         hiddenWorktreePaths: [String] = [],
+        worktreeOrder: [String] = [],
         startupScripts: ProjectStartupScripts = .defaults
     ) {
         self.id = id
@@ -61,6 +63,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.color = color
         self.addedAt = addedAt
         self.hiddenWorktreePaths = hiddenWorktreePaths
+        self.worktreeOrder = worktreeOrder
         self.startupScripts = startupScripts
     }
 
@@ -74,6 +77,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         color = try c.decode(String.self, forKey: .color)
         addedAt = try c.decode(Date.self, forKey: .addedAt)
         hiddenWorktreePaths = (try? c.decode([String].self, forKey: .hiddenWorktreePaths)) ?? []
+        worktreeOrder = (try? c.decode([String].self, forKey: .worktreeOrder)) ?? []
         startupScripts = (try? c.decode(ProjectStartupScripts.self, forKey: .startupScripts))
             ?? .defaults
     }

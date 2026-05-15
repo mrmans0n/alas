@@ -104,6 +104,14 @@ struct SidebarView: View {
                                 onRetryDelete: { wt in state.deleteWorktree(wt) },
                                 onRemoveFailed: { wt in
                                     state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
+                                },
+                                onDropWorktree: { draggedId, destinationId in
+                                    state.projectsManager.reorderWorktree(
+                                        projectId: project.id,
+                                        movingId: draggedId,
+                                        destinationId: destinationId
+                                    )
+                                    state.saveProjects()
                                 }
                             )
                         }

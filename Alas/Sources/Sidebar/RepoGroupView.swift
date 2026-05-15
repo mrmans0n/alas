@@ -21,6 +21,7 @@ struct RepoGroupView: View {
     let onRetryCreate: (Worktree) -> Void
     let onRetryDelete: (Worktree) -> Void
     let onRemoveFailed: (Worktree) -> Void
+    let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
     @State private var plusHovering = false
@@ -104,6 +105,12 @@ struct RepoGroupView: View {
                             onRetryCreate: { onRetryCreate(wt) },
                             onRetryDelete: { onRetryDelete(wt) }
                         )
+                        .draggable(wt.id)
+                        .dropDestination(for: String.self) { ids, _ in
+                            guard let draggedId = ids.first, draggedId != wt.id else { return false }
+                            onDropWorktree(draggedId, wt.id)
+                            return true
+                        }
                     }
                 }
                 .padding(.horizontal, 6)
