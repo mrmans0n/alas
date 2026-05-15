@@ -119,9 +119,13 @@ enum CommitAIRunner {
         // `timeout`: when the watchdog fires, `process.terminate()` closes
         // the child's read end, the kernel delivers EPIPE to our blocked
         // write, and `write(contentsOf:)` returns (via `try?`).
+        let timeoutState = TimeoutState()
         let watchdog = Task {
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-            if !Task.isCancelled && process.isRunning { process.terminate() }
+            if !Task.isCancelled && process.isRunning {
+                timeoutState.markTimedOut()
+                process.terminate()
+            }
         }
 
         // Cancellation scope spans the stdin write too, for the same
@@ -147,6 +151,14 @@ enum CommitAIRunner {
             throw CancellationError()
         }
 
+        // Distinguish a watchdog kill from a genuine CLI failure: if the
+        // watchdog fired, surface `.timedOut` so the inline error reads
+        // "Timed out after 120s" instead of a generic non-zero exit
+        // message, which would mislead users about what actually happened.
+        if timeoutState.didTimeOut {
+            throw CommitAIError.timedOut(seconds: timeout)
+        }
+
         let outData = await outRead.value
         let errData = await errRead.value
         let stdout = String(data: outData, encoding: .utf8) ?? ""
@@ -156,6 +168,26 @@ enum CommitAIRunner {
             throw CommitAIError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }
         return CommitAIAdapterParser.parse(stdout)
+    }
+}
+
+/// Thread-safe latch for "did the watchdog terminate this child?" Set
+/// by the watchdog Task, read by the runner after `exit.wait()` so we
+/// can distinguish a watchdog SIGTERM from a normal non-zero exit.
+private final class TimeoutState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timedOut = false
+
+    var didTimeOut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return timedOut
+    }
+
+    func markTimedOut() {
+        lock.lock()
+        timedOut = true
+        lock.unlock()
     }
 }
 
