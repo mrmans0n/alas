@@ -5,6 +5,7 @@ struct CommitHeaderView: View {
     @Binding var expanded: Bool
 
     @Environment(\.theme) private var theme
+    @State private var shaHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,7 +33,17 @@ struct CommitHeaderView: View {
                 .lineLimit(1)
             Text(details.info.shortSha)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(theme.color("fg-faint"))
+                .foregroundColor(shaHovering ? theme.color("accent") : theme.color("fg-faint"))
+                .onTapGesture {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(details.info.sha, forType: .string)
+                }
+                .onHover { hovering in
+                    shaHovering = hovering
+                    if hovering { NSCursor.pointingHand.push() }
+                    else { NSCursor.pop() }
+                }
+                .help("Click to copy SHA")
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text(details.info.author)
                 .font(.system(size: 11))
@@ -63,7 +74,24 @@ struct CommitHeaderView: View {
                 Text("\(details.info.author) <\(details.authorEmail)>")
                 Text(absoluteDate(details.info.date))
                 if !details.parents.isEmpty {
-                    Text("parent" + (details.parents.count > 1 ? "s" : "") + ": " + details.parents.joined(separator: " "))
+                    HStack(spacing: 4) {
+                        Text("parent" + (details.parents.count > 1 ? "s" : "") + ":")
+                        ForEach(Array(details.parents.enumerated()), id: \.offset) { index, parent in
+                            Text(parent)
+                                .onTapGesture {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(parent, forType: .string)
+                                }
+                                .onHover { hovering in
+                                    if hovering { NSCursor.pointingHand.push() }
+                                    else { NSCursor.pop() }
+                                }
+                                .help("Click to copy SHA")
+                            if index < details.parents.count - 1 {
+                                Text(" ")
+                            }
+                        }
+                    }
                 }
                 Text("\(details.files.count) file\(details.files.count == 1 ? "" : "s")")
                 Text("+\(details.info.insertions)").foregroundColor(theme.color("add"))
