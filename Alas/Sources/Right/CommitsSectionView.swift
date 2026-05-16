@@ -8,6 +8,7 @@ struct CommitsSectionView: View {
     let isLoadingOlder: Bool
     @Binding var expanded: Bool
     let onSelect: (CommitInfo) -> Void
+    let onCopySHA: (CommitInfo) -> Void
     let onLoadOlder: () -> Void
 
     @Environment(\.theme) private var theme
@@ -51,7 +52,8 @@ struct CommitsSectionView: View {
                 CommitRow(
                     commit: commit,
                     isLast: idx == commits.count - 1 && olderCommits.isEmpty,
-                    onSelect: { onSelect(commit) }
+                    onSelect: { onSelect(commit) },
+                    onCopySHA: { onCopySHA(commit) }
                 )
             }
         } else if olderCommits.isEmpty {
@@ -71,7 +73,8 @@ struct CommitsSectionView: View {
                     commit: commit,
                     isLast: idx == olderCommits.count - 1,
                     isHistorical: comparisonRef != nil,
-                    onSelect: { onSelect(commit) }
+                    onSelect: { onSelect(commit) },
+                    onCopySHA: { onCopySHA(commit) }
                 )
             }
         }
