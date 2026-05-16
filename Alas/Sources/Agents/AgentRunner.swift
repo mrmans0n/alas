@@ -63,7 +63,7 @@ enum AgentRunner {
         do {
             try process.run()
         } catch {
-            throw AgentRunError.binaryNotFound(agentId: agent.id)
+            throw AgentRunError.binaryNotFound(agentId: agent.id, displayName: agent.displayName)
         }
 
         // Close the parent's copies of the stdin read end and the
@@ -173,7 +173,7 @@ enum AgentRunner {
             // that as .binaryNotFound so callers can show a targeted "install
             // the CLI" message rather than a generic non-zero-exit one.
             if process.terminationStatus == 127 {
-                throw AgentRunError.binaryNotFound(agentId: agent.id)
+                throw AgentRunError.binaryNotFound(agentId: agent.id, displayName: agent.displayName)
             }
             throw AgentRunError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }

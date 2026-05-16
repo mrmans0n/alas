@@ -109,8 +109,9 @@ struct AgentRunnerInvocationTests {
                 )
             }
             Issue.record("expected throw")
-        } catch let AgentRunError.binaryNotFound(agentId) {
+        } catch let AgentRunError.binaryNotFound(agentId, displayName) {
             #expect(agentId == "ghost")
+            #expect(displayName == "ghost")
         } catch {
             Issue.record("wrong error: \(error)")
         }
