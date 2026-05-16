@@ -94,13 +94,16 @@ struct IndentationHelper {
 
         guard isWhitespaceOnly(linePrefix) else { return nil }
 
+        let nextIsSameDelimiter = cursor < ns.length && Character(ns.substring(with: NSRange(location: cursor, length: 1))) == delimiter
+
         let indentUnit = indentUnit(in: text)
         let currentIndent = linePrefix
         let dedented = dedent(currentIndent, by: indentUnit)
 
         guard dedented.count < currentIndent.count else { return nil }
 
-        let replacementRange = NSRange(location: lineStart, length: currentIndent.count)
+        let consumeExtra = nextIsSameDelimiter ? 1 : 0
+        let replacementRange = NSRange(location: lineStart, length: currentIndent.count + consumeExtra)
         let replacement = dedented + String(delimiter)
         let selectedLocationDelta = dedented.count + 1
 

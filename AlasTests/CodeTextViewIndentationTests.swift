@@ -49,6 +49,22 @@ struct CodeTextViewIndentationTests {
         #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
     }
 
+    @Test func closingDelimiterDedentOnWhitespaceBeforeExistingCloser() {
+        let textView = makeTextView("    }")
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+        textView.insertText("}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(textView.string == "}")
+        #expect(textView.selectedRange() == NSRange(location: 1, length: 0))
+    }
+
+    @Test func closingDelimiterDedentWithExistingCloserOnNextLine() {
+        let textView = makeTextView("    {\n        \n    }")
+        textView.setSelectedRange(NSRange(location: 14, length: 0))
+        textView.insertText("}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(textView.string == "    {\n    }\n    }")
+        #expect(textView.selectedRange() == NSRange(location: 11, length: 0))
+    }
+
     @Test func closingDelimiterStepOverStillWorks() {
         let textView = makeTextView("()")
         textView.setSelectedRange(NSRange(location: 1, length: 0))

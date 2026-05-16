@@ -237,6 +237,42 @@ struct IndentationHelperTests {
         #expect(edit == nil)
     }
 
+    @Test func closingDelimiterStepOverConsumesExistingCloser() {
+        let edit = IndentationHelper.closingDelimiterEdit(
+            in: "        }",
+            selectedRange: NSRange(location: 8, length: 0),
+            delimiter: "}",
+            mode: .bracketAware
+        )
+        #expect(edit != nil)
+        #expect(edit?.replacementRange == NSRange(location: 0, length: 9))
+        #expect(edit?.replacement == "    }")
+        #expect(edit?.selectedLocationDelta == 5)
+    }
+
+    @Test func closingDelimiterStepOverParenthesis() {
+        let edit = IndentationHelper.closingDelimiterEdit(
+            in: "        )",
+            selectedRange: NSRange(location: 8, length: 0),
+            delimiter: ")",
+            mode: .bracketAware
+        )
+        #expect(edit != nil)
+        #expect(edit?.replacement == "    )")
+    }
+
+    @Test func closingDelimiterSameCharNoStepOverIfDifferentChar() {
+        let edit = IndentationHelper.closingDelimiterEdit(
+            in: "        x",
+            selectedRange: NSRange(location: 8, length: 0),
+            delimiter: "}",
+            mode: .bracketAware
+        )
+        #expect(edit != nil)
+        #expect(edit?.replacementRange == NSRange(location: 0, length: 8))
+        #expect(edit?.replacement == "    }")
+    }
+
     // MARK: - Indent unit detection
 
     @Test func indentUnitDetectsTab() {
