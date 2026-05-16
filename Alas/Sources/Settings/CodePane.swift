@@ -122,32 +122,14 @@ struct CodePane: View {
         let recipes = recipes(for: entry.language)
         let status = availability.status(for: entry)
         if status == .notInstalled, !recipes.isEmpty {
-            let available = state.installerHost.allAvailable(in: recipes)
-            if available.isEmpty {
-                AlasButton(title: "Install", style: .subtle, action: {})
-                    .disabled(true)
-                    .help("Install one of: \(recipes.map { $0.installer.rawValue }.joined(separator: ", "))")
-            } else if available.count == 1, let pair = available.first {
-                AlasButton(title: installBusy ? "Installing…" : "Install", style: .subtle, action: {
-                    runInstall(pair.installer, recipe: pair.recipe, language: entry.language)
-                })
-                .disabled(installBusy)
-            } else {
-                Menu {
-                    ForEach(available, id: \.installer.kind) { pair in
-                        Button("Install with \(pair.installer.kind.rawValue)") {
-                            runInstall(pair.installer, recipe: pair.recipe, language: entry.language)
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(installBusy ? "Installing…" : "Install")
-                        Image(systemName: "chevron.down")
-                    }
+            InstallSplitButton(
+                recipes: recipes,
+                available: state.installerHost.allAvailable(in: recipes),
+                busy: installBusy,
+                onInstall: { installer, recipe in
+                    runInstall(installer, recipe: recipe, language: entry.language)
                 }
-                .disabled(installBusy)
-                .menuStyle(.borderlessButton)
-            }
+            )
         }
     }
 

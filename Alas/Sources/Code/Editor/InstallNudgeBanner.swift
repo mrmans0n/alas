@@ -87,27 +87,14 @@ struct InstallNudgeBanner: View {
 
     @ViewBuilder
     private func installButton(for nudge: NudgeData) -> some View {
-        if nudge.available.count == 1, let pair = nudge.available.first {
-            AlasButton(title: installBusy ? "Installing…" : "Install", style: .subtle, action: {
-                runInstall(pair.installer, recipe: pair.recipe, language: nudge.language)
-            })
-            .disabled(installBusy)
-        } else {
-            Menu {
-                ForEach(nudge.available, id: \.installer.kind) { pair in
-                    Button("Install with \(pair.installer.kind.rawValue)") {
-                        runInstall(pair.installer, recipe: pair.recipe, language: nudge.language)
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(installBusy ? "Installing…" : "Install")
-                    Image(systemName: "chevron.down")
-                }
+        InstallSplitButton(
+            recipes: nudge.available.map(\.recipe),
+            available: nudge.available,
+            busy: installBusy,
+            onInstall: { installer, recipe in
+                runInstall(installer, recipe: recipe, language: nudge.language)
             }
-            .disabled(installBusy)
-            .menuStyle(.borderlessButton)
-        }
+        )
     }
 
     private func runInstall(_ installer: DetectedInstaller, recipe: InstallRecipe, language: String) {
