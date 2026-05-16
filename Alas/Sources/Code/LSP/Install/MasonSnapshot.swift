@@ -3,6 +3,12 @@ import Foundation
 struct MasonPackage: Codable, Equatable, Sendable, Identifiable {
     let masonId: String
     let displayName: String
+    /// Pre-resolved canonical LSP languageId for the primary language. The
+    /// generator normalizes Mason's display names (e.g. "Bash" → "shellscript",
+    /// "C++" → "cpp") so the Add-language dialog persists a config under the
+    /// same languageId the registry uses for the corresponding built-in.
+    /// Empty if Mason had no language data; the dialog falls back to masonId.
+    let languageId: String
     let languages: [String]
     let extensions: [String]
     let command: String

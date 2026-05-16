@@ -152,7 +152,12 @@ struct CodeLanguageDetailView: View {
     }
 
     private func applyPrefill(_ pkg: MasonPackage) {
-        entry.language = (pkg.languages.first ?? pkg.masonId).lowercased()
+        // Prefer the generator-normalized languageId so it lines up with the
+        // registry's built-in languageIds (e.g. "shellscript", not "bash";
+        // "cpp", not "c++"). Fall back to masonId only when the snapshot has
+        // no language data at all.
+        let resolved = pkg.languageId.isEmpty ? pkg.masonId.lowercased() : pkg.languageId
+        entry.language = resolved
         entry.extensions = pkg.extensions
         entry.command = pkg.command
         entry.args = pkg.args

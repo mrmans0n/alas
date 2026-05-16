@@ -35,6 +35,27 @@ trap 'rm -rf "$TMP"' EXIT
 # binary into LSP mode, we override here. Keys are masonIds; values are
 # {command, args}. Unknown packages fall through to (bin, []), which works
 # for the many LSPs that default to stdio with no flags.
+# Mason's `languages` field uses display names ("Bash", "C++", "C#"). Our
+# registry uses canonical LSP languageIds — typically the lowercased display
+# name, but with a few well-known overrides where they diverge. We emit a
+# pre-resolved `languageId` field in the snapshot so the Add-language dialog
+# saves a config under the registry-aligned ID. Without this, saving the
+# bash-language-server prefill would write `language: "bash"` which then
+# beats the built-in `shellscript` entry alphabetically when resolving by
+# extension, opening .sh files with the wrong LSP languageId.
+LSP_LANG_ID_MAP=$(cat <<'JSON'
+{
+  "Bash":   "shellscript",
+  "Shell":  "shellscript",
+  "Zsh":    "shellscript",
+  "C":      "c",
+  "C++":    "cpp",
+  "C#":     "csharp",
+  "F#":     "fsharp"
+}
+JSON
+)
+
 LSP_OVERRIDE_MAP=$(cat <<'JSON'
 {
   "pyright":                        {"command": "pyright-langserver", "args": ["--stdio"]},
@@ -236,9 +257,19 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
     extensions=$(jq -n --argjson langs "$languages" --argjson map "$LANG_EXT_MAP" \
         '($langs[0] // "") as $primary | $map[$primary] // []')
 
+    # Resolve the LSP languageId from the primary language. Use the override
+    # map first; fall back to a lowercased display name with non-alphanumeric
+    # characters stripped (handles "Plain Text" → "plaintext"). Empty when
+    # Mason gave us no language at all — the dialog falls back to the
+    # masonId in that case.
+    language_id=$(jq -nr --argjson langs "$languages" --argjson map "$LSP_LANG_ID_MAP" \
+        '($langs[0] // "") as $primary
+         | $map[$primary] // ($primary | ascii_downcase | gsub("[^a-z0-9]"; ""))')
+
     entry=$(jq -n \
         --arg masonId "$name" \
         --arg displayName "$name" \
+        --arg languageId "$language_id" \
         --argjson languages "$languages" \
         --argjson extensions "$extensions" \
         --arg command "$cmd" \
@@ -247,6 +278,7 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
         '{
             masonId: $masonId,
             displayName: $displayName,
+            languageId: $languageId,
             languages: $languages,
             extensions: $extensions,
             command: $command,

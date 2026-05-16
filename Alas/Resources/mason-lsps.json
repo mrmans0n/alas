@@ -4,6 +4,7 @@
     {
       "masonId": "angular-language-server",
       "displayName": "angular-language-server",
+      "languageId": "angular",
       "languages": [
         "Angular"
       ],
@@ -21,6 +22,7 @@
     {
       "masonId": "ansible-language-server",
       "displayName": "ansible-language-server",
+      "languageId": "ansible",
       "languages": [
         "Ansible"
       ],
@@ -43,6 +45,7 @@
     {
       "masonId": "antlers-language-server",
       "displayName": "antlers-language-server",
+      "languageId": "antlers",
       "languages": [
         "Antlers"
       ],
@@ -60,6 +63,7 @@
     {
       "masonId": "asm-lsp",
       "displayName": "asm-lsp",
+      "languageId": "assembly",
       "languages": [
         "Assembly"
       ],
@@ -82,6 +86,7 @@
     {
       "masonId": "astro-language-server",
       "displayName": "astro-language-server",
+      "languageId": "astro",
       "languages": [
         "Astro"
       ],
@@ -103,6 +108,7 @@
     {
       "masonId": "autotools-language-server",
       "displayName": "autotools-language-server",
+      "languageId": "",
       "languages": [],
       "extensions": [],
       "command": "autotools-language-server",
@@ -118,6 +124,7 @@
     {
       "masonId": "awk-language-server",
       "displayName": "awk-language-server",
+      "languageId": "awk",
       "languages": [
         "AWK"
       ],
@@ -135,6 +142,7 @@
     {
       "masonId": "azure-pipelines-language-server",
       "displayName": "azure-pipelines-language-server",
+      "languageId": "azurepipelines",
       "languages": [
         "Azure Pipelines"
       ],
@@ -152,6 +160,7 @@
     {
       "masonId": "bacon-ls",
       "displayName": "bacon-ls",
+      "languageId": "rust",
       "languages": [
         "Rust"
       ],
@@ -176,6 +185,7 @@
     {
       "masonId": "basedpyright",
       "displayName": "basedpyright",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -201,6 +211,7 @@
     {
       "masonId": "bash-language-server",
       "displayName": "bash-language-server",
+      "languageId": "shellscript",
       "languages": [
         "Bash",
         "Csh",
@@ -232,6 +243,7 @@
     {
       "masonId": "basics-language-server",
       "displayName": "basics-language-server",
+      "languageId": "",
       "languages": [],
       "extensions": [],
       "command": "basics-language-server",
@@ -247,6 +259,7 @@
     {
       "masonId": "beancount-language-server",
       "displayName": "beancount-language-server",
+      "languageId": "beancount",
       "languages": [
         "Beancount"
       ],
@@ -269,6 +282,7 @@
     {
       "masonId": "biome",
       "displayName": "biome",
+      "languageId": "json",
       "languages": [
         "JSON",
         "JavaScript",
@@ -297,6 +311,7 @@
     {
       "masonId": "brighterscript",
       "displayName": "brighterscript",
+      "languageId": "brighterscript",
       "languages": [
         "BrighterScript"
       ],
@@ -314,6 +329,7 @@
     {
       "masonId": "cairo-language-server",
       "displayName": "cairo-language-server",
+      "languageId": "cairo",
       "languages": [
         "Cairo"
       ],
@@ -331,6 +347,7 @@
     {
       "masonId": "cds-lsp",
       "displayName": "cds-lsp",
+      "languageId": "cds",
       "languages": [
         "CDS"
       ],
@@ -348,6 +365,7 @@
     {
       "masonId": "circom-lsp",
       "displayName": "circom-lsp",
+      "languageId": "circom",
       "languages": [
         "Circom"
       ],
@@ -365,6 +383,7 @@
     {
       "masonId": "cmake-language-server",
       "displayName": "cmake-language-server",
+      "languageId": "cmake",
       "languages": [
         "CMake"
       ],
@@ -389,6 +408,7 @@
     {
       "masonId": "coffeesense-language-server",
       "displayName": "coffeesense-language-server",
+      "languageId": "coffeescript",
       "languages": [
         "CoffeeScript"
       ],
@@ -408,6 +428,7 @@
     {
       "masonId": "copilot-language-server",
       "displayName": "copilot-language-server",
+      "languageId": "",
       "languages": [],
       "extensions": [],
       "command": "copilot-language-server",
@@ -423,6 +444,7 @@
     {
       "masonId": "cspell-lsp",
       "displayName": "cspell-lsp",
+      "languageId": "",
       "languages": [],
       "extensions": [],
       "command": "cspell-lsp",
@@ -438,6 +460,7 @@
     {
       "masonId": "css-lsp",
       "displayName": "css-lsp",
+      "languageId": "css",
       "languages": [
         "CSS",
         "SCSS",
@@ -461,6 +484,7 @@
     {
       "masonId": "css-variables-language-server",
       "displayName": "css-variables-language-server",
+      "languageId": "css",
       "languages": [
         "CSS",
         "SCSS",
@@ -482,6 +506,7 @@
     {
       "masonId": "cssmodules-language-server",
       "displayName": "cssmodules-language-server",
+      "languageId": "css",
       "languages": [
         "CSS"
       ],
@@ -501,6 +526,7 @@
     {
       "masonId": "cucumber-language-server",
       "displayName": "cucumber-language-server",
+      "languageId": "cucumber",
       "languages": [
         "Cucumber"
       ],
@@ -518,6 +544,7 @@
     {
       "masonId": "cue",
       "displayName": "cue",
+      "languageId": "cue",
       "languages": [
         "Cue"
       ],
@@ -542,6 +569,7 @@
     {
       "masonId": "cuelsp",
       "displayName": "cuelsp",
+      "languageId": "cue",
       "languages": [
         "Cue"
       ],
@@ -561,6 +589,7 @@
     {
       "masonId": "custom-elements-languageserver",
       "displayName": "custom-elements-languageserver",
+      "languageId": "",
       "languages": [],
       "extensions": [],
       "command": "custom-elements-languageserver",
@@ -576,6 +605,7 @@
     {
       "masonId": "cypher-language-server",
       "displayName": "cypher-language-server",
+      "languageId": "cypher",
       "languages": [
         "Cypher"
       ],
@@ -593,6 +623,7 @@
     {
       "masonId": "diagnostic-languageserver",
       "displayName": "diagnostic-languageserver",
+      "languageId": "",
       "languages": [],
       "extensions": [],
       "command": "diagnostic-languageserver",
@@ -608,6 +639,7 @@
     {
       "masonId": "dingo-lsp",
       "displayName": "dingo-lsp",
+      "languageId": "dingo",
       "languages": [
         "Dingo"
       ],
@@ -625,6 +657,7 @@
     {
       "masonId": "django-language-server",
       "displayName": "django-language-server",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -645,6 +678,7 @@
     {
       "masonId": "django-template-lsp",
       "displayName": "django-template-lsp",
+      "languageId": "python",
       "languages": [
         "Python",
         "Django",
@@ -667,6 +701,7 @@
     {
       "masonId": "docker-compose-language-service",
       "displayName": "docker-compose-language-service",
+      "languageId": "docker",
       "languages": [
         "Docker"
       ],
@@ -684,6 +719,7 @@
     {
       "masonId": "dockerfile-language-server",
       "displayName": "dockerfile-language-server",
+      "languageId": "docker",
       "languages": [
         "Docker"
       ],
@@ -708,6 +744,7 @@
     {
       "masonId": "dot-language-server",
       "displayName": "dot-language-server",
+      "languageId": "dot",
       "languages": [
         "DOT"
       ],
@@ -725,6 +762,7 @@
     {
       "masonId": "elm-language-server",
       "displayName": "elm-language-server",
+      "languageId": "elm",
       "languages": [
         "Elm"
       ],
@@ -744,6 +782,7 @@
     {
       "masonId": "ember-language-server",
       "displayName": "ember-language-server",
+      "languageId": "ember",
       "languages": [
         "Ember"
       ],
@@ -761,6 +800,7 @@
     {
       "masonId": "emmet-language-server",
       "displayName": "emmet-language-server",
+      "languageId": "emmet",
       "languages": [
         "Emmet"
       ],
@@ -780,6 +820,7 @@
     {
       "masonId": "emmet-ls",
       "displayName": "emmet-ls",
+      "languageId": "emmet",
       "languages": [
         "Emmet"
       ],
@@ -797,6 +838,7 @@
     {
       "masonId": "esbonio",
       "displayName": "esbonio",
+      "languageId": "sphinx",
       "languages": [
         "Sphinx"
       ],
@@ -814,6 +856,7 @@
     {
       "masonId": "eslint-lsp",
       "displayName": "eslint-lsp",
+      "languageId": "javascript",
       "languages": [
         "JavaScript",
         "TypeScript"
@@ -838,6 +881,7 @@
     {
       "masonId": "fennel-language-server",
       "displayName": "fennel-language-server",
+      "languageId": "fennel",
       "languages": [
         "Fennel"
       ],
@@ -857,6 +901,7 @@
     {
       "masonId": "fish-lsp",
       "displayName": "fish-lsp",
+      "languageId": "fish",
       "languages": [
         "Fish"
       ],
@@ -881,6 +926,7 @@
     {
       "masonId": "flux-lsp",
       "displayName": "flux-lsp",
+      "languageId": "flux",
       "languages": [
         "Flux"
       ],
@@ -898,6 +944,7 @@
     {
       "masonId": "foam-language-server",
       "displayName": "foam-language-server",
+      "languageId": "openfoam",
       "languages": [
         "OpenFOAM"
       ],
@@ -915,6 +962,7 @@
     {
       "masonId": "fortls",
       "displayName": "fortls",
+      "languageId": "fortran",
       "languages": [
         "Fortran"
       ],
@@ -937,6 +985,7 @@
     {
       "masonId": "gh-actions-language-server",
       "displayName": "gh-actions-language-server",
+      "languageId": "yaml",
       "languages": [
         "YAML"
       ],
@@ -957,6 +1006,7 @@
     {
       "masonId": "gitlab-ci-ls",
       "displayName": "gitlab-ci-ls",
+      "languageId": "yaml",
       "languages": [
         "YAML"
       ],
@@ -977,6 +1027,7 @@
     {
       "masonId": "glint",
       "displayName": "glint",
+      "languageId": "handlebars",
       "languages": [
         "Handlebars",
         "Glimmer",
@@ -997,6 +1048,7 @@
     {
       "masonId": "golangci-lint-langserver",
       "displayName": "golangci-lint-langserver",
+      "languageId": "go",
       "languages": [
         "Go"
       ],
@@ -1021,6 +1073,7 @@
     {
       "masonId": "gopls",
       "displayName": "gopls",
+      "languageId": "go",
       "languages": [
         "Go"
       ],
@@ -1045,6 +1098,7 @@
     {
       "masonId": "grammarly-languageserver",
       "displayName": "grammarly-languageserver",
+      "languageId": "markdown",
       "languages": [
         "Markdown",
         "Text"
@@ -1066,6 +1120,7 @@
     {
       "masonId": "graphql-language-service-cli",
       "displayName": "graphql-language-service-cli",
+      "languageId": "graphql",
       "languages": [
         "GraphQL"
       ],
@@ -1090,6 +1145,7 @@
     {
       "masonId": "hdl-checker",
       "displayName": "hdl-checker",
+      "languageId": "vhdl",
       "languages": [
         "VHDL",
         "Verilog",
@@ -1109,6 +1165,7 @@
     {
       "masonId": "herb-language-server",
       "displayName": "herb-language-server",
+      "languageId": "html",
       "languages": [
         "HTML",
         "Ruby"
@@ -1130,6 +1187,7 @@
     {
       "masonId": "hoon-language-server",
       "displayName": "hoon-language-server",
+      "languageId": "hoon",
       "languages": [
         "Hoon"
       ],
@@ -1147,6 +1205,7 @@
     {
       "masonId": "html-lsp",
       "displayName": "html-lsp",
+      "languageId": "html",
       "languages": [
         "HTML"
       ],
@@ -1169,6 +1228,7 @@
     {
       "masonId": "htmx-lsp",
       "displayName": "htmx-lsp",
+      "languageId": "htmx",
       "languages": [
         "HTMX"
       ],
@@ -1186,6 +1246,7 @@
     {
       "masonId": "hydra-lsp",
       "displayName": "hydra-lsp",
+      "languageId": "yaml",
       "languages": [
         "YAML"
       ],
@@ -1206,6 +1267,7 @@
     {
       "masonId": "intelephense",
       "displayName": "intelephense",
+      "languageId": "php",
       "languages": [
         "PHP"
       ],
@@ -1225,6 +1287,7 @@
     {
       "masonId": "jedi-language-server",
       "displayName": "jedi-language-server",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -1245,6 +1308,7 @@
     {
       "masonId": "jinja-lsp",
       "displayName": "jinja-lsp",
+      "languageId": "django",
       "languages": [
         "Django",
         "Jinja",
@@ -1264,6 +1328,7 @@
     {
       "masonId": "jq-lsp",
       "displayName": "jq-lsp",
+      "languageId": "jq",
       "languages": [
         "Jq"
       ],
@@ -1286,6 +1351,7 @@
     {
       "masonId": "json-lsp",
       "displayName": "json-lsp",
+      "languageId": "json",
       "languages": [
         "JSON"
       ],
@@ -1307,6 +1373,7 @@
     {
       "masonId": "jsonnet-language-server",
       "displayName": "jsonnet-language-server",
+      "languageId": "jsonnet",
       "languages": [
         "Jsonnet"
       ],
@@ -1324,6 +1391,7 @@
     {
       "masonId": "kos-language-server",
       "displayName": "kos-language-server",
+      "languageId": "kerboscript",
       "languages": [
         "Kerboscript"
       ],
@@ -1341,6 +1409,7 @@
     {
       "masonId": "language-server-bitbake",
       "displayName": "language-server-bitbake",
+      "languageId": "bitbake",
       "languages": [
         "BitBake"
       ],
@@ -1358,6 +1427,7 @@
     {
       "masonId": "lean-language-server",
       "displayName": "lean-language-server",
+      "languageId": "lean3",
       "languages": [
         "Lean 3"
       ],
@@ -1375,6 +1445,7 @@
     {
       "masonId": "lelwel",
       "displayName": "lelwel",
+      "languageId": "lelwel",
       "languages": [
         "Lelwel"
       ],
@@ -1392,6 +1463,7 @@
     {
       "masonId": "lwc-language-server",
       "displayName": "lwc-language-server",
+      "languageId": "html",
       "languages": [
         "HTML",
         "JavaScript"
@@ -1413,6 +1485,7 @@
     {
       "masonId": "m68k-lsp-server",
       "displayName": "m68k-lsp-server",
+      "languageId": "m68k",
       "languages": [
         "M68K"
       ],
@@ -1430,6 +1503,7 @@
     {
       "masonId": "mdx-analyzer",
       "displayName": "mdx-analyzer",
+      "languageId": "mdx",
       "languages": [
         "MDX"
       ],
@@ -1447,6 +1521,7 @@
     {
       "masonId": "move-analyzer",
       "displayName": "move-analyzer",
+      "languageId": "move",
       "languages": [
         "Move"
       ],
@@ -1464,6 +1539,7 @@
     {
       "masonId": "mutt-language-server",
       "displayName": "mutt-language-server",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -1484,6 +1560,7 @@
     {
       "masonId": "nginx-language-server",
       "displayName": "nginx-language-server",
+      "languageId": "nginx",
       "languages": [
         "nginx"
       ],
@@ -1501,6 +1578,7 @@
     {
       "masonId": "nickel-lang-lsp",
       "displayName": "nickel-lang-lsp",
+      "languageId": "nickel",
       "languages": [
         "Nickel"
       ],
@@ -1518,6 +1596,7 @@
     {
       "masonId": "nil",
       "displayName": "nil",
+      "languageId": "nix",
       "languages": [
         "Nix"
       ],
@@ -1537,6 +1616,7 @@
     {
       "masonId": "nomicfoundation-solidity-language-server",
       "displayName": "nomicfoundation-solidity-language-server",
+      "languageId": "solidity",
       "languages": [
         "Solidity"
       ],
@@ -1556,6 +1636,7 @@
     {
       "masonId": "nxls",
       "displayName": "nxls",
+      "languageId": "json",
       "languages": [
         "JSON"
       ],
@@ -1575,6 +1656,7 @@
     {
       "masonId": "openscad-language-server",
       "displayName": "openscad-language-server",
+      "languageId": "openscad",
       "languages": [
         "OpenSCAD"
       ],
@@ -1592,6 +1674,7 @@
     {
       "masonId": "openscad-lsp",
       "displayName": "openscad-lsp",
+      "languageId": "openscad",
       "languages": [
         "OpenSCAD"
       ],
@@ -1609,6 +1692,7 @@
     {
       "masonId": "oxlint",
       "displayName": "oxlint",
+      "languageId": "javascript",
       "languages": [
         "JavaScript",
         "TypeScript"
@@ -1636,6 +1720,7 @@
     {
       "masonId": "pbls",
       "displayName": "pbls",
+      "languageId": "protobuf",
       "languages": [
         "Protobuf"
       ],
@@ -1655,6 +1740,7 @@
     {
       "masonId": "perlnavigator",
       "displayName": "perlnavigator",
+      "languageId": "perl",
       "languages": [
         "Perl"
       ],
@@ -1675,6 +1761,7 @@
     {
       "masonId": "pest-language-server",
       "displayName": "pest-language-server",
+      "languageId": "pest",
       "languages": [
         "Pest"
       ],
@@ -1692,6 +1779,7 @@
     {
       "masonId": "prisma-language-server",
       "displayName": "prisma-language-server",
+      "languageId": "prisma",
       "languages": [
         "Prisma"
       ],
@@ -1711,6 +1799,7 @@
     {
       "masonId": "protols",
       "displayName": "protols",
+      "languageId": "protobuf",
       "languages": [
         "Protobuf"
       ],
@@ -1730,6 +1819,7 @@
     {
       "masonId": "purescript-language-server",
       "displayName": "purescript-language-server",
+      "languageId": "purescript",
       "languages": [
         "PureScript"
       ],
@@ -1754,6 +1844,7 @@
     {
       "masonId": "pyre",
       "displayName": "pyre",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -1774,6 +1865,7 @@
     {
       "masonId": "pyrefly",
       "displayName": "pyrefly",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -1799,6 +1891,7 @@
     {
       "masonId": "pyright",
       "displayName": "pyright",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -1826,6 +1919,7 @@
     {
       "masonId": "python-lsp-server",
       "displayName": "python-lsp-server",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -1851,6 +1945,7 @@
     {
       "masonId": "rassumfrassum",
       "displayName": "rassumfrassum",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -1871,6 +1966,7 @@
     {
       "masonId": "regols",
       "displayName": "regols",
+      "languageId": "rego",
       "languages": [
         "Rego"
       ],
@@ -1888,6 +1984,7 @@
     {
       "masonId": "remark-language-server",
       "displayName": "remark-language-server",
+      "languageId": "markdown",
       "languages": [
         "Markdown"
       ],
@@ -1908,6 +2005,7 @@
     {
       "masonId": "rescript-language-server",
       "displayName": "rescript-language-server",
+      "languageId": "rescript",
       "languages": [
         "ReScript"
       ],
@@ -1928,6 +2026,7 @@
     {
       "masonId": "rnix-lsp",
       "displayName": "rnix-lsp",
+      "languageId": "nix",
       "languages": [
         "Nix"
       ],
@@ -1947,6 +2046,7 @@
     {
       "masonId": "robotcode",
       "displayName": "robotcode",
+      "languageId": "robotframework",
       "languages": [
         "Robot Framework"
       ],
@@ -1964,6 +2064,7 @@
     {
       "masonId": "robotframework-lsp",
       "displayName": "robotframework-lsp",
+      "languageId": "robotframework",
       "languages": [
         "Robot Framework"
       ],
@@ -1981,6 +2082,7 @@
     {
       "masonId": "rpm_lsp_server",
       "displayName": "rpm_lsp_server",
+      "languageId": "spec",
       "languages": [
         "Spec"
       ],
@@ -1998,6 +2100,7 @@
     {
       "masonId": "ruff",
       "displayName": "ruff",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -2023,6 +2126,7 @@
     {
       "masonId": "salt-lsp",
       "displayName": "salt-lsp",
+      "languageId": "salt",
       "languages": [
         "Salt"
       ],
@@ -2040,6 +2144,7 @@
     {
       "masonId": "shopify-cli",
       "displayName": "shopify-cli",
+      "languageId": "liquid",
       "languages": [
         "Liquid"
       ],
@@ -2059,6 +2164,7 @@
     {
       "masonId": "snakeskin-cli",
       "displayName": "snakeskin-cli",
+      "languageId": "snakeskin",
       "languages": [
         "Snakeskin"
       ],
@@ -2076,6 +2182,7 @@
     {
       "masonId": "solidity-ls",
       "displayName": "solidity-ls",
+      "languageId": "solidity",
       "languages": [
         "Solidity"
       ],
@@ -2095,6 +2202,7 @@
     {
       "masonId": "some-sass-language-server",
       "displayName": "some-sass-language-server",
+      "languageId": "scss",
       "languages": [
         "SCSS"
       ],
@@ -2114,6 +2222,7 @@
     {
       "masonId": "sourcery",
       "displayName": "sourcery",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -2139,6 +2248,7 @@
     {
       "masonId": "spyglassmc-language-server",
       "displayName": "spyglassmc-language-server",
+      "languageId": "mcfunction",
       "languages": [
         "MCFunction"
       ],
@@ -2156,6 +2266,7 @@
     {
       "masonId": "sqlls",
       "displayName": "sqlls",
+      "languageId": "sql",
       "languages": [
         "SQL"
       ],
@@ -2175,6 +2286,7 @@
     {
       "masonId": "sqls",
       "displayName": "sqls",
+      "languageId": "sql",
       "languages": [
         "SQL"
       ],
@@ -2194,6 +2306,7 @@
     {
       "masonId": "stan-language-server",
       "displayName": "stan-language-server",
+      "languageId": "stan",
       "languages": [
         "Stan"
       ],
@@ -2211,6 +2324,7 @@
     {
       "masonId": "starlark-rust",
       "displayName": "starlark-rust",
+      "languageId": "starlark",
       "languages": [
         "Starlark"
       ],
@@ -2233,6 +2347,7 @@
     {
       "masonId": "stimulus-language-server",
       "displayName": "stimulus-language-server",
+      "languageId": "blade",
       "languages": [
         "Blade",
         "HTML",
@@ -2253,6 +2368,7 @@
     {
       "masonId": "stylelint-language-server",
       "displayName": "stylelint-language-server",
+      "languageId": "stylelint",
       "languages": [
         "Stylelint"
       ],
@@ -2270,6 +2386,7 @@
     {
       "masonId": "stylelint-lsp",
       "displayName": "stylelint-lsp",
+      "languageId": "stylelint",
       "languages": [
         "Stylelint"
       ],
@@ -2287,6 +2404,7 @@
     {
       "masonId": "svelte-language-server",
       "displayName": "svelte-language-server",
+      "languageId": "svelte",
       "languages": [
         "Svelte"
       ],
@@ -2308,6 +2426,7 @@
     {
       "masonId": "svlangserver",
       "displayName": "svlangserver",
+      "languageId": "systemverilog",
       "languages": [
         "SystemVerilog"
       ],
@@ -2325,6 +2444,7 @@
     {
       "masonId": "svls",
       "displayName": "svls",
+      "languageId": "systemverilog",
       "languages": [
         "SystemVerilog"
       ],
@@ -2347,6 +2467,7 @@
     {
       "masonId": "tabby-agent",
       "displayName": "tabby-agent",
+      "languageId": "",
       "languages": [],
       "extensions": [],
       "command": "tabby-agent",
@@ -2362,6 +2483,7 @@
     {
       "masonId": "tailwindcss-language-server",
       "displayName": "tailwindcss-language-server",
+      "languageId": "css",
       "languages": [
         "CSS"
       ],
@@ -2388,6 +2510,7 @@
     {
       "masonId": "tclint",
       "displayName": "tclint",
+      "languageId": "tcl",
       "languages": [
         "Tcl"
       ],
@@ -2407,6 +2530,7 @@
     {
       "masonId": "termux-language-server",
       "displayName": "termux-language-server",
+      "languageId": "shellscript",
       "languages": [
         "Bash"
       ],
@@ -2427,6 +2551,7 @@
     {
       "masonId": "textlsp",
       "displayName": "textlsp",
+      "languageId": "text",
       "languages": [
         "Text",
         "LaTeX",
@@ -2446,6 +2571,7 @@
     {
       "masonId": "tsgo",
       "displayName": "tsgo",
+      "languageId": "typescript",
       "languages": [
         "TypeScript",
         "JavaScript"
@@ -2468,6 +2594,7 @@
     {
       "masonId": "tsp-server",
       "displayName": "tsp-server",
+      "languageId": "typespec",
       "languages": [
         "Typespec"
       ],
@@ -2485,6 +2612,7 @@
     {
       "masonId": "turtle-language-server",
       "displayName": "turtle-language-server",
+      "languageId": "turtle",
       "languages": [
         "Turtle"
       ],
@@ -2502,6 +2630,7 @@
     {
       "masonId": "twiggy-language-server",
       "displayName": "twiggy-language-server",
+      "languageId": "twig",
       "languages": [
         "Twig",
         "HTML"
@@ -2522,6 +2651,7 @@
     {
       "masonId": "ty",
       "displayName": "ty",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -2547,6 +2677,7 @@
     {
       "masonId": "typescript-language-server",
       "displayName": "typescript-language-server",
+      "languageId": "typescript",
       "languages": [
         "TypeScript",
         "JavaScript"
@@ -2576,6 +2707,7 @@
     {
       "masonId": "unocss-language-server",
       "displayName": "unocss-language-server",
+      "languageId": "css",
       "languages": [
         "CSS"
       ],
@@ -2595,6 +2727,7 @@
     {
       "masonId": "vectorcode",
       "displayName": "vectorcode",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
@@ -2615,6 +2748,7 @@
     {
       "masonId": "vetur-vls",
       "displayName": "vetur-vls",
+      "languageId": "vue",
       "languages": [
         "Vue"
       ],
@@ -2634,6 +2768,7 @@
     {
       "masonId": "vim-language-server",
       "displayName": "vim-language-server",
+      "languageId": "vimscript",
       "languages": [
         "VimScript"
       ],
@@ -2651,6 +2786,7 @@
     {
       "masonId": "vscode-solidity-server",
       "displayName": "vscode-solidity-server",
+      "languageId": "solidity",
       "languages": [
         "Solidity"
       ],
@@ -2670,6 +2806,7 @@
     {
       "masonId": "vtsls",
       "displayName": "vtsls",
+      "languageId": "javascript",
       "languages": [
         "JavaScript",
         "TypeScript"
@@ -2697,6 +2834,7 @@
     {
       "masonId": "vue-language-server",
       "displayName": "vue-language-server",
+      "languageId": "vue",
       "languages": [
         "Vue"
       ],
@@ -2723,6 +2861,7 @@
     {
       "masonId": "wing",
       "displayName": "wing",
+      "languageId": "wing",
       "languages": [
         "Wing"
       ],
@@ -2740,6 +2879,7 @@
     {
       "masonId": "yaml-language-server",
       "displayName": "yaml-language-server",
+      "languageId": "yaml",
       "languages": [
         "YAML"
       ],
@@ -2767,6 +2907,7 @@
     {
       "masonId": "yls-yara",
       "displayName": "yls-yara",
+      "languageId": "yara",
       "languages": [
         "YARA"
       ],
@@ -2784,6 +2925,7 @@
     {
       "masonId": "zuban",
       "displayName": "zuban",
+      "languageId": "python",
       "languages": [
         "Python"
       ],
