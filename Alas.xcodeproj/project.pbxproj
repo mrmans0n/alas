@@ -136,6 +136,7 @@
 		6256EAEB315812ED4F4E9107 /* StageChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1874031C788ADB4398151FF1 /* StageChip.swift */; };
 		629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */; };
 		62CE99A2AC8B0700EB2F42A2 /* CommitAIDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8EA1E2128F7ED14F9CF61C3 /* CommitAIDetectorTests.swift */; };
+		636ED129478744F9169AD774 /* ProjectConfigAgentOverrideTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1FD24B10ED0B3D4280F15E8 /* ProjectConfigAgentOverrideTests.swift */; };
 		64ADA6AFE69C52F121A163E1 /* FileTypeIconView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F721FB733081A583D4053DDA /* FileTypeIconView.swift */; };
 		659B9DBE590DCF6C395C64B3 /* AgentRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C2381497E73D74C8C314928 /* AgentRegistryTests.swift */; };
 		66D3CC7109527B2938684292 /* ProjectsManagerWorktreeOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3711FACCAD4DE3E29AB13DD2 /* ProjectsManagerWorktreeOrderingTests.swift */; };
@@ -639,6 +640,7 @@
 		E1703FC5CD7DF16F4450E274 /* DiffParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffParser.swift; sourceTree = "<group>"; };
 		E1944B7BC9FC74CD09D816B6 /* DeleteFailedWorktreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteFailedWorktreeView.swift; sourceTree = "<group>"; };
 		E1D1797A096A39AE6CB5EA00 /* FileIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIndex.swift; sourceTree = "<group>"; };
+		E1FD24B10ED0B3D4280F15E8 /* ProjectConfigAgentOverrideTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfigAgentOverrideTests.swift; sourceTree = "<group>"; };
 		E288FF8FA00AC18E1CDD3CA2 /* NewWorktreeDialogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWorktreeDialogTests.swift; sourceTree = "<group>"; };
 		E40B5332AD30BF8ED743FC2B /* CommitAIAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitAIAdapter.swift; sourceTree = "<group>"; };
 		E43F9F04AF6A6FF0A4D328F4 /* CommitHeaderViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitHeaderViewTests.swift; sourceTree = "<group>"; };
@@ -793,6 +795,7 @@
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
 				7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */,
 				5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */,
+				E1FD24B10ED0B3D4280F15E8 /* ProjectConfigAgentOverrideTests.swift */,
 				5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */,
 				8E3A9C194105E52A72293855 /* ProjectGitWatcherTests.swift */,
 				00809DCA566AAAADD7448659 /* ProjectPickerTests.swift */,
@@ -1841,6 +1844,7 @@
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
 				EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */,
 				7FC2A96DE87638A594DD8B61 /* ProcessGitTests.swift in Sources */,
+				636ED129478744F9169AD774 /* ProjectConfigAgentOverrideTests.swift in Sources */,
 				D13AFC98364971915782491C /* ProjectConfigTests.swift in Sources */,
 				2A18F8265F467BF33AD69159 /* ProjectGitWatcherTests.swift in Sources */,
 				4E7279E8E76C7778BC686DF1 /* ProjectPickerTests.swift in Sources */,

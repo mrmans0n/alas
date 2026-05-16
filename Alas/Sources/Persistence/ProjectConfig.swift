@@ -10,13 +10,17 @@ enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable {
 }
 
 // MARK: - ProjectStartupScripts
-/// Per-repository startup-script configuration for terminal session open and
-/// worktree creation. Global settings in `AppConfig.Terminal` act as defaults.
+/// Per-repository startup-script configuration for terminal session open,
+/// worktree creation, and worktree agent override.
+/// Global settings in `AppConfig.Terminal` act as defaults.
 struct ProjectStartupScripts: Codable, Equatable {
     var sessionOpenMode: ProjectStartupScriptMode
     var sessionOpenScript: String
     var worktreeCreateMode: ProjectStartupScriptMode
     var worktreeCreateScript: String
+    var worktreeAgentMode: ProjectStartupScriptMode
+    var worktreeAgentId: String?
+    var worktreeAgentUseBypassPermissions: Bool
 
     static let defaults = ProjectStartupScripts(
         sessionOpenMode: .useGlobal,
@@ -24,6 +28,42 @@ struct ProjectStartupScripts: Codable, Equatable {
         worktreeCreateMode: .useGlobal,
         worktreeCreateScript: ""
     )
+
+    enum CodingKeys: String, CodingKey {
+        case sessionOpenMode, sessionOpenScript,
+             worktreeCreateMode, worktreeCreateScript,
+             worktreeAgentMode, worktreeAgentId,
+             worktreeAgentUseBypassPermissions
+    }
+
+    init(
+        sessionOpenMode: ProjectStartupScriptMode,
+        sessionOpenScript: String,
+        worktreeCreateMode: ProjectStartupScriptMode,
+        worktreeCreateScript: String,
+        worktreeAgentMode: ProjectStartupScriptMode = .useGlobal,
+        worktreeAgentId: String? = nil,
+        worktreeAgentUseBypassPermissions: Bool = false
+    ) {
+        self.sessionOpenMode = sessionOpenMode
+        self.sessionOpenScript = sessionOpenScript
+        self.worktreeCreateMode = worktreeCreateMode
+        self.worktreeCreateScript = worktreeCreateScript
+        self.worktreeAgentMode = worktreeAgentMode
+        self.worktreeAgentId = worktreeAgentId
+        self.worktreeAgentUseBypassPermissions = worktreeAgentUseBypassPermissions
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionOpenMode = try c.decode(ProjectStartupScriptMode.self, forKey: .sessionOpenMode)
+        sessionOpenScript = try c.decode(String.self, forKey: .sessionOpenScript)
+        worktreeCreateMode = try c.decode(ProjectStartupScriptMode.self, forKey: .worktreeCreateMode)
+        worktreeCreateScript = try c.decode(String.self, forKey: .worktreeCreateScript)
+        worktreeAgentMode = (try? c.decode(ProjectStartupScriptMode.self, forKey: .worktreeAgentMode)) ?? .useGlobal
+        worktreeAgentId = try? c.decode(String.self, forKey: .worktreeAgentId)
+        worktreeAgentUseBypassPermissions = (try? c.decode(Bool.self, forKey: .worktreeAgentUseBypassPermissions)) ?? false
+    }
 }
 
 // MARK: - ProjectsFile
