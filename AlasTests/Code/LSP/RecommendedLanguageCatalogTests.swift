@@ -65,7 +65,7 @@ struct RecommendedLanguageCatalogTests {
 
     @Test("core mainstream languages are present")
     func coreMainstreamPresent() {
-        for lang in ["swift", "rust", "typescript", "python", "go", "c", "cpp", "ruby", "bash", "lua", "markdown", "json", "kotlin"] {
+        for lang in ["swift", "rust", "typescript", "python", "go", "c", "cpp", "ruby", "shellscript", "lua", "markdown", "json", "kotlin"] {
             #expect(
                 RecommendedLanguageCatalog.entry(forLanguage: lang) != nil,
                 "Missing catalog entry for \(lang)"

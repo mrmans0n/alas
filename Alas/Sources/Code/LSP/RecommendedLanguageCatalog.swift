@@ -113,8 +113,8 @@ enum RecommendedLanguageCatalog {
             ]
         ),
         RecommendedLanguage(
-            language: "bash",
-            displayName: "Bash",
+            language: "shellscript",
+            displayName: "Shell",
             masonId: "bash-language-server",
             aliasOf: nil,
             recipes: [
