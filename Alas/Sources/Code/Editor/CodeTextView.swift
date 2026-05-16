@@ -239,7 +239,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
 
-        if hasMultipleSelections {
+        if hasMultipleSelections && replacementRange.location == NSNotFound {
             let ranges = normalizedSelectedRanges()
             var edits: [MultiCursorEdit] = []
             let character = text.count == 1 ? text.first : nil
@@ -430,18 +430,18 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
 
+        if event.modifierFlags.contains(.command) {
+            let p = convert(event.locationInWindow, from: nil)
+            commandClickHandler?(p)
+            return
+        }
+
         // Normal click clears multi-cursor
         if hasMultipleSelections {
             super.mouseDown(with: event)
             if selectedRanges.count > 1, let first = selectedRanges.first {
                 setSelectedRanges([first], affinity: .downstream, stillSelecting: false)
             }
-            return
-        }
-
-        if event.modifierFlags.contains(.command) {
-            let p = convert(event.locationInWindow, from: nil)
-            commandClickHandler?(p)
             return
         }
         super.mouseDown(with: event)
