@@ -129,6 +129,11 @@ struct GitNameValidatorTests {
         #expect(result == .invalid("Name contains unsupported characters."))
     }
 
+    @Test func rejectsBracket() {
+        let result = GitNameValidator.validateBranchName("feature/[wip]")
+        #expect(result == .invalid("Name contains unsupported characters."))
+    }
+
     @Test func rejectsAtCurly() {
         let result = GitNameValidator.validateBranchName("stash@{1}")
         #expect(result == .invalid("Name cannot contain '@{' ."))

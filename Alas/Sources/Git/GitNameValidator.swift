@@ -81,7 +81,7 @@ struct GitNameValidator {
                 if ch == "\r" || ch == "\n" || ch == "\0" {
                     return .invalid("Name contains unsupported characters.")
                 }
-                if ch == "?" || ch == "*" {
+                if ch == "?" || ch == "*" || ch == "[" {
                     return .invalid("Name contains unsupported characters.")
                 }
             }
