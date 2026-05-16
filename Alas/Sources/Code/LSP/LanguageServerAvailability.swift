@@ -102,7 +102,9 @@ struct LanguageServerAvailability {
             "\(NSHomeDirectory())/.local/bin",
             "\(NSHomeDirectory())/.npm-global/bin",
             "\(NSHomeDirectory())/.bun/bin",
-            "\(NSHomeDirectory())/.volta/bin"
+            "\(NSHomeDirectory())/.volta/bin",
+            // Default GOPATH/bin for `go install`-placed binaries (gopls, etc.).
+            "\(NSHomeDirectory())/go/bin"
         ]
 
         dirs.append(contentsOf: pathFileEntries(at: "/etc/paths"))

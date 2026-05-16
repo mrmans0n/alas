@@ -89,6 +89,10 @@ struct InstallerHost: Equatable, Sendable {
             "\(NSHomeDirectory())/.local/bin",
             "\(NSHomeDirectory())/.bun/bin",
             "\(NSHomeDirectory())/.volta/bin",
+            // Default GOPATH/bin for `go install`-placed binaries. Mason
+            // `pkg:golang/...` recipes drop their output here unless the
+            // user has set GOPATH/GOBIN elsewhere.
+            "\(NSHomeDirectory())/go/bin",
         ]
 
         dirs.append(contentsOf: pathFileEntries(at: "/etc/paths"))

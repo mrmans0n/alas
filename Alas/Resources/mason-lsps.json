@@ -280,11 +280,9 @@
         "cts",
         "js",
         "json",
-        "jsx",
         "mjs",
         "mts",
-        "ts",
-        "tsx"
+        "ts"
       ],
       "command": "biome",
       "args": [
@@ -457,7 +455,9 @@
         "scss"
       ],
       "command": "vscode-css-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -833,14 +833,14 @@
         "cjs",
         "cts",
         "js",
-        "jsx",
         "mjs",
         "mts",
-        "ts",
-        "tsx"
+        "ts"
       ],
       "command": "vscode-eslint-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1001,11 +1001,9 @@
         "cjs",
         "cts",
         "js",
-        "jsx",
         "mjs",
         "mts",
-        "ts",
-        "tsx"
+        "ts"
       ],
       "command": "glint",
       "args": [],
@@ -1097,7 +1095,11 @@
         "graphql"
       ],
       "command": "graphql-lsp",
-      "args": [],
+      "args": [
+        "server",
+        "-m",
+        "stream"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1175,7 +1177,9 @@
         "html"
       ],
       "command": "vscode-html-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1311,7 +1315,9 @@
         "json"
       ],
       "command": "vscode-json-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1417,7 +1423,6 @@
         "htm",
         "html",
         "js",
-        "jsx",
         "mjs"
       ],
       "command": "lwc-language-server",
@@ -1637,11 +1642,9 @@
         "cjs",
         "cts",
         "js",
-        "jsx",
         "mjs",
         "mts",
-        "ts",
-        "tsx"
+        "ts"
       ],
       "command": "oxlint",
       "args": [],
@@ -2486,11 +2489,9 @@
         "cjs",
         "cts",
         "js",
-        "jsx",
         "mjs",
         "mts",
-        "ts",
-        "tsx"
+        "ts"
       ],
       "command": "tsgo",
       "args": [],
@@ -2594,11 +2595,9 @@
         "cjs",
         "cts",
         "js",
-        "jsx",
         "mjs",
         "mts",
-        "ts",
-        "tsx"
+        "ts"
       ],
       "command": "typescript-language-server",
       "args": [
@@ -2722,11 +2721,9 @@
         "cjs",
         "cts",
         "js",
-        "jsx",
         "mjs",
         "mts",
-        "ts",
-        "tsx"
+        "ts"
       ],
       "command": "vtsls",
       "args": [],
