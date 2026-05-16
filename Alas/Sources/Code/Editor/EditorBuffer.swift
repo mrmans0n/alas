@@ -579,8 +579,6 @@ final class EditorBuffer {
 
     // MARK: - Format-on-save
 
-    private struct FormatSaveTimeout: Error {}
-
     /// Best-effort formatting before save. Falls back to plain save when
     /// formatting is disabled, unavailable, fails, times out, or the buffer
     /// changed while the formatter was in flight.
@@ -600,6 +598,8 @@ final class EditorBuffer {
         }
         let generation = editGeneration
         let url = worktreeRoot.appendingPathComponent(relativePath)
+        let text = storage.string
+        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil)
         let options = LSPFormattingOptions(tabSize: 4, insertSpaces: true)
         let edits: [LSPTextEdit]? = await requestFormatting(lsp: lsp, url: url, language: resolvedLanguage, options: options, timeoutNanoseconds: formattingTimeoutNanoseconds)
         guard editGeneration == generation else {
@@ -614,27 +614,34 @@ final class EditorBuffer {
             try save()
             return
         }
-        let text = storage.string
-        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil)
+        let formattedText = storage.string
+        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: formattedText, edits: nil)
         try save()
     }
 
     private func requestFormatting(lsp: DocumentFormatter, url: URL, language: String, options: LSPFormattingOptions, timeoutNanoseconds: UInt64) async -> [LSPTextEdit]? {
-        do {
-            return try await withThrowingTaskGroup(of: [LSPTextEdit]?.self) { group in
-                group.addTask {
-                    await lsp.formatting(for: url, languageId: language, options: options)
-                }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                    throw FormatSaveTimeout()
-                }
-                let first = try await group.next()!
-                group.cancelAll()
-                return first
+        let formatTask: Task<[LSPTextEdit]?, Never> = Task { [weak self] in
+            guard self != nil else { return nil }
+            return await lsp.formatting(for: url, languageId: language, options: options)
+        }
+        let timeoutTask = Task { try? await Task.sleep(nanoseconds: timeoutNanoseconds) }
+        return await withCheckedContinuation { (cont: CheckedContinuation<[LSPTextEdit]?, Never>) in
+            var didResume = false
+            func finish(_ value: [LSPTextEdit]?) {
+                guard !didResume else { return }
+                didResume = true
+                cont.resume(returning: value)
             }
-        } catch {
-            return nil
+            Task {
+                let edits = await formatTask.value
+                timeoutTask.cancel()
+                finish(edits)
+            }
+            Task {
+                try? await timeoutTask.value
+                formatTask.cancel()
+                finish(nil)
+            }
         }
     }
 

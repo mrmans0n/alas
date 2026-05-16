@@ -120,6 +120,17 @@ struct FormatOnSaveTests {
         #expect(onDisk == "HELLO")
         #expect(buffer.storage.string == "HELLO")
     }
+
+    @Test func syncsCurrentTextBeforeFormatting() async throws {
+        let root = tempWorktree()
+        try writeFile(root, "a.txt", "hello")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+        let formatter = TrackingFormatter()
+        try await buffer.formatAndSave(config: makeConfig(formatOnSave: true), lsp: formatter)
+        #expect(formatter.didChangeCalls.first == "HELLO")
+        #expect(formatter.didChangeCalls.last == "formatted")
+    }
 }
 
 @MainActor
@@ -149,5 +160,22 @@ private final class FakeFormatter: DocumentFormatter, @unchecked Sendable {
 
     func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]?) async {
         didChangeText = text
+    }
+}
+
+@MainActor
+private final class TrackingFormatter: DocumentFormatter, @unchecked Sendable {
+    private(set) var didChangeCalls: [String] = []
+
+    func language(forFileExtension ext: String) -> String? {
+        "swift"
+    }
+
+    func formatting(for fileURL: URL, languageId: String, options: LSPFormattingOptions) async -> [LSPTextEdit]? {
+        [.init(range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 5)), newText: "formatted")]
+    }
+
+    func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]?) async {
+        didChangeCalls.append(text)
     }
 }
