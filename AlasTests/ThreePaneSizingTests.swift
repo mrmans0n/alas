@@ -120,7 +120,7 @@ struct ThreePaneSizingTests {
         #expect(isApproximatelyEqual(result.centerWidth, 950))
     }
 
-    @Test func twoPaneModeShrinksSidebarOnlyAsNeededToProtectCenter() {
+    @Test func twoPaneModeSharesSpaceProportionallyBelowCombinedMinimum() {
         let result = ThreePaneSizing.calculate(
             availableWidth: 580,
             preferredSidebarWidth: 244,
@@ -131,8 +131,8 @@ struct ThreePaneSizingTests {
 
         #expect(result.rightVisible == false)
         #expect(isApproximatelyEqual(result.rightWidth, 0))
-        #expect(isApproximatelyEqual(result.sidebarWidth, 174))
-        #expect(isApproximatelyEqual(result.centerWidth, 400))
+        #expect(isApproximatelyEqual(result.sidebarWidth, 191.3333333333))
+        #expect(isApproximatelyEqual(result.centerWidth, 382.6666666667))
     }
 
     @Test func twoPaneAtCenterMinimumStillKeepsSidebarVisible() {
@@ -149,6 +149,23 @@ struct ThreePaneSizingTests {
         #expect(isApproximatelyEqual(result.rightWidth, 0))
         #expect(isApproximatelyEqual(result.sidebarWidth, 133.3333333333))
         #expect(isApproximatelyEqual(result.centerWidth, 266.6666666667))
+        #expect(isApproximatelyEqual(result.sidebarWidth + result.centerWidth + config.dividerWidth, availableWidth))
+    }
+
+    @Test func twoPaneJustAboveCenterMinimumKeepsSidebarVisible() {
+        let availableWidth = config.centerMin + config.dividerWidth + 1
+        let result = ThreePaneSizing.calculate(
+            availableWidth: availableWidth,
+            preferredSidebarWidth: 244,
+            preferredRightWidth: 320,
+            rightPreferredVisible: false,
+            configuration: config
+        )
+
+        #expect(result.rightVisible == false)
+        #expect(isApproximatelyEqual(result.rightWidth, 0))
+        #expect(isApproximatelyEqual(result.sidebarWidth, 133.6666666667))
+        #expect(isApproximatelyEqual(result.centerWidth, 267.3333333333))
         #expect(isApproximatelyEqual(result.sidebarWidth + result.centerWidth + config.dividerWidth, availableWidth))
     }
 
