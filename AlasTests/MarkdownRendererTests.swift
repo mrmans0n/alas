@@ -254,6 +254,7 @@ struct MarkdownRendererTests {
         let boldBackground = s.attribute(.backgroundColor, at: boldRange.location, effectiveRange: nil) as? NSColor
         #expect(codeBlock != nil)
         #expect(codeFont?.isFixedPitch == true)
+        #expect(codeBackground != nil)
         #expect(codeBackground != boldBackground)
     }
 
