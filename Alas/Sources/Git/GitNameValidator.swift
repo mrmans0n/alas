@@ -50,15 +50,20 @@ struct GitNameValidator {
         }
 
         let components = name.split(separator: "/", omittingEmptySubsequences: false)
-        for component in components {
+        for (index, component) in components.enumerated() {
             let comp = String(component)
+            let isLast = index == components.count - 1
 
             if comp == "." || comp == ".." {
                 return .invalid("Name cannot contain '.' or '..' as a path component.")
             }
 
-            if comp.hasPrefix(".") || comp.hasSuffix(".") {
-                return .invalid("Path components cannot start or end with '.'.")
+            if comp.hasPrefix(".") {
+                return .invalid("Path components cannot start with '.'.")
+            }
+
+            if isLast && comp.hasSuffix(".") {
+                return .invalid("Name cannot end with '.'.")
             }
 
             if comp.contains("..") {

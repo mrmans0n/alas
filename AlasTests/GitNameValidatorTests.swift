@@ -61,7 +61,17 @@ struct GitNameValidatorTests {
 
     @Test func rejectsDotComponent() {
         let result = GitNameValidator.validateBranchName("feature/.secret")
-        #expect(result == .invalid("Path components cannot start or end with '.'."))
+        #expect(result == .invalid("Path components cannot start with '.'."))
+    }
+
+    @Test func acceptsIntermediateDotSuffix() {
+        let result = GitNameValidator.validateBranchName("foo./bar")
+        #expect(result == .valid)
+    }
+
+    @Test func rejectsFinalDotSuffix() {
+        let result = GitNameValidator.validateBranchName("foo/bar.")
+        #expect(result == .invalid("Name cannot end with '.'."))
     }
 
     @Test func rejectsDotDotComponent() {
