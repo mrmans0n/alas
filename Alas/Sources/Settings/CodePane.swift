@@ -81,7 +81,11 @@ struct CodePane: View {
                 onCancel: { creatingNew = false }
             )
         }
-        .sheet(isPresented: $installSheetVisible) {
+        .sheet(isPresented: $installSheetVisible, onDismiss: {
+            // Interactive dismiss (Escape, click-out) bypasses the sheet's
+            // own buttons; reset the installer so the next install starts clean.
+            state.lspInstaller.reset()
+        }) {
             LSPInstallProgressSheet(installer: state.lspInstaller) {
                 installSheetVisible = false
                 state.refreshInstallerHost()

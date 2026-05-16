@@ -32,7 +32,11 @@ struct InstallNudgeBanner: View {
                 .frame(height: 0.5)
                 .foregroundColor(theme.color("line")),
                 alignment: .bottom)
-            .sheet(isPresented: $installSheetVisible) {
+            .sheet(isPresented: $installSheetVisible, onDismiss: {
+                // Interactive dismiss bypasses the sheet's own buttons; reset
+                // the installer so the next install starts from .idle.
+                appState.lspInstaller.reset()
+            }) {
                 LSPInstallProgressSheet(installer: appState.lspInstaller) {
                     installSheetVisible = false
                     appState.refreshInstallerHost()
