@@ -219,21 +219,19 @@ struct WorktreeService {
     }
 
     private func initializedSubmodulesHaveNoLocalState(_ path: URL) async throws -> Bool {
-        // One rev-list per submodule using set arithmetic — every commit
-        // reachable from local branches/reflog/tags that ISN'T reachable
-        // from any remote ref. Replaces an earlier O(reflog × remotes)
-        // shell loop that timed out on submodules with non-trivial
-        // reflogs. Notes/stash are checked separately because they need
-        // full `refs/notes` / `refs/stash` paths.
+        // Reachability set arithmetic for reflog and notes/stash (the
+        // perf-critical fix — replaces an O(reflog × remotes) shell loop
+        // that timed out on submodules with non-trivial reflogs).
         //
-        // Tags get an explicit name+oid comparison via one `ls-remote`
-        // call: rev-list reachability misses the cases where a tag with
-        // a local-only NAME (or a retargeted/retagged tag) points at a
-        // commit that's already in a remote branch — losing that local
-        // tag state on a force-remove would surprise the user.
+        // Branches and tags get explicit name+oid comparisons via single
+        // `ls-remote` calls: rev-list reachability misses the case where
+        // a local ref's NAME or annotation differs from the remote while
+        // its target commit is already reachable from a remote branch
+        // (`my-fix` at origin/main; a retargeted/retagged release tag).
+        // Losing that local ref on a force-remove would surprise the user.
         let localStateScript = """
-        if test -n "$(git rev-list --max-count=1 --branches --reflog --not --remotes 2>/dev/null)"; then
-          echo local-branch-or-reflog
+        if test -n "$(git rev-list --max-count=1 --reflog --not --remotes 2>/dev/null)"; then
+          echo local-reflog
           exit 0
         fi
         extra=$(git for-each-ref --format='%(refname)' refs/notes refs/stash)
@@ -241,7 +239,29 @@ struct WorktreeService {
           echo notes-stash
           exit 0
         fi
-        remote_tags=$(git ls-remote --tags --refs origin 2>/dev/null | awk '{print $2"="$1}')
+        # Branches: compare against local remote-tracking refs. No
+        # network: refs/remotes/<remote>/<branch> already encodes what
+        # the user has fetched. Translate to refs/heads/<branch>=<oid>
+        # so a direct join against for-each-ref refs/heads is exact.
+        remote_heads=$(git for-each-ref --format='%(refname)=%(objectname)' refs/remotes 2>/dev/null \\
+          | awk '/^refs\\/remotes\\/[^\\/]+\\/HEAD=/ { next }
+                 { sub(/^refs\\/remotes\\/[^\\/]+\\//, "refs/heads/", $0); print }')
+        branch_diff=$(git for-each-ref --format='%(refname)=%(objectname)' refs/heads \\
+          | awk -v rt="$remote_heads" '
+              BEGIN { n = split(rt, arr, "\\n"); for (i = 1; i <= n; i++) seen[arr[i]] = 1 }
+              !seen[$0] { print; exit }
+          ')
+        if test -n "$branch_diff"; then
+          echo "branch-mismatch $branch_diff"
+          exit 0
+        fi
+        # Tags: one network call per submodule. `protocol.file.allow=always`
+        # lets the file-protocol test fixtures work; harmless on real
+        # remotes. If `ls-remote` fails (offline, dead remote, etc.) any
+        # local tag is treated as a mismatch — the safer default: don't
+        # force-remove when we can't verify the tag state.
+        remote_tags=$(git -c protocol.file.allow=always ls-remote --tags --refs origin 2>/dev/null \\
+          | awk '{print $2"="$1}')
         tag_diff=$(git for-each-ref --format='%(refname)=%(objectname)' refs/tags \\
           | awk -v rt="$remote_tags" '
               BEGIN { n = split(rt, arr, "\\n"); for (i = 1; i <= n; i++) seen[arr[i]] = 1 }

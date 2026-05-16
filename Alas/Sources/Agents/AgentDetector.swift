@@ -1,12 +1,14 @@
 import Foundation
 
 enum AgentDetector {
-    /// For each agent in `agents`, decide whether it's installed:
-    ///   - if `binaryOverride` is set, the override path must exist and be
-    ///     executable (tilde-expanded);
-    ///   - else if `binary` looks like a path (`/foo`, `./foo`, `~/foo`),
-    ///     resolve it directly the same way;
-    ///   - otherwise scan the colon-separated `path` for `binary`.
+    /// For each agent in `agents`, decide whether it's installed. The
+    /// same rule applies to `binaryOverride` and `binary`:
+    ///   - path-shaped values (`/foo`, `./foo`, `~/foo`, anything
+    ///     containing `/`) are stat-checked directly after tilde expansion;
+    ///   - bare command names (`claude`, `claude-beta`) are looked up in
+    ///     the colon-separated `path`. `AgentRunner.runPrompt` invokes
+    ///     via `/usr/bin/env` with the augmented PATH, so a bare command
+    ///     name here is genuinely runnable as long as PATH resolves it.
     /// Returns the set of installed agent ids.
     static func scan(
         path: String,
@@ -15,23 +17,19 @@ enum AgentDetector {
         let dirs = path.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
         var found: Set<String> = []
         for agent in agents {
-            if let trimmed = agent.binaryOverride?.trimmingCharacters(in: .whitespaces),
-               !trimmed.isEmpty {
-                if isExecutable(atPath: expandTilde(trimmed)) {
+            let effective: String = {
+                if let trimmed = agent.binaryOverride?.trimmingCharacters(in: .whitespaces),
+                   !trimmed.isEmpty {
+                    return trimmed
+                }
+                return agent.binary
+            }()
+            guard !effective.isEmpty else { continue }
+            if looksLikePath(effective) {
+                if isExecutable(atPath: expandTilde(effective)) {
                     found.insert(agent.id)
                 }
-                continue
-            }
-            // Custom agents can enter absolute or tilde paths in the
-            // binary field. Resolve those directly instead of trying to
-            // find them on PATH (which would silently fail).
-            if looksLikePath(agent.binary) {
-                if isExecutable(atPath: expandTilde(agent.binary)) {
-                    found.insert(agent.id)
-                }
-                continue
-            }
-            if isExecutable(named: agent.binary, in: dirs) {
+            } else if isExecutable(named: effective, in: dirs) {
                 found.insert(agent.id)
             }
         }

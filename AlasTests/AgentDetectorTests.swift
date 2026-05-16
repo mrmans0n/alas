@@ -62,6 +62,22 @@ struct AgentDetectorTests {
         #expect(installed.isEmpty)
     }
 
+    @Test func bareCommandNameOverrideIsPathScanned() async throws {
+        // A user can override a built-in with a different command name
+        // (e.g. `claude-beta` installed via Homebrew). Detection must
+        // PATH-scan, not stat the literal string against cwd.
+        let dir = try tmpDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeShim(in: dir, named: "claude-beta")
+        var claude = AgentBuiltins.entry(id: "claude")!
+        claude.binaryOverride = "claude-beta"
+        let installed = await AgentDetector.scan(
+            path: dir.path,
+            agents: [claude]
+        )
+        #expect(installed == Set(["claude"]))
+    }
+
     @Test func customAgentDetectedByBinaryOnPath() async throws {
         let dir = try tmpDir()
         defer { try? FileManager.default.removeItem(at: dir) }
