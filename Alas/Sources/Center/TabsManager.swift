@@ -1035,6 +1035,19 @@ final class TabsManager {
         }
     }
 
+    /// Async save that attempts LSP formatting first when enabled.
+    @discardableResult
+    func saveActiveAsync(worktreeId: String, config: AppConfig.Code) async -> Bool {
+        guard let activeId = activeTabId(forWorktree: worktreeId),
+              let buffer = peekBuffer(tabId: activeId) else { return false }
+        do {
+            try await buffer.formatAndSaveRecordingError(config: config, lsp: lsp)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     @discardableResult
     func revertActive(worktreeId: String) -> Bool {
         guard let activeId = activeTabId(forWorktree: worktreeId),

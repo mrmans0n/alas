@@ -11,6 +11,7 @@ actor LSPClient {
     private var nextId: Int = 0
     private var pending: [LSPID: CheckedContinuation<Data?, Error>] = [:]
     private var textDocumentSyncKind: TextDocumentSyncKind = .full
+    private(set) var supportsDocumentFormatting: Bool = false
     // `AsyncStream` is single-consumer — values are delivered to whichever
     // iterator races to read first, not broadcast. Multiple coordinators
     // sharing one client (two tabs in the same worktree/language) used to
@@ -60,12 +61,15 @@ actor LSPClient {
                     "hover": ["contentFormat": ["markdown", "plaintext"]],
                     "definition": [:],
                     "documentSymbol": ["hierarchicalDocumentSymbolSupport": true],
-                    "publishDiagnostics": [:]
+                    "publishDiagnostics": [:],
+                    "formatting": ["dynamicRegistration": false]
                 ]
             ] as [String: Any]
         ]
         let rawResult = try await sendRequest(method: "initialize", params: params)
-        textDocumentSyncKind = Self.decodeTextDocumentSyncKind(from: rawResult)
+        let caps = Self.decodeCapabilities(from: rawResult)
+        textDocumentSyncKind = caps.syncKind
+        supportsDocumentFormatting = caps.supportsFormatting
         try sendNotification(method: "initialized", params: [String: Any]())
         state = .ready
     }
@@ -143,6 +147,17 @@ actor LSPClient {
         return (try? JSONDecoder().decode([LSPDocumentSymbol].self, from: raw)) ?? []
     }
 
+    func formatting(uri: String, options: LSPFormattingOptions) async throws -> [LSPTextEdit] {
+        guard supportsDocumentFormatting else { return [] }
+        let params = LSPDocumentFormattingParams(
+            textDocument: LSPTextDocumentIdentifier(uri: uri),
+            options: options
+        )
+        let raw = try await sendRequest(method: "textDocument/formatting", params: params)
+        guard let raw, raw.count > 4 else { return [] }
+        return (try? JSONDecoder().decode([LSPTextEdit].self, from: raw)) ?? []
+    }
+
     func shutdown() async {
         // Send the polite handshake only if we ever reached `.ready`. For
         // clients that died during `initialize()` (or never started), the
@@ -178,13 +193,37 @@ actor LSPClient {
         }
     }
 
-    private static func decodeTextDocumentSyncKind(from data: Data?) -> TextDocumentSyncKind {
-        guard let data else { return .full }
+    private static func decodeCapabilities(from data: Data?) -> (syncKind: TextDocumentSyncKind, supportsFormatting: Bool) {
+        guard let data else { return (.full, false) }
         struct InitializeResult: Decodable {
             let capabilities: ServerCapabilities
         }
         struct ServerCapabilities: Decodable {
             let textDocumentSync: TextDocumentSync?
+            let documentFormattingProvider: DocumentFormattingProvider?
+        }
+        enum DocumentFormattingProvider: Decodable {
+            case unsupported
+            case supported
+
+            var isSupported: Bool {
+                switch self {
+                case .unsupported: return false
+                case .supported: return true
+                }
+            }
+
+            init(from decoder: Decoder) throws {
+                let single = try decoder.singleValueContainer()
+                if let value = try? single.decode(Bool.self) {
+                    self = value ? .supported : .unsupported
+                    return
+                }
+                _ = try decoder.container(keyedBy: EmptyCodingKeys.self)
+                self = .supported
+            }
+
+            enum EmptyCodingKeys: CodingKey {}
         }
         enum TextDocumentSync: Decodable {
             case kind(TextDocumentSyncKind)
@@ -203,13 +242,17 @@ actor LSPClient {
             enum CodingKeys: String, CodingKey { case change }
         }
 
-        guard let result = try? JSONDecoder().decode(InitializeResult.self, from: data),
-              let sync = result.capabilities.textDocumentSync else {
-            return .full
+        guard let result = try? JSONDecoder().decode(InitializeResult.self, from: data) else {
+            return (.full, false)
         }
-        switch sync {
-        case .kind(let kind): return kind
-        }
+        let syncKind: TextDocumentSyncKind = {
+            guard let sync = result.capabilities.textDocumentSync else { return .full }
+            switch sync {
+            case .kind(let kind): return kind
+            }
+        }()
+        let supportsFormatting = result.capabilities.documentFormattingProvider?.isSupported ?? false
+        return (syncKind, supportsFormatting)
     }
 
     private static func fullRange(for text: String) -> LSPRange {

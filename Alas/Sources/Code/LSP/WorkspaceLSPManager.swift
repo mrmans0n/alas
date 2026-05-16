@@ -1,9 +1,16 @@
 import Foundation
 import Observation
 
+@MainActor
+protocol DocumentFormatter: AnyObject {
+    func language(forFileExtension ext: String) -> String?
+    func formatting(for fileURL: URL, languageId: String, options: LSPFormattingOptions) async -> [LSPTextEdit]?
+    func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]?) async
+}
+
 @Observable
 @MainActor
-final class WorkspaceLSPManager {
+final class WorkspaceLSPManager: DocumentFormatter {
     /// Identifies a holder by the resolved spawn (root + command + args +
     /// env) rather than the LSP languageId. typescript-language-server
     /// requires per-extension language IDs (`typescript`, `typescriptreact`,
@@ -260,6 +267,26 @@ final class WorkspaceLSPManager {
         let initOk = await holder.ready.value
         guard initOk, let cur = holders[key], cur.openedURIs.contains(uri) else { return }
         try? await cur.client.didSave(uri: uri)
+    }
+
+    /// Request `textDocument/formatting` for `fileURL` if a live client is
+    /// available and the server advertises formatting support. Returns `nil`
+    /// when no client exists, the server doesn't support formatting, or the
+    /// request fails. Errors are swallowed so callers can fall back to plain
+    /// save.
+    func formatting(for fileURL: URL, languageId: String, options: LSPFormattingOptions) async -> [LSPTextEdit]? {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri), let holder = holders[key], holder.openedURIs.contains(uri) else { return nil }
+        let initOk = await holder.ready.value
+        guard initOk, let cur = holders[key], cur.openedURIs.contains(uri) else { return nil }
+        let supportsFormatting = await cur.client.supportsDocumentFormatting
+        guard supportsFormatting else { return nil }
+        do {
+            let edits = try await cur.client.formatting(uri: uri, options: options)
+            return edits
+        } catch {
+            return nil
+        }
     }
 
     /// Polls until the live client for `(fileURL, language)` is available

@@ -568,6 +568,110 @@ final class EditorBuffer {
         }
     }
 
+    func formatAndSaveRecordingError(config: AppConfig.Code, lsp: DocumentFormatter?, formattingTimeoutNanoseconds: UInt64 = 5_000_000_000) async throws {
+        do {
+            try await formatAndSave(config: config, lsp: lsp, formattingTimeoutNanoseconds: formattingTimeoutNanoseconds)
+        } catch {
+            lastSaveError = (error as NSError).localizedDescription
+            throw error
+        }
+    }
+
+    // MARK: - Format-on-save
+
+    private struct FormatSaveTimeout: Error {}
+
+    /// Best-effort formatting before save. Falls back to plain save when
+    /// formatting is disabled, unavailable, fails, times out, or the buffer
+    /// changed while the formatter was in flight.
+    func formatAndSave(config: AppConfig.Code, lsp: DocumentFormatter?, formattingTimeoutNanoseconds: UInt64 = 5_000_000_000) async throws {
+        guard !readOnly, !isExternal else {
+            try save()
+            return
+        }
+        guard config.formatOnSave, let lsp else {
+            try save()
+            return
+        }
+        let resolvedLanguage = language ?? lsp.language(forFileExtension: ((relativePath as NSString).pathExtension))
+        guard let resolvedLanguage else {
+            try save()
+            return
+        }
+        let generation = editGeneration
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let options = LSPFormattingOptions(tabSize: 4, insertSpaces: true)
+        let edits: [LSPTextEdit]? = await requestFormatting(lsp: lsp, url: url, language: resolvedLanguage, options: options, timeoutNanoseconds: formattingTimeoutNanoseconds)
+        guard editGeneration == generation else {
+            try save()
+            return
+        }
+        guard let edits, !edits.isEmpty else {
+            try save()
+            return
+        }
+        guard applyFormattingEdits(edits) else {
+            try save()
+            return
+        }
+        let text = storage.string
+        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil)
+        try save()
+    }
+
+    private func requestFormatting(lsp: DocumentFormatter, url: URL, language: String, options: LSPFormattingOptions, timeoutNanoseconds: UInt64) async -> [LSPTextEdit]? {
+        do {
+            return try await withThrowingTaskGroup(of: [LSPTextEdit]?.self) { group in
+                group.addTask {
+                    await lsp.formatting(for: url, languageId: language, options: options)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    throw FormatSaveTimeout()
+                }
+                let first = try await group.next()!
+                group.cancelAll()
+                return first
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    /// Convert and apply LSP edits in reverse document order so offsets do
+    /// not shift. Returns `false` if any edit range is invalid, leaving the
+    /// buffer untouched.
+    private func applyFormattingEdits(_ edits: [LSPTextEdit]) -> Bool {
+        let text = storage.string
+        var nsEdits: [(range: NSRange, newText: String)] = []
+        for edit in edits {
+            guard let start = TextEditCoordinates.utf16Offset(from: edit.range.start, in: text),
+                  let end = TextEditCoordinates.utf16Offset(from: edit.range.end, in: text),
+                  start <= end, end <= (text as NSString).length else { return false }
+            nsEdits.append((NSRange(location: start, length: end - start), edit.newText))
+        }
+        let ascending = nsEdits.sorted { first, second in
+            if first.range.location == second.range.location {
+                return first.range.length < second.range.length
+            }
+            return first.range.location < second.range.location
+        }
+        for index in ascending.indices.dropFirst() {
+            guard NSMaxRange(ascending[index - 1].range) <= ascending[index].range.location else {
+                return false
+            }
+        }
+        loading = true
+        storage.beginEditing()
+        for edit in ascending.reversed() {
+            storage.replaceCharacters(in: edit.range, with: edit.newText)
+        }
+        storage.endEditing()
+        loading = false
+        editGeneration &+= 1
+        return true
+    }
+
     // MARK: - Snapshot / restore (hot-exit)
 
     private func applySnapshot(_ snap: EditorBufferStore.Snapshot) {

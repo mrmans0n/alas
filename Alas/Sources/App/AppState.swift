@@ -794,7 +794,9 @@ final class AppState {
     }
 
     func saveActiveTab(worktreeId: String) {
-        _ = tabs.saveActive(worktreeId: worktreeId)
+        Task {
+            _ = await tabs.saveActiveAsync(worktreeId: worktreeId, config: config.code)
+        }
     }
 
     func saveAllTabs() {

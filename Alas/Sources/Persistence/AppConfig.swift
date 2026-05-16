@@ -78,12 +78,13 @@ struct AppConfig: Codable, Equatable {
     struct Code: Codable, Equatable {
         var fontFamily: String      // "" = system monospaced fallback
         var fontSize: Int           // clamped [8, 64] on decode/write
+        var formatOnSave: Bool
         var languageServers: [LanguageServerConfig]
         var dismissedInstallNudges: [String]
         var userDefinedRecipes: [String: [InstallRecipe]]
 
         enum CodingKeys: String, CodingKey {
-            case fontFamily, fontSize, languageServers, dismissedInstallNudges, userDefinedRecipes
+            case fontFamily, fontSize, formatOnSave, languageServers, dismissedInstallNudges, userDefinedRecipes
         }
     }
 
@@ -166,6 +167,7 @@ struct AppConfig: Codable, Equatable {
         code: Code(
             fontFamily: "SF Mono",
             fontSize: 13,
+            formatOnSave: true,
             languageServers: [],
             dismissedInstallNudges: [],
             userDefinedRecipes: [:]
@@ -239,12 +241,14 @@ extension AppConfig {
             let fontFamily = (try? codeContainer.decode(String.self, forKey: .fontFamily)) ?? "SF Mono"
             let rawSize = (try? codeContainer.decode(Int.self, forKey: .fontSize)) ?? 13
             let fontSize = max(8, min(64, rawSize))
+            let formatOnSave = (try? codeContainer.decode(Bool.self, forKey: .formatOnSave)) ?? true
             let servers = (try? codeContainer.decode([LanguageServerConfig].self, forKey: .languageServers)) ?? []
             let dismissed = (try? codeContainer.decode([String].self, forKey: .dismissedInstallNudges)) ?? []
             let userRecipes = (try? codeContainer.decode([String: [InstallRecipe]].self, forKey: .userDefinedRecipes)) ?? [:]
             code = Code(
                 fontFamily: fontFamily,
                 fontSize: fontSize,
+                formatOnSave: formatOnSave,
                 languageServers: servers,
                 dismissedInstallNudges: dismissed,
                 userDefinedRecipes: userRecipes
@@ -253,6 +257,7 @@ extension AppConfig {
             code = Code(
                 fontFamily: "SF Mono",
                 fontSize: 13,
+                formatOnSave: true,
                 languageServers: [],
                 dismissedInstallNudges: [],
                 userDefinedRecipes: [:]
