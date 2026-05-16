@@ -313,40 +313,175 @@ final class MarkdownRenderer {
         appendPlain("\n")
     }
 
-    private func visitTable(_ table: Markdown.Table) {
-        let header: [String] = table.head.cells.map { $0.plainText }
-        let bodyRows: [[String]] = table.body.rows.map { (row: Markdown.Table.Row) -> [String] in
-            row.cells.map { (cell: Markdown.Table.Cell) -> String in cell.plainText }
+    private struct RenderedTableCell {
+        let content: NSAttributedString
+        let row: Int
+        let column: Int
+        let isHeader: Bool
+        let alignment: NSTextAlignment
+    }
+
+    private func textAlignment(for alignment: Markdown.Table.ColumnAlignment?) -> NSTextAlignment {
+        switch alignment {
+        case .center: return .center
+        case .right: return .right
+        case .left, .none: return .left
         }
-        let allRows: [[String]] = [header] + bodyRows
-        let columnCount = allRows.map { (r: [String]) -> Int in r.count }.max() ?? 0
+    }
+
+    private func renderTableCell(_ cell: Markdown.Table.Cell) -> NSAttributedString {
+        let savedOutput = output
+        let savedTraits = currentTraits
+        let savedStrikethrough = inStrikethrough
+        let cellOutput = NSMutableAttributedString()
+
+        output = cellOutput
+        currentTraits = []
+        inStrikethrough = false
+
+        for child in cell.children {
+            if let paragraph = child as? Paragraph {
+                for inline in paragraph.children {
+                    visit(inline)
+                }
+            } else {
+                visit(child)
+            }
+        }
+
+        let rendered = cellOutput.copy() as! NSAttributedString
+        output = savedOutput
+        currentTraits = savedTraits
+        inStrikethrough = savedStrikethrough
+
+        if rendered.length > 0 {
+            return rendered
+        }
+        return NSAttributedString(string: "", attributes: bodyAttributes())
+    }
+
+    private func tableParagraphStyle(
+        table: NSTextTable,
+        row: Int,
+        column: Int,
+        columnCount: Int,
+        isHeader: Bool,
+        isBandedRow: Bool,
+        alignment: NSTextAlignment
+    ) -> NSParagraphStyle {
+        let block = NSTextTableBlock(
+            table: table,
+            startingRow: row,
+            rowSpan: 1,
+            startingColumn: column,
+            columnSpan: 1
+        )
+        block.verticalAlignment = .middleAlignment
+        block.setWidth(8, type: .absoluteValueType, for: .padding)
+        block.setWidth(0.5, type: .absoluteValueType, for: .border)
+        block.setBorderColor(NSColor(theme.color("fg-faint")))
+        let backgroundToken: String
+        if isHeader {
+            backgroundToken = "bg-3"
+        } else if isBandedRow {
+            backgroundToken = "bg-2"
+        } else {
+            backgroundToken = "bg-1"
+        }
+        block.backgroundColor = NSColor(theme.color(backgroundToken))
+
+        if columnCount > 0 {
+            block.setContentWidth(100 / CGFloat(columnCount), type: .percentageValueType)
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.textBlocks = [block]
+        paragraph.alignment = alignment
+        paragraph.paragraphSpacing = 0
+        paragraph.paragraphSpacingBefore = 0
+        paragraph.lineBreakMode = .byWordWrapping
+        return paragraph
+    }
+
+    private func visitTable(_ table: Markdown.Table) {
+        let headerCells = Array(table.head.cells)
+        let bodyRows = Array(table.body.rows)
+        let columnCount = max(
+            headerCells.count,
+            bodyRows.map { (row: Markdown.Table.Row) in Array(row.cells).count }.max() ?? 0
+        )
         guard columnCount > 0 else { return }
 
-        var widths = Array(repeating: 0, count: columnCount)
-        for row in allRows {
-            for (i, cell) in row.enumerated() where i < columnCount {
-                widths[i] = max(widths[i], cell.count)
+        let textTable = NSTextTable()
+        textTable.numberOfColumns = columnCount
+        textTable.layoutAlgorithm = .automaticLayoutAlgorithm
+        textTable.collapsesBorders = true
+        textTable.hidesEmptyCells = false
+
+        let alignments = table.columnAlignments
+        var renderedCells: [RenderedTableCell] = []
+
+        for column in 0..<columnCount {
+            let content: NSAttributedString
+            if column < headerCells.count {
+                content = renderTableCell(headerCells[column])
+            } else {
+                content = NSAttributedString(string: "", attributes: bodyAttributes())
+            }
+            renderedCells.append(RenderedTableCell(
+                content: content,
+                row: 0,
+                column: column,
+                isHeader: true,
+                alignment: textAlignment(for: column < alignments.count ? alignments[column] : nil)
+            ))
+        }
+
+        for (bodyIndex, row) in bodyRows.enumerated() {
+            let rowCells = Array(row.cells)
+            for column in 0..<columnCount {
+                let content: NSAttributedString
+                if column < rowCells.count {
+                    content = renderTableCell(rowCells[column])
+                } else {
+                    content = NSAttributedString(string: "", attributes: bodyAttributes())
+                }
+                renderedCells.append(RenderedTableCell(
+                    content: content,
+                    row: bodyIndex + 1,
+                    column: column,
+                    isHeader: false,
+                    alignment: textAlignment(for: column < alignments.count ? alignments[column] : nil)
+                ))
             }
         }
 
-        func formatRow(_ row: [String]) -> String {
-            let padded = (0..<columnCount).map { i -> String in
-                let cell = i < row.count ? row[i] : ""
-                return cell.padding(toLength: widths[i], withPad: " ", startingAt: 0)
+        for cell in renderedCells {
+            let mutable = NSMutableAttributedString(attributedString: cell.content)
+            let style = tableParagraphStyle(
+                table: textTable,
+                row: cell.row,
+                column: cell.column,
+                columnCount: columnCount,
+                isHeader: cell.isHeader,
+                isBandedRow: !cell.isHeader && cell.row.isMultiple(of: 2),
+                alignment: cell.alignment
+            )
+            let fullRange = NSRange(location: 0, length: mutable.length)
+            if fullRange.length > 0 {
+                mutable.addAttribute(.paragraphStyle, value: style, range: fullRange)
+                if cell.isHeader {
+                    applyHeaderTableFont(to: mutable, range: fullRange)
+                }
+            } else {
+                mutable.append(NSAttributedString(string: " ", attributes: [
+                    .font: cell.isHeader ? headerTableFont() : bodyFont(),
+                    .foregroundColor: NSColor(theme.color("fg")),
+                    .paragraphStyle: style
+                ]))
             }
-            return "| " + padded.joined(separator: " | ") + " |"
-        }
-
-        let separator = "|-" + widths.map { String(repeating: "-", count: $0) }.joined(separator: "-|-") + "-|"
-
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: monospaceFont(size: monoSize),
-            .foregroundColor: NSColor(theme.color("fg"))
-        ]
-        output.append(NSAttributedString(string: formatRow(header) + "\n", attributes: attrs))
-        output.append(NSAttributedString(string: separator + "\n", attributes: attrs))
-        for row in bodyRows {
-            output.append(NSAttributedString(string: formatRow(row) + "\n", attributes: attrs))
+            output.append(mutable)
+            output.append(NSAttributedString(string: "\n", attributes: [.paragraphStyle: style]))
         }
         appendPlain("\n")
     }
@@ -440,6 +575,33 @@ final class MarkdownRenderer {
         if currentTraits.isEmpty { return base }
         let desc = base.fontDescriptor.withSymbolicTraits(currentTraits)
         return NSFont(descriptor: desc, size: base.pointSize) ?? base
+    }
+
+    private func headerTableFont() -> NSFont {
+        NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+    }
+
+    private func applyHeaderTableFont(to mutable: NSMutableAttributedString, range: NSRange) {
+        mutable.enumerateAttribute(.font, in: range) { value, range, _ in
+            guard let font = value as? NSFont else {
+                mutable.addAttribute(.font, value: headerTableFont(), range: range)
+                return
+            }
+            guard !font.isFixedPitch else { return }
+
+            let traits = font.fontDescriptor.symbolicTraits
+            if traits.isEmpty {
+                mutable.addAttribute(.font, value: headerTableFont(), range: range)
+                return
+            }
+
+            let headerTraits = traits.union(.bold)
+            let descriptor = font.fontDescriptor.withSymbolicTraits(headerTraits)
+            guard let headerFont = NSFont(descriptor: descriptor, size: font.pointSize) else {
+                return
+            }
+            mutable.addAttribute(.font, value: headerFont, range: range)
+        }
     }
 
     private func monospaceFont(size: CGFloat) -> NSFont {
