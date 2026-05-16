@@ -88,9 +88,22 @@ jobs:
         if: always()
         run: ./scripts/cleanup-signing-keychain.sh
 
+      - name: Extract release notes
+        run: |
+          awk -v v="## [$VERSION]" '
+            index($0, v) == 1 { body = 1; next }
+            body && index($0, "## [") == 1 { exit }
+            body { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md" || {
+            echo "::error::No CHANGELOG.md section found for v$VERSION"
+            exit 1
+          }
+
       - name: Upload macOS artifacts to release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: ${{ runner.temp }}/release-notes.md
           files: |
             build/Build/Products/Release/Alas-*-arm64.app.zip
             build/Build/Products/Release/Alas-*-arm64.dmg
