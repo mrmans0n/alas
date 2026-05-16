@@ -3,8 +3,10 @@ import Foundation
 enum AgentDetector {
     /// For each agent in `agents`, decide whether it's installed:
     ///   - if `binaryOverride` is set, the override path must exist and be
-    ///     executable
-    ///   - otherwise scan the colon-separated `path` for `binary`
+    ///     executable (tilde-expanded);
+    ///   - else if `binary` looks like a path (`/foo`, `./foo`, `~/foo`),
+    ///     resolve it directly the same way;
+    ///   - otherwise scan the colon-separated `path` for `binary`.
     /// Returns the set of installed agent ids.
     static func scan(
         path: String,
@@ -15,7 +17,16 @@ enum AgentDetector {
         for agent in agents {
             if let trimmed = agent.binaryOverride?.trimmingCharacters(in: .whitespaces),
                !trimmed.isEmpty {
-                if isExecutable(atPath: trimmed) {
+                if isExecutable(atPath: expandTilde(trimmed)) {
+                    found.insert(agent.id)
+                }
+                continue
+            }
+            // Custom agents can enter absolute or tilde paths in the
+            // binary field. Resolve those directly instead of trying to
+            // find them on PATH (which would silently fail).
+            if looksLikePath(agent.binary) {
+                if isExecutable(atPath: expandTilde(agent.binary)) {
                     found.insert(agent.id)
                 }
                 continue
@@ -48,5 +59,13 @@ enum AgentDetector {
         return fm.fileExists(atPath: path, isDirectory: &isDir)
             && !isDir.boolValue
             && fm.isExecutableFile(atPath: path)
+    }
+
+    private static func looksLikePath(_ s: String) -> Bool {
+        s.hasPrefix("/") || s.hasPrefix("~") || s.contains("/")
+    }
+
+    private static func expandTilde(_ path: String) -> String {
+        (path as NSString).expandingTildeInPath
     }
 }

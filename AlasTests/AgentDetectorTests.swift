@@ -77,4 +77,47 @@ struct AgentDetectorTests {
         )
         #expect(installed == Set(["uuid-1"]))
     }
+
+    @Test func customAgentDetectedByAbsolutePathBinary() async throws {
+        // Users can type an absolute path into the custom-agent binary
+        // field directly. Detection must resolve it the same way it would
+        // a builtin's binaryOverride, NOT try to PATH-scan it.
+        let dir = try tmpDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeShim(in: dir, named: "myagent")
+        let absolutePath = dir.appendingPathComponent("myagent").path
+        let custom = AgentDefinition(
+            id: "uuid-abs", displayName: "Abs",
+            binary: absolutePath,
+            binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
+        )
+        let installed = await AgentDetector.scan(
+            path: "",  // empty PATH; absolute binary must still resolve
+            agents: [custom]
+        )
+        #expect(installed == Set(["uuid-abs"]))
+    }
+
+    @Test func customAgentDetectedByTildePathBinary() async throws {
+        // ~/-style paths in the custom binary field must be expanded
+        // before the executable check.
+        let home = NSString(string: "~").expandingTildeInPath
+        let relative = "alas-det-tilde-\(UUID().uuidString)"
+        let dir = URL(fileURLWithPath: home).appendingPathComponent(relative)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeShim(in: dir, named: "myagent")
+        let custom = AgentDefinition(
+            id: "uuid-tilde", displayName: "Tilde",
+            binary: "~/\(relative)/myagent",
+            binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
+        )
+        let installed = await AgentDetector.scan(
+            path: "",
+            agents: [custom]
+        )
+        #expect(installed == Set(["uuid-tilde"]))
+    }
 }

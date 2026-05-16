@@ -274,14 +274,19 @@ final class AppState {
                     )
                 }
 
-                // After the startup script runs, optionally spawn an agent
-                // CLI in the new worktree. The caller (typically the new-
-                // worktree dialog) chooses which agent to launch by id;
-                // bypass-permissions semantics still come from config
-                // (project override > global). Fire-and-forget: a failed
-                // launch logs but never fails the worktree create.
-                if let id = launchAgentId,
-                   let agent = self.agentRegistry.enabled().first(where: { $0.id == id }) {
+                // Resolve the per-creation agent into a command line that
+                // will run inside the new terminal session — appended to
+                // the session's startup script so the agent gets a real
+                // TTY and the user can interact with it. Bypass-perms
+                // semantics still come from config (project override >
+                // global). If no terminal is being opened we silently skip
+                // auto-launch: a detached background spawn for an
+                // interactive CLI (claude, codex, gemini) would just exit
+                // immediately on the EOF from its missing stdin.
+                let launchAgentCommand: String? = {
+                    guard let id = launchAgentId,
+                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
+                    else { return nil }
                     let useBypass: Bool = {
                         switch project.startupScripts.worktreeAgentMode {
                         case .disabled: return false
@@ -295,23 +300,8 @@ final class AppState {
                     if useBypass, let flag = agent.bypassPermissionsFlag {
                         argv.append(flag)
                     }
-                    let argvJoined = argv
-                        .map { Self.shellQuote($0) }
-                        .joined(separator: " ")
-                    // Truly detach: bypass our local Process.run wrapper
-                    // (which awaits + enforces a 30s SIGTERM watchdog that
-                    // would kill a long-lived agent). Outer zsh forks the
-                    // agent in a subshell, backgrounds it, and exits — the
-                    // agent is then re-parented to launchd and outlives
-                    // this Task. Caveat: the agent runs hidden today (no
-                    // terminal output visible); plumbing through the new
-                    // TerminalService session is a tracked follow-up.
-                    let proc = Process()
-                    proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                    proc.arguments = ["-c", "( \(argvJoined) & ) </dev/null >/dev/null 2>&1"]
-                    proc.currentDirectoryURL = newWorktree.path
-                    try? proc.run()
-                }
+                    return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+                }()
 
                 do {
                     let wasHidden = projectsManager.isWorktreeHidden(
@@ -329,8 +319,15 @@ final class AppState {
                     }
 
                     selectedWorktreeId = newWorktree.id
-                    if openTerminal {
-                        _ = try? openTerminalTab(for: newWorktree)
+                    // Force the terminal open when an agent was picked —
+                    // launching an interactive CLI without a visible
+                    // session is functionally a no-op.
+                    let shouldOpenTerminal = openTerminal || launchAgentCommand != nil
+                    if shouldOpenTerminal {
+                        _ = try? openTerminalTab(
+                            for: newWorktree,
+                            startupScriptSuffix: launchAgentCommand
+                        )
                     }
                 } catch {
                     projectsManager.setOperationState(
@@ -561,13 +558,17 @@ final class AppState {
     }
 
     @discardableResult
-    func openTerminalTab(for worktree: Worktree) throws -> Tab {
+    func openTerminalTab(
+        for worktree: Worktree,
+        startupScriptSuffix: String? = nil
+    ) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
         let session = try terminal.openSession(
             worktree: worktree, project: project,
-            cfg: config.terminal, theme: themeStore.current
+            cfg: config.terminal, theme: themeStore.current,
+            startupScriptSuffix: startupScriptSuffix
         )
         harness.detector.register(sessionId: session.id) { [weak session] in
             session?.surface.foregroundPid
