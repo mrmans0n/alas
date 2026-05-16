@@ -193,8 +193,10 @@
         "py",
         "pyi"
       ],
-      "command": "basedpyright",
-      "args": [],
+      "command": "basedpyright-langserver",
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",

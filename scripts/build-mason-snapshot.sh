@@ -60,6 +60,7 @@ JSON
 LSP_OVERRIDE_MAP=$(cat <<'JSON'
 {
   "pyright":                        {"command": "pyright-langserver", "args": ["--stdio"]},
+  "basedpyright":                   {"command": "basedpyright-langserver", "args": ["--stdio"]},
   "typescript-language-server":     {"command": "typescript-language-server", "args": ["--stdio"]},
   "bash-language-server":           {"command": "bash-language-server", "args": ["start"]},
   "css-lsp":                        {"command": "vscode-css-language-server", "args": ["--stdio"]},
