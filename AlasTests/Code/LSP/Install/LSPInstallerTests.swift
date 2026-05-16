@@ -146,6 +146,59 @@ struct LSPInstallerTests {
         Issue.record("install did not cancel within timeout, state = \(installer.state)")
     }
 
+    @Test("install while running throws InstallerBusy")
+    @MainActor
+    func installWhileBusy() async throws {
+        let installer = LSPInstaller()
+        await installer._spawnForTesting(
+            executable: "/bin/sleep",
+            arguments: ["10"],
+            language: "first"
+        )
+        // Wait for state to become .running
+        for _ in 0..<50 {
+            if case .running = installer.state { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        // Now try to start a second install via the public API; expect InstallerBusy.
+        let installer2 = DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")
+        let recipe = InstallRecipe(installer: .brew, package: "anything")
+        do {
+            try await installer.install(recipe: recipe, using: installer2, language: "second")
+            Issue.record("expected InstallerBusy to be thrown")
+        } catch is InstallerBusy {
+            // expected
+        } catch {
+            Issue.record("expected InstallerBusy, got \(error)")
+        }
+
+        // Cleanup
+        installer.cancel()
+        for _ in 0..<200 {
+            if case .cancelled = installer.state { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    @Test("install with missing executable transitions to .failed")
+    @MainActor
+    func failedOnBadExecutable() async throws {
+        let installer = LSPInstaller()
+        await installer._spawnForTesting(
+            executable: "/bin/does-not-exist",
+            arguments: [],
+            language: "test"
+        )
+        // _spawn sets .failed synchronously in the catch — but the assignment
+        // happens during the await, so check immediately after await returns.
+        if case .failed(let lang, _) = installer.state {
+            #expect(lang == "test")
+        } else {
+            Issue.record("expected .failed state, got \(installer.state)")
+        }
+    }
+
     @Test("reset returns state to idle")
     @MainActor
     func resetClears() async {

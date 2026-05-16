@@ -123,6 +123,7 @@ final class LSPInstaller {
         arguments: [String],
         language: String
     ) async {
+        precondition(state == .idle, "_spawnForTesting requires idle state")
         await _spawn(
             executable: executable,
             arguments: arguments,
@@ -172,6 +173,13 @@ final class LSPInstaller {
             }
         }
 
+        // The readabilityHandler and terminationHandler each enqueue independent
+        // @MainActor Tasks. Their main-actor execution order is not strictly
+        // guaranteed by Swift Concurrency, so the very last log lines may land
+        // after `.finished` is set. In practice this race window is microseconds
+        // (brew/cargo/npm flush before exit and the kernel signals EOF before
+        // terminationHandler fires). The progress sheet keeps the log visible
+        // after `.finished` anyway, so any late-arriving lines are still seen.
         process.terminationHandler = { [weak self, buffer] proc in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -243,7 +251,8 @@ private final class LineBuffer: @unchecked Sendable {
         pending += chunk
         var out: [String] = []
         while let newlineRange = pending.range(of: "\n") {
-            let line = String(pending[..<newlineRange.lowerBound])
+            var line = String(pending[..<newlineRange.lowerBound])
+            if line.hasSuffix("\r") { line.removeLast() }
             out.append(line)
             pending.removeSubrange(pending.startIndex...newlineRange.lowerBound)
         }
