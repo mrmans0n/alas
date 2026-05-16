@@ -59,6 +59,9 @@ struct NewWorktreeDialog: View {
                     Text("Open in new terminal pane").font(.system(size: 12))
                         .foregroundColor(theme.color("fg"))
                 }
+                if let validationMessage = branchValidationMessage {
+                    Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
+                }
                 if let createErrorMessage {
                     Text(createErrorMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
@@ -68,7 +71,11 @@ struct NewWorktreeDialog: View {
             confirmStyle: .primary,
             onCancel: { presented = false },
             onConfirm: create,
-            confirmEnabled: Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty)
+            confirmEnabled: Self.canCreate(
+                projectsEmpty: state.projects.isEmpty,
+                branchEmpty: branch.isEmpty,
+                branchValidation: branchValidationMessage
+            )
         )
         .onAppear {
             if projectId.isEmpty {
@@ -100,6 +107,16 @@ struct NewWorktreeDialog: View {
 
     private var showsRepositorySelector: Bool {
         !state.projects.isEmpty && presetProject == nil
+    }
+
+    private var branchValidationMessage: String? {
+        let result = GitNameValidator.validateBranchName(branch)
+        switch result {
+        case .valid:
+            return nil
+        case .invalid(let message):
+            return message
+        }
     }
 
     private var subtitleText: String {
@@ -178,12 +195,12 @@ struct NewWorktreeDialog: View {
     }
 
     private func submitCreate() {
-        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty) else { return }
+        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty, branchValidation: branchValidationMessage) else { return }
         create()
     }
 
-    nonisolated static func canCreate(projectsEmpty: Bool, branchEmpty: Bool) -> Bool {
-        !projectsEmpty && !branchEmpty
+    nonisolated static func canCreate(projectsEmpty: Bool, branchEmpty: Bool, branchValidation: String? = nil) -> Bool {
+        !projectsEmpty && !branchEmpty && branchValidation == nil
     }
 
     nonisolated static func resolvedPresetProject(

@@ -1,0 +1,124 @@
+import Foundation
+
+/// Validates git branch names and worktree names to prevent invalid refs
+/// and filesystem-unsafe paths before shelling out to git.
+struct GitNameValidator {
+    enum ValidationResult: Equatable {
+        case valid
+        case invalid(String)
+    }
+
+    /// Validate a git branch name according to git ref naming rules.
+    /// Allows path-style names such as `feature/foo`.
+    static func validateBranchName(_ name: String) -> ValidationResult {
+        // Do NOT trim spaces — if the user includes them, they are invalid.
+        // We only reject truly empty strings after stripping all characters.
+        if name.isEmpty {
+            return .invalid("Name cannot be empty.")
+        }
+
+        if name.count > 250 {
+            return .invalid("Name is too long (max 250 characters).")
+        }
+
+        if name.contains(" ") {
+            return .invalid("Name cannot contain spaces.")
+        }
+
+        if name.unicodeScalars.contains(where: { $0.isASCII && $0.properties.generalCategory == .control }) {
+            return .invalid("Name cannot contain control characters.")
+        }
+
+        if name.hasPrefix("/") || name.hasSuffix("/") {
+            return .invalid("Name cannot start or end with '/' .")
+        }
+
+        if name.contains("//") {
+            return .invalid("Name cannot contain consecutive '/' .")
+        }
+
+        if name.contains("@{") {
+            return .invalid("Name cannot contain '@{' .")
+        }
+
+        if name == "@" {
+            return .invalid("'@' is not a valid branch name.")
+        }
+
+        if name.hasPrefix("-") {
+            return .invalid("Name cannot start with '-' .")
+        }
+
+        let components = name.split(separator: "/", omittingEmptySubsequences: false)
+        for (index, component) in components.enumerated() {
+            let comp = String(component)
+            let isLast = index == components.count - 1
+
+            if comp == "." || comp == ".." {
+                return .invalid("Name cannot contain '.' or '..' as a path component.")
+            }
+
+            if comp.hasPrefix(".") {
+                return .invalid("Path components cannot start with '.'.")
+            }
+
+            if isLast && comp.hasSuffix(".") {
+                return .invalid("Name cannot end with '.'.")
+            }
+
+            if comp.contains("..") {
+                return .invalid("Name cannot contain '..'.")
+            }
+
+            if comp.hasSuffix(".lock") {
+                return .invalid("Name cannot end with '.lock' .")
+            }
+
+            for ch in comp {
+                if ch == "~" || ch == "^" || ch == ":" || ch == "\\" || ch == "\t" {
+                    return .invalid("Name contains unsupported characters.")
+                }
+                if ch == "\r" || ch == "\n" || ch == "\0" {
+                    return .invalid("Name contains unsupported characters.")
+                }
+                if ch == "?" || ch == "*" || ch == "[" {
+                    return .invalid("Name contains unsupported characters.")
+                }
+            }
+        }
+
+        return .valid
+    }
+
+    /// Validate a branch prefix (e.g. "feature/") which may end with a
+    /// trailing slash that separates the prefix from the rest of the
+    /// branch name. All other branch-name rules still apply.
+    static func validateBranchPrefix(_ prefix: String) -> ValidationResult {
+        if prefix.isEmpty {
+            return .valid
+        }
+
+        // Temporarily strip a trailing slash for validation, then
+        // re-check that the stripped form is a valid branch name.
+        let toValidate: String
+        if prefix.hasSuffix("/") {
+            let stripped = String(prefix.dropLast())
+            if stripped.isEmpty {
+                return .invalid("Prefix cannot be '/' only.")
+            }
+            if stripped.hasSuffix("/") {
+                return .invalid("Prefix cannot contain consecutive '/'.")
+            }
+            toValidate = stripped
+        } else {
+            toValidate = prefix
+        }
+
+        return validateBranchName(toValidate)
+    }
+
+    /// Validate a worktree directory name derived from a branch name.
+    static func validateWorktreeName(_ name: String) -> ValidationResult {
+        validateBranchName(name)
+    }
+}
