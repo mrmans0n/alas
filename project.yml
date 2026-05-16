@@ -42,6 +42,8 @@ targets:
       - path: ThirdParty/ghostty/src/font/res/JetBrainsMonoNerdFont-Regular.ttf
         buildPhase: resources
         optional: true
+      - path: Alas/Resources/mason-lsps.json
+        buildPhase: resources
     info:
       path: Alas/Resources/Info.plist
       properties:

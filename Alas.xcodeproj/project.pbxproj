@@ -107,6 +107,7 @@
 		42C0AE388E5CF8B2AAEADE3C /* SearchEmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFF914E16884DAC97F11C76 /* SearchEmptyState.swift */; };
 		42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */; };
 		43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */; };
+		4421A9D1E7481B49701B3131 /* mason-lsps.json in Resources */ = {isa = PBXBuildFile; fileRef = F0D567F7F894902AD192D220 /* mason-lsps.json */; };
 		4565825A901B119DCD1037ED /* SymbolsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDCB33A74DC088022E5BD5F /* SymbolsFeature.swift */; };
 		45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC68B05B719B9235865027F /* ThreePaneSizing.swift */; };
 		466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0240C5961343C3042D865570 /* GeneralPane.swift */; };
@@ -691,6 +692,7 @@
 		EE26221DC8E8837FFEB87474 /* DiffParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffParserTests.swift; sourceTree = "<group>"; };
 		EE607EE1ACDE73C1DB0FCA00 /* SettingsRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRow.swift; sourceTree = "<group>"; };
 		EECB91379591DA21D216A894 /* RelativeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTime.swift; sourceTree = "<group>"; };
+		F0D567F7F894902AD192D220 /* mason-lsps.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "mason-lsps.json"; sourceTree = "<group>"; };
 		F12340A649892955245BECB7 /* DefinitionFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefinitionFeature.swift; sourceTree = "<group>"; };
 		F15E14D45EC3926768DE5BD1 /* DiffTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffTabView.swift; sourceTree = "<group>"; };
 		F198697EB5305E5ECE97BC61 /* HarnessDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessDetectorTests.swift; sourceTree = "<group>"; };
@@ -1363,6 +1365,7 @@
 			isa = PBXGroup;
 			children = (
 				6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */,
+				F0D567F7F894902AD192D220 /* mason-lsps.json */,
 				4A546C28E4A7690D621C99E0 /* Themes */,
 			);
 			path = Resources;
@@ -1562,6 +1565,7 @@
 				629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */,
 				B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */,
 				C893CA3167A5CC6637FCD8C8 /* light.json in Resources */,
+				4421A9D1E7481B49701B3131 /* mason-lsps.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
