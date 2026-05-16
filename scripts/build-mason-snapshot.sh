@@ -43,23 +43,32 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
     # Translate source.id into install recipes we know how to run.
     # The purl spec URL-encodes '@' as '%40' for scoped npm packages (e.g.
     # pkg:npm/%40angular/language-server@21.2.13). We decode %40 -> @ and
-    # strip the trailing @VERSION qualifier (always starts with a digit).
+    # strip the trailing @VERSION qualifier. The version pattern is
+    # `@[^@]*$` (last @ to end-of-string) rather than `@[0-9]` because some
+    # Go modules use `@vX.Y.Z` semver tags — anchoring to the final @ also
+    # correctly preserves npm scope prefixes (e.g. @biomejs/biome).
     recipes="[]"
     case "$source_id" in
         pkg:cargo/*)
-            crate=$(printf '%s' "$source_id" | sed -E 's|^pkg:cargo/||; s|@[0-9].*$||')
+            crate=$(printf '%s' "$source_id" | sed -E 's|^pkg:cargo/||; s|@[^@]*$||')
             recipes=$(jq -n --arg pkg "$crate" '[{installer:"cargo", package:$pkg, extraArgs:[]}]')
             ;;
         pkg:npm/*)
-            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:npm/||; s|%40|@|g; s|@[0-9].*$||')
+            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:npm/||; s|%40|@|g; s|@[^@]*$||')
             recipes=$(jq -n --arg pkg "$n" '[{installer:"npm", package:$pkg, extraArgs:[]}]')
             ;;
         pkg:pypi/*)
-            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:pypi/||; s|@[0-9].*$||')
+            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:pypi/||; s|@[^@]*$||')
             recipes=$(jq -n --arg pkg "$n" '[{installer:"pipx", package:$pkg, extraArgs:[]}]')
             ;;
         pkg:golang/*)
-            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:golang/||; s|@[0-9].*$||')
+            # Mason Go source ids may carry both `@vX.Y.Z` and `#cmd/subpath`
+            # qualifiers (e.g. cuelang.org/go@v0.16.1#cmd/cue). Strip just the
+            # version (any chars between `@` and either `#` or end), then
+            # turn the `#subpath` separator into `/` so the final string is
+            # the full importable command path. `LSPInstaller.argv` appends
+            # `@latest` later.
+            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:golang/||; s|@[^#]*||; s|#|/|')
             recipes=$(jq -n --arg pkg "$n" '[{installer:"go", package:$pkg, extraArgs:[]}]')
             ;;
         pkg:github/*)

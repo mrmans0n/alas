@@ -502,7 +502,7 @@
         },
         {
           "installer": "go",
-          "package": "cuelang.org/go@v0.16.1#cmd/cue",
+          "package": "cuelang.org/go/cmd/cue",
           "extraArgs": []
         }
       ]
@@ -519,7 +519,7 @@
       "recipes": [
         {
           "installer": "go",
-          "package": "github.com/dagger/cuelsp@v0.3.4#cmd/cuelsp",
+          "package": "github.com/dagger/cuelsp/cmd/cuelsp",
           "extraArgs": []
         }
       ]
@@ -583,7 +583,7 @@
       "recipes": [
         {
           "installer": "go",
-          "package": "github.com/MadAppGang/dingo/cmd/dingo-lsp@v0.14.0",
+          "package": "github.com/MadAppGang/dingo/cmd/dingo-lsp",
           "extraArgs": []
         }
       ]
@@ -949,7 +949,7 @@
         },
         {
           "installer": "go",
-          "package": "github.com/nametake/golangci-lint-langserver@v0.0.12",
+          "package": "github.com/nametake/golangci-lint-langserver",
           "extraArgs": []
         }
       ]
@@ -971,7 +971,7 @@
         },
         {
           "installer": "go",
-          "package": "golang.org/x/tools/gopls@v0.21.1",
+          "package": "golang.org/x/tools/gopls",
           "extraArgs": []
         }
       ]
@@ -1186,7 +1186,7 @@
         },
         {
           "installer": "go",
-          "package": "github.com/wader/jq-lsp@v0.1.17",
+          "package": "github.com/wader/jq-lsp",
           "extraArgs": []
         }
       ]
@@ -1220,7 +1220,7 @@
       "recipes": [
         {
           "installer": "go",
-          "package": "github.com/grafana/jsonnet-language-server@v0.17.0",
+          "package": "github.com/grafana/jsonnet-language-server",
           "extraArgs": []
         }
       ]
@@ -1357,7 +1357,7 @@
       "recipes": [
         {
           "installer": "cargo",
-          "package": "move-analyzer@ea70797099baea64f05194a918cebd69ed02b285?repository_url=https://github.com/move-language/move&rev=true&locked=false",
+          "package": "move-analyzer",
           "extraArgs": []
         }
       ]
@@ -1740,7 +1740,7 @@
       "recipes": [
         {
           "installer": "go",
-          "package": "github.com/kitagry/regols@v0.2.4",
+          "package": "github.com/kitagry/regols",
           "extraArgs": []
         }
       ]
@@ -2022,7 +2022,7 @@
       "recipes": [
         {
           "installer": "go",
-          "package": "github.com/sqls-server/sqls@v0.2.47",
+          "package": "github.com/sqls-server/sqls",
           "extraArgs": []
         }
       ]
