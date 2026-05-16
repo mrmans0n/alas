@@ -426,4 +426,7 @@ extension Notification.Name {
     static let alasResizePaneRight  = Notification.Name("AlasResizePaneRight")
     static let alasResizePaneUp     = Notification.Name("AlasResizePaneUp")
     static let alasResizePaneDown   = Notification.Name("AlasResizePaneDown")
+    static let alasShowFindReplace  = Notification.Name("AlasShowFindReplace")
+    static let codeEditorDidAttach  = Notification.Name("CodeEditorDidAttach")
+    static let codeEditorDidDetach  = Notification.Name("CodeEditorDidDetach")
 }
