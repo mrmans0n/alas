@@ -23,6 +23,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var mouseExitedHandler: (() -> Void)?
     var indentationMode: IndentationMode = .plain
 
+    var autoPairDisabled: Bool = false
+
     /// Set by `CodeEditorCoordinator.attach`. Each closure mutates the shared
     /// `code.fontSize` config in response to the matching menu command.
     var increaseFontSizeHandler: (() -> Void)?
@@ -53,8 +55,12 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard isEditable else { return }
+        if autoPairDisabled {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
         guard
-            isEditable,
             let text = Self.string(from: insertString),
             text.count == 1,
             let character = text.first

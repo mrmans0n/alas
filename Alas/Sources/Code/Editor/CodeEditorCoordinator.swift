@@ -16,6 +16,8 @@ final class CodeEditorCoordinator {
 
     private var currentTabId: TabID?
     private var currentWorktreeId: String?
+
+    var tabId: TabID? { currentTabId }
     private var currentRoot: URL?
     private var currentRelativePath: String?
     private var currentLanguage: String?
@@ -229,6 +231,12 @@ final class CodeEditorCoordinator {
         }
 
         applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
+
+        NotificationCenter.default.post(
+            name: .codeEditorDidAttach,
+            object: self,
+            userInfo: ["textView": textView, "tabId": tabId]
+        )
     }
 
     func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
@@ -426,6 +434,12 @@ final class CodeEditorCoordinator {
         buffer = nil
         // We deliberately do NOT close the LSP document or stop the file
         // watcher — the buffer owns those for as long as the tab is alive.
+
+        NotificationCenter.default.post(
+            name: .codeEditorDidDetach,
+            object: self,
+            userInfo: ["tabId": tabId as Any]
+        )
     }
 
     // MARK: - Edit propagation (highlight + didChange debouncer)

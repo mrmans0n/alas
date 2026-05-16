@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct EditorTabView: View {
     let worktreePath: URL
@@ -12,13 +13,18 @@ struct EditorTabView: View {
     let originatingRelativePath: String?
     @Environment(\.theme) var theme
 
+    @State private var findBarVisible: Bool = false
+    @State private var findController = EditorFindController()
+    @State private var findText: String = ""
+    @State private var replaceText: String = ""
+    @State private var findBarMessage: String? = nil
+    @State private var activeTextView: CodeTextView? = nil
+    @FocusState private var findFieldFocused: Bool
+
     var body: some View {
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             breadcrumb
             if externalAbsolutePath == nil {
-                // In-worktree tabs: create a normal buffer and show the
-                // conflict banner (external tabs are read-only and have no
-                // conflict semantics).
                 let buffer = appState.tabs.buffer(
                     worktreeId: worktreeId,
                     tabId: tabId,
@@ -26,6 +32,64 @@ struct EditorTabView: View {
                     relativePath: relativePath
                 )
                 EditorConflictBanner(buffer: buffer)
+            }
+            if findBarVisible {
+                EditorFindBarView(
+                    findText: $findText,
+                    replaceText: $replaceText,
+                    message: $findBarMessage,
+                    findFieldFocused: $findFieldFocused,
+                    onFind: { direction in
+                        findController.findString = findText
+                        guard !findText.isEmpty else { return }
+                        guard let textView = activeTextView else { return }
+                        let start: Int
+                        switch direction {
+                        case .previous:
+                            start = textView.selectedRange().location
+                        case .next:
+                            start = textView.selectedRange().location + textView.selectedRange().length
+                        }
+                        let range: NSRange?
+                        switch direction {
+                        case .previous:
+                            range = findController.previousMatchRange(upTo: start)
+                        case .next:
+                            range = findController.nextMatchRange(startingAt: start)
+                        }
+                        if let range {
+                            textView.setSelectedRange(range)
+                            textView.scrollRangeToVisible(range)
+                        } else {
+                            findBarMessage = "No matches"
+                        }
+                    },
+                    onReplace: {
+                        findController.findString = findText
+                        findController.replacementString = replaceText
+                        if findController.replaceCurrent() {
+                            findBarMessage = nil
+                        } else {
+                            findBarMessage = "No matches"
+                        }
+                    },
+                    onReplaceAll: {
+                        findController.findString = findText
+                        findController.replacementString = replaceText
+                        let count = findController.replaceAll()
+                        if count == 0 {
+                            findBarMessage = "No matches"
+                        } else if count == 1 {
+                            findBarMessage = "Replaced 1 match"
+                        } else {
+                            findBarMessage = "Replaced \(count) matches"
+                        }
+                    },
+                    onDone: {
+                        findBarVisible = false
+                        findBarMessage = nil
+                    }
+                )
             }
             CodeEditorView(
                 worktreeId: worktreeId,
@@ -42,6 +106,31 @@ struct EditorTabView: View {
             )
         }
         .background(theme.color("bg-1"))
+        .onDisappear {
+            findBarVisible = false
+            findController.textView = nil
+            activeTextView = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .codeEditorDidAttach)) { notification in
+            guard let info = notification.userInfo,
+                  let notifTabId = info["tabId"] as? TabID,
+                  notifTabId == tabId,
+                  let textView = info["textView"] as? CodeTextView else { return }
+            activeTextView = textView
+            findController.textView = textView
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .codeEditorDidDetach)) { notification in
+            guard let info = notification.userInfo,
+                  let notifTabId = info["tabId"] as? TabID,
+                  notifTabId == tabId else { return }
+            activeTextView = nil
+            findController.textView = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .alasShowFindReplace)) { _ in
+            guard appState.tabs.activeTabId(forWorktree: worktreeId) == tabId else { return }
+            findBarVisible = true
+            findFieldFocused = true
+        }
     }
 
     private var breadcrumb: some View {
