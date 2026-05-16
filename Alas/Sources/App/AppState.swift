@@ -25,12 +25,87 @@ final class AppState {
 
     var isSearchOpen: Bool = false
 
-    var availableCommitAITools: [CommitAITool] = []
+    /// Computed each time `config.agents` changes or detection re-runs.
+    /// `RootView.task` calls `rescanAgents()` once at launch; the Settings
+    /// window calls it again on appear.
+    var agentRegistry: AgentRegistry = AgentRegistry(
+        builtinState: [:],
+        customs: [],
+        installedIds: []
+    )
 
-    func rescanCommitAITools() {
+    /// Resolve a single agent by id (built-in id or custom UUID). Nil for
+    /// unknown ids or "none".
+    func agent(id: String?) -> AgentDefinition? {
+        guard let id, id != "none" else { return nil }
+        return agentRegistry.agents.first(where: { $0.id == id })
+    }
+
+    /// Recompute `agentRegistry` from `config.agents` + a fresh detection
+    /// scan. Safe to call repeatedly.
+    func rescanAgents() {
+        let registry = composeRegistryWithoutDetection()
         Task { @MainActor in
-            self.availableCommitAITools = await CommitAIDetector.scanCurrentEnvironment()
+            let installedIds = await AgentDetector.scanCurrentEnvironment(
+                agents: registry.agents
+            )
+            self.agentRegistry = AgentRegistry(
+                builtinState: self.config.agents.builtinState,
+                customs: self.config.agents.custom,
+                installedIds: installedIds
+            )
+            self.snapInvalidatedAgentSelections()
         }
+    }
+
+    /// Build a registry view without running detection — used as the input
+    /// to detection (since the detector needs the merged agent list).
+    private func composeRegistryWithoutDetection() -> AgentRegistry {
+        AgentRegistry(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom,
+            installedIds: []
+        )
+    }
+
+    /// When an enabled agent becomes disabled / uninstalled / deleted, snap
+    /// any selector pointing at it to a safe default:
+    ///   - `changes.aiToolId` → "none"
+    ///   - `agents.worktreeAutoLaunch.agentId` → nil
+    ///   - per-project `worktreeAgentMode` → `.useGlobal` if it referenced
+    ///     a vanished agent
+    private func snapInvalidatedAgentSelections() {
+        let enabledIds = Set(agentRegistry.enabled().map(\.id))
+        var changed = false
+        let currentTool = config.changes.aiToolId
+        if currentTool != "none", !enabledIds.contains(currentTool) {
+            config.changes.aiToolId = "none"
+            changed = true
+        }
+        if let autoLaunchId = config.agents.worktreeAutoLaunch.agentId,
+           !enabledIds.contains(autoLaunchId) {
+            config.agents.worktreeAutoLaunch.agentId = nil
+            changed = true
+        }
+        if changed { saveConfig() }
+
+        var projectsChanged = false
+        for project in projectsManager.projects {
+            guard project.startupScripts.worktreeAgentMode == .overrideGlobal,
+                  let id = project.startupScripts.worktreeAgentId,
+                  !enabledIds.contains(id) else { continue }
+            var updated = project.startupScripts
+            updated.worktreeAgentMode = .useGlobal
+            updated.worktreeAgentId = nil
+            updateProject(
+                id: project.id,
+                name: project.name,
+                color: project.color,
+                startupScripts: updated
+            )
+            projectsChanged = true
+        }
+        if projectsChanged { saveProjects() }
     }
 
     /// Set when a worktree deletion fails because the tree is dirty.

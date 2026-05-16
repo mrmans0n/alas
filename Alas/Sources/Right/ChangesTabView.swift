@@ -27,7 +27,7 @@ struct ChangesTabView: View {
                         stagedAdd: stagedAdd,
                         stagedDel: stagedDel,
                         branchName: branchName,
-                        availableTools: appState.availableCommitAITools,
+                        availableAgents: appState.agentRegistry.enabled(),
                         aiToolId: appState.bind(\.changes.aiToolId),
                         onGenerate: handleGenerate,
                         onCommit: { rps.runCommit() },
@@ -71,9 +71,8 @@ struct ChangesTabView: View {
             rps.cancelGenerate()
             return
         }
-        let toolId = appState.config.changes.aiToolId
-        guard let tool = CommitAITool(rawValue: toolId), tool != .none else { return }
-        rps.generate(promptOverride: appState.config.changes.prompt, tool: tool)
+        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else { return }
+        rps.generate(promptOverride: appState.config.changes.prompt, agent: agent)
     }
 
     private func copyCommitSHA(_ commit: CommitInfo) {

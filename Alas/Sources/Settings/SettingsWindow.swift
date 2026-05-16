@@ -59,7 +59,7 @@ struct SettingsWindow: View {
         .background(WindowConfigurator())
         .environment(\.theme, theme)
         .ignoresSafeArea()
-        .onAppear { state.rescanCommitAITools() }
+        .onAppear { state.rescanAgents() }
     }
 
     private func closeWindow() {
