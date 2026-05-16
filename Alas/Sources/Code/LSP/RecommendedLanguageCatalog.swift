@@ -179,8 +179,10 @@ enum RecommendedLanguageCatalog {
 }
 
 extension RecommendedLanguage {
-    /// Returns this entry's recipes, following one level of `aliasOf` if set.
-    /// The catalog never chains aliases (an alias's target is canonical).
+    /// Returns this entry's recipes, recursively following `aliasOf`. The
+    /// catalog's invariant is that alias targets are themselves canonical, so
+    /// recursion bottoms out in one hop today; recursion is used defensively
+    /// in case a future edit chains aliases.
     var resolvedRecipes: [InstallRecipe] {
         if let target = aliasOf,
            let canonical = RecommendedLanguageCatalog.entry(forLanguage: target) {
