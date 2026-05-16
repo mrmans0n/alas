@@ -110,7 +110,7 @@ struct LanguageServerRegistry {
         LanguageServerConfig(
             language: "json",
             extensions: ["json"],
-            command: "vscode-json-languageserver",
+            command: "vscode-json-language-server",
             args: ["--stdio"],
             env: [:],
             rootMarkers: ["package.json", ".git"],
@@ -122,7 +122,7 @@ struct LanguageServerRegistry {
         LanguageServerConfig(
             language: "jsonc",
             extensions: ["jsonc"],
-            command: "vscode-json-languageserver",
+            command: "vscode-json-language-server",
             args: ["--stdio"],
             env: [:],
             rootMarkers: ["package.json", ".git"],

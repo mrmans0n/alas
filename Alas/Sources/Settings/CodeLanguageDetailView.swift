@@ -114,16 +114,41 @@ struct CodeLanguageDetailView: View {
                 AlasToggle(on: $entry.enabled)
             }
 
+            if let validation = validationMessage {
+                Text(validation)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(theme.color("warn"))
+                    .padding(.top, 8)
+            }
+
             HStack(spacing: 8) {
                 Spacer()
                 AlasButton(title: "Cancel", style: .subtle, action: onCancel)
                 AlasButton(title: "Save", style: .primary, action: { onSave(entry, pendingRecipes) })
+                    .disabled(validationMessage != nil)
             }
             .padding(.top, 16)
         }
         .padding(24)
         .frame(width: 560)
         .background(theme.color("bg-1"))
+    }
+
+    private var validationMessage: String? {
+        // Mason prefill leaves extensions empty for many packages; without
+        // them `LanguageServerRegistry.language(forFileExtension:)` never
+        // matches the language and the LSP never spawns. Block save until
+        // the required fields are filled.
+        if entry.language.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "Language ID is required."
+        }
+        if entry.command.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "Command is required."
+        }
+        if entry.extensions.isEmpty {
+            return "Add at least one file extension."
+        }
+        return nil
     }
 
     private func applyPrefill(_ pkg: MasonPackage) {
