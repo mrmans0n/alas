@@ -1,14 +1,17 @@
 import SwiftUI
 
 /// Install affordance shared by Settings → Code rows and the editor nudge.
+/// Visual style mirrors `AiSplitButton` in the right-sidebar commit composer:
+/// a single rounded rect with a primary action on the left and (when there's
+/// more than one detected installer) an attached caret menu on the right.
 ///
-/// Renders as one of three shapes depending on detected installers:
-/// - **No installer detected:** a disabled "Install" button whose tooltip
-///   lists which installers would make this work.
-/// - **Single installer:** a plain "Install" button that runs that recipe.
-/// - **Multiple installers:** a split button — primary "Install" runs the
-///   first available recipe (catalog-ordered, our recommended pick), and
-///   a caret-only menu lets the user pick a specific installer.
+/// Renders as one of three shapes:
+/// - **No installer detected:** a disabled "Install" pill whose tooltip
+///   lists installers that would unlock it.
+/// - **Single installer:** the primary pill on its own, running that recipe.
+/// - **Multiple installers:** primary pill + caret menu. The primary runs
+///   the first-available (catalog-ordered, our recommended pick); the menu
+///   lets the user pick a different installer.
 struct InstallSplitButton: View {
     let recipes: [InstallRecipe]
     let available: [(installer: DetectedInstaller, recipe: InstallRecipe)]
@@ -17,41 +20,59 @@ struct InstallSplitButton: View {
 
     @Environment(\.theme) var theme
 
-    var body: some View {
-        if available.isEmpty {
-            AlasButton(title: "Install", style: .subtle, action: {})
-                .disabled(true)
-                .help("Install one of: \(recipes.map { $0.installer.rawValue }.joined(separator: ", "))")
-        } else if available.count == 1, let pair = available.first {
-            AlasButton(title: busy ? "Installing…" : "Install", style: .subtle, action: {
-                onInstall(pair.installer, pair.recipe)
-            })
-            .disabled(busy)
-        } else if let first = available.first {
-            HStack(spacing: 2) {
-                AlasButton(title: busy ? "Installing…" : "Install", style: .subtle, action: {
-                    onInstall(first.installer, first.recipe)
-                })
-                .disabled(busy)
+    private var label: String { busy ? "Installing…" : "Install" }
+    private var hasInstaller: Bool { !available.isEmpty }
+    private var primaryDisabled: Bool { busy || !hasInstaller }
 
-                Menu {
-                    ForEach(available, id: \.installer.kind) { pair in
-                        Button("Install with \(pair.installer.kind.rawValue)") {
-                            onInstall(pair.installer, pair.recipe)
-                        }
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(theme.color("fg-muted"))
-                        .frame(width: 22, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .disabled(busy)
+    var body: some View {
+        HStack(spacing: 1) {
+            primaryButton
+            if available.count > 1 {
+                caretMenu
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    @ViewBuilder
+    private var primaryButton: some View {
+        Button(action: runPrimary) {
+            Text(label)
+                .font(.system(size: 11))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .foregroundColor(primaryDisabled ? theme.color("fg-faint") : theme.color("fg"))
+                .background(theme.color("bg-3"))
+        }
+        .buttonStyle(.plain)
+        .disabled(primaryDisabled)
+        .help(hasInstaller
+              ? (available.count > 1
+                 ? "Install with \(available[0].installer.kind.rawValue)"
+                 : "Install with \(available[0].installer.kind.rawValue)")
+              : "Install one of: \(recipes.map { $0.installer.rawValue }.joined(separator: ", "))")
+    }
+
+    @ViewBuilder
+    private var caretMenu: some View {
+        Menu {
+            ForEach(available, id: \.installer.kind) { pair in
+                Button("Install with \(pair.installer.kind.rawValue)") {
+                    onInstall(pair.installer, pair.recipe)
+                }
+            }
+        } label: {
+            Icon(name: "chev-down", size: 9, color: theme.color("fg-faint"))
+                .padding(.horizontal, 7).padding(.vertical, 7)
+                .background(theme.color("bg-3"))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(busy)
+    }
+
+    private func runPrimary() {
+        guard let first = available.first else { return }
+        onInstall(first.installer, first.recipe)
     }
 }
