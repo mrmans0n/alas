@@ -13,6 +13,7 @@ struct NewWorktreeDialog: View {
     @State private var branch: String = ""
     @State private var runStartup: Bool = true
     @State private var openTerminal: Bool = true
+    @State private var launchAgent: Bool = false
     @State private var branches: [String] = []
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
@@ -62,6 +63,13 @@ struct NewWorktreeDialog: View {
                 if let validationMessage = branchValidationMessage {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
+                if let agent = effectiveAutoLaunchAgent {
+                    HStack(spacing: 10) {
+                        AlasToggle(on: $launchAgent)
+                        Text("Launch \(agent.displayName) on create").font(.system(size: 12))
+                            .foregroundColor(theme.color("fg"))
+                    }
+                }
                 if let createErrorMessage {
                     Text(createErrorMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
@@ -91,9 +99,11 @@ struct NewWorktreeDialog: View {
             if branch.isEmpty {
                 branch = state.config.worktrees.branchPrefix
             }
+            launchAgent = effectiveAutoLaunchAgent != nil
             loadBranchesForSelectedProject()
         }
         .onChange(of: projectId) { _, _ in
+            launchAgent = effectiveAutoLaunchAgent != nil
             loadBranchesForSelectedProject()
         }
         .onChange(of: branch) { _, _ in
@@ -124,6 +134,19 @@ struct NewWorktreeDialog: View {
             return "Create a worktree."
         }
         return "Create a worktree in \(project.name) branched from \(base)."
+    }
+
+    private var effectiveAutoLaunchAgent: AgentDefinition? {
+        guard let project = state.projects.first(where: { $0.id == projectId }) else { return nil }
+        let resolved = AgentAutoLaunch.resolve(
+            registry: state.agentRegistry,
+            globalAgentId: state.config.agents.worktreeAutoLaunch.agentId,
+            globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions,
+            projectMode: project.startupScripts.worktreeAgentMode,
+            projectAgentId: project.startupScripts.worktreeAgentId,
+            projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions
+        )
+        return resolved.flatMap { state.agent(id: $0.agentId) }
     }
 
     private var renderedPath: String {
@@ -184,7 +207,8 @@ struct NewWorktreeDialog: View {
             branch: branch,
             destination: dest,
             runStartup: runStartup,
-            openTerminal: openTerminal
+            openTerminal: openTerminal,
+            launchAgent: launchAgent
         )
         guard !id.isEmpty else {
             createErrorMessage = "A worktree already exists at this path."

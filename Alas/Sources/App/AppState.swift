@@ -218,7 +218,8 @@ final class AppState {
         branch: String,
         destination: URL,
         runStartup: Bool,
-        openTerminal: Bool
+        openTerminal: Bool,
+        launchAgent: Bool = true
     ) -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -281,7 +282,7 @@ final class AppState {
                     projectAgentId: project.startupScripts.worktreeAgentId,
                     projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions
                 )
-                if let autoLaunch {
+                if let autoLaunch, launchAgent {
                     let argvJoined = autoLaunch.argv
                         .map { Self.shellQuote($0) }
                         .joined(separator: " ")
