@@ -219,20 +219,36 @@ struct WorktreeService {
     }
 
     private func initializedSubmodulesHaveNoLocalState(_ path: URL) async throws -> Bool {
-        // Single git rev-list per submodule using set arithmetic — every
-        // commit reachable from local refs (branches, tags, reflog) that
-        // ISN'T reachable from any remote ref. Replaces an earlier O(reflog
-        // × remotes) shell loop that timed out on submodules with non-
-        // trivial reflogs. Notes/stash are checked separately because they
-        // need `refs/notes` / `refs/stash` paths, not their `:short` form.
+        // One rev-list per submodule using set arithmetic — every commit
+        // reachable from local branches/reflog/tags that ISN'T reachable
+        // from any remote ref. Replaces an earlier O(reflog × remotes)
+        // shell loop that timed out on submodules with non-trivial
+        // reflogs. Notes/stash are checked separately because they need
+        // full `refs/notes` / `refs/stash` paths.
+        //
+        // Tags get an explicit name+oid comparison via one `ls-remote`
+        // call: rev-list reachability misses the cases where a tag with
+        // a local-only NAME (or a retargeted/retagged tag) points at a
+        // commit that's already in a remote branch — losing that local
+        // tag state on a force-remove would surprise the user.
         let localStateScript = """
-        if test -n "$(git rev-list --max-count=1 --branches --tags --reflog --not --remotes 2>/dev/null)"; then
-          echo local
+        if test -n "$(git rev-list --max-count=1 --branches --reflog --not --remotes 2>/dev/null)"; then
+          echo local-branch-or-reflog
           exit 0
         fi
         extra=$(git for-each-ref --format='%(refname)' refs/notes refs/stash)
         if test -n "$extra" && test -n "$(git rev-list --max-count=1 $extra --not --remotes 2>/dev/null)"; then
           echo notes-stash
+          exit 0
+        fi
+        remote_tags=$(git ls-remote --tags --refs origin 2>/dev/null | awk '{print $2"="$1}')
+        tag_diff=$(git for-each-ref --format='%(refname)=%(objectname)' refs/tags \\
+          | awk -v rt="$remote_tags" '
+              BEGIN { n = split(rt, arr, "\\n"); for (i = 1; i <= n; i++) seen[arr[i]] = 1 }
+              !seen[$0] { print; exit }
+          ')
+        if test -n "$tag_diff"; then
+          echo "tag-mismatch $tag_diff"
         fi
         """
         let result = try await Process.git(

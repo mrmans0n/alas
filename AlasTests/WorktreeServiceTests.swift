@@ -450,13 +450,125 @@ extension WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: submodulePath.path))
     }
 
-    // Note: three previous tests (LocalTagOnRemoteCommit, RetargetedRemoteTag,
-    // RetaggedAnnotatedRemoteTag) were removed alongside the script rewrite.
-    // The new check is reachability-based: a local tag whose target commit
-    // is already reachable from any remote ref is now considered "clean
-    // enough" to force-delete — the data is in the remote; only the local
-    // label differs. The remaining LocalOnlyTag test still covers the case
-    // where the tag's target commit is itself local-only.
+    @Test func removeDoesNotForceDeleteSubmoduleLocalTagOnRemoteCommit() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
+
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-submodule-local-remote-tag")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/submodule-local-remote-tag",
+            destination: dest, projectId: "p"
+        )
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: dest
+        )
+
+        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
+        _ = try await Process.git(["tag", "local-only"], cwd: submodulePath)
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        }
+        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
+    }
+
+    @Test func removeDoesNotForceDeleteSubmoduleRetargetedRemoteTag() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "tagged remote commit"], cwd: submoduleRepo)
+        _ = try await Process.git(["tag", "shared"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "current remote commit"], cwd: submoduleRepo)
+
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-submodule-retargeted-tag")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/submodule-retargeted-tag",
+            destination: dest, projectId: "p"
+        )
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: dest
+        )
+
+        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
+        _ = try await Process.git(["tag", "-f", "shared", "HEAD"], cwd: submodulePath)
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        }
+        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
+    }
+
+    @Test func removeDoesNotForceDeleteSubmoduleRetaggedAnnotatedRemoteTag() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "current remote commit"], cwd: submoduleRepo)
+        _ = try await Process.git(["tag", "-a", "shared", "-m", "remote annotation"], cwd: submoduleRepo)
+
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-submodule-retagged-annotated")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/submodule-retagged-annotated",
+            destination: dest, projectId: "p"
+        )
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: dest
+        )
+
+        let submodulePath = dest.appendingPathComponent("Deps/Submodule")
+        _ = try await Process.git(["tag", "-f", "-a", "shared", "-m", "local annotation", "HEAD"], cwd: submodulePath)
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        }
+        #expect(FileManager.default.fileExists(atPath: submodulePath.path))
+    }
 
     @Test func removeDoesNotForceDeleteSubmoduleReflogOnlyCommit() async throws {
         let repo = try await makeRepo()
