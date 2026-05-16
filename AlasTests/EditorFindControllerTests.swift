@@ -6,7 +6,6 @@ import AppKit
 @MainActor
 @Suite(.serialized)
 struct EditorFindControllerTests {
-
     private func makeTextView(_ text: String = "") -> CodeTextView {
         let storage = NSTextStorage(string: text)
         let layoutManager = NSLayoutManager()
