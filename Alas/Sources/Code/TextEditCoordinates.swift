@@ -51,6 +51,32 @@ enum TextEditCoordinates {
         return LSPPosition(line: point.line, character: point.character)
     }
 
+    static func utf16Offset(from position: LSPPosition, in text: String) -> Int? {
+        guard position.line >= 0, position.character >= 0 else { return nil }
+        let ns = text as NSString
+        var line = 0
+        var lineStart = 0
+        var index = 0
+        while index < ns.length {
+            if ns.character(at: index) == 10 {
+                if line == position.line {
+                    let offset = lineStart + position.character
+                    guard offset <= index else { return nil }
+                    return offset
+                }
+                line += 1
+                lineStart = index + 1
+            }
+            index += 1
+        }
+        if line == position.line {
+            let offset = lineStart + position.character
+            guard offset <= ns.length else { return nil }
+            return offset
+        }
+        return nil
+    }
+
     private static func point(utf16Offset target: Int, in text: String) -> (line: Int, character: Int, byteColumn: Int)? {
         let ns = text as NSString
         guard target >= 0, target <= ns.length else { return nil }

@@ -70,6 +70,40 @@ struct LSPClientLifecycleTests {
         transport.finish()
     }
 
+    @Test("formatting request sends document URI and options")
+    func formatting() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"documentFormattingProvider":true}}}"#)
+            } else if sent.contains(#""method":"textDocument/formatting""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":2,"result":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"newText":"let"}]}"#)
+            }
+        }
+        try await client.initialize()
+        #expect((transport.sent.first ?? "").contains(#""formatting":{"dynamicRegistration":false}"#))
+        let edits = try await client.formatting(
+            uri: "file:///tmp/x.swift",
+            options: LSPFormattingOptions(tabSize: 2, insertSpaces: true)
+        )
+        let request = transport.sent.last ?? ""
+        #expect(request.contains(#""method":"textDocument/formatting""#))
+        #expect(request.contains(#""uri":"file:///tmp/x.swift""#))
+        #expect(request.contains(#""tabSize":2"#))
+        #expect(request.contains(#""insertSpaces":true"#))
+        #expect(edits == [
+            LSPTextEdit(
+                range: LSPRange(
+                    start: LSPPosition(line: 0, character: 0),
+                    end: LSPPosition(line: 0, character: 3)
+                ),
+                newText: "let"
+            )
+        ])
+        transport.finish()
+    }
+
     @Test("incremental text sync sends a ranged full replacement")
     func incrementalTextSyncUsesRange() async throws {
         let transport = FakeTransport()

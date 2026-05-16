@@ -255,3 +255,24 @@ struct LSPPublishDiagnosticsParams: Decodable, Sendable {
     let uri: String
     let diagnostics: [LSPDiagnostic]
 }
+
+// MARK: - Formatting
+
+struct LSPFormattingOptions: Codable, Hashable, Sendable {
+    let tabSize: Int
+    let insertSpaces: Bool
+}
+
+struct LSPDocumentFormattingParams: Codable, Hashable, Sendable {
+    let textDocument: LSPTextDocumentIdentifier
+    let options: LSPFormattingOptions
+}
+
+struct LSPTextDocumentIdentifier: Codable, Hashable, Sendable {
+    let uri: String
+}
+
+struct LSPTextEdit: Codable, Hashable, Sendable {
+    let range: LSPRange
+    let newText: String
+}

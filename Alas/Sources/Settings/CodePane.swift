@@ -33,6 +33,10 @@ struct CodePane: View {
                             }
                         ), monospaced: true).frame(width: 80)
                     }
+                    SettingsRow(name: "Format on save",
+                                desc: "Request document formatting from the language server before writing to disk.") {
+                        AlasToggle(on: state.bind(\.code.formatOnSave))
+                    }
                 }
 
                 SettingsGroup(title: "Languages") {
