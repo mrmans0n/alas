@@ -78,4 +78,35 @@ struct LanguageServerRegistryTests {
         #expect(entry?.args == ["start"])
         #expect(entry?.extensions == ["sh", "bash", "zsh"])
     }
+
+    @Test("go built-in uses gopls")
+    func goBuiltIn() {
+        let entry = LanguageServerRegistry.builtIns.first(where: { $0.language == "go" })
+        #expect(entry?.command == "gopls")
+        #expect(entry?.extensions == ["go"])
+    }
+
+    @Test("c and cpp built-ins both use clangd")
+    func cAndCppBuiltIns() {
+        let c = LanguageServerRegistry.builtIns.first(where: { $0.language == "c" })
+        let cpp = LanguageServerRegistry.builtIns.first(where: { $0.language == "cpp" })
+        #expect(c?.command == "clangd")
+        #expect(cpp?.command == "clangd")
+        #expect(c?.extensions == ["c", "h"])
+        #expect(cpp?.extensions == ["cc", "cpp", "cxx", "hh", "hpp", "hxx"])
+    }
+
+    @Test("ruby built-in uses ruby-lsp")
+    func rubyBuiltIn() {
+        let entry = LanguageServerRegistry.builtIns.first(where: { $0.language == "ruby" })
+        #expect(entry?.command == "ruby-lsp")
+        #expect(entry?.extensions == ["rb"])
+    }
+
+    @Test("lua built-in uses lua-language-server")
+    func luaBuiltIn() {
+        let entry = LanguageServerRegistry.builtIns.first(where: { $0.language == "lua" })
+        #expect(entry?.command == "lua-language-server")
+        #expect(entry?.extensions == ["lua"])
+    }
 }

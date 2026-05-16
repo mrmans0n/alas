@@ -145,6 +145,51 @@ struct LanguageServerRegistry {
             env: [:],
             rootMarkers: [".git"],
             enabled: true
+        ),
+        LanguageServerConfig(
+            language: "go",
+            extensions: ["go"],
+            command: "gopls",
+            args: [],
+            env: [:],
+            rootMarkers: ["go.mod", "go.sum", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "c",
+            extensions: ["c", "h"],
+            command: "clangd",
+            args: [],
+            env: [:],
+            rootMarkers: ["compile_commands.json", "CMakeLists.txt", "Makefile", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "cpp",
+            extensions: ["cc", "cpp", "cxx", "hh", "hpp", "hxx"],
+            command: "clangd",
+            args: [],
+            env: [:],
+            rootMarkers: ["compile_commands.json", "CMakeLists.txt", "Makefile", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "ruby",
+            extensions: ["rb"],
+            command: "ruby-lsp",
+            args: [],
+            env: [:],
+            rootMarkers: ["Gemfile", ".ruby-version", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "lua",
+            extensions: ["lua"],
+            command: "lua-language-server",
+            args: [],
+            env: [:],
+            rootMarkers: [".luarc.json", ".luarc.jsonc", "stylua.toml", ".git"],
+            enabled: true
         )
     ]
 
