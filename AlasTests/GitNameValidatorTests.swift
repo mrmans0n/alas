@@ -124,9 +124,24 @@ struct GitNameValidatorTests {
         #expect(result == .invalid("Name cannot contain '@{' ."))
     }
 
-    @Test func rejectsLeadingDashComponent() {
+    @Test func rejectsStandaloneAt() {
+        let result = GitNameValidator.validateBranchName("@")
+        #expect(result == .invalid("'@' is not a valid branch name."))
+    }
+
+    @Test func acceptsAtInComponent() {
+        let result = GitNameValidator.validateBranchName("user@branch")
+        #expect(result == .valid)
+    }
+
+    @Test func acceptsHyphenInPathComponent() {
         let result = GitNameValidator.validateBranchName("feature/-dash")
-        #expect(result == .invalid("Path components cannot start with '-' ."))
+        #expect(result == .valid)
+    }
+
+    @Test func rejectsLeadingDashShorthand() {
+        let result = GitNameValidator.validateBranchName("-dash")
+        #expect(result == .invalid("Name cannot start with '-' ."))
     }
 
     @Test func rejectsDotLock() {

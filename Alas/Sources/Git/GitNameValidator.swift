@@ -41,6 +41,14 @@ struct GitNameValidator {
             return .invalid("Name cannot contain '@{' .")
         }
 
+        if name == "@" {
+            return .invalid("'@' is not a valid branch name.")
+        }
+
+        if name.hasPrefix("-") {
+            return .invalid("Name cannot start with '-' .")
+        }
+
         let components = name.split(separator: "/", omittingEmptySubsequences: false)
         for component in components {
             let comp = String(component)
@@ -55,10 +63,6 @@ struct GitNameValidator {
 
             if comp.contains("..") {
                 return .invalid("Name cannot contain '..'.")
-            }
-
-            if comp.hasPrefix("-") {
-                return .invalid("Path components cannot start with '-' .")
             }
 
             if comp.hasSuffix(".lock") {
