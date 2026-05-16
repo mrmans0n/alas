@@ -50,7 +50,7 @@ struct Icon: View {
         case "github":     return "circle.hexagongrid"
         case "alert":      return "exclamationmark.triangle"
         case "sparkle":    return "sparkle"
-        default:           return "questionmark"
+        default:           return name
         }
     }
 }
