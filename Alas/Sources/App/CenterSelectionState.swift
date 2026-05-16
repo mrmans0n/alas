@@ -1,0 +1,62 @@
+import Foundation
+
+enum CenterSelectionState: Equatable {
+    case worktree(Worktree)
+    case deleting(Worktree)
+    case deleteFailed(Worktree, message: String)
+    case empty
+}
+
+struct CenterSelectionStateResolver {
+    let selectedWorktreeId: String?
+    let projects: [ProjectConfig]
+    let projectsManager: ProjectsManager
+
+    @MainActor
+    func resolve() -> CenterSelectionState {
+        guard let id = selectedWorktreeId else { return .empty }
+        if let op = projectsManager.operationState(for: id) {
+            switch op {
+            case .deleting:
+                if let wt = findWorktree(by: id) { return .deleting(wt) }
+                return .empty
+            case .deleteFailed(let message):
+                if let wt = findWorktree(by: id) { return .deleteFailed(wt, message: message) }
+                return .empty
+            default:
+                break
+            }
+        }
+        if let wt = selectedWorktree() { return .worktree(wt) }
+        return .empty
+    }
+
+    @MainActor
+    private func findWorktree(by id: String) -> Worktree? {
+        for project in projects {
+            if let wt = projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
+                return wt
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    private func selectedWorktree() -> Worktree? {
+        guard let id = selectedWorktreeId else { return nil }
+        for project in projects {
+            if let wt = projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
+                if let op = projectsManager.operationState(for: wt.id) {
+                    switch op {
+                    case .creating, .deleting, .createFailed:
+                        return nil
+                    case .deleteFailed:
+                        break
+                    }
+                }
+                return wt
+            }
+        }
+        return nil
+    }
+}
