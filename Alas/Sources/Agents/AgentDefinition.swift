@@ -21,11 +21,18 @@ struct AgentDefinition: Codable, Equatable, Identifiable {
 
     /// The binary to invoke. Prefers a non-blank override; otherwise the
     /// catalog/custom `binary` (looked up via PATH at run time).
+    /// Tildes are expanded so that `~/bin/foo` works when the value is
+    /// passed to `/usr/bin/env` or shell-quoted into a command line —
+    /// neither of those does its own tilde expansion the way an
+    /// interactive shell does.
     var resolvedBinary: String {
+        let raw: String
         if let trimmed = binaryOverride?.trimmingCharacters(in: .whitespaces),
            !trimmed.isEmpty {
-            return trimmed
+            raw = trimmed
+        } else {
+            raw = binary
         }
-        return binary
+        return (raw as NSString).expandingTildeInPath
     }
 }
