@@ -209,9 +209,8 @@
         "Zsh"
       ],
       "extensions": [
-        "bash",
         "sh",
-        "zsh"
+        "bash"
       ],
       "command": "bash-language-server",
       "args": [
@@ -276,13 +275,7 @@
         "TypeScript"
       ],
       "extensions": [
-        "cjs",
-        "cts",
-        "js",
-        "json",
-        "mjs",
-        "mts",
-        "ts"
+        "json"
       ],
       "command": "biome",
       "args": [
@@ -451,8 +444,7 @@
         "LESS"
       ],
       "extensions": [
-        "css",
-        "scss"
+        "css"
       ],
       "command": "vscode-css-language-server",
       "args": [
@@ -475,8 +467,7 @@
         "LESS"
       ],
       "extensions": [
-        "css",
-        "scss"
+        "css"
       ],
       "command": "css-variables-language-server",
       "args": [],
@@ -660,8 +651,6 @@
         "HTML"
       ],
       "extensions": [
-        "htm",
-        "html",
         "py",
         "pyi"
       ],
@@ -830,12 +819,9 @@
         "TypeScript"
       ],
       "extensions": [
-        "cjs",
-        "cts",
         "js",
         "mjs",
-        "mts",
-        "ts"
+        "cjs"
       ],
       "command": "vscode-eslint-language-server",
       "args": [
@@ -997,14 +983,7 @@
         "TypeScript",
         "JavaScript"
       ],
-      "extensions": [
-        "cjs",
-        "cts",
-        "js",
-        "mjs",
-        "mts",
-        "ts"
-      ],
+      "extensions": [],
       "command": "glint",
       "args": [],
       "recipes": [
@@ -1071,8 +1050,8 @@
         "Text"
       ],
       "extensions": [
-        "markdown",
-        "md"
+        "md",
+        "markdown"
       ],
       "command": "grammarly-languageserver",
       "args": [],
@@ -1091,8 +1070,8 @@
         "GraphQL"
       ],
       "extensions": [
-        "gql",
-        "graphql"
+        "graphql",
+        "gql"
       ],
       "command": "graphql-lsp",
       "args": [
@@ -1135,9 +1114,8 @@
         "Ruby"
       ],
       "extensions": [
-        "htm",
         "html",
-        "rb"
+        "htm"
       ],
       "command": "herb-language-server",
       "args": [],
@@ -1173,8 +1151,8 @@
         "HTML"
       ],
       "extensions": [
-        "htm",
-        "html"
+        "html",
+        "htm"
       ],
       "command": "vscode-html-language-server",
       "args": [
@@ -1419,11 +1397,8 @@
         "JavaScript"
       ],
       "extensions": [
-        "cjs",
-        "htm",
         "html",
-        "js",
-        "mjs"
+        "htm"
       ],
       "command": "lwc-language-server",
       "args": [],
@@ -1639,12 +1614,9 @@
         "TypeScript"
       ],
       "extensions": [
-        "cjs",
-        "cts",
         "js",
         "mjs",
-        "mts",
-        "ts"
+        "cjs"
       ],
       "command": "oxlint",
       "args": [],
@@ -1920,8 +1892,8 @@
         "Markdown"
       ],
       "extensions": [
-        "markdown",
-        "md"
+        "md",
+        "markdown"
       ],
       "command": "remark-language-server",
       "args": [],
@@ -2267,12 +2239,7 @@
         "PHP",
         "Ruby"
       ],
-      "extensions": [
-        "htm",
-        "html",
-        "php",
-        "rb"
-      ],
+      "extensions": [],
       "command": "stimulus-language-server",
       "args": [],
       "recipes": [
@@ -2444,8 +2411,8 @@
         "Bash"
       ],
       "extensions": [
-        "bash",
-        "sh"
+        "sh",
+        "bash"
       ],
       "command": "termux-language-server",
       "args": [],
@@ -2465,9 +2432,7 @@
         "LaTeX",
         "Org"
       ],
-      "extensions": [
-        "tex"
-      ],
+      "extensions": [],
       "command": "textlsp",
       "args": [],
       "recipes": [
@@ -2486,12 +2451,9 @@
         "JavaScript"
       ],
       "extensions": [
-        "cjs",
-        "cts",
-        "js",
-        "mjs",
+        "ts",
         "mts",
-        "ts"
+        "cts"
       ],
       "command": "tsgo",
       "args": [],
@@ -2545,8 +2507,6 @@
         "HTML"
       ],
       "extensions": [
-        "htm",
-        "html",
         "twig"
       ],
       "command": "twiggy-language-server",
@@ -2592,12 +2552,9 @@
         "JavaScript"
       ],
       "extensions": [
-        "cjs",
-        "cts",
-        "js",
-        "mjs",
+        "ts",
         "mts",
-        "ts"
+        "cts"
       ],
       "command": "typescript-language-server",
       "args": [
@@ -2718,12 +2675,9 @@
         "TypeScript"
       ],
       "extensions": [
-        "cjs",
-        "cts",
         "js",
         "mjs",
-        "mts",
-        "ts"
+        "cjs"
       ],
       "command": "vtsls",
       "args": [],

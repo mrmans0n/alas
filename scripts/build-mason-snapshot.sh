@@ -225,11 +225,16 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
         cmd_args='[]'
     fi
 
-    # Look up each language in the curated extension map and union the
-    # results. Unknown languages contribute nothing; the dialog blocks save
-    # if the final list is empty so the user has to fill them in.
+    # Look up the FIRST language only in the curated extension map. We can't
+    # union across all of Mason's `languages` because our config model ties
+    # one entry to one languageId — unioning would route, e.g., .js files
+    # through a `typescript-language-server` entry whose languageId is
+    # "typescript", and `typescript-language-server` parses files based on
+    # the languageId it was opened with (see LanguageServerRegistry's
+    # comment on typescript/javascript). Users wanting coverage for the
+    # other languages add separate entries.
     extensions=$(jq -n --argjson langs "$languages" --argjson map "$LANG_EXT_MAP" \
-        '[$langs[] | $map[.] // empty] | add // [] | unique')
+        '($langs[0] // "") as $primary | $map[$primary] // []')
 
     entry=$(jq -n \
         --arg masonId "$name" \
