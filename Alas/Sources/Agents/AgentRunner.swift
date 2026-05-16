@@ -1,5 +1,10 @@
 import Foundation
 
+struct GeneratedMessage: Equatable {
+    let subject: String
+    let body: String
+}
+
 /// First paragraph = subject (first line only); the rest = body.
 /// Tolerates missing blank lines, trailing whitespace, empty input.
 enum AgentMessageParser {
