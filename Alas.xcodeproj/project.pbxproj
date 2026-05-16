@@ -143,6 +143,7 @@
 		5EA1AA5C8D9DE003BACE8291 /* AlasGhostty.Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */; };
 		5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE58EF9CF8EC461667D9430 /* AppConfig.swift */; };
 		5FF61283B11E2696A72727D1 /* TreeSitterHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */; };
+		604E881461FC839C4233B0AF /* LSPInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74D394D40BC9060833DD640A /* LSPInstaller.swift */; };
 		6140E9DE848A53A37DFB8890 /* CodexInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F59C2CF9199EC099B1814AC /* CodexInstallerTests.swift */; };
 		6256EAEB315812ED4F4E9107 /* StageChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1874031C788ADB4398151FF1 /* StageChip.swift */; };
 		629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */; };
@@ -344,6 +345,7 @@
 		F88FD8BE546E36A0E3BF2594 /* ProjectGitWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12F540ABB23DDB829E1629D /* ProjectGitWatcher.swift */; };
 		F9BE25DD2C3A008328978575 /* AgentAutoLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25C1AD69581AAE3D34624F23 /* AgentAutoLaunch.swift */; };
 		FCE78F165C46577F64D9B9AD /* CenterSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */; };
+		FD797B47C5EE0F82796A3733 /* LSPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028348C468E45161F567110A /* LSPInstallerTests.swift */; };
 		FDB1BD021ED0D2C7247E42D5 /* RightPaneStateLoadOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C89163A30EA4D278E86959 /* RightPaneStateLoadOlderTests.swift */; };
 		FE1517EC14DCB1C29528C865 /* StatusParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA6A9F78C8E8CDF6D170BDD /* StatusParserTests.swift */; };
 		FF4707BB143F25062DD3BC43 /* AgentAutoLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36F875ED8D44E6C298588E60 /* AgentAutoLaunchTests.swift */; };
@@ -366,6 +368,7 @@
 		019A03B92542169A6595D432 /* HoverHighlightFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverHighlightFeature.swift; sourceTree = "<group>"; };
 		01F0314E357190EF2A1F861B /* CodexInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexInstaller.swift; sourceTree = "<group>"; };
 		0240C5961343C3042D865570 /* GeneralPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralPane.swift; sourceTree = "<group>"; };
+		028348C468E45161F567110A /* LSPInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPInstallerTests.swift; sourceTree = "<group>"; };
 		02FCDD45C23BAE141549D03F /* AlasGhostty.SurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.SurfaceView.swift; sourceTree = "<group>"; };
 		0326789AA29BD63CC1B8F81F /* DefinitionSnippetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefinitionSnippetCache.swift; sourceTree = "<group>"; };
 		0359D6646D12B66B70B5BB43 /* AiSplitButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AiSplitButton.swift; sourceTree = "<group>"; };
@@ -523,6 +526,7 @@
 		71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTabStateCodableTests.swift; sourceTree = "<group>"; };
 		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
 		743E347E3DE3EEAD3942CD78 /* StartupScriptResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptResolver.swift; sourceTree = "<group>"; };
+		74D394D40BC9060833DD640A /* LSPInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPInstaller.swift; sourceTree = "<group>"; };
 		7544FD20BC61E587CAFAC099 /* AgentRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRegistry.swift; sourceTree = "<group>"; };
 		768D12909DD5233659AC4E03 /* RepoGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoGroupView.swift; sourceTree = "<group>"; };
 		76F2498E56CBAF84CB67166C /* HarnessKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessKind.swift; sourceTree = "<group>"; };
@@ -1260,6 +1264,7 @@
 			children = (
 				364507D55CD5D73CD44819E7 /* InstallerHostTests.swift */,
 				FDB4C80D9DD6DA28DE182955 /* InstallRecipeTests.swift */,
+				028348C468E45161F567110A /* LSPInstallerTests.swift */,
 			);
 			path = Install;
 			sourceTree = "<group>";
@@ -1288,6 +1293,7 @@
 			children = (
 				C506EF972D34E2F937D4FEEC /* InstallerHost.swift */,
 				9F80EA8C6EFF2C0A8F02C62D /* InstallRecipe.swift */,
+				74D394D40BC9060833DD640A /* LSPInstaller.swift */,
 			);
 			path = Install;
 			sourceTree = "<group>";
@@ -1723,6 +1729,7 @@
 				255E9EAE89D521E08EB90918 /* JSONHookSettingsFile.swift in Sources */,
 				E433BB79E6D79DAF4532172A /* Kbd.swift in Sources */,
 				C1EBF68A32C7C1D61ECC89AC /* LSPClient.swift in Sources */,
+				604E881461FC839C4233B0AF /* LSPInstaller.swift in Sources */,
 				DC394B7740FAEBD2F8ACB61F /* LSPMessages.swift in Sources */,
 				70FCC2B12AE446728EE7CF8D /* LSPTransport.swift in Sources */,
 				91BA613AFD278AF56168EB22 /* LSPURI.swift in Sources */,
@@ -1892,6 +1899,7 @@
 				D675E5B1E5E95E7239F3A89F /* InstallRecipeTests.swift in Sources */,
 				32660CEE9955165AE3CCDFBE /* InstallerHostTests.swift in Sources */,
 				524B70F03B9A934CEEA5FA61 /* LSPClientTests.swift in Sources */,
+				FD797B47C5EE0F82796A3733 /* LSPInstallerTests.swift in Sources */,
 				79575F0DA597D2C2DFCDC9E2 /* LSPMessagesTests.swift in Sources */,
 				C2CE2E3DE88344FDDE67D66A /* LSPTransportTests.swift in Sources */,
 				4153DAD75F27395D2D385BED /* LanguageServerAvailabilityTests.swift in Sources */,
