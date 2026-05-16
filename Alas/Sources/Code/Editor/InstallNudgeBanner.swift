@@ -83,12 +83,17 @@ struct InstallNudgeBanner: View {
         let availability = LanguageServerAvailability()
         guard availability.status(for: entry) == .notInstalled else { return nil }
         // 3. Catalog entry required (curated or user-defined recipes).
+        //    userDefinedRecipes wins when present so a user-overridden
+        //    language (e.g. Ruff Mason-prefilled under "python") shows
+        //    its own install action instead of the curated Pyright one.
         let recipes: [InstallRecipe] = {
-            if let curated = RecommendedLanguageCatalog.entry(forLanguage: language) {
-                let resolved = curated.resolvedRecipes
-                if !resolved.isEmpty { return resolved }
+            if let user = appState.config.code.userDefinedRecipes[language], !user.isEmpty {
+                return user
             }
-            return appState.config.code.userDefinedRecipes[language] ?? []
+            if let curated = RecommendedLanguageCatalog.entry(forLanguage: language) {
+                return curated.resolvedRecipes
+            }
+            return []
         }()
         guard !recipes.isEmpty else { return nil }
         // 4. Installer must be detected.

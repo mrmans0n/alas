@@ -144,11 +144,16 @@ struct CodePane: View {
     }
 
     private func recipes(for language: String) -> [InstallRecipe] {
-        if let curated = RecommendedLanguageCatalog.entry(forLanguage: language) {
-            let resolved = curated.resolvedRecipes
-            if !resolved.isEmpty { return resolved }
+        // userDefinedRecipes wins when present — a user who Mason-prefilled
+        // a Ruff config under the `python` language ID needs the Install
+        // button to run Ruff's recipe, not the curated Pyright one.
+        if let user = state.config.code.userDefinedRecipes[language], !user.isEmpty {
+            return user
         }
-        return state.config.code.userDefinedRecipes[language] ?? []
+        if let curated = RecommendedLanguageCatalog.entry(forLanguage: language) {
+            return curated.resolvedRecipes
+        }
+        return []
     }
 
     private func runInstall(_ installer: DetectedInstaller, recipe: InstallRecipe, language: String) {

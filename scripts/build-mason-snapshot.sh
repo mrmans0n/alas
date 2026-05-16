@@ -140,8 +140,6 @@ LANG_EXT_MAP=$(cat <<'JSON'
   "Cue": ["cue"],
   "D": ["d"],
   "Dart": ["dart"],
-  "Docker": ["dockerfile"],
-  "Dockerfile": ["dockerfile"],
   "EJS": ["ejs"],
   "Elixir": ["ex", "exs"],
   "Elm": ["elm"],

@@ -725,9 +725,7 @@
       "languages": [
         "Docker"
       ],
-      "extensions": [
-        "dockerfile"
-      ],
+      "extensions": [],
       "command": "docker-compose-langserver",
       "args": [],
       "recipes": [
@@ -745,9 +743,7 @@
       "languages": [
         "Docker"
       ],
-      "extensions": [
-        "dockerfile"
-      ],
+      "extensions": [],
       "command": "docker-langserver",
       "args": [
         "--stdio"
