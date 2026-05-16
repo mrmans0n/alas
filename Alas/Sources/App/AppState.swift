@@ -269,6 +269,33 @@ final class AppState {
                     )
                 }
 
+                // After the startup script runs, optionally spawn the
+                // configured agent CLI in the new worktree. This is fire-
+                // and-forget: a failed launch logs but never fails the
+                // worktree create.
+                let autoLaunch = AgentAutoLaunch.resolve(
+                    registry: self.agentRegistry,
+                    globalAgentId: self.config.agents.worktreeAutoLaunch.agentId,
+                    globalUseBypass: self.config.agents.worktreeAutoLaunch.useBypassPermissions,
+                    projectMode: project.startupScripts.worktreeAgentMode,
+                    projectAgentId: project.startupScripts.worktreeAgentId,
+                    projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions
+                )
+                if let autoLaunch {
+                    let argvJoined = autoLaunch.argv
+                        .map { Self.shellQuote($0) }
+                        .joined(separator: " ")
+                    // Spawn detached: we want the agent to keep running
+                    // beyond the worktree-create Task. zsh -c is used here
+                    // because the same shell-quoting and PATH semantics
+                    // apply as for the startup script.
+                    _ = try? await Process.run(
+                        "/bin/zsh",
+                        args: ["-c", argvJoined],
+                        cwd: newWorktree.path
+                    )
+                }
+
                 do {
                     let wasHidden = projectsManager.isWorktreeHidden(
                         projectId: project.id,
@@ -300,6 +327,16 @@ final class AppState {
             }
         }
         return optimistic.id
+    }
+
+    nonisolated private static func shellQuote(_ s: String) -> String {
+        if s.range(of: "[^A-Za-z0-9_/.@%+=,:-]", options: .regularExpression) == nil {
+            return s
+        }
+        // POSIX single-quote escape: end the quoted string, insert an
+        // escaped quote, restart the quoted string.
+        let escaped = s.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
     }
 
     nonisolated private static func performCreateWorktree(
