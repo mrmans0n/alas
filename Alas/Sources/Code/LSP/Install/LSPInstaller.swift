@@ -42,6 +42,7 @@ final class LSPInstaller {
         case .cargo:
             return (exec, ["install", recipe.package])
         case .rustup:
+            assert(!recipe.extraArgs.isEmpty, "rustup recipe must supply extraArgs")
             return (exec, recipe.extraArgs)
         case .go:
             return (exec, ["install", "\(recipe.package)@latest"])

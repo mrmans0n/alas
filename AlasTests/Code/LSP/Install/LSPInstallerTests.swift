@@ -76,4 +76,12 @@ struct LSPInstallerTests {
         let line = LSPInstaller.displayCommandLine(for: recipe, using: installer)
         #expect(line == "brew install rust-analyzer")
     }
+
+    @Test("displayCommandLine strips deep installer paths to basename")
+    func displayCommandLineDeepPath() {
+        let installer = DetectedInstaller(kind: .rustup, executable: "/Users/x/.cargo/bin/rustup")
+        let recipe = InstallRecipe(installer: .rustup, package: "", extraArgs: ["component", "add", "rust-analyzer"])
+        let line = LSPInstaller.displayCommandLine(for: recipe, using: installer)
+        #expect(line == "rustup component add rust-analyzer")
+    }
 }
