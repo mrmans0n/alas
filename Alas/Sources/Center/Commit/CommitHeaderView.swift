@@ -101,6 +101,7 @@ struct CommitHeaderView: View {
             .foregroundColor(theme.color("fg-faint"))
         }
         .padding(.top, 8)
+        .textSelection(.enabled)
     }
 
     private func absoluteDate(_ date: Date) -> String {
