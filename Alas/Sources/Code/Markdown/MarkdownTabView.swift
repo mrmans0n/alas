@@ -154,18 +154,16 @@ struct MarkdownTabView: View {
         HStack(spacing: 6) {
             breadcrumbText
             Spacer()
-            Picker("", selection: Binding(
+            Seg(value: Binding(
                 get: { resolvedMode },
                 set: { newMode in
                     appState.tabs.setMarkdownViewMode(worktreeId: worktreeId, tabId: tabId, mode: newMode)
                 }
-            )) {
-                Image(systemName: "pencil").tag(MarkdownViewMode.editor)
-                Image(systemName: "rectangle.split.2x1").tag(MarkdownViewMode.split)
-                Image(systemName: "eye").tag(MarkdownViewMode.preview)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 120)
+            ), systemImageOptions: [
+                (MarkdownViewMode.editor, "pencil"),
+                (MarkdownViewMode.split, "rectangle.split.2x1"),
+                (MarkdownViewMode.preview, "eye"),
+            ])
         }
         .padding(.horizontal, 12).frame(height: 28)
         .background(theme.color("bg-1"))
