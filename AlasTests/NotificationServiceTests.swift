@@ -21,6 +21,7 @@ struct NotificationServiceTests {
         #expect(requests.count == 1)
         #expect(requests[0].identifier == "session-1-awaiting")
         #expect(requests[0].content.title == "Claude Code needs input")
+        #expect(requests[0].content.sound != nil)
         #expect(requests[0].content.userInfo["projectId"] as? String == "project-1")
         #expect(requests[0].content.userInfo["worktreeId"] as? String == "worktree-1")
         #expect(requests[0].content.userInfo["sessionId"] as? String == "session-1")
@@ -44,6 +45,7 @@ struct NotificationServiceTests {
         #expect(requests[0].identifier == "session-1")
         #expect(requests[0].content.title == "Codex finished")
         #expect(requests[0].content.body == "Completed")
+        #expect(requests[0].content.sound != nil)
     }
 
     @Test func finishEnabledFlagDoesNotDisableAwaitingNotifications() {

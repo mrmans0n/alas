@@ -44,6 +44,7 @@ final class NotificationService {
         let content = UNMutableNotificationContent()
         content.title = "\(agent.displayName) needs input"
         content.body = body ?? "Session is waiting for you."
+        content.sound = .default
         content.userInfo = [
             "projectId": projectId,
             "worktreeId": worktreeId,
@@ -59,6 +60,7 @@ final class NotificationService {
         let content = UNMutableNotificationContent()
         content.title = "\(agent.displayName) finished"
         content.body = body ?? "Session is done."
+        content.sound = .default
         content.userInfo = [
             "projectId": projectId,
             "worktreeId": worktreeId,
