@@ -47,11 +47,7 @@ struct RootView: View {
                             )
                         },
                         center: {
-                            if let wt = selectedWorktree() {
-                                CenterPaneView(state: state, worktree: wt)
-                            } else {
-                                EmptyTabView(onNewTerminal: {})
-                            }
+                            centerContent()
                         },
                         right: {
                             if let wt = selectedWorktree() {
@@ -147,6 +143,34 @@ struct RootView: View {
 
     private func openSettingsWindow() {
         openWindow(id: "settings")
+    }
+
+    @ViewBuilder
+    private func centerContent() -> some View {
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.projects,
+            projectsManager: state.projectsManager
+        )
+        switch resolver.resolve() {
+        case .worktree(let wt):
+            CenterPaneView(state: state, worktree: wt)
+        case .deleting(let wt):
+            DeletingWorktreeView(worktree: wt)
+        case .deleteFailed(let wt, let message):
+            DeleteFailedWorktreeView(
+                worktree: wt,
+                message: message,
+                onRetry: { state.deleteWorktree(wt) },
+                onCopyError: {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(message, forType: .string)
+                }
+            )
+        case .empty:
+            EmptyTabView(onNewTerminal: {})
+        }
     }
 
     private func selectedWorktree() -> Worktree? {
