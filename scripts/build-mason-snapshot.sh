@@ -22,6 +22,101 @@ done
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+# Mason's package.yaml lists `languages` (display names like "Rust", "TOML")
+# but not file extensions. We need extensions so the Add-language picker can
+# write a non-empty `extensions` array — without that, the LSP would never
+# be matched to a file. Maintain a hand-curated map here. Unknown languages
+# fall back to an empty array; the dialog blocks save until the user fills
+# them in manually.
+LANG_EXT_MAP=$(cat <<'JSON'
+{
+  "AsciiDoc": ["adoc", "asciidoc"],
+  "Astro": ["astro"],
+  "Bash": ["sh", "bash"],
+  "Bicep": ["bicep"],
+  "C": ["c", "h"],
+  "C#": ["cs"],
+  "C++": ["cc", "cpp", "cxx", "hh", "hpp", "hxx"],
+  "CMake": ["cmake"],
+  "CSS": ["css"],
+  "Clojure": ["clj", "cljs", "cljc", "edn"],
+  "CoffeeScript": ["coffee"],
+  "Crystal": ["cr"],
+  "Cue": ["cue"],
+  "D": ["d"],
+  "Dart": ["dart"],
+  "Dockerfile": ["dockerfile"],
+  "EJS": ["ejs"],
+  "Elixir": ["ex", "exs"],
+  "Elm": ["elm"],
+  "Erlang": ["erl", "hrl"],
+  "F#": ["fs", "fsi", "fsx"],
+  "Fennel": ["fnl"],
+  "Fish": ["fish"],
+  "Gleam": ["gleam"],
+  "Go": ["go"],
+  "GraphQL": ["graphql", "gql"],
+  "Groovy": ["groovy", "gradle"],
+  "HCL": ["hcl"],
+  "HTML": ["html", "htm"],
+  "Haskell": ["hs", "lhs"],
+  "Helm": ["yaml", "yml"],
+  "JSON": ["json"],
+  "JSONC": ["jsonc"],
+  "Java": ["java"],
+  "JavaScript": ["js", "mjs", "cjs", "jsx"],
+  "Julia": ["jl"],
+  "Kotlin": ["kt", "kts"],
+  "LaTeX": ["tex"],
+  "Lean": ["lean"],
+  "Liquid": ["liquid"],
+  "Lua": ["lua"],
+  "Markdown": ["md", "markdown"],
+  "Nim": ["nim"],
+  "Nix": ["nix"],
+  "OCaml": ["ml", "mli"],
+  "PHP": ["php"],
+  "Perl": ["pl", "pm"],
+  "PowerShell": ["ps1", "psm1"],
+  "Prisma": ["prisma"],
+  "Protobuf": ["proto"],
+  "PureScript": ["purs"],
+  "Python": ["py", "pyi"],
+  "R": ["r"],
+  "ReScript": ["res", "resi"],
+  "Reason": ["re", "rei"],
+  "Ruby": ["rb"],
+  "Rust": ["rs"],
+  "SCSS": ["scss"],
+  "SQL": ["sql"],
+  "Sass": ["sass"],
+  "Scala": ["scala", "sbt", "sc"],
+  "Shell": ["sh", "bash", "zsh"],
+  "Solidity": ["sol"],
+  "Stylus": ["styl"],
+  "Svelte": ["svelte"],
+  "Swift": ["swift"],
+  "TOML": ["toml"],
+  "Tcl": ["tcl"],
+  "Terraform": ["tf", "tfvars"],
+  "TypeScript": ["ts", "mts", "cts", "tsx"],
+  "Twig": ["twig"],
+  "V": ["v"],
+  "Vala": ["vala"],
+  "Vim": ["vim"],
+  "Vue": ["vue"],
+  "Vimscript": ["vim"],
+  "WebAssembly": ["wat", "wasm"],
+  "XML": ["xml"],
+  "YAML": ["yaml", "yml"],
+  "Zig": ["zig"],
+  "Zsh": ["zsh"],
+  "haxe": ["hx"],
+  "shellscript": ["sh", "bash", "zsh"]
+}
+JSON
+)
+
 echo "Cloning mason-org/mason-registry into $TMP..." >&2
 git clone --depth 1 https://github.com/mason-org/mason-registry.git "$TMP/registry" >&2
 
@@ -90,17 +185,24 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
     cmd="$bin_entry"
     if [ -z "$cmd" ]; then cmd="$name"; fi
 
+    # Look up each language in the curated extension map and union the
+    # results. Unknown languages contribute nothing; the dialog blocks save
+    # if the final list is empty so the user has to fill them in.
+    extensions=$(jq -n --argjson langs "$languages" --argjson map "$LANG_EXT_MAP" \
+        '[$langs[] | $map[.] // empty] | add // [] | unique')
+
     entry=$(jq -n \
         --arg masonId "$name" \
         --arg displayName "$name" \
         --argjson languages "$languages" \
+        --argjson extensions "$extensions" \
         --arg command "$cmd" \
         --argjson recipes "$recipes" \
         '{
             masonId: $masonId,
             displayName: $displayName,
             languages: $languages,
-            extensions: [],
+            extensions: $extensions,
             command: $command,
             args: [],
             recipes: $recipes

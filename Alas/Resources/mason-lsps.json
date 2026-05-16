@@ -85,7 +85,9 @@
       "languages": [
         "Astro"
       ],
-      "extensions": [],
+      "extensions": [
+        "astro"
+      ],
       "command": "astro-ls",
       "args": [],
       "recipes": [
@@ -151,7 +153,9 @@
       "languages": [
         "Rust"
       ],
-      "extensions": [],
+      "extensions": [
+        "rs"
+      ],
       "command": "bacon-ls",
       "args": [],
       "recipes": [
@@ -173,7 +177,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "basedpyright",
       "args": [],
       "recipes": [
@@ -199,7 +206,11 @@
         "Sh",
         "Zsh"
       ],
-      "extensions": [],
+      "extensions": [
+        "bash",
+        "sh",
+        "zsh"
+      ],
       "command": "bash-language-server",
       "args": [],
       "recipes": [
@@ -260,7 +271,17 @@
         "JavaScript",
         "TypeScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "cts",
+        "js",
+        "json",
+        "jsx",
+        "mjs",
+        "mts",
+        "ts",
+        "tsx"
+      ],
       "command": "biome",
       "args": [],
       "recipes": [
@@ -350,7 +371,9 @@
       "languages": [
         "CMake"
       ],
-      "extensions": [],
+      "extensions": [
+        "cmake"
+      ],
       "command": "cmake-language-server",
       "args": [],
       "recipes": [
@@ -372,7 +395,9 @@
       "languages": [
         "CoffeeScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "coffee"
+      ],
       "command": "coffeesense-language-server",
       "args": [],
       "recipes": [
@@ -421,7 +446,10 @@
         "SCSS",
         "LESS"
       ],
-      "extensions": [],
+      "extensions": [
+        "css",
+        "scss"
+      ],
       "command": "vscode-css-language-server",
       "args": [],
       "recipes": [
@@ -440,7 +468,10 @@
         "SCSS",
         "LESS"
       ],
-      "extensions": [],
+      "extensions": [
+        "css",
+        "scss"
+      ],
       "command": "css-variables-language-server",
       "args": [],
       "recipes": [
@@ -457,7 +488,9 @@
       "languages": [
         "CSS"
       ],
-      "extensions": [],
+      "extensions": [
+        "css"
+      ],
       "command": "cssmodules-language-server",
       "args": [],
       "recipes": [
@@ -491,7 +524,9 @@
       "languages": [
         "Cue"
       ],
-      "extensions": [],
+      "extensions": [
+        "cue"
+      ],
       "command": "cue",
       "args": [],
       "recipes": [
@@ -513,7 +548,9 @@
       "languages": [
         "Cue"
       ],
-      "extensions": [],
+      "extensions": [
+        "cue"
+      ],
       "command": "cuelsp",
       "args": [],
       "recipes": [
@@ -594,7 +631,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "djls",
       "args": [],
       "recipes": [
@@ -613,7 +653,12 @@
         "Django",
         "HTML"
       ],
-      "extensions": [],
+      "extensions": [
+        "htm",
+        "html",
+        "py",
+        "pyi"
+      ],
       "command": "djlsp",
       "args": [],
       "recipes": [
@@ -686,7 +731,9 @@
       "languages": [
         "Elm"
       ],
-      "extensions": [],
+      "extensions": [
+        "elm"
+      ],
       "command": "elm-language-server",
       "args": [],
       "recipes": [
@@ -772,7 +819,16 @@
         "JavaScript",
         "TypeScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "cts",
+        "js",
+        "jsx",
+        "mjs",
+        "mts",
+        "ts",
+        "tsx"
+      ],
       "command": "vscode-eslint-language-server",
       "args": [],
       "recipes": [
@@ -789,7 +845,9 @@
       "languages": [
         "Fennel"
       ],
-      "extensions": [],
+      "extensions": [
+        "fnl"
+      ],
       "command": "fennel-language-server",
       "args": [],
       "recipes": [
@@ -806,7 +864,9 @@
       "languages": [
         "Fish"
       ],
-      "extensions": [],
+      "extensions": [
+        "fish"
+      ],
       "command": "fish-lsp",
       "args": [],
       "recipes": [
@@ -884,7 +944,10 @@
       "languages": [
         "YAML"
       ],
-      "extensions": [],
+      "extensions": [
+        "yaml",
+        "yml"
+      ],
       "command": "gh-actions-language-server",
       "args": [],
       "recipes": [
@@ -901,7 +964,10 @@
       "languages": [
         "YAML"
       ],
-      "extensions": [],
+      "extensions": [
+        "yaml",
+        "yml"
+      ],
       "command": "gitlab-ci-ls",
       "args": [],
       "recipes": [
@@ -921,7 +987,16 @@
         "TypeScript",
         "JavaScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "cts",
+        "js",
+        "jsx",
+        "mjs",
+        "mts",
+        "ts",
+        "tsx"
+      ],
       "command": "glint",
       "args": [],
       "recipes": [
@@ -938,7 +1013,9 @@
       "languages": [
         "Go"
       ],
-      "extensions": [],
+      "extensions": [
+        "go"
+      ],
       "command": "golangci-lint-langserver",
       "args": [],
       "recipes": [
@@ -960,7 +1037,9 @@
       "languages": [
         "Go"
       ],
-      "extensions": [],
+      "extensions": [
+        "go"
+      ],
       "command": "gopls",
       "args": [],
       "recipes": [
@@ -983,7 +1062,10 @@
         "Markdown",
         "Text"
       ],
-      "extensions": [],
+      "extensions": [
+        "markdown",
+        "md"
+      ],
       "command": "grammarly-languageserver",
       "args": [],
       "recipes": [
@@ -1000,7 +1082,10 @@
       "languages": [
         "GraphQL"
       ],
-      "extensions": [],
+      "extensions": [
+        "gql",
+        "graphql"
+      ],
       "command": "graphql-lsp",
       "args": [],
       "recipes": [
@@ -1037,7 +1122,11 @@
         "HTML",
         "Ruby"
       ],
-      "extensions": [],
+      "extensions": [
+        "htm",
+        "html",
+        "rb"
+      ],
       "command": "herb-language-server",
       "args": [],
       "recipes": [
@@ -1071,7 +1160,10 @@
       "languages": [
         "HTML"
       ],
-      "extensions": [],
+      "extensions": [
+        "htm",
+        "html"
+      ],
       "command": "vscode-html-language-server",
       "args": [],
       "recipes": [
@@ -1105,7 +1197,10 @@
       "languages": [
         "YAML"
       ],
-      "extensions": [],
+      "extensions": [
+        "yaml",
+        "yml"
+      ],
       "command": "hydra-lsp",
       "args": [],
       "recipes": [
@@ -1122,7 +1217,9 @@
       "languages": [
         "PHP"
       ],
-      "extensions": [],
+      "extensions": [
+        "php"
+      ],
       "command": "intelephense",
       "args": [],
       "recipes": [
@@ -1139,7 +1236,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "jedi-language-server",
       "args": [],
       "recipes": [
@@ -1197,7 +1297,9 @@
       "languages": [
         "JSON"
       ],
-      "extensions": [],
+      "extensions": [
+        "json"
+      ],
       "command": "vscode-json-language-server",
       "args": [],
       "recipes": [
@@ -1300,7 +1402,14 @@
         "HTML",
         "JavaScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "htm",
+        "html",
+        "js",
+        "jsx",
+        "mjs"
+      ],
       "command": "lwc-language-server",
       "args": [],
       "recipes": [
@@ -1368,7 +1477,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "mutt-language-server",
       "args": [],
       "recipes": [
@@ -1419,7 +1531,9 @@
       "languages": [
         "Nix"
       ],
-      "extensions": [],
+      "extensions": [
+        "nix"
+      ],
       "command": "nil",
       "args": [],
       "recipes": [
@@ -1436,7 +1550,9 @@
       "languages": [
         "Solidity"
       ],
-      "extensions": [],
+      "extensions": [
+        "sol"
+      ],
       "command": "nomicfoundation-solidity-language-server",
       "args": [],
       "recipes": [
@@ -1453,7 +1569,9 @@
       "languages": [
         "JSON"
       ],
-      "extensions": [],
+      "extensions": [
+        "json"
+      ],
       "command": "nxls",
       "args": [],
       "recipes": [
@@ -1505,7 +1623,16 @@
         "JavaScript",
         "TypeScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "cts",
+        "js",
+        "jsx",
+        "mjs",
+        "mts",
+        "ts",
+        "tsx"
+      ],
       "command": "oxlint",
       "args": [],
       "recipes": [
@@ -1527,7 +1654,9 @@
       "languages": [
         "Protobuf"
       ],
-      "extensions": [],
+      "extensions": [
+        "proto"
+      ],
       "command": "pbls",
       "args": [],
       "recipes": [
@@ -1544,7 +1673,10 @@
       "languages": [
         "Perl"
       ],
-      "extensions": [],
+      "extensions": [
+        "pl",
+        "pm"
+      ],
       "command": "perlnavigator",
       "args": [],
       "recipes": [
@@ -1578,7 +1710,9 @@
       "languages": [
         "Prisma"
       ],
-      "extensions": [],
+      "extensions": [
+        "prisma"
+      ],
       "command": "prisma-language-server",
       "args": [],
       "recipes": [
@@ -1595,7 +1729,9 @@
       "languages": [
         "Protobuf"
       ],
-      "extensions": [],
+      "extensions": [
+        "proto"
+      ],
       "command": "protols",
       "args": [],
       "recipes": [
@@ -1612,7 +1748,9 @@
       "languages": [
         "PureScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "purs"
+      ],
       "command": "purescript-language-server",
       "args": [],
       "recipes": [
@@ -1634,7 +1772,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "pyre",
       "args": [],
       "recipes": [
@@ -1651,7 +1792,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "pyrefly",
       "args": [],
       "recipes": [
@@ -1673,7 +1817,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "pyright",
       "args": [],
       "recipes": [
@@ -1695,7 +1842,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "pylsp",
       "args": [],
       "recipes": [
@@ -1717,7 +1867,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "rass",
       "args": [],
       "recipes": [
@@ -1751,7 +1904,10 @@
       "languages": [
         "Markdown"
       ],
-      "extensions": [],
+      "extensions": [
+        "markdown",
+        "md"
+      ],
       "command": "remark-language-server",
       "args": [],
       "recipes": [
@@ -1768,7 +1924,10 @@
       "languages": [
         "ReScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "res",
+        "resi"
+      ],
       "command": "rescript-language-server",
       "args": [],
       "recipes": [
@@ -1785,7 +1944,9 @@
       "languages": [
         "Nix"
       ],
-      "extensions": [],
+      "extensions": [
+        "nix"
+      ],
       "command": "rnix-lsp",
       "args": [],
       "recipes": [
@@ -1853,7 +2014,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "ruff",
       "args": [],
       "recipes": [
@@ -1892,7 +2056,9 @@
       "languages": [
         "Liquid"
       ],
-      "extensions": [],
+      "extensions": [
+        "liquid"
+      ],
       "command": "shopify",
       "args": [],
       "recipes": [
@@ -1926,7 +2092,9 @@
       "languages": [
         "Solidity"
       ],
-      "extensions": [],
+      "extensions": [
+        "sol"
+      ],
       "command": "solidity-ls",
       "args": [],
       "recipes": [
@@ -1943,7 +2111,9 @@
       "languages": [
         "SCSS"
       ],
-      "extensions": [],
+      "extensions": [
+        "scss"
+      ],
       "command": "some-sass-language-server",
       "args": [],
       "recipes": [
@@ -1960,7 +2130,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "sourcery",
       "args": [],
       "recipes": [
@@ -1999,7 +2172,9 @@
       "languages": [
         "SQL"
       ],
-      "extensions": [],
+      "extensions": [
+        "sql"
+      ],
       "command": "sql-language-server",
       "args": [],
       "recipes": [
@@ -2016,7 +2191,9 @@
       "languages": [
         "SQL"
       ],
-      "extensions": [],
+      "extensions": [
+        "sql"
+      ],
       "command": "sqls",
       "args": [],
       "recipes": [
@@ -2075,7 +2252,12 @@
         "PHP",
         "Ruby"
       ],
-      "extensions": [],
+      "extensions": [
+        "htm",
+        "html",
+        "php",
+        "rb"
+      ],
       "command": "stimulus-language-server",
       "args": [],
       "recipes": [
@@ -2126,7 +2308,9 @@
       "languages": [
         "Svelte"
       ],
-      "extensions": [],
+      "extensions": [
+        "svelte"
+      ],
       "command": "svelteserver",
       "args": [],
       "recipes": [
@@ -2197,7 +2381,9 @@
       "languages": [
         "CSS"
       ],
-      "extensions": [],
+      "extensions": [
+        "css"
+      ],
       "command": "tailwindcss-language-server",
       "args": [],
       "recipes": [
@@ -2219,7 +2405,9 @@
       "languages": [
         "Tcl"
       ],
-      "extensions": [],
+      "extensions": [
+        "tcl"
+      ],
       "command": "tclint",
       "args": [],
       "recipes": [
@@ -2236,7 +2424,10 @@
       "languages": [
         "Bash"
       ],
-      "extensions": [],
+      "extensions": [
+        "bash",
+        "sh"
+      ],
       "command": "termux-language-server",
       "args": [],
       "recipes": [
@@ -2255,7 +2446,9 @@
         "LaTeX",
         "Org"
       ],
-      "extensions": [],
+      "extensions": [
+        "tex"
+      ],
       "command": "textlsp",
       "args": [],
       "recipes": [
@@ -2273,7 +2466,16 @@
         "TypeScript",
         "JavaScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "cts",
+        "js",
+        "jsx",
+        "mjs",
+        "mts",
+        "ts",
+        "tsx"
+      ],
       "command": "tsgo",
       "args": [],
       "recipes": [
@@ -2325,7 +2527,11 @@
         "Twig",
         "HTML"
       ],
-      "extensions": [],
+      "extensions": [
+        "htm",
+        "html",
+        "twig"
+      ],
       "command": "twiggy-language-server",
       "args": [],
       "recipes": [
@@ -2342,7 +2548,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "ty",
       "args": [],
       "recipes": [
@@ -2365,7 +2574,16 @@
         "TypeScript",
         "JavaScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "cts",
+        "js",
+        "jsx",
+        "mjs",
+        "mts",
+        "ts",
+        "tsx"
+      ],
       "command": "typescript-language-server",
       "args": [],
       "recipes": [
@@ -2387,7 +2605,9 @@
       "languages": [
         "CSS"
       ],
-      "extensions": [],
+      "extensions": [
+        "css"
+      ],
       "command": "unocss-language-server",
       "args": [],
       "recipes": [
@@ -2404,7 +2624,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "vectorcode",
       "args": [],
       "recipes": [
@@ -2421,7 +2644,9 @@
       "languages": [
         "Vue"
       ],
-      "extensions": [],
+      "extensions": [
+        "vue"
+      ],
       "command": "vls",
       "args": [],
       "recipes": [
@@ -2455,7 +2680,9 @@
       "languages": [
         "Solidity"
       ],
-      "extensions": [],
+      "extensions": [
+        "sol"
+      ],
       "command": "vscode-solidity-server",
       "args": [],
       "recipes": [
@@ -2473,7 +2700,16 @@
         "JavaScript",
         "TypeScript"
       ],
-      "extensions": [],
+      "extensions": [
+        "cjs",
+        "cts",
+        "js",
+        "jsx",
+        "mjs",
+        "mts",
+        "ts",
+        "tsx"
+      ],
       "command": "vtsls",
       "args": [],
       "recipes": [
@@ -2495,7 +2731,9 @@
       "languages": [
         "Vue"
       ],
-      "extensions": [],
+      "extensions": [
+        "vue"
+      ],
       "command": "vue-language-server",
       "args": [],
       "recipes": [
@@ -2534,7 +2772,10 @@
       "languages": [
         "YAML"
       ],
-      "extensions": [],
+      "extensions": [
+        "yaml",
+        "yml"
+      ],
       "command": "yaml-language-server",
       "args": [],
       "recipes": [
@@ -2573,7 +2814,10 @@
       "languages": [
         "Python"
       ],
-      "extensions": [],
+      "extensions": [
+        "py",
+        "pyi"
+      ],
       "command": "zuban",
       "args": [],
       "recipes": [
