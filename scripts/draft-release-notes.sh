@@ -28,6 +28,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$WRITE" == 1 && -n "$TARGET" ]]; then
+  echo "--target with --write is implemented in the next task." >&2
+  exit 2
+fi
+
+preflight_write_unreleased() {
+  local file="CHANGELOG.md"
+  test -f "$file" || { echo "$file not found" >&2; exit 1; }
+
+  grep -qE '^## \[Unreleased\]$' "$file" || {
+    echo "No '## [Unreleased]' heading in $file." >&2
+    exit 1
+  }
+}
+
+if [[ "$WRITE" == 1 && -z "$TARGET" ]]; then
+  preflight_write_unreleased
+fi
+
 find_base_ref() {
   if [[ -n "$SINCE" ]]; then
     echo "$SINCE"
@@ -143,11 +162,60 @@ if [[ -z "$body" ]]; then
   exit 0
 fi
 
-# stdout path (write path comes in later tasks)
-if [[ -n "$TARGET" ]]; then
+write_unreleased() {
+  local new_body="$1"
+  local file="CHANGELOG.md"
+  test -f "$file" || { echo "$file not found" >&2; exit 1; }
+
+  # Verify [Unreleased] heading exists.
+  grep -qE '^## \[Unreleased\]$' "$file" || {
+    echo "No '## [Unreleased]' heading in $file." >&2
+    exit 1
+  }
+
+  local tmp
+  tmp=$(mktemp)
+  new_body="$new_body" awk '
+    BEGIN { in_unr = 0; printed_body = 0; new_body = ENVIRON["new_body"] }
+    /^## \[Unreleased\]$/ {
+      print
+      print ""
+      if (length(new_body) > 0) {
+        print new_body
+        print ""
+      }
+      in_unr = 1
+      printed_body = 1
+      next
+    }
+    in_unr && /^## \[/ { in_unr = 0 }
+    in_unr { next }   # drop existing Unreleased body
+    { print }
+  ' "$file" > "$tmp"
+
+  # Collapse any run of >2 blank lines that the splice may have left behind.
+  awk 'BEGIN{b=0} /^$/{b++; if(b<=1) print; next} {b=0; print}' "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+emit_for_unreleased() {
+  # Body without a heading (heading stays in CHANGELOG.md).
+  echo "$body"
+}
+
+emit_for_target() {
   echo "## [$TARGET] - $(date +%Y-%m-%d)"
+  echo
+  echo "$body"
+}
+
+if [[ -n "$TARGET" ]]; then
+  emit_for_target
+elif [[ "$WRITE" == 1 ]]; then
+  write_unreleased "$body"
+  echo "Updated [Unreleased] body in CHANGELOG.md." >&2
 else
   echo "## [Unreleased]"
+  echo
+  echo "$body"
 fi
-echo
-echo "$body"
