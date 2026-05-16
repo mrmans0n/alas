@@ -66,14 +66,20 @@ struct CodePane: View {
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
         .sheet(item: $selected) { entry in
-            CodeLanguageDetailView(initial: entry,
-                                   onSave: { save(originalLanguage: entry.language, $0) },
-                                   onCancel: { selected = nil })
+            CodeLanguageDetailView(
+                initial: entry,
+                isNew: false,
+                onSave: { saved, _ in save(originalLanguage: entry.language, saved, recipes: nil) },
+                onCancel: { selected = nil }
+            )
         }
         .sheet(isPresented: $creatingNew) {
-            CodeLanguageDetailView(initial: blank(),
-                                   onSave: { save(originalLanguage: nil, $0) },
-                                   onCancel: { creatingNew = false })
+            CodeLanguageDetailView(
+                initial: blank(),
+                isNew: true,
+                onSave: { saved, recipes in save(originalLanguage: nil, saved, recipes: recipes) },
+                onCancel: { creatingNew = false }
+            )
         }
         .sheet(isPresented: $installSheetVisible) {
             LSPInstallProgressSheet(installer: state.lspInstaller) {
@@ -160,7 +166,7 @@ struct CodePane: View {
         }
     }
 
-    private func save(originalLanguage: String?, _ entry: LanguageServerConfig) {
+    private func save(originalLanguage: String?, _ entry: LanguageServerConfig, recipes: [InstallRecipe]?) {
         var list = state.config.code.languageServers
         // Look up by the original language ID so renaming an entry replaces
         // it in place. Searching by the edited value (`entry.language`) would
@@ -174,6 +180,9 @@ struct CodePane: View {
             list.append(entry)
         }
         state.config.code.languageServers = list
+        if let recipes, !recipes.isEmpty {
+            state.config.code.userDefinedRecipes[entry.language] = recipes
+        }
         state.saveConfig()
         selected = nil
         creatingNew = false
