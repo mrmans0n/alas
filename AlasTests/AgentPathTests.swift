@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import Alas
 
-struct CommitAIPathTests {
+struct AgentPathTests {
     /// Make a temporary directory that exists on disk, and return its path.
     private func makeDir() throws -> String {
         let url = FileManager.default.temporaryDirectory
@@ -19,7 +19,7 @@ struct CommitAIPathTests {
             try? FileManager.default.removeItem(atPath: b)
         }
 
-        let result = CommitAIPath.augment(base: "", wellKnown: [a, b])
+        let result = AgentPath.augment(base: "", wellKnown: [a, b])
         #expect(result == "\(a):\(b)")
     }
 
@@ -27,7 +27,7 @@ struct CommitAIPathTests {
         let extra = try makeDir()
         defer { try? FileManager.default.removeItem(atPath: extra) }
 
-        let result = CommitAIPath.augment(base: "/usr/bin:/bin", wellKnown: [extra])
+        let result = AgentPath.augment(base: "/usr/bin:/bin", wellKnown: [extra])
         #expect(result == "/usr/bin:/bin:\(extra)")
     }
 
@@ -36,7 +36,7 @@ struct CommitAIPathTests {
         let missing = "/definitely/does/not/exist/\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: existing) }
 
-        let result = CommitAIPath.augment(base: "", wellKnown: [missing, existing])
+        let result = AgentPath.augment(base: "", wellKnown: [missing, existing])
         #expect(result == existing)
     }
 
@@ -44,25 +44,25 @@ struct CommitAIPathTests {
         let dir = try makeDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
-        let result = CommitAIPath.augment(base: "\(dir):/usr/bin", wellKnown: [dir])
+        let result = AgentPath.augment(base: "\(dir):/usr/bin", wellKnown: [dir])
         #expect(result == "\(dir):/usr/bin")
     }
 
     @Test func expandsTildeInWellKnownPaths() throws {
         let home = NSString("~").expandingTildeInPath
-        let result = CommitAIPath.augment(base: "", wellKnown: ["~"])
+        let result = AgentPath.augment(base: "", wellKnown: ["~"])
         #expect(result == home)
     }
 
     @Test func dedupesByExpandedFormAgainstBase() throws {
         let home = NSString("~").expandingTildeInPath
-        let result = CommitAIPath.augment(base: home, wellKnown: ["~"])
+        let result = AgentPath.augment(base: home, wellKnown: ["~"])
         #expect(result == home)
     }
 
     @Test func augmentedDefaultsToProcessPath() {
         let processPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        let result = CommitAIPath.augmented()
+        let result = AgentPath.augmented()
         #expect(result.contains(processPath) || processPath.isEmpty)
     }
 
@@ -70,12 +70,12 @@ struct CommitAIPathTests {
         let dir = try makeDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
-        let result = CommitAIPath.augment(base: "/usr/bin:", wellKnown: [dir])
+        let result = AgentPath.augment(base: "/usr/bin:", wellKnown: [dir])
         #expect(result == "/usr/bin:\(dir)")
     }
 
     @Test func normalizesEmptyComponentsInBase() throws {
-        let result = CommitAIPath.augment(base: "::", wellKnown: [])
+        let result = AgentPath.augment(base: "::", wellKnown: [])
         #expect(result == "")
     }
 }
