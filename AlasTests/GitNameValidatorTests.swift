@@ -134,6 +134,11 @@ struct GitNameValidatorTests {
         #expect(result == .valid)
     }
 
+    @Test func acceptsBracesWithoutAt() {
+        let result = GitNameValidator.validateBranchName("feature/{foo}")
+        #expect(result == .valid)
+    }
+
     @Test func acceptsHyphenInPathComponent() {
         let result = GitNameValidator.validateBranchName("feature/-dash")
         #expect(result == .valid)
