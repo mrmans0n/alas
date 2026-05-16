@@ -283,9 +283,46 @@ extension AlasGhostty {
 
             let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
 
-            // Build the key event. We skip the full IME/preedit machinery for v1.
-            var keyEv = event.alasGhosttyKeyEvent(action)
-            let chars = event.alasGhosttyCharacters
+            // Ask Ghostty which modifiers should be used for text translation.
+            // This handles configs such as `macos-option-as-alt` correctly.
+            let rawMods = alasGhosttyMods(event.modifierFlags)
+            let translatedGhosttyMods = ghostty_surface_key_translation_mods(surface, rawMods)
+
+            // Convert translated Ghostty mods back to AppKit flags so we can
+            // derive the correct composed characters (e.g. Option+n → ~).
+            let translatedAppKitMods = alasAppKitModifierFlags(from: translatedGhosttyMods)
+            var translationFlags = event.modifierFlags
+            for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
+                if translatedAppKitMods.contains(flag) {
+                    translationFlags.insert(flag)
+                } else {
+                    translationFlags.remove(flag)
+                }
+            }
+
+            // If translation modifiers differ we must build a new event.
+            // Reusing the original event when they're equal is required for
+            // some IME behaviours (see upstream Ghostty comment).
+            let translationEvent: NSEvent
+            if translationFlags == event.modifierFlags {
+                translationEvent = event
+            } else {
+                translationEvent = NSEvent.keyEvent(
+                    with: event.type,
+                    location: event.locationInWindow,
+                    modifierFlags: translationFlags,
+                    timestamp: event.timestamp,
+                    windowNumber: event.windowNumber,
+                    context: nil,
+                    characters: event.characters(byApplyingModifiers: translationFlags) ?? "",
+                    charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+                    isARepeat: event.isARepeat,
+                    keyCode: event.keyCode
+                ) ?? event
+            }
+
+            var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
+            let chars = translationEvent.alasGhosttyCharacters
 
             if let chars {
                 chars.withCString { ptr in
@@ -463,9 +500,16 @@ extension AlasGhostty {
 
 // MARK: - NSEvent key-translation helpers (ported from upstream NSEvent+Extension.swift)
 
-private extension NSEvent {
+extension NSEvent {
     /// Build a `ghostty_input_key_s` for the given action. Does NOT set `text` or `composing`.
-    func alasGhosttyKeyEvent(_ action: ghostty_input_action_e) -> ghostty_input_key_s {
+    ///
+    /// - Parameter translationFlags: AppKit modifiers used for text translation (may differ
+    ///   from the physical event modifiers when Ghostty translates them for configs such as
+    ///   `macos-option-as-alt`). Defaults to the event's own `modifierFlags`.
+    func alasGhosttyKeyEvent(
+        _ action: ghostty_input_action_e,
+        translationFlags: NSEvent.ModifierFlags? = nil
+    ) -> ghostty_input_key_s {
         var ev = ghostty_input_key_s()
         ev.action = action
         // Ghostty uses the macOS virtual key code directly as `keycode`.
@@ -473,8 +517,11 @@ private extension NSEvent {
         ev.text = nil
         ev.composing = false
         ev.mods = alasGhosttyMods(modifierFlags)
-        // Consumed mods: Ctrl and Cmd don't contribute to character translation.
-        ev.consumed_mods = alasGhosttyMods(modifierFlags.subtracting([.control, .command]))
+
+        // Consumed mods: the modifiers that contributed to the translated text.
+        // Control and Command never contribute to character translation.
+        let consumedFlags = (translationFlags ?? modifierFlags).subtracting([.control, .command])
+        ev.consumed_mods = alasGhosttyMods(consumedFlags)
 
         ev.unshifted_codepoint = 0
         if type == .keyDown || type == .keyUp {
@@ -487,14 +534,17 @@ private extension NSEvent {
     }
 
     /// The text string to pass as `ghostty_input_key_s.text`, filtering out
-    /// raw control characters and PUA function-key ranges.
+    /// control characters and PUA function-key ranges.
+    ///
+    /// Control characters (U+0000–U+001F) are encoded by Ghostty itself from the
+    /// keycode + mods, so we must not send them as text. This fixes Shift+Enter
+    /// and other modified control-key combinations.
     var alasGhosttyCharacters: String? {
         guard let characters else { return nil }
         if characters.count == 1, let scalar = characters.unicodeScalars.first {
             if scalar.value < 0x20 {
-                // Control character: return the characters without Ctrl so Ghostty
-                // handles the encoding itself.
-                return self.characters(byApplyingModifiers: modifierFlags.subtracting(.control))
+                // Control character — let Ghostty encode from keycode + mods.
+                return nil
             }
             if scalar.value >= 0xF700 && scalar.value <= 0xF8FF {
                 // PUA function key — don't send as text.
@@ -505,9 +555,24 @@ private extension NSEvent {
     }
 }
 
+// MARK: - Modifier translation helpers
+
+/// Convert Ghostty modifier bits back to AppKit `NSEvent.ModifierFlags`.
+/// Used when Ghostty's `ghostty_surface_key_translation_mods` tells us
+/// which modifiers should participate in character translation.
+func alasAppKitModifierFlags(from mods: ghostty_input_mods_e) -> NSEvent.ModifierFlags {
+    var flags: NSEvent.ModifierFlags = []
+    if mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue   != 0 { flags.insert(.shift) }
+    if mods.rawValue & GHOSTTY_MODS_CTRL.rawValue    != 0 { flags.insert(.control) }
+    if mods.rawValue & GHOSTTY_MODS_ALT.rawValue     != 0 { flags.insert(.option) }
+    if mods.rawValue & GHOSTTY_MODS_SUPER.rawValue   != 0 { flags.insert(.command) }
+    if mods.rawValue & GHOSTTY_MODS_CAPS.rawValue     != 0 { flags.insert(.capsLock) }
+    return flags
+}
+
 // MARK: - Modifier translation (ported from upstream Ghostty.Input.swift)
 
-private func alasGhosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+func alasGhosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
     var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
     if flags.contains(.shift)   { mods |= GHOSTTY_MODS_SHIFT.rawValue }
     if flags.contains(.control) { mods |= GHOSTTY_MODS_CTRL.rawValue }
