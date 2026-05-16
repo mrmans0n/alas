@@ -2282,7 +2282,11 @@
         "sql"
       ],
       "command": "sql-language-server",
-      "args": [],
+      "args": [
+        "up",
+        "--method",
+        "stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",

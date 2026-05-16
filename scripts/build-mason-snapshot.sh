@@ -78,7 +78,8 @@ LSP_OVERRIDE_MAP=$(cat <<'JSON'
   "marksman":                       {"command": "marksman", "args": ["server"]},
   "deno":                           {"command": "deno",  "args": ["lsp"]},
   "biome":                          {"command": "biome", "args": ["lsp-proxy"]},
-  "ruff":                           {"command": "ruff",  "args": ["server"]}
+  "ruff":                           {"command": "ruff",  "args": ["server"]},
+  "sqlls":                          {"command": "sql-language-server", "args": ["up", "--method", "stdio"]}
 }
 JSON
 )
