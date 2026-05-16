@@ -61,6 +61,12 @@ struct AlasApp: App {
                 }
                 .keyboardShortcut("p", modifiers: .command)
                 Divider()
+                Button("Split Selection into Lines") {
+                    NSApp.sendAction(#selector(CodeTextView.splitSelectionIntoLines(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(!state.hasActiveCodeEditorTab)
+                Divider()
                 Button("Find and Replace") {
                     NotificationCenter.default.post(name: .alasShowFindReplace, object: nil)
                 }

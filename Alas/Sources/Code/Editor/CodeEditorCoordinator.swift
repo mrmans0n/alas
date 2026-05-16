@@ -384,6 +384,7 @@ final class CodeEditorCoordinator {
             // because the NSUndoManager belongs to the (reused) NSTextView.
             diagnosticsFeature.reset()
             textView?.undoManager?.removeAllActions()
+            textView?.setSelectedRange(NSRange(location: 0, length: 0))
         }
         applyBaseStyle(theme: theme)
         runHighlight(theme: theme)
