@@ -200,4 +200,3 @@ private struct AgentCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
-
