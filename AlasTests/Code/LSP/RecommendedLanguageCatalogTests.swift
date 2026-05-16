@@ -39,12 +39,13 @@ struct RecommendedLanguageCatalogTests {
         #expect(entry?.resolvedRecipes.first?.package == "vscode-langservers-extracted")
     }
 
-    @Test("cpp aliases to c (clangd)")
+    @Test("cpp aliases to c (clangd; no installable recipe)")
     func cppAlias() {
         let entry = RecommendedLanguageCatalog.entry(forLanguage: "cpp")
-        #expect(entry?.resolvedRecipes.first?.installer == .brew)
-        // clangd ships in the llvm formula on macOS
-        #expect(entry?.resolvedRecipes.first?.package == "llvm")
+        #expect(entry?.aliasOf == "c")
+        // c has empty recipes — brew install llvm is keg-only and would not
+        // make clangd discoverable on PATH (see RecommendedLanguageCatalog).
+        #expect(entry?.resolvedRecipes.isEmpty == true)
     }
 
     @Test("unknown language returns nil")

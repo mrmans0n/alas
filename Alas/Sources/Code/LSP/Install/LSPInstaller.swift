@@ -66,6 +66,10 @@ final class LSPInstaller {
 
     private var currentProcess: Process?
     private var watchdog: Task<Void, Never>?
+    /// Set in `cancel()` so the terminationHandler can recognize a clean
+    /// non-zero exit (e.g. `brew` trapping SIGINT and exiting 130) as a
+    /// user-initiated cancel rather than an install failure.
+    private var cancelRequested = false
 
     func install(
         recipe: InstallRecipe,
@@ -87,6 +91,7 @@ final class LSPInstaller {
     func cancel() {
         guard case .running = state else { return }
         guard let process = currentProcess else { return }
+        cancelRequested = true
         // SIGINT first
         kill(process.processIdentifier, SIGINT)
         watchdog?.cancel()
@@ -95,7 +100,7 @@ final class LSPInstaller {
             guard let self else { return }
             await MainActor.run {
                 if case .running = self.state, let proc = self.currentProcess, proc.isRunning {
-                    proc.terminate()                // SIGTERM
+                    proc.terminate() // SIGTERM
                 }
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -108,11 +113,22 @@ final class LSPInstaller {
     }
 
     func reset() {
+        // If a sheet host disappears mid-install (window closed, tab destroyed),
+        // SwiftUI fires the sheet's onDismiss → reset(). Tear down the live
+        // process synchronously — there's no UI left to watch the SIGINT→TERM
+        // escalation, so just SIGKILL and move on. The terminationHandler
+        // still fires from a background queue but sees state == .idle and
+        // skips the state transition.
+        if case .running = state, let proc = currentProcess, proc.isRunning {
+            cancelRequested = true
+            kill(proc.processIdentifier, SIGKILL)
+        }
         state = .idle
         logLines = []
         currentProcess = nil
         watchdog?.cancel()
         watchdog = nil
+        cancelRequested = false
     }
 
     /// Test seam: spawn without going through recipe argv. Production code calls
@@ -202,11 +218,17 @@ final class LSPInstaller {
                 self.currentProcess = nil
                 self.watchdog?.cancel()
                 self.watchdog = nil
-                // Distinguish cancel from organic non-zero exit.
+                defer { self.cancelRequested = false }
+                // Distinguish cancel from organic non-zero exit. Some
+                // installers (notably `brew`) trap SIGINT and exit cleanly
+                // with a non-zero status (commonly 130), so `.uncaughtSignal`
+                // alone misses user-initiated cancels — consult the flag
+                // set by cancel() too.
+                let cancelled = self.cancelRequested
                 if case .running(let lang, _) = self.state {
                     if proc.terminationStatus == 0 {
                         self.state = .finished(language: lang, exitCode: 0)
-                    } else if proc.terminationReason == .uncaughtSignal {
+                    } else if cancelled || proc.terminationReason == .uncaughtSignal {
                         self.state = .cancelled(language: lang)
                     } else {
                         self.state = .finished(language: lang, exitCode: proc.terminationStatus)
@@ -259,7 +281,8 @@ private final class LineBuffer: @unchecked Sendable {
     private var pending: String = ""
 
     func feed(_ chunk: String) -> [String] {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         pending += chunk
         var out: [String] = []
         while let newlineRange = pending.range(of: "\n") {
@@ -272,7 +295,8 @@ private final class LineBuffer: @unchecked Sendable {
     }
 
     func flush() -> String? {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         if pending.isEmpty { return nil }
         let tail = pending
         pending = ""

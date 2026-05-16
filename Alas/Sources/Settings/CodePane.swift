@@ -167,7 +167,15 @@ struct CodePane: View {
         }
         state.config.code.languageServers = list
         if let recipes, !recipes.isEmpty {
+            // New entry created from the Add dialog — write the recipes.
             state.config.code.userDefinedRecipes[entry.language] = recipes
+        } else if let original = originalLanguage, original != entry.language {
+            // Edit dialog renamed an existing language. Migrate any existing
+            // recipes from the old key to the new one so the Install button
+            // stays visible.
+            if let existing = state.config.code.userDefinedRecipes.removeValue(forKey: original) {
+                state.config.code.userDefinedRecipes[entry.language] = existing
+            }
         }
         state.saveConfig()
         selected = nil

@@ -91,10 +91,14 @@ enum RecommendedLanguageCatalog {
             displayName: "C / C++",
             masonId: "clangd",
             aliasOf: nil,
-            recipes: [
-                // clangd ships inside the llvm formula on macOS
-                InstallRecipe(installer: .brew, package: "llvm"),
-            ]
+            // Homebrew's `llvm` formula is keg-only on macOS: `clangd` lands
+            // in `/opt/homebrew/opt/llvm/bin/clangd` which is NOT on the
+            // standard PATH and not in our well-known directories, so an
+            // install would succeed but availability detection would still
+            // report "not installed". clangd is also bundled with Xcode CLT,
+            // so most dev machines already have it. Ship without a recipe;
+            // power users can wire their own via Add language → manual fields.
+            recipes: []
         ),
         RecommendedLanguage(
             language: "cpp",
