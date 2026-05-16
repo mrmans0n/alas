@@ -203,5 +203,4 @@ struct CodeTextViewMultiCursorTests {
 
         #expect(textView.selectedRanges.count == 1)
     }
-
 }
