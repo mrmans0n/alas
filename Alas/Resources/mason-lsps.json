@@ -701,11 +701,13 @@
     {
       "masonId": "docker-compose-language-service",
       "displayName": "docker-compose-language-service",
-      "languageId": "docker",
+      "languageId": "dockerfile",
       "languages": [
         "Docker"
       ],
-      "extensions": [],
+      "extensions": [
+        "dockerfile"
+      ],
       "command": "docker-compose-langserver",
       "args": [],
       "recipes": [
@@ -719,11 +721,13 @@
     {
       "masonId": "dockerfile-language-server",
       "displayName": "dockerfile-language-server",
-      "languageId": "docker",
+      "languageId": "dockerfile",
       "languages": [
         "Docker"
       ],
-      "extensions": [],
+      "extensions": [
+        "dockerfile"
+      ],
       "command": "docker-langserver",
       "args": [
         "--stdio"

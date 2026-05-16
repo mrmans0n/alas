@@ -51,7 +51,8 @@ LSP_LANG_ID_MAP=$(cat <<'JSON'
   "C":      "c",
   "C++":    "cpp",
   "C#":     "csharp",
-  "F#":     "fsharp"
+  "F#":     "fsharp",
+  "Docker": "dockerfile"
 }
 JSON
 )
@@ -98,6 +99,7 @@ LANG_EXT_MAP=$(cat <<'JSON'
   "Cue": ["cue"],
   "D": ["d"],
   "Dart": ["dart"],
+  "Docker": ["dockerfile"],
   "Dockerfile": ["dockerfile"],
   "EJS": ["ejs"],
   "Elixir": ["ex", "exs"],
