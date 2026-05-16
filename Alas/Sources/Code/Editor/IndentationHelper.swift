@@ -2,7 +2,6 @@ import Foundation
 
 /// Pure helper for indentation decisions. Does not import AppKit.
 struct IndentationHelper {
-
     struct NewlineEdit: Equatable {
         let replacement: String
         let selectedLocationDelta: Int

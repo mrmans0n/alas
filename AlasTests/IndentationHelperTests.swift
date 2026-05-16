@@ -3,7 +3,6 @@ import Testing
 @testable import Alas
 
 struct IndentationHelperTests {
-
     // MARK: - Newline plain mode
 
     @Test func plainNewlinePreservesIndent() {
