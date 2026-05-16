@@ -6,6 +6,17 @@ import AppKit
 /// dirty tracking, save, file-watch, and LSP `didChange` are all
 /// orchestrated by the buffer + coordinator pair.
 final class CodeTextView: NSTextView, FontSizeResponder {
+    private static let pairedDelimiters: [Character: Character] = [
+        "(": ")",
+        "[": "]",
+        "{": "}",
+        "\"": "\"",
+        "'": "'",
+        "`": "`"
+    ]
+
+    private static let closingDelimiters: Set<Character> = [")", "]", "}"]
+
     var hoverHandler: ((NSPoint) -> Void)?
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
@@ -39,6 +50,36 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard
+            isEditable,
+            let text = Self.string(from: insertString),
+            text.count == 1,
+            let character = text.first
+        else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+
+        let range = effectiveReplacementRange(replacementRange)
+        guard range.location != NSNotFound, NSMaxRange(range) <= (string as NSString).length else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+
+        if let closing = Self.pairedDelimiters[character], shouldInsertPair(opening: character, closing: closing, range: range) {
+            insertPairedDelimiter(opening: character, closing: closing, replacementRange: range)
+            return
+        }
+
+        if Self.closingDelimiters.contains(character), range.length == 0, nextCharacter(at: range.location) == character {
+            setSelectedRange(NSRange(location: range.location + 1, length: 0))
+            return
+        }
+
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
@@ -74,5 +115,76 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             owner: self, userInfo: nil
         )
         addTrackingArea(area)
+    }
+
+    private static func string(from insertString: Any) -> String? {
+        if let string = insertString as? String { return string }
+        if let attributed = insertString as? NSAttributedString { return attributed.string }
+        return nil
+    }
+
+    private func effectiveReplacementRange(_ replacementRange: NSRange) -> NSRange {
+        replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+    }
+
+    private func insertPairedDelimiter(opening: Character, closing: Character, replacementRange range: NSRange) {
+        let current = string as NSString
+        if opening == closing, range.length == 0, nextCharacter(at: range.location) == closing {
+            setSelectedRange(NSRange(location: range.location + 1, length: 0))
+            return
+        }
+
+        let selectedText = range.length > 0 ? current.substring(with: range) : ""
+        let replacement = "\(opening)\(selectedText)\(closing)"
+        super.insertText(replacement, replacementRange: range)
+
+        if range.length > 0 {
+            setSelectedRange(NSRange(location: range.location + 1, length: range.length))
+        } else {
+            setSelectedRange(NSRange(location: range.location + 1, length: 0))
+        }
+    }
+
+    private func shouldInsertPair(opening: Character, closing: Character, range: NSRange) -> Bool {
+        guard opening == closing, range.length == 0 else { return true }
+
+        if isEscapedByBackslash(at: range.location) { return false }
+        if isIdentifierLike(characterBefore: range.location) { return false }
+        if isIdentifierLike(characterAfter: range.location) { return false }
+
+        return true
+    }
+
+    private func nextCharacter(at location: Int) -> Character? {
+        let nsString = string as NSString
+        guard location < nsString.length else { return nil }
+        return Character(nsString.substring(with: NSRange(location: location, length: 1)))
+    }
+
+    private func previousCharacter(before location: Int) -> Character? {
+        guard location > 0 else { return nil }
+        let nsString = string as NSString
+        guard location <= nsString.length else { return nil }
+        return Character(nsString.substring(with: NSRange(location: location - 1, length: 1)))
+    }
+
+    private func isIdentifierLike(characterBefore location: Int) -> Bool {
+        guard let character = previousCharacter(before: location) else { return false }
+        return character.isLetter || character.isNumber || character == "_"
+    }
+
+    private func isIdentifierLike(characterAfter location: Int) -> Bool {
+        guard let character = nextCharacter(at: location) else { return false }
+        return character.isLetter || character.isNumber || character == "_"
+    }
+
+    private func isEscapedByBackslash(at location: Int) -> Bool {
+        var cursor = location
+        var backslashCount = 0
+        while previousCharacter(before: cursor) == "\\" {
+            backslashCount += 1
+            cursor -= 1
+        }
+        return backslashCount % 2 == 1
     }
 }
