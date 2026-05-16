@@ -646,6 +646,64 @@ extension WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: submodulePath.path))
     }
 
+    @Test func removePropagatesOriginalSubmoduleErrorWhenHelperFails() async throws {
+        // When the safety helpers throw (e.g. the submodule's gitdir is
+        // corrupt / unreadable / times out), `remove()` must NOT swallow
+        // the original "submodules cannot be moved" stderr from
+        // `git worktree remove` and surface the helper's failure instead.
+        // It should rethrow `WorktreeError.gitFailed` with the original
+        // stderr and leave the worktree on disk.
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
+
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-submodule-broken")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/submodule-broken",
+            destination: dest, projectId: "p"
+        )
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: dest
+        )
+
+        // Corrupt the submodule's gitfile so `git submodule foreach`
+        // inside the safety helpers fails. The submodule directory and
+        // .gitmodules entry still exist, so the parent's `git worktree
+        // remove` still trips the "submodules cannot be moved" guard.
+        let gitfile = dest.appendingPathComponent("Deps/Submodule/.git")
+        try? "gitdir: /nonexistent/broken/path\n".write(to: gitfile, atomically: true, encoding: .utf8)
+
+        do {
+            try await svc.remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+            Issue.record("expected throw")
+        } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
+            // Must be the original git-worktree-remove stderr, not the
+            // helper's internal failure (e.g., "not a git repository").
+            let lower = stderr.lowercased()
+            #expect(
+                lower.contains("submodules") && lower.contains("cannot be moved"),
+                "expected original submodules error, got: \(stderr)"
+            )
+        }
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+    }
+
     @Test func addForExistingBranchSucceedsWithoutDashB() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

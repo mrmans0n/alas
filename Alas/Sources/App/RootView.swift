@@ -137,7 +137,7 @@ struct RootView: View {
                 state.selectedWorktreeId = firstWorktreeId()
             }
             state.startAllProjectGitWatchers()
-            state.rescanCommitAITools()
+            state.rescanAgents()
         }
     }
 

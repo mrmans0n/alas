@@ -34,6 +34,7 @@ struct SettingsWindow: View {
                     case .terminal:   TerminalPane(state: state)
                     case .code:       CodePane(state: state)
                     case .changes:    ChangesPane(state: state)
+                    case .agents:     AgentsPane(state: state)
                     case .appearance: AppearancePane(state: state)
                     }
                 }
@@ -59,7 +60,7 @@ struct SettingsWindow: View {
         .background(WindowConfigurator())
         .environment(\.theme, theme)
         .ignoresSafeArea()
-        .onAppear { state.rescanCommitAITools() }
+        .onAppear { state.rescanAgents() }
     }
 
     private func closeWindow() {

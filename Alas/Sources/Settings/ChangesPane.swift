@@ -61,14 +61,15 @@ struct ChangesPane: View {
 
     private var menuItems: [MenuItem] {
         var items: [MenuItem] = []
-        for tool in CommitAITool.detectable {
-            let detected = state.availableCommitAITools.contains(tool)
-            items.append(MenuItem(
-                id: tool.id,
-                label: detected ? tool.label : "\(tool.label) (not detected)"
-            ))
+        // Show every enabled agent (installed or not). Disabled agents are
+        // hidden — they're managed from Settings → Agents. Append
+        // "(not installed)" to the label when the binary isn't detected.
+        let installedIds = Set(state.agentRegistry.installed().map(\.id))
+        for agent in state.agentRegistry.agents where agent.isEnabled {
+            let suffix = installedIds.contains(agent.id) ? "" : " (not installed)"
+            items.append(MenuItem(id: agent.id, label: agent.displayName + suffix))
         }
-        items.append(MenuItem(id: CommitAITool.none.id, label: CommitAITool.none.label))
+        items.append(MenuItem(id: "none", label: "None"))
         return items
     }
 }

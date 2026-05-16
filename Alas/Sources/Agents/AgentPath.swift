@@ -1,12 +1,11 @@
 import Foundation
 
-/// Computes a PATH string suitable for finding commit-message AI CLIs from
-/// inside Alas. Needed because a macOS GUI app inherits launchd's minimal
-/// PATH (typically `/usr/bin:/bin:/usr/sbin:/sbin` + `/etc/paths.d/*`) and
-/// therefore can't see tools the user installed into `/opt/homebrew/bin`,
-/// `~/.local/bin`, etc.
-enum CommitAIPath {
-    /// Well-known directories where commit-AI CLIs are commonly installed.
+/// Computes a PATH string suitable for finding agent CLIs from inside Alas.
+/// Needed because a macOS GUI app inherits launchd's minimal PATH (typically
+/// `/usr/bin:/bin:/usr/sbin:/sbin` + `/etc/paths.d/*`) and therefore can't see
+/// tools the user installed into `/opt/homebrew/bin`, `~/.local/bin`, etc.
+enum AgentPath {
+    /// Well-known directories where agent CLIs are commonly installed.
     /// Order is preserved when appending. Tilde-form entries are expanded
     /// at lookup time.
     static let wellKnownDirectories: [String] = [

@@ -32,13 +32,19 @@ final class TerminalService {
     }
 
     /// Create a new session for the given worktree and return it.
+    /// `startupScriptSuffix`, when non-empty, is appended to the effective
+    /// per-session startup script and runs after the user's normal init —
+    /// used by worktree-create's auto-launch-agent path to put the agent
+    /// CLI directly into the new terminal session (visible, with a TTY,
+    /// not a hidden detached process).
     @discardableResult
     func openSession(
         worktree: Worktree,
         project: ProjectConfig,
         cfg: AppConfig.Terminal,
         theme: Theme,
-        forcedCwd: URL? = nil
+        forcedCwd: URL? = nil,
+        startupScriptSuffix: String? = nil
     ) throws -> TerminalSession {
         try ensureApp(cfg: cfg, theme: theme)
         guard let app else { throw NSError(domain: "TerminalService", code: 1) }
@@ -48,10 +54,17 @@ final class TerminalService {
             project: project, worktree: worktree, sessionId: sessionId,
             socketPath: socketPath, inheritParent: cfg.inheritParentEnv
         )
-        let effectiveScript = StartupScriptResolver.sessionOpenScript(
+        let baseScript = StartupScriptResolver.sessionOpenScript(
             global: cfg,
             project: project
         )
+        let effectiveScript: String = {
+            let trimmedSuffix = startupScriptSuffix?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if trimmedSuffix.isEmpty { return baseScript }
+            let trimmedBase = baseScript.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmedBase.isEmpty ? trimmedSuffix : "\(trimmedBase)\n\(trimmedSuffix)"
+        }()
         let plan = try StartupScriptInstaller.plan(
             shell: cfg.shell,
             startupScript: effectiveScript,

@@ -253,6 +253,10 @@ private struct ProjectDialog: View {
                 isValidating = false
             }
         case .edit(let project):
+            // Preserve fields the dialog doesn't yet edit (the worktree
+            // agent override — that lands with the AgentsPane UI later).
+            // Without this, hand-set JSON values would be silently wiped
+            // every time the user edits an unrelated startup-script field.
             state.updateProject(
                 id: project.id,
                 name: name,
@@ -261,7 +265,10 @@ private struct ProjectDialog: View {
                     sessionOpenMode: sessionOpenMode,
                     sessionOpenScript: sessionOpenScript,
                     worktreeCreateMode: worktreeCreateMode,
-                    worktreeCreateScript: worktreeCreateScript
+                    worktreeCreateScript: worktreeCreateScript,
+                    worktreeAgentMode: project.startupScripts.worktreeAgentMode,
+                    worktreeAgentId: project.startupScripts.worktreeAgentId,
+                    worktreeAgentUseBypassPermissions: project.startupScripts.worktreeAgentUseBypassPermissions
                 )
             )
             presented = false

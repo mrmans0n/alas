@@ -157,8 +157,7 @@ final class RightPaneState {
     /// `cancelGenerate()` (or by re-calling `generate` — the new Task
     /// replaces the old). On success, populates `composer.subject`/`body`
     /// and expands the composer so the user sees the result.
-    func generate(promptOverride: String, tool: CommitAITool) {
-        guard let adapter = tool.makeAdapter() else { return }
+    func generate(promptOverride: String, agent: AgentDefinition) {
         composer.error = nil
         composer.busy = true
         let wt = worktree.path
@@ -209,7 +208,8 @@ final class RightPaneState {
                     diff: diff
                 )
 
-                let message = try await adapter.generate(
+                let message = try await AgentRunner.runPrompt(
+                    agent: agent,
                     input: payload,
                     prompt: promptOverride
                 )

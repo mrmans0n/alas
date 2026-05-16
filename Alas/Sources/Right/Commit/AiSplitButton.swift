@@ -1,24 +1,25 @@
 import SwiftUI
 
 struct AiSplitButton: View {
-    let availableTools: [CommitAITool]
+    let availableAgents: [AgentDefinition]
     @Binding var selectedToolId: String
     let busy: Bool
     let onGenerate: () -> Void
 
     @Environment(\.theme) var theme
 
-    private var selected: CommitAITool? {
-        CommitAITool(rawValue: selectedToolId)
+    /// Currently-selected agent, or nil for "none" / unknown id.
+    private var selected: AgentDefinition? {
+        availableAgents.first(where: { $0.id == selectedToolId })
     }
 
-    /// True when no usable tool is selected AND no generation is in
-    /// flight. The primary button doubles as a cancel affordance while
-    /// busy, so it must stay clickable even if the user changes the
-    /// dropdown to "None" mid-generation — otherwise the only visible
-    /// cancel control disappears.
+    private var primaryLabel: String {
+        if busy { return "Cancel" }
+        return selected?.displayName ?? "None"
+    }
+
     private var primaryDisabled: Bool {
-        !busy && (selected == nil || selected == CommitAITool.none)
+        !busy && selected == nil
     }
 
     var body: some View {
@@ -30,7 +31,7 @@ struct AiSplitButton: View {
                     } else {
                         Text("✨").font(.system(size: 11))
                     }
-                    Text(busy ? "Cancel" : (selected?.label ?? "None"))
+                    Text(primaryLabel)
                         .font(.system(size: 11))
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
@@ -40,26 +41,26 @@ struct AiSplitButton: View {
             .buttonStyle(.plain)
             .disabled(primaryDisabled)
             .help(primaryDisabled
-                  ? "Pick a tool in Settings → Changes to enable"
+                  ? "Pick an agent in Settings → Agents to enable"
                   : busy
                       ? "Cancel generation"
-                      : "Generate commit message with \(selected!.label)")
+                      : "Generate commit message with \(selected?.displayName ?? "")")
 
             Menu {
-                ForEach(menuTools, id: \.id) { tool in
+                ForEach(availableAgents) { agent in
                     Button {
-                        selectedToolId = tool.id
+                        selectedToolId = agent.id
                     } label: {
                         HStack {
-                            Text(tool.label)
-                            if tool.id == selectedToolId {
+                            Text(agent.displayName)
+                            if agent.id == selectedToolId {
                                 Icon(name: "check", size: 10)
                             }
                         }
                     }
                 }
                 Divider()
-                Button("None") { selectedToolId = CommitAITool.none.id }
+                Button("None") { selectedToolId = "none" }
             } label: {
                 Icon(name: "chev-down", size: 9, color: theme.color("fg-faint"))
                     .padding(.horizontal, 7).padding(.vertical, 7)
@@ -70,11 +71,5 @@ struct AiSplitButton: View {
             .fixedSize()
         }
         .clipShape(RoundedRectangle(cornerRadius: 4))
-    }
-
-    private var menuTools: [CommitAITool] {
-        availableTools.isEmpty
-            ? CommitAITool.detectable          // show all so user knows what's possible
-            : availableTools
     }
 }

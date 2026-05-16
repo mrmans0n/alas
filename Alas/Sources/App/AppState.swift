@@ -25,12 +25,93 @@ final class AppState {
 
     var isSearchOpen: Bool = false
 
-    var availableCommitAITools: [CommitAITool] = []
+    /// Computed each time `config.agents` changes or detection re-runs.
+    /// `RootView.task` calls `rescanAgents()` once at launch; the Settings
+    /// window calls it again on appear.
+    var agentRegistry: AgentRegistry = AgentRegistry(
+        builtinState: [:],
+        customs: [],
+        installedIds: []
+    )
 
-    func rescanCommitAITools() {
+    /// Resolve a single agent by id (built-in id or custom UUID). Nil for
+    /// unknown ids or "none".
+    func agent(id: String?) -> AgentDefinition? {
+        guard let id, id != "none" else { return nil }
+        return agentRegistry.agents.first(where: { $0.id == id })
+    }
+
+    /// Recompute `agentRegistry` from `config.agents` + a fresh detection
+    /// scan. Safe to call repeatedly.
+    func rescanAgents() {
+        let registry = composeRegistryWithoutDetection()
         Task { @MainActor in
-            self.availableCommitAITools = await CommitAIDetector.scanCurrentEnvironment()
+            let installedIds = await AgentDetector.scanCurrentEnvironment(
+                agents: registry.agents
+            )
+            self.agentRegistry = AgentRegistry(
+                builtinState: self.config.agents.builtinState,
+                customs: self.config.agents.custom,
+                installedIds: installedIds
+            )
+            self.snapInvalidatedAgentSelections()
         }
+    }
+
+    /// Build a registry view without running detection — used as the input
+    /// to detection (since the detector needs the merged agent list).
+    private func composeRegistryWithoutDetection() -> AgentRegistry {
+        AgentRegistry(
+            builtinState: config.agents.builtinState,
+            customs: config.agents.custom,
+            installedIds: []
+        )
+    }
+
+    /// When an enabled agent becomes disabled / uninstalled / deleted, snap
+    /// any selector pointing at it to a safe default:
+    ///   - `changes.aiToolId` → "none"
+    ///   - `agents.worktreeAutoLaunch.agentId` → nil
+    ///   - per-project `worktreeAgentMode` → `.useGlobal` if it referenced
+    ///     a vanished agent
+    private func snapInvalidatedAgentSelections() {
+        let enabledIds = Set(agentRegistry.enabled().map(\.id))
+        var changed = false
+        let currentTool = config.changes.aiToolId
+        if currentTool != "none", !enabledIds.contains(currentTool) {
+            config.changes.aiToolId = "none"
+            changed = true
+        }
+        if let autoLaunchId = config.agents.worktreeAutoLaunch.agentId,
+           !enabledIds.contains(autoLaunchId) {
+            config.agents.worktreeAutoLaunch.agentId = nil
+            changed = true
+        }
+        if changed { saveConfig() }
+
+        var projectsChanged = false
+        for project in projectsManager.projects {
+            // Match the same modes AgentAutoLaunch.resolve treats as
+            // "use the project's agent" — both .overrideGlobal and
+            // .appendToGlobal qualify.
+            guard project.startupScripts.worktreeAgentMode == .overrideGlobal
+                    || project.startupScripts.worktreeAgentMode == .appendToGlobal,
+                  let id = project.startupScripts.worktreeAgentId,
+                  !enabledIds.contains(id) else { continue }
+            var updated = project.startupScripts
+            updated.worktreeAgentMode = .useGlobal
+            updated.worktreeAgentId = nil
+            projectsManager.updateProject(
+                id: project.id,
+                update: ProjectUpdate(
+                    name: project.name,
+                    color: project.color,
+                    startupScripts: updated
+                )
+            )
+            projectsChanged = true
+        }
+        if projectsChanged { saveProjects() }
     }
 
     /// Set when a worktree deletion fails because the tree is dirty.
@@ -141,7 +222,8 @@ final class AppState {
         branch: String,
         destination: URL,
         runStartup: Bool,
-        openTerminal: Bool
+        openTerminal: Bool,
+        launchAgentId: String? = nil
     ) -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -192,6 +274,35 @@ final class AppState {
                     )
                 }
 
+                // Resolve the per-creation agent into a command line that
+                // will run inside the new terminal session — appended to
+                // the session's startup script so the agent gets a real
+                // TTY and the user can interact with it. Bypass-perms
+                // semantics still come from config (project override >
+                // global). If no terminal is being opened we silently skip
+                // auto-launch: a detached background spawn for an
+                // interactive CLI (claude, codex, gemini) would just exit
+                // immediately on the EOF from its missing stdin.
+                let launchAgentCommand: String? = {
+                    guard let id = launchAgentId,
+                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
+                    else { return nil }
+                    let useBypass: Bool = {
+                        switch project.startupScripts.worktreeAgentMode {
+                        case .disabled: return false
+                        case .useGlobal:
+                            return self.config.agents.worktreeAutoLaunch.useBypassPermissions
+                        case .overrideGlobal, .appendToGlobal:
+                            return project.startupScripts.worktreeAgentUseBypassPermissions
+                        }
+                    }()
+                    var argv = [agent.resolvedBinary]
+                    if useBypass, let flag = agent.bypassPermissionsFlag {
+                        argv.append(flag)
+                    }
+                    return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+                }()
+
                 do {
                     let wasHidden = projectsManager.isWorktreeHidden(
                         projectId: project.id,
@@ -208,8 +319,15 @@ final class AppState {
                     }
 
                     selectedWorktreeId = newWorktree.id
-                    if openTerminal {
-                        _ = try? openTerminalTab(for: newWorktree)
+                    // Force the terminal open when an agent was picked —
+                    // launching an interactive CLI without a visible
+                    // session is functionally a no-op.
+                    let shouldOpenTerminal = openTerminal || launchAgentCommand != nil
+                    if shouldOpenTerminal {
+                        _ = try? openTerminalTab(
+                            for: newWorktree,
+                            startupScriptSuffix: launchAgentCommand
+                        )
                     }
                 } catch {
                     projectsManager.setOperationState(
@@ -223,6 +341,16 @@ final class AppState {
             }
         }
         return optimistic.id
+    }
+
+    nonisolated private static func shellQuote(_ s: String) -> String {
+        if s.range(of: "[^A-Za-z0-9_/.@%+=,:-]", options: .regularExpression) == nil {
+            return s
+        }
+        // POSIX single-quote escape: end the quoted string, insert an
+        // escaped quote, restart the quoted string.
+        let escaped = s.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
     }
 
     nonisolated private static func performCreateWorktree(
@@ -430,13 +558,17 @@ final class AppState {
     }
 
     @discardableResult
-    func openTerminalTab(for worktree: Worktree) throws -> Tab {
+    func openTerminalTab(
+        for worktree: Worktree,
+        startupScriptSuffix: String? = nil
+    ) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
         let session = try terminal.openSession(
             worktree: worktree, project: project,
-            cfg: config.terminal, theme: themeStore.current
+            cfg: config.terminal, theme: themeStore.current,
+            startupScriptSuffix: startupScriptSuffix
         )
         harness.detector.register(sessionId: session.id) { [weak session] in
             session?.surface.foregroundPid

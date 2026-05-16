@@ -6,7 +6,7 @@ struct CommitComposerView: View {
     let stagedAdd: Int
     let stagedDel: Int
     let branchName: String?
-    let availableTools: [CommitAITool]
+    let availableAgents: [AgentDefinition]
     @Binding var aiToolId: String
     let onGenerate: () -> Void
     let onCommit: () -> Void
@@ -117,7 +117,7 @@ struct CommitComposerView: View {
 
             HStack(spacing: 8) {
                 AiSplitButton(
-                    availableTools: availableTools,
+                    availableAgents: availableAgents,
                     selectedToolId: $aiToolId,
                     busy: state.busy,
                     onGenerate: onGenerate

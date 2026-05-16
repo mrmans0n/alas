@@ -5,35 +5,9 @@ struct GeneratedMessage: Equatable {
     let body: String
 }
 
-enum CommitAIError: LocalizedError {
-    case toolNotFound(String)
-    case nonZeroExit(stderr: String, exitCode: Int32)
-    case timedOut(seconds: TimeInterval)
-
-    var errorDescription: String? {
-        switch self {
-        case .toolNotFound(let bin): return "CLI not found on PATH: \(bin)"
-        case .nonZeroExit(let stderr, _):
-            let first = stderr
-                .split(separator: "\n", omittingEmptySubsequences: true)
-                .first
-                .map(String.init) ?? "CLI exited with an error"
-            return first
-        case .timedOut(let s): return "Timed out after \(Int(s))s"
-        }
-    }
-}
-
-protocol CommitAIAdapter {
-    var tool: CommitAITool { get }
-    /// Run the CLI, piping `input` to its stdin. Returns the parsed
-    /// (subject, body). Throws `CommitAIError` on failure.
-    func generate(input: String, prompt: String) async throws -> GeneratedMessage
-}
-
-/// Shared parser. First paragraph = subject (first line only); the rest =
-/// body. Tolerates missing blank lines, trailing whitespace, empty input.
-enum CommitAIAdapterParser {
+/// First paragraph = subject (first line only); the rest = body.
+/// Tolerates missing blank lines, trailing whitespace, empty input.
+enum AgentMessageParser {
     static func parse(_ stdout: String) -> GeneratedMessage {
         let trimmed = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -50,17 +24,22 @@ enum CommitAIAdapterParser {
     }
 }
 
-/// Shared runner: spawns `binary <args...>`, pipes `input` on stdin, parses
-/// stdout. 120s timeout (longer than the default git 30s — generation can
-/// be slow). Cancellation is delivered by Task cancellation, which
-/// `Process.run` propagates as SIGTERM.
-enum CommitAIRunner {
-    static func run(
-        binary: String,
-        args: [String],
+/// Spawns the agent's resolved binary with `agent.promptModeArgs + [prompt]`,
+/// pipes `input` on stdin, parses stdout. 120s timeout. Cancellation is
+/// delivered by Task cancellation, which `Process.run` propagates as SIGTERM.
+///
+/// Pipe-management and process-lifecycle logic mirrors `Process.run` in
+/// `Process+Git.swift`; the commentary there explains why each fd is closed
+/// when it is.
+enum AgentRunner {
+    static func runPrompt(
+        agent: AgentDefinition,
         input: String,
+        prompt: String,
         timeout: TimeInterval = 120
     ) async throws -> GeneratedMessage {
+        let binary = agent.resolvedBinary
+        let args = agent.promptModeArgs + [prompt]
         let pipe = Pipe()
         // We can't use Process.run directly because it doesn't accept
         // stdin. Inline a minimal variant that does, reusing gitEnv()
@@ -70,7 +49,7 @@ enum CommitAIRunner {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = [binary] + args
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = CommitAIPath.augmented(base: env["PATH"])
+        env["PATH"] = AgentPath.augmented(base: env["PATH"])
         process.environment = env
 
         let outPipe = Pipe()
@@ -83,13 +62,13 @@ enum CommitAIRunner {
         // `process.run()` and the `await` cannot drop the resume. Set the
         // handler BEFORE `run()` for the same reason — see ExitGate in
         // Process+Git.swift.
-        let exit = RunnerExitGate()
+        let exit = AgentRunnerExitGate()
         process.terminationHandler = { _ in exit.didExit() }
 
         do {
             try process.run()
         } catch {
-            throw CommitAIError.toolNotFound(binary)
+            throw AgentRunError.binaryNotFound(agentId: agent.id, displayName: agent.displayName)
         }
 
         // Close the parent's copies of the stdin read end and the
@@ -134,7 +113,7 @@ enum CommitAIRunner {
         // `timeout`: when the watchdog fires, `process.terminate()` closes
         // the child's read end, the kernel delivers EPIPE to our blocked
         // write, and `write(contentsOf:)` returns (via `try?`).
-        let timeoutState = TimeoutState()
+        let timeoutState = AgentRunnerTimeoutState()
         let watchdog = Task {
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             if !Task.isCancelled && process.isRunning {
@@ -171,7 +150,7 @@ enum CommitAIRunner {
         // "Timed out after 120s" instead of a generic non-zero exit
         // message, which would mislead users about what actually happened.
         if timeoutState.didTimeOut {
-            throw CommitAIError.timedOut(seconds: timeout)
+            throw AgentRunError.timedOut(seconds: timeout)
         }
 
         // Bound the post-exit drain: if a selected CLI spawned a helper
@@ -194,16 +173,23 @@ enum CommitAIRunner {
         let stderr = String(data: errData, encoding: .utf8) ?? ""
 
         if process.terminationStatus != 0 {
-            throw CommitAIError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
+            // exit 127 is the POSIX convention for "command not found" — env
+            // uses it when the named binary doesn't exist on PATH.  Surface
+            // that as .binaryNotFound so callers can show a targeted "install
+            // the CLI" message rather than a generic non-zero-exit one.
+            if process.terminationStatus == 127 {
+                throw AgentRunError.binaryNotFound(agentId: agent.id, displayName: agent.displayName)
+            }
+            throw AgentRunError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }
-        return CommitAIAdapterParser.parse(stdout)
+        return AgentMessageParser.parse(stdout)
     }
 }
 
 /// Thread-safe latch for "did the watchdog terminate this child?" Set
 /// by the watchdog Task, read by the runner after `exit.wait()` so we
 /// can distinguish a watchdog SIGTERM from a normal non-zero exit.
-private final class TimeoutState: @unchecked Sendable {
+private final class AgentRunnerTimeoutState: @unchecked Sendable {
     private let lock = NSLock()
     private var timedOut = false
 
@@ -223,7 +209,7 @@ private final class TimeoutState: @unchecked Sendable {
 /// Latches process termination so `wait()` resumes exactly once, even if
 /// the child exits before (or concurrently with) `wait()` being awaited.
 /// Mirrors `ExitGate` in Process+Git.swift.
-private final class RunnerExitGate: @unchecked Sendable {
+private final class AgentRunnerExitGate: @unchecked Sendable {
     private let lock = NSLock()
     private var exited = false
     private var continuation: CheckedContinuation<Void, Never>?
@@ -250,18 +236,6 @@ private final class RunnerExitGate: @unchecked Sendable {
             }
             continuation = cont
             lock.unlock()
-        }
-    }
-}
-
-extension CommitAITool {
-    func makeAdapter() -> CommitAIAdapter? {
-        switch self {
-        case .none:        return nil
-        case .claude:      return ClaudeAdapter()
-        case .codex:       return CodexAdapter()
-        case .cursorAgent: return CursorAgentAdapter()
-        case .pi:          return PiAdapter()
         }
     }
 }
