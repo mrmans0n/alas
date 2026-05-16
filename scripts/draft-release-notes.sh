@@ -28,11 +28,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$WRITE" == 1 && -n "$TARGET" ]]; then
-  echo "--target with --write is implemented in the next task." >&2
-  exit 2
-fi
-
 preflight_write_unreleased() {
   local file="CHANGELOG.md"
   test -f "$file" || { echo "$file not found" >&2; exit 1; }
@@ -43,8 +38,26 @@ preflight_write_unreleased() {
   }
 }
 
+preflight_promote_to_target() {
+  local target="$1"
+  local file="CHANGELOG.md"
+  test -f "$file" || { echo "$file not found" >&2; exit 1; }
+
+  grep -qE '^## \[Unreleased\]$' "$file" || {
+    echo "No '## [Unreleased]' heading in $file." >&2
+    exit 1
+  }
+
+  if grep -qF "## [$target]" "$file"; then
+    echo "CHANGELOG.md already has a [$target] section." >&2
+    exit 1
+  fi
+}
+
 if [[ "$WRITE" == 1 && -z "$TARGET" ]]; then
   preflight_write_unreleased
+elif [[ "$WRITE" == 1 && -n "$TARGET" ]]; then
+  preflight_promote_to_target "$TARGET"
 fi
 
 find_base_ref() {
@@ -157,7 +170,7 @@ render_body() {
 
 body=$(render_body)
 
-if [[ -z "$body" ]]; then
+if [[ -z "$body" && ! ( "$WRITE" == 1 && -n "$TARGET" ) ]]; then
   echo "No release-note-worthy commits since $BASE." >&2
   exit 0
 fi
@@ -198,6 +211,58 @@ write_unreleased() {
   rm -f "$tmp"
 }
 
+promote_to_target() {
+  local target="$1"
+  local new_body="$2"
+  local file="CHANGELOG.md"
+  local today
+  today=$(date +%Y-%m-%d)
+
+  test -f "$file" || { echo "$file not found" >&2; exit 1; }
+
+  grep -qE '^## \[Unreleased\]$' "$file" || {
+    echo "No '## [Unreleased]' heading in $file." >&2
+    exit 1
+  }
+
+  if grep -qF "## [$target]" "$file"; then
+    echo "CHANGELOG.md already has a [$target] section." >&2
+    exit 1
+  fi
+
+  if [[ -z "$new_body" ]]; then
+    echo "No release-note-worthy commits to promote into [$target]; refusing." >&2
+    exit 1
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  target="$target" today="$today" new_body="$new_body" awk '
+    BEGIN {
+      in_unr = 0
+      target = ENVIRON["target"]
+      today = ENVIRON["today"]
+      new_body = ENVIRON["new_body"]
+    }
+    /^## \[Unreleased\]$/ {
+      print "## [Unreleased]"
+      print ""
+      print "## [" target "] - " today
+      print ""
+      print new_body
+      print ""
+      in_unr = 1
+      next
+    }
+    in_unr && /^## \[/ { in_unr = 0 }
+    in_unr { next }
+    { print }
+  ' "$file" > "$tmp"
+
+  awk 'BEGIN{b=0} /^$/{b++; if(b<=1) print; next} {b=0; print}' "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
 emit_for_unreleased() {
   # Body without a heading (heading stays in CHANGELOG.md).
   echo "$body"
@@ -210,7 +275,12 @@ emit_for_target() {
 }
 
 if [[ -n "$TARGET" ]]; then
-  emit_for_target
+  if [[ "$WRITE" == 1 ]]; then
+    promote_to_target "$TARGET" "$body"
+    echo "Promoted [Unreleased] to [$TARGET] in CHANGELOG.md." >&2
+  else
+    emit_for_target
+  fi
 elif [[ "$WRITE" == 1 ]]; then
   write_unreleased "$body"
   echo "Updated [Unreleased] body in CHANGELOG.md." >&2
