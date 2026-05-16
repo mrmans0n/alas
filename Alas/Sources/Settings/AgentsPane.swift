@@ -44,9 +44,21 @@ struct AgentsPane: View {
                     }
                 }
 
-                SettingsGroup(title: "Available agents") {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text("AVAILABLE AGENTS")
+                            .font(.system(size: 11, weight: .semibold))
+                            .tracking(0.6)
+                            .foregroundColor(theme.color("fg-dim"))
+                        Spacer()
+                        AlasButton(title: "Add custom agent", style: .subtle) {
+                            editing = .new
+                        }
+                    }
+                    .padding(.bottom, 14)
                     cardGrid
                 }
+                .padding(.vertical, 18)
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
@@ -94,7 +106,6 @@ struct AgentsPane: View {
                     onToggle: { isOn in toggleEnabled(agent: agent, isOn: isOn) }
                 )
             }
-            AddAgentCard(onTap: { editing = .new })
         }
     }
 
@@ -190,26 +201,3 @@ private struct AgentCard: View {
     }
 }
 
-private struct AddAgentCard: View {
-    let onTap: () -> Void
-    @Environment(\.theme) var theme
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack {
-                Spacer()
-                Text("+ Add custom agent")
-                    .font(.system(size: 12.5))
-                    .foregroundColor(theme.color("fg-muted"))
-                Spacer()
-            }
-            .padding(.vertical, 24)
-            .frame(maxWidth: .infinity)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(theme.color("line-soft"), style: StrokeStyle(lineWidth: 1, dash: [4]))
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}

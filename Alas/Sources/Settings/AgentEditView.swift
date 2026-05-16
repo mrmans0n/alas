@@ -9,6 +9,8 @@ struct AgentEditView: View {
     @State private var draft: AgentDefinition
     @State private var deleteConfirmShown = false
 
+    @Environment(\.theme) var theme
+
     init(state: AppState, target: AgentsPane.EditTarget, onDismiss: @escaping () -> Void) {
         self.state = state
         self.target = target
@@ -40,14 +42,15 @@ struct AgentEditView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(headerTitle).font(.system(size: 14, weight: .semibold))
+            Text(headerTitle)
+                .font(.system(size: 16, weight: .semibold))
                 .padding(.bottom, 12)
 
-            row("Name") {
+            SettingsRow(name: "Name") {
                 AlasField(text: $draft.displayName, monospaced: false)
                     .disabled(draft.isBuiltin)
             }
-            row(draft.isBuiltin ? "Binary override" : "Binary / command") {
+            SettingsRow(name: draft.isBuiltin ? "Binary override" : "Binary / command") {
                 AlasField(
                     text: Binding(
                         get: { draft.isBuiltin ? (draft.binaryOverride ?? "") : draft.binary },
@@ -63,13 +66,13 @@ struct AgentEditView: View {
                 )
             }
             if draft.isBuiltin {
-                row("Default binary") {
+                SettingsRow(name: "Default binary") {
                     Text(draft.binary)
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(theme.color("fg-dim"))
                 }
             }
-            row("Prompt-mode args") {
+            SettingsRow(name: "Prompt-mode args") {
                 AlasField(
                     text: Binding(
                         get: { draft.promptModeArgs.joined(separator: " ") },
@@ -83,7 +86,7 @@ struct AgentEditView: View {
                 )
                 .disabled(draft.isBuiltin)
             }
-            row("Bypass-perms flag") {
+            SettingsRow(name: "Bypass-perms flag") {
                 AlasField(
                     text: Binding(
                         get: { draft.bypassPermissionsFlag ?? "" },
@@ -93,13 +96,11 @@ struct AgentEditView: View {
                 )
                 .disabled(draft.isBuiltin)
             }
-            row("Enabled") {
+            SettingsRow(name: "Enabled") {
                 AlasToggle(on: $draft.isEnabled)
             }
 
-            Spacer()
-
-            HStack {
+            HStack(spacing: 8) {
                 if !draft.isBuiltin && !isNew {
                     AlasButton(title: "Delete", style: .subtle) {
                         deleteConfirmShown = true
@@ -116,9 +117,11 @@ struct AgentEditView: View {
                 )
                 .disabled(!canSave)
             }
+            .padding(.top, 16)
         }
         .padding(24)
-        .frame(width: 520, height: 460)
+        .frame(width: 560)
+        .background(theme.color("bg-1"))
         .confirmationDialog(
             "Delete this custom agent?",
             isPresented: $deleteConfirmShown,
@@ -134,26 +137,14 @@ struct AgentEditView: View {
     }
 
     private var headerTitle: String {
-        if isNew { return "New custom agent" }
-        return draft.displayName.isEmpty ? "Edit agent" : draft.displayName
+        if isNew { return "Add agent" }
+        return draft.displayName.isEmpty ? "Edit agent" : "Edit \(draft.displayName)"
     }
 
     private var canSave: Bool {
         if draft.isBuiltin { return true }
         return !draft.displayName.trimmingCharacters(in: .whitespaces).isEmpty
             && !draft.binary.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    private func row<Content: View>(_ name: String, @ViewBuilder _ content: () -> Content) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(name)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-                .frame(width: 140, alignment: .leading)
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, 6)
     }
 
     private func save() {

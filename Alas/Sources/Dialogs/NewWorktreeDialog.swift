@@ -13,7 +13,7 @@ struct NewWorktreeDialog: View {
     @State private var branch: String = ""
     @State private var runStartup: Bool = true
     @State private var openTerminal: Bool = true
-    @State private var launchAgent: Bool = false
+    @State private var launchAgentId: String = "none"
     @State private var branches: [String] = []
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
@@ -63,11 +63,16 @@ struct NewWorktreeDialog: View {
                 if let validationMessage = branchValidationMessage {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
-                if let agent = effectiveAutoLaunchAgent {
-                    HStack(spacing: 10) {
-                        AlasToggle(on: $launchAgent)
-                        Text("Launch \(agent.displayName) on create").font(.system(size: 12))
-                            .foregroundColor(theme.color("fg"))
+                if !state.agentRegistry.enabled().isEmpty {
+                    DialogField(label: "Launch agent") {
+                        Picker("", selection: $launchAgentId) {
+                            Text("None").tag("none")
+                            ForEach(state.agentRegistry.enabled()) { agent in
+                                Text(agent.displayName).tag(agent.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
                 }
                 if let createErrorMessage {
@@ -99,11 +104,11 @@ struct NewWorktreeDialog: View {
             if branch.isEmpty {
                 branch = state.config.worktrees.branchPrefix
             }
-            launchAgent = effectiveAutoLaunchAgent != nil
+            launchAgentId = effectiveAutoLaunchAgent?.id ?? "none"
             loadBranchesForSelectedProject()
         }
         .onChange(of: projectId) { _, _ in
-            launchAgent = effectiveAutoLaunchAgent != nil
+            launchAgentId = effectiveAutoLaunchAgent?.id ?? "none"
             loadBranchesForSelectedProject()
         }
         .onChange(of: branch) { _, _ in
@@ -208,7 +213,7 @@ struct NewWorktreeDialog: View {
             destination: dest,
             runStartup: runStartup,
             openTerminal: openTerminal,
-            launchAgent: launchAgent
+            launchAgentId: launchAgentId == "none" ? nil : launchAgentId
         )
         guard !id.isEmpty else {
             createErrorMessage = "A worktree already exists at this path."

@@ -223,7 +223,7 @@ final class AppState {
         destination: URL,
         runStartup: Bool,
         openTerminal: Bool,
-        launchAgent: Bool = true
+        launchAgentId: String? = nil
     ) -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -274,39 +274,43 @@ final class AppState {
                     )
                 }
 
-                // After the startup script runs, optionally spawn the
-                // configured agent CLI in the new worktree. This is fire-
-                // and-forget: a failed launch logs but never fails the
-                // worktree create.
-                let autoLaunch = AgentAutoLaunch.resolve(
-                    registry: self.agentRegistry,
-                    globalAgentId: self.config.agents.worktreeAutoLaunch.agentId,
-                    globalUseBypass: self.config.agents.worktreeAutoLaunch.useBypassPermissions,
-                    projectMode: project.startupScripts.worktreeAgentMode,
-                    projectAgentId: project.startupScripts.worktreeAgentId,
-                    projectUseBypass: project.startupScripts.worktreeAgentUseBypassPermissions
-                )
-                if let autoLaunch, launchAgent {
-                    let argvJoined = autoLaunch.argv
+                // After the startup script runs, optionally spawn an agent
+                // CLI in the new worktree. The caller (typically the new-
+                // worktree dialog) chooses which agent to launch by id;
+                // bypass-permissions semantics still come from config
+                // (project override > global). Fire-and-forget: a failed
+                // launch logs but never fails the worktree create.
+                if let id = launchAgentId,
+                   let agent = self.agentRegistry.enabled().first(where: { $0.id == id }) {
+                    let useBypass: Bool = {
+                        switch project.startupScripts.worktreeAgentMode {
+                        case .disabled: return false
+                        case .useGlobal:
+                            return self.config.agents.worktreeAutoLaunch.useBypassPermissions
+                        case .overrideGlobal, .appendToGlobal:
+                            return project.startupScripts.worktreeAgentUseBypassPermissions
+                        }
+                    }()
+                    var argv = [agent.resolvedBinary]
+                    if useBypass, let flag = agent.bypassPermissionsFlag {
+                        argv.append(flag)
+                    }
+                    let argvJoined = argv
                         .map { Self.shellQuote($0) }
                         .joined(separator: " ")
-                    // Truly detach the spawned agent: bypass our local
-                    // Process.run wrapper (which awaits + enforces a 30s
-                    // SIGTERM watchdog that would kill a long-lived
-                    // interactive agent like claude or codex). The outer
-                    // zsh forks the agent in a subshell, backgrounds it,
-                    // and exits — the agent is then re-parented to launchd
-                    // and outlives this Task. Caveat: the agent runs
-                    // hidden today (no terminal output visible). A future
-                    // PR plumbs it through the new TerminalService session
-                    // for visibility; tracked as a follow-up in the spec.
+                    // Truly detach: bypass our local Process.run wrapper
+                    // (which awaits + enforces a 30s SIGTERM watchdog that
+                    // would kill a long-lived agent). Outer zsh forks the
+                    // agent in a subshell, backgrounds it, and exits — the
+                    // agent is then re-parented to launchd and outlives
+                    // this Task. Caveat: the agent runs hidden today (no
+                    // terminal output visible); plumbing through the new
+                    // TerminalService session is a tracked follow-up.
                     let proc = Process()
                     proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
                     proc.arguments = ["-c", "( \(argvJoined) & ) </dev/null >/dev/null 2>&1"]
                     proc.currentDirectoryURL = newWorktree.path
                     try? proc.run()
-                    // Do NOT wait — the outer zsh exits immediately after
-                    // the subshell forks-and-backgrounds the agent.
                 }
 
                 do {
