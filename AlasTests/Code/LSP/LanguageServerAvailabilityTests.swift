@@ -52,11 +52,26 @@ struct LanguageServerAvailabilityTests {
         let availability = LanguageServerAvailability(
             environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"],
             xcrunFind: { _ in nil },
-            additionalPathDirectories: [dir.path]
+            additionalPathDirectories: ["\(NSHomeDirectory())/.npm-global/bin", dir.path]
         )
 
         #expect(availability.status(for: entry) == .available)
         #expect(availability.resolvedCommand(for: entry) == executable.path)
+    }
+
+    @Test("gui PATH includes npm-global directory")
+    func launchEnvironmentIncludesNpmGlobal() {
+        let entry = config(command: "custom-lsp")
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": "/usr/bin:/bin"],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: ["\(NSHomeDirectory())/.npm-global/bin", "/opt/homebrew/bin"]
+        )
+
+        let env = availability.launchEnvironment(for: entry)
+        let path = env["PATH"] ?? ""
+        #expect(path.contains("/.npm-global/bin"))
+        #expect(path.contains("/opt/homebrew/bin"))
     }
 
     @Test("Swift sourcekit-lsp falls back to xcrun")

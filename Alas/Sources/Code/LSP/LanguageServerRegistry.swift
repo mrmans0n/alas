@@ -127,6 +127,24 @@ struct LanguageServerRegistry {
             env: [:],
             rootMarkers: ["package.json", ".git"],
             enabled: true
+        ),
+        LanguageServerConfig(
+            language: "python",
+            extensions: ["py", "pyi"],
+            command: "pyright-langserver",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "shellscript",
+            extensions: ["sh", "bash", "zsh"],
+            command: "bash-language-server",
+            args: ["start"],
+            env: [:],
+            rootMarkers: [".git"],
+            enabled: true
         )
     ]
 
