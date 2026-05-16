@@ -78,6 +78,26 @@ struct IndentationHelperTests {
         #expect(edit?.selectedLocationDelta == 5)
     }
 
+    @Test func bracketAwareNewlineAfterOpenerWithTrailingSpaces() {
+        let edit = IndentationHelper.newlineEdit(
+            in: "    {   ",
+            selectedRange: NSRange(location: 8, length: 0),
+            mode: .bracketAware
+        )
+        #expect(edit != nil)
+        #expect(edit?.replacement == "\n        ")
+    }
+
+    @Test func bracketAwareExpandsPairWithTrailingSpaces() {
+        let edit = IndentationHelper.newlineEdit(
+            in: "    {   }",
+            selectedRange: NSRange(location: 8, length: 0),
+            mode: .bracketAware
+        )
+        #expect(edit != nil)
+        #expect(edit?.replacement == "\n        \n    ")
+    }
+
     @Test func bracketAwareNewlineAfterOpener() {
         let edit = IndentationHelper.newlineEdit(
             in: "    {",

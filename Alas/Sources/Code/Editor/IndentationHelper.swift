@@ -39,18 +39,21 @@ struct IndentationHelper {
         let leadingWhitespace = leadingWhitespace(of: linePrefix)
         let indentUnit = indentUnit(in: text)
 
-        let beforeCursor = String(linePrefix)
         let afterCursor = ns.substring(with: NSRange(location: cursor, length: NSMaxRange(currentLineRange) - cursor))
+
+        let trimmedBefore = linePrefix.reversed().drop(while: { $0 == " " || $0 == "\t" }).reversed()
+        let lastSignificant = trimmedBefore.last
 
         let endsWithOpener: Bool
         let isBetweenPair: Bool
 
         if mode == .bracketAware {
-            endsWithOpener = beforeCursor.last.map { Self.pairedDelimiters.keys.contains($0) } ?? false
+            endsWithOpener = lastSignificant.map { Self.pairedDelimiters.keys.contains($0) } ?? false
             isBetweenPair = {
-                guard let lastChar = beforeCursor.last,
+                guard let lastChar = lastSignificant,
                       let expectedCloser = Self.pairedDelimiters[lastChar] else { return false }
-                return afterCursor.first == expectedCloser
+                let trimmedAfter = afterCursor.drop(while: { $0 == " " || $0 == "\t" })
+                return trimmedAfter.first == expectedCloser
             }()
         } else {
             endsWithOpener = false
