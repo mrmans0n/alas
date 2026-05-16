@@ -10,7 +10,9 @@
       ],
       "extensions": [],
       "command": "ngserver",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -28,7 +30,9 @@
       ],
       "extensions": [],
       "command": "ansible-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -130,7 +134,9 @@
       ],
       "extensions": [],
       "command": "awk-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -148,7 +154,9 @@
       ],
       "extensions": [],
       "command": "azure-pipelines-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -418,7 +426,9 @@
         "coffee"
       ],
       "command": "coffeesense-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -516,7 +526,9 @@
         "css"
       ],
       "command": "cssmodules-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -534,7 +546,9 @@
       ],
       "extensions": [],
       "command": "cucumber-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -554,7 +568,9 @@
         "cue"
       ],
       "command": "cue",
-      "args": [],
+      "args": [
+        "lsp"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -629,7 +645,9 @@
       "languages": [],
       "extensions": [],
       "command": "diagnostic-languageserver",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -691,7 +709,9 @@
         "pyi"
       ],
       "command": "djlsp",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "pipx",
@@ -756,7 +776,9 @@
       ],
       "extensions": [],
       "command": "dot-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -776,7 +798,9 @@
         "elm"
       ],
       "command": "elm-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -794,7 +818,9 @@
       ],
       "extensions": [],
       "command": "ember-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1000,7 +1026,9 @@
         "yml"
       ],
       "command": "gh-actions-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1042,7 +1070,9 @@
       ],
       "extensions": [],
       "command": "glint",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1114,7 +1144,9 @@
         "markdown"
       ],
       "command": "grammarly-languageserver",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1281,7 +1313,9 @@
         "php"
       ],
       "command": "intelephense",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1479,7 +1513,9 @@
         "htm"
       ],
       "command": "lwc-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1515,7 +1551,9 @@
       ],
       "extensions": [],
       "command": "mdx-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1755,7 +1793,9 @@
         "pm"
       ],
       "command": "perlnavigator",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1793,7 +1833,9 @@
         "prisma"
       ],
       "command": "prisma-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2218,7 +2260,9 @@
         "scss"
       ],
       "command": "some-sass-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2262,7 +2306,9 @@
       ],
       "extensions": [],
       "command": "spyglassmc-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2324,7 +2370,9 @@
       ],
       "extensions": [],
       "command": "stan-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2342,7 +2390,9 @@
       ],
       "extensions": [],
       "command": "starlark",
-      "args": [],
+      "args": [
+        "--lsp"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -2386,7 +2436,9 @@
       ],
       "extensions": [],
       "command": "stylelint-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2404,7 +2456,9 @@
       ],
       "extensions": [],
       "command": "stylelint-lsp",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2612,7 +2666,9 @@
       ],
       "extensions": [],
       "command": "tsp-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2651,7 +2707,9 @@
         "twig"
       ],
       "command": "twiggy-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2672,7 +2730,9 @@
         "pyi"
       ],
       "command": "ty",
-      "args": [],
+      "args": [
+        "server"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -2768,7 +2828,9 @@
         "vue"
       ],
       "command": "vls",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2786,7 +2848,9 @@
       ],
       "extensions": [],
       "command": "vim-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2806,7 +2870,9 @@
         "sol"
       ],
       "command": "vscode-solidity-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
