@@ -1074,20 +1074,27 @@ final class TabsManager {
     }
 
     /// Re-fires `didOpen` for every live buffer whose resolved LSP language
-    /// matches `language`. Used after the install nudge finishes: the
-    /// buffers tried to open their document at construction time, the spawn
-    /// failed (executable missing), and `WorkspaceLSPManager` dropped the
-    /// holder. Without a re-open they stay LSP-less even after the
-    /// executable becomes available.
+    /// matches `language` *or any alias that shares its install recipes*.
+    /// Used after the install nudge finishes: the buffers tried to open
+    /// their document at construction time, the spawn failed (executable
+    /// missing), and `WorkspaceLSPManager` dropped the holder. Without a
+    /// re-open they stay LSP-less even after the executable becomes
+    /// available.
+    ///
+    /// Expands the alias group so that installing typescript-language-server
+    /// from a `.tsx` banner also revives open `.ts`/`.js`/`.jsx` tabs (all
+    /// four languages share the same recipe in the catalog).
     ///
     /// Covers both in-worktree buffers (via `EditorBuffer.reopenLSPDocument`)
     /// and external tabs (via `ensureExternalLSPOpen` — idempotent against
     /// already-opened docs).
     func reopenLSPDocuments(forLanguage language: String) {
-        for buffer in buffers.values where buffer.language == language {
+        let group = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: language))
+        for buffer in buffers.values
+            where buffer.language.map(group.contains) ?? false {
             buffer.reopenLSPDocument()
         }
-        for (tabId, info) in externalLSPInfo where info.language == language {
+        for (tabId, info) in externalLSPInfo where group.contains(info.language) {
             ensureExternalLSPOpen(tabId: tabId)
         }
     }

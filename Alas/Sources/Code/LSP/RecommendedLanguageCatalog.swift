@@ -180,6 +180,27 @@ enum RecommendedLanguageCatalog {
     static func entry(forLanguage language: String) -> RecommendedLanguage? {
         byLanguage[language]
     }
+
+    /// All language IDs that share the same install recipes as `language` —
+    /// i.e. the canonical language plus every entry that aliases to it. Used
+    /// after an install completes to re-fire `didOpen` for buffers in every
+    /// language served by the just-installed binary (e.g. installing
+    /// typescript-language-server from a `.tsx` banner should also revive
+    /// open `.ts`/`.js`/`.jsx` tabs).
+    ///
+    /// If `language` is not in the catalog, returns `[language]` unchanged.
+    static func aliasGroup(forLanguage language: String) -> [String] {
+        // Canonical = either the alias target or this entry itself. For
+        // languages we don't recognize, the caller's own ID is the only
+        // thing we can confidently include.
+        guard let entry = byLanguage[language] else { return [language] }
+        let canonical = entry.aliasOf ?? entry.language
+        var group = [canonical]
+        for other in allEntries where other.aliasOf == canonical && other.language != canonical {
+            group.append(other.language)
+        }
+        return group
+    }
 }
 
 extension RecommendedLanguage {
