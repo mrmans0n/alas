@@ -80,8 +80,9 @@ struct InstallerHost: Equatable, Sendable {
     /// Same well-known set as `LanguageServerAvailability.defaultAdditionalPathDirectories`,
     /// kept aligned so a host that has brew on PATH for LSP detection also has it for
     /// installer detection.
+    // Keep in sync with LanguageServerAvailability.defaultAdditionalPathDirectories — both consult the same well-known set.
     static func defaultAdditionalPathDirectories() -> [String] {
-        let dirs: [String] = [
+        var dirs: [String] = [
             "/usr/local/bin",
             "/opt/homebrew/bin",
             "\(NSHomeDirectory())/.cargo/bin",
@@ -89,8 +90,26 @@ struct InstallerHost: Equatable, Sendable {
             "\(NSHomeDirectory())/.bun/bin",
             "\(NSHomeDirectory())/.volta/bin",
         ]
+
+        dirs.append(contentsOf: pathFileEntries(at: "/etc/paths"))
+
+        let pathsD = "/etc/paths.d"
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: pathsD) {
+            for entry in entries.sorted() {
+                dirs.append(contentsOf: pathFileEntries(at: "\(pathsD)/\(entry)"))
+            }
+        }
+
         var seen = Set<String>()
         return dirs.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private static func pathFileEntries(at path: String) -> [String] {
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+        return contents
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 }
 

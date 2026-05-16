@@ -4,7 +4,7 @@ import Testing
 
 @Suite("InstallerHost")
 struct InstallerHostTests {
-    @Test("detects brew at /opt/homebrew/bin")
+    @Test("detects brew via PATH")
     func detectsBrew() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
