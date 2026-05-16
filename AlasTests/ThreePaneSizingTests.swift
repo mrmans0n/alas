@@ -135,6 +135,23 @@ struct ThreePaneSizingTests {
         #expect(isApproximatelyEqual(result.centerWidth, 400))
     }
 
+    @Test func twoPaneAtCenterMinimumStillKeepsSidebarVisible() {
+        let availableWidth = config.centerMin + config.dividerWidth
+        let result = ThreePaneSizing.calculate(
+            availableWidth: availableWidth,
+            preferredSidebarWidth: 244,
+            preferredRightWidth: 320,
+            rightPreferredVisible: false,
+            configuration: config
+        )
+
+        #expect(result.rightVisible == false)
+        #expect(isApproximatelyEqual(result.rightWidth, 0))
+        #expect(isApproximatelyEqual(result.sidebarWidth, 133.3333333333))
+        #expect(isApproximatelyEqual(result.centerWidth, 266.6666666667))
+        #expect(isApproximatelyEqual(result.sidebarWidth + result.centerWidth + config.dividerWidth, availableWidth))
+    }
+
     @Test func verySmallWidthsRemainNonNegative() {
         let result = ThreePaneSizing.calculate(
             availableWidth: 120,
@@ -149,6 +166,24 @@ struct ThreePaneSizingTests {
         #expect(result.rightWidth >= 0)
         #expect(result.rightVisible == false)
         #expect(isApproximatelyEqual(result.sidebarWidth + result.centerWidth + config.dividerWidth, 120))
+    }
+
+    @Test func nonFiniteWidthsRemainNonNegative() {
+        let result = ThreePaneSizing.calculate(
+            availableWidth: .nan,
+            preferredSidebarWidth: .infinity,
+            preferredRightWidth: -.infinity,
+            rightPreferredVisible: true,
+            configuration: config
+        )
+
+        #expect(result.sidebarWidth.isFinite)
+        #expect(result.centerWidth.isFinite)
+        #expect(result.rightWidth.isFinite)
+        #expect(result.sidebarWidth >= 0)
+        #expect(result.centerWidth >= 0)
+        #expect(result.rightWidth >= 0)
+        #expect(result.rightVisible == false)
     }
 
     @Test func preferredWidthsAreClampedBeforeCalculation() {

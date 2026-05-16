@@ -137,8 +137,17 @@ enum ThreePaneSizing {
             sidebarWidth = preferredSidebarWidth
         } else if usableWidth >= sidebarMin + centerMin {
             sidebarWidth = max(sidebarMin, usableWidth - centerMin)
+        } else if usableWidth <= 0 {
+            sidebarWidth = 0
+        } else if usableWidth > centerMin {
+            sidebarWidth = max(0, usableWidth - centerMin)
         } else {
-            sidebarWidth = min(max(0, usableWidth), max(0, usableWidth - centerMin))
+            let denominator = sidebarMin + centerMin
+            if denominator > 0 {
+                sidebarWidth = usableWidth * (sidebarMin / denominator)
+            } else {
+                sidebarWidth = 0
+            }
         }
 
         let clampedSidebarWidth = max(0, sidebarWidth)
