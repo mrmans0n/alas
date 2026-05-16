@@ -27,12 +27,17 @@ struct WorkingTreeSectionView: View {
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
             ) {
-                if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
-                    HStack(spacing: 6) {
-                        Text("+\(totalAdd)").foregroundColor(theme.color("add"))
-                        Text("−\(totalDel)").foregroundColor(theme.color("del"))
+                HStack(spacing: 8) {
+                    if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
+                        HStack(spacing: 6) {
+                            Text("+\(totalAdd)").foregroundColor(theme.color("add"))
+                            Text("−\(totalDel)").foregroundColor(theme.color("del"))
+                        }
+                        .font(.system(size: 11, design: .monospaced))
                     }
-                    .font(.system(size: 11, design: .monospaced))
+                    if staged.isEmpty, !unstaged.isEmpty {
+                        AlasButton(title: "Stage all", style: .subtle, action: { onStageAll?(unstaged) })
+                    }
                 }
             }
 
@@ -43,20 +48,20 @@ struct WorkingTreeSectionView: View {
                         .foregroundColor(theme.color("fg-faint"))
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                } else if staged.isEmpty {
+                    flatFileTree(files: unstaged, collapseNamespace: "unstaged")
                 } else {
-                    if !staged.isEmpty {
-                        subsection(
-                            title: "Staged",
-                            files: staged,
-                            expanded: $stagedExpanded,
-                            collapseNamespace: "staged",
-                            actionLabel: "Unstage all",
-                            onAction: { onUnstageAll?(staged) }
-                        )
-                    }
+                    subsection(
+                        title: "Staged",
+                        files: staged,
+                        expanded: $stagedExpanded,
+                        collapseNamespace: "staged",
+                        actionLabel: "Unstage all",
+                        onAction: { onUnstageAll?(staged) }
+                    )
                     if !unstaged.isEmpty {
                         subsection(
-                            title: staged.isEmpty ? "Working tree" : "Changes",
+                            title: "Changes",
                             files: unstaged,
                             expanded: $unstagedExpanded,
                             collapseNamespace: "unstaged",
@@ -66,6 +71,14 @@ struct WorkingTreeSectionView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func flatFileTree(files: [ChangedFile], collapseNamespace: String) -> some View {
+        let filesByPath = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0) })
+        ForEach(ChangesTreeBuilder.build(files: files)) { node in
+            renderNode(node, filesByPath: filesByPath, depth: 0, collapseNamespace: collapseNamespace)
         }
     }
 
