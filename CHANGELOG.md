@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- --target with --write promotes [Unreleased] to versioned section.
 - --write splices generated notes into [Unreleased].
 - render grouped release notes from conventional commits.
 - add draft-release-notes.sh skeleton with flag parsing.
@@ -19,6 +20,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 📚 Docs
 
+- add RELEASING.md covering the changelog + tag flow.
 - seed CHANGELOG.md with [Unreleased] and [0.1.1] section.
 - rewrite README in landing-page style with brew install.
 
