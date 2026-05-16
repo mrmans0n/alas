@@ -125,7 +125,30 @@ final class AppState {
         installerHost = .detect()
     }
 
-    /// Set when a worktree deletion fails because the tree is dirty.
+    enum ForceDeleteReason: Equatable {
+        case dirty
+        case containsSubmodules
+
+        var alertTitleSuffix: String {
+            switch self {
+            case .dirty:
+                "has uncommitted changes."
+            case .containsSubmodules:
+                "contains submodules."
+            }
+        }
+
+        var alertMessage: String {
+            switch self {
+            case .dirty:
+                "Force delete? Any uncommitted work in this worktree will be lost."
+            case .containsSubmodules:
+                "Git requires force delete for worktrees containing initialized submodules. Any uncommitted work in this worktree will be lost."
+            }
+        }
+    }
+
+    /// Set when a worktree deletion fails because Git requires `--force`.
     /// The UI presents a confirmation dialog; confirming retries with force.
     struct PendingForceDeleteWorktree: Identifiable, Equatable {
         let id: String           // worktree id
@@ -135,6 +158,7 @@ final class AppState {
         let worktreePath: URL    // actual worktree path
         let deleteBranchIfMerged: Bool
         let removedIndex: Int
+        let reason: ForceDeleteReason
     }
     var pendingForceDeleteWorktree: PendingForceDeleteWorktree?
 
@@ -1209,7 +1233,7 @@ final class AppState {
                 force: force
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
-            if !force && Self.looksLikeDirtyWorktreeError(stderr) {
+            if !force, let reason = Self.forceDeleteReason(for: stderr) {
                 // Clear deleting so the user can see the row again while deciding.
                 projectsManager.setOperationState(id: worktree.id, state: nil)
                 pendingForceDeleteWorktree = PendingForceDeleteWorktree(
@@ -1219,7 +1243,8 @@ final class AppState {
                     repoPath: repoPath,
                     worktreePath: worktree.path,
                     deleteBranchIfMerged: deleteBranchIfMerged,
-                    removedIndex: removedIndex
+                    removedIndex: removedIndex,
+                    reason: reason
                 )
                 return
             } else {
@@ -1305,15 +1330,24 @@ final class AppState {
         }.value
     }
 
-    /// Permissive substring check: git's exact wording around dirty/locked
+    /// Permissive substring check: git's exact wording around dirty/submodule
     /// worktrees varies by version. If the match misses, the caller surfaces
     /// the raw stderr instead, which is acceptable degradation.
-    nonisolated static func looksLikeDirtyWorktreeError(_ stderr: String) -> Bool {
+    nonisolated static func forceDeleteReason(for stderr: String) -> ForceDeleteReason? {
         let s = stderr.lowercased()
-        return s.contains("is dirty")
+        if s.contains("working trees containing submodules")
+            || (s.contains("containing submodules") && s.contains("cannot be moved or removed")) {
+            return .containsSubmodules
+        }
+
+        if s.contains("is dirty")
             || s.contains("dirty worktree")
             || s.contains("contains modified or untracked files")
-            || s.contains("modified or untracked")
+            || s.contains("modified or untracked") {
+            return .dirty
+        }
+
+        return nil
     }
 
     private func confirmDeleteWorktree(branch: String) -> Bool {

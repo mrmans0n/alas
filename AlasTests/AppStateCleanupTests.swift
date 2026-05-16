@@ -279,11 +279,12 @@ struct AppStateCleanupTests {
     // MARK: - Dirty-worktree force-delete state
 
     @Test func looksLikeDirtyWorktreeErrorMatchesKnownPatterns() {
-        #expect(AppState.looksLikeDirtyWorktreeError("Cannot delete a dirty worktree"))
-        #expect(AppState.looksLikeDirtyWorktreeError("fatal: 'foo' contains modified or untracked files"))
-        #expect(AppState.looksLikeDirtyWorktreeError("worktree is dirty and cannot be removed"))
-        #expect(!AppState.looksLikeDirtyWorktreeError("fatal: not a git repository"))
-        #expect(!AppState.looksLikeDirtyWorktreeError(""))
+        #expect(AppState.forceDeleteReason(for: "Cannot delete a dirty worktree") == .dirty)
+        #expect(AppState.forceDeleteReason(for: "fatal: 'foo' contains modified or untracked files") == .dirty)
+        #expect(AppState.forceDeleteReason(for: "worktree is dirty and cannot be removed") == .dirty)
+        #expect(AppState.forceDeleteReason(for: "fatal: working trees containing submodules cannot be moved or removed") == .containsSubmodules)
+        #expect(AppState.forceDeleteReason(for: "fatal: not a git repository") == nil)
+        #expect(AppState.forceDeleteReason(for: "") == nil)
     }
 
     @Test func cancelForceDeleteClearsPendingState() async throws {
@@ -302,7 +303,8 @@ struct AppStateCleanupTests {
             repoPath: repo,
             worktreePath: wt.path,
             deleteBranchIfMerged: false,
-            removedIndex: 0
+            removedIndex: 0,
+            reason: .dirty
         )
         #expect(state.pendingForceDeleteWorktree != nil)
 

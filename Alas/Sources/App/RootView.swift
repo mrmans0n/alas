@@ -108,7 +108,7 @@ struct RootView: View {
             )
         }
         .alert(
-            "'\(state.pendingForceDeleteWorktree?.branch ?? "")' has uncommitted changes.",
+            "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(state.pendingForceDeleteWorktree?.reason.alertTitleSuffix ?? "requires force delete.")",
             isPresented: Binding(
                 get: { state.pendingForceDeleteWorktree != nil },
                 set: { if !$0 { state.cancelForceDeletePendingWorktree() } }
@@ -122,7 +122,7 @@ struct RootView: View {
                 }
             },
             message: {
-                Text("Force delete? Any uncommitted work in this worktree will be lost.")
+                Text(state.pendingForceDeleteWorktree?.reason.alertMessage ?? "Force delete?")
             }
         )
         .task {
