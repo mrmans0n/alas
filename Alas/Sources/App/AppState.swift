@@ -97,11 +97,13 @@ final class AppState {
             var updated = project.startupScripts
             updated.worktreeAgentMode = .useGlobal
             updated.worktreeAgentId = nil
-            updateProject(
+            projectsManager.updateProject(
                 id: project.id,
-                name: project.name,
-                color: project.color,
-                startupScripts: updated
+                update: ProjectUpdate(
+                    name: project.name,
+                    color: project.color,
+                    startupScripts: updated
+                )
             )
             projectsChanged = true
         }

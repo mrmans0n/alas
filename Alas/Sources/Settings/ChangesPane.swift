@@ -61,9 +61,9 @@ struct ChangesPane: View {
 
     private var menuItems: [MenuItem] {
         var items: [MenuItem] = []
-        // Show every known agent — disabled / missing ones too, so the user
-        // can see at a glance which agents this picker draws from. Suffix
-        // the label with "(not installed)" when applicable.
+        // Show every enabled agent (installed or not). Disabled agents are
+        // hidden — they're managed from Settings → Agents. Append
+        // "(not installed)" to the label when the binary isn't detected.
         let installedIds = Set(state.agentRegistry.installed().map(\.id))
         for agent in state.agentRegistry.agents where agent.isEnabled {
             let suffix = installedIds.contains(agent.id) ? "" : " (not installed)"

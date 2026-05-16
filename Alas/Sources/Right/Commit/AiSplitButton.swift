@@ -44,7 +44,7 @@ struct AiSplitButton: View {
                   ? "Pick an agent in Settings → Agents to enable"
                   : busy
                       ? "Cancel generation"
-                      : "Generate commit message with \(selected!.displayName)")
+                      : "Generate commit message with \(selected?.displayName ?? "")")
 
             Menu {
                 ForEach(availableAgents) { agent in
