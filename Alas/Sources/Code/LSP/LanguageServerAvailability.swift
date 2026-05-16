@@ -100,6 +100,7 @@ struct LanguageServerAvailability {
             "/opt/homebrew/bin",
             "\(NSHomeDirectory())/.cargo/bin",
             "\(NSHomeDirectory())/.local/bin",
+            "\(NSHomeDirectory())/.npm-global/bin",
             "\(NSHomeDirectory())/.bun/bin",
             "\(NSHomeDirectory())/.volta/bin"
         ]

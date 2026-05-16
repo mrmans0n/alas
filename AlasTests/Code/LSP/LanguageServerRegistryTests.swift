@@ -51,6 +51,31 @@ struct LanguageServerRegistryTests {
         #expect(r.language(forFileExtension: "jsx") == "javascriptreact")
         #expect(r.language(forFileExtension: "json") == "json")
         #expect(r.language(forFileExtension: "jsonc") == "jsonc")
+        #expect(r.language(forFileExtension: "py") == "python")
+        #expect(r.language(forFileExtension: "pyi") == "python")
+        #expect(r.language(forFileExtension: "sh") == "shellscript")
+        #expect(r.language(forFileExtension: "bash") == "shellscript")
+        #expect(r.language(forFileExtension: "zsh") == "shellscript")
         #expect(r.language(forFileExtension: "xyz") == nil)
+    }
+
+    @Test("built-in Python entry exists")
+    func python() {
+        let r = LanguageServerRegistry(userDefined: [])
+        let entry = r.entry(forLanguage: "python")
+        #expect(entry != nil)
+        #expect(entry?.command == "pyright-langserver")
+        #expect(entry?.args == ["--stdio"])
+        #expect(entry?.extensions == ["py", "pyi"])
+    }
+
+    @Test("built-in Shell entry exists")
+    func shellscript() {
+        let r = LanguageServerRegistry(userDefined: [])
+        let entry = r.entry(forLanguage: "shellscript")
+        #expect(entry != nil)
+        #expect(entry?.command == "bash-language-server")
+        #expect(entry?.args == ["start"])
+        #expect(entry?.extensions == ["sh", "bash", "zsh"])
     }
 }
