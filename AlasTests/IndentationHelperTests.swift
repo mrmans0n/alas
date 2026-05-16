@@ -257,17 +257,14 @@ struct IndentationHelperTests {
         #expect(edit == nil)
     }
 
-    @Test func closingDelimiterStepOverConsumesExistingCloser() {
+    @Test func closingDelimiterStepOverWhenExistingCloser() {
         let edit = IndentationHelper.closingDelimiterEdit(
             in: "        }",
             selectedRange: NSRange(location: 8, length: 0),
             delimiter: "}",
             mode: .bracketAware
         )
-        #expect(edit != nil)
-        #expect(edit?.replacementRange == NSRange(location: 0, length: 9))
-        #expect(edit?.replacement == "    }")
-        #expect(edit?.selectedLocationDelta == 5)
+        #expect(edit == nil)
     }
 
     @Test func closingDelimiterStepOverParenthesis() {
@@ -277,8 +274,7 @@ struct IndentationHelperTests {
             delimiter: ")",
             mode: .bracketAware
         )
-        #expect(edit != nil)
-        #expect(edit?.replacement == "    )")
+        #expect(edit == nil)
     }
 
     @Test func closingDelimiterSameCharNoStepOverIfDifferentChar() {

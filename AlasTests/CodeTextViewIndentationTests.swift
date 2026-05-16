@@ -53,8 +53,8 @@ struct CodeTextViewIndentationTests {
         let textView = makeTextView("    }")
         textView.setSelectedRange(NSRange(location: 4, length: 0))
         textView.insertText("}", replacementRange: NSRange(location: NSNotFound, length: 0))
-        #expect(textView.string == "}")
-        #expect(textView.selectedRange() == NSRange(location: 1, length: 0))
+        #expect(textView.string == "    }")
+        #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
     }
 
     @Test func closingDelimiterDedentWithExistingCloserOnNextLine() {

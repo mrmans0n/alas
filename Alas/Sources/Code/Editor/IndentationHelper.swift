@@ -99,14 +99,15 @@ struct IndentationHelper {
 
         let nextIsSameDelimiter = cursor < ns.length && Character(ns.substring(with: NSRange(location: cursor, length: 1))) == delimiter
 
+        if nextIsSameDelimiter { return nil }
+
         let indentUnit = indentUnit(in: text)
         let currentIndent = linePrefix
         let dedented = dedent(currentIndent, by: indentUnit)
 
         guard dedented.count < currentIndent.count else { return nil }
 
-        let consumeExtra = nextIsSameDelimiter ? 1 : 0
-        let replacementRange = NSRange(location: lineStart, length: currentIndent.count + consumeExtra)
+        let replacementRange = NSRange(location: lineStart, length: currentIndent.count)
         let replacement = dedented + String(delimiter)
         let selectedLocationDelta = dedented.count + 1
 
