@@ -258,6 +258,30 @@ struct MarkdownRendererTests {
         #expect(codeBackground != boldBackground)
     }
 
+    @Test func tableHeaderCellsPreserveInlineMarkdownFonts() throws {
+        let source = """
+        | `code` | *italic* |
+        | - | - |
+        | value | value |
+        """
+        let r = try MarkdownRendererTests.render(source)
+        let s = r.attributedString
+
+        let codeRange = (s.string as NSString).range(of: "code")
+        let codeFont = s.attribute(.font, at: codeRange.location, effectiveRange: nil) as? NSFont
+        let codeBackground = s.attribute(.backgroundColor, at: codeRange.location, effectiveRange: nil) as? NSColor
+        let codeBlock = tableBlock(at: "code", in: s)
+        #expect(codeBlock != nil)
+        #expect(codeFont?.isFixedPitch == true)
+        #expect(codeBackground != nil)
+
+        let italicRange = (s.string as NSString).range(of: "italic")
+        let italicFont = s.attribute(.font, at: italicRange.location, effectiveRange: nil) as? NSFont
+        let italicBlock = tableBlock(at: "italic", in: s)
+        #expect(italicBlock != nil)
+        #expect(italicFont?.fontDescriptor.symbolicTraits.contains(.italic) == true)
+    }
+
     @Test func tableCellsUseGFMColumnAlignment() throws {
         let source = """
         | Left | Center | Right |

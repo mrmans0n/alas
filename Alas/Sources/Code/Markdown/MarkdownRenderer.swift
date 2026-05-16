@@ -471,7 +471,7 @@ final class MarkdownRenderer {
             if fullRange.length > 0 {
                 mutable.addAttribute(.paragraphStyle, value: style, range: fullRange)
                 if cell.isHeader {
-                    mutable.addAttribute(.font, value: headerTableFont(), range: fullRange)
+                    applyHeaderTableFont(to: mutable, range: fullRange)
                 }
             } else {
                 mutable.append(NSAttributedString(string: " ", attributes: [
@@ -579,6 +579,29 @@ final class MarkdownRenderer {
 
     private func headerTableFont() -> NSFont {
         NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+    }
+
+    private func applyHeaderTableFont(to mutable: NSMutableAttributedString, range: NSRange) {
+        mutable.enumerateAttribute(.font, in: range) { value, range, _ in
+            guard let font = value as? NSFont else {
+                mutable.addAttribute(.font, value: headerTableFont(), range: range)
+                return
+            }
+            guard !font.isFixedPitch else { return }
+
+            let traits = font.fontDescriptor.symbolicTraits
+            if traits.isEmpty {
+                mutable.addAttribute(.font, value: headerTableFont(), range: range)
+                return
+            }
+
+            let headerTraits = traits.union(.bold)
+            let descriptor = font.fontDescriptor.withSymbolicTraits(headerTraits)
+            guard let headerFont = NSFont(descriptor: descriptor, size: font.pointSize) else {
+                return
+            }
+            mutable.addAttribute(.font, value: headerFont, range: range)
+        }
     }
 
     private func monospaceFont(size: CGFloat) -> NSFont {
