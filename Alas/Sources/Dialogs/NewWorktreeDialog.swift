@@ -195,7 +195,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func submitCreate() {
-        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty) else { return }
+        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty, branchValidation: branchValidationMessage) else { return }
         create()
     }
 

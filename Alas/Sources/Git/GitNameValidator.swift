@@ -81,6 +81,33 @@ struct GitNameValidator {
         return .valid
     }
 
+    /// Validate a branch prefix (e.g. "feature/") which may end with a
+    /// trailing slash that separates the prefix from the rest of the
+    /// branch name. All other branch-name rules still apply.
+    static func validateBranchPrefix(_ prefix: String) -> ValidationResult {
+        if prefix.isEmpty {
+            return .valid
+        }
+
+        // Temporarily strip a trailing slash for validation, then
+        // re-check that the stripped form is a valid branch name.
+        let toValidate: String
+        if prefix.hasSuffix("/") {
+            let stripped = String(prefix.dropLast())
+            if stripped.isEmpty {
+                return .invalid("Prefix cannot be '/' only.")
+            }
+            if stripped.hasSuffix("/") {
+                return .invalid("Prefix cannot contain consecutive '/'.")
+            }
+            toValidate = stripped
+        } else {
+            toValidate = prefix
+        }
+
+        return validateBranchName(toValidate)
+    }
+
     /// Validate a worktree directory name derived from a branch name.
     static func validateWorktreeName(_ name: String) -> ValidationResult {
         validateBranchName(name)

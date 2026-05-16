@@ -144,4 +144,45 @@ struct GitNameValidatorTests {
         let result = GitNameValidator.validateWorktreeName("feature/foo")
         #expect(result == .valid)
     }
+
+    // MARK: - Branch prefix validation
+    @Test func acceptsFeatureSlashPrefix() {
+        let result = GitNameValidator.validateBranchPrefix("feature/")
+        #expect(result == .valid)
+    }
+
+    @Test func acceptsPrefixWithoutSlash() {
+        let result = GitNameValidator.validateBranchPrefix("feature")
+        #expect(result == .valid)
+    }
+
+    @Test func acceptsEmptyPrefix() {
+        let result = GitNameValidator.validateBranchPrefix("")
+        #expect(result == .valid)
+    }
+
+    @Test func acceptsNestedPrefixWithTrailingSlash() {
+        let result = GitNameValidator.validateBranchPrefix("release/v1/")
+        #expect(result == .valid)
+    }
+
+    @Test func rejectsSlashOnlyPrefix() {
+        let result = GitNameValidator.validateBranchPrefix("/")
+        #expect(result == .invalid("Prefix cannot be '/' only."))
+    }
+
+    @Test func rejectsDoubleTrailingSlash() {
+        let result = GitNameValidator.validateBranchPrefix("feature//")
+        #expect(result == .invalid("Prefix cannot contain consecutive '/'."))
+    }
+
+    @Test func rejectsPrefixWithSpaces() {
+        let result = GitNameValidator.validateBranchPrefix("bad name/")
+        #expect(result == .invalid("Name cannot contain spaces."))
+    }
+
+    @Test func rejectsPrefixWithTraversal() {
+        let result = GitNameValidator.validateBranchPrefix("../")
+        #expect(result == .invalid("Name cannot contain '.' or '..' as a path component."))
+    }
 }

@@ -94,7 +94,7 @@ struct WorktreesPane: View {
         if state.config.worktrees.branchPrefix.isEmpty {
             return nil
         }
-        switch GitNameValidator.validateBranchName(state.config.worktrees.branchPrefix) {
+        switch GitNameValidator.validateBranchPrefix(state.config.worktrees.branchPrefix) {
         case .valid:
             return nil
         case .invalid(let message):
