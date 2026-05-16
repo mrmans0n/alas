@@ -536,18 +536,24 @@ extension NSEvent {
     /// The text string to pass as `ghostty_input_key_s.text`, filtering out
     /// control characters and PUA function-key ranges.
     ///
-    /// Control characters (U+0000–U+001F) are encoded by Ghostty itself from the
-    /// keycode + mods, so we must not send them as text. This fixes Shift+Enter
-    /// and other modified control-key combinations.
+    /// For Ctrl-modified keys (e.g. Ctrl+A), we strip Ctrl and return the
+    /// layout-translated character so that alternative layouts (Dvorak etc.)
+    /// produce the correct control key.
+    ///
+    /// For Shift-modified keys that produce control characters natively
+    /// (e.g. Shift+Enter → \\r, Shift+Tab → \\t), we return nil so Ghostty
+    /// encodes them from keycode + mods. Otherwise Shift+Enter would be
+    /// flattened to a plain Enter text payload.
     var alasGhosttyCharacters: String? {
         guard let characters else { return nil }
         if characters.count == 1, let scalar = characters.unicodeScalars.first {
             if scalar.value < 0x20 {
-                // Control character — let Ghostty encode from keycode + mods.
+                if modifierFlags.contains(.control) {
+                    return self.characters(byApplyingModifiers: modifierFlags.subtracting(.control))
+                }
                 return nil
             }
             if scalar.value >= 0xF700 && scalar.value <= 0xF8FF {
-                // PUA function key — don't send as text.
                 return nil
             }
         }

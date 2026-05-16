@@ -134,8 +134,7 @@ struct SurfaceViewKeyboardTests {
         #expect(event.alasGhosttyCharacters == nil)
     }
 
-    @Test func controlCharacterReturnsNilForText() throws {
-        // Ctrl+A produces U+0001 — a control character.
+    @Test func ctrlPlusLetterReturnsLayoutCharacter() throws {
         let event = try #require(
             NSEvent.keyEvent(
                 with: .keyDown,
@@ -151,9 +150,7 @@ struct SurfaceViewKeyboardTests {
             )
         )
 
-        // With the fix, control characters should return nil so Ghostty
-        // encodes them from the keycode + mods, not from text.
-        #expect(event.alasGhosttyCharacters == nil)
+        #expect(event.alasGhosttyCharacters == "a")
     }
 
     @Test func shiftEnterReturnsNilForText() throws {
