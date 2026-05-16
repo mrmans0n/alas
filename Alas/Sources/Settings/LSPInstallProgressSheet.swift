@@ -85,23 +85,9 @@ struct LSPInstallProgressSheet: View {
                         installer.cancel()
                     }
                 } else {
-                    AlasButton(title: "Close", style: .subtle) {
-                        installer.reset()
-                        onDone(nil)
-                    }
+                    AlasButton(title: "Close", style: .subtle, action: dismissCarryingCompletion)
                     if isSuccess {
-                        AlasButton(title: "Done", style: .primary) {
-                            // Snapshot the language BEFORE reset() flips state
-                            // back to .idle and drops the associated value.
-                            let completed: String?
-                            if case .finished(let lang, 0) = installer.state {
-                                completed = lang
-                            } else {
-                                completed = nil
-                            }
-                            installer.reset()
-                            onDone(completed)
-                        }
+                        AlasButton(title: "Done", style: .primary, action: dismissCarryingCompletion)
                     }
                 }
             }
@@ -111,5 +97,20 @@ struct LSPInstallProgressSheet: View {
         .frame(width: 600)
         .background(theme.color("bg-1"))
         .interactiveDismissDisabled(isRunning)
+    }
+
+    /// Snapshot the completed language (if any) BEFORE `reset()` flips state
+    /// back to `.idle` and drops its associated value, then reset and notify
+    /// the caller. Used by both the Close and Done buttons so dismissing via
+    /// either still triggers the post-install reopen of editor buffers.
+    private func dismissCarryingCompletion() {
+        let completed: String?
+        if case .finished(let lang, 0) = installer.state {
+            completed = lang
+        } else {
+            completed = nil
+        }
+        installer.reset()
+        onDone(completed)
     }
 }
