@@ -160,6 +160,24 @@ final class EditorBuffer {
         }
     }
 
+    /// Re-fire `didOpen` for this buffer's current text. Used after a
+    /// language server becomes available (e.g. installed via the editor
+    /// nudge or Settings) so an already-open buffer can pick it up without
+    /// the user closing and reopening the tab. No-op for external buffers
+    /// (those use a different open path), for buffers with no resolved
+    /// language, and for buffers whose document is already attached to a
+    /// live server — `openDocument` increments `refsByURI` before checking
+    /// `openedURIs`, so blindly re-calling it for an already-attached
+    /// document would leave a dangling ref the next `didClose` couldn't
+    /// balance.
+    func reopenLSPDocument() {
+        guard !isExternal, let lsp, let language else { return }
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
+        let text = storage.string
+        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
+    }
+
     @discardableResult
     func onEdit(_ block: @escaping () -> Void) -> EditObserverToken {
         onTextEdit { _ in block() }

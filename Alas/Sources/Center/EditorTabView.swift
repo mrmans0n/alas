@@ -33,6 +33,7 @@ struct EditorTabView: View {
                 )
                 EditorConflictBanner(buffer: buffer)
             }
+            InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
             if findBarVisible {
                 EditorFindBarView(
                     findText: $findText,
@@ -131,6 +132,11 @@ struct EditorTabView: View {
             findBarVisible = true
             findFieldFocused = true
         }
+    }
+
+    private var nudgeAbsolutePath: String {
+        if let abs = externalAbsolutePath { return abs }
+        return worktreePath.appendingPathComponent(relativePath).path
     }
 
     private var breadcrumb: some View {

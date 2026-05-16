@@ -79,9 +79,11 @@ struct AppConfig: Codable, Equatable {
         var fontFamily: String      // "" = system monospaced fallback
         var fontSize: Int           // clamped [8, 64] on decode/write
         var languageServers: [LanguageServerConfig]
+        var dismissedInstallNudges: [String]
+        var userDefinedRecipes: [String: [InstallRecipe]]
 
         enum CodingKeys: String, CodingKey {
-            case fontFamily, fontSize, languageServers
+            case fontFamily, fontSize, languageServers, dismissedInstallNudges, userDefinedRecipes
         }
     }
 
@@ -164,7 +166,9 @@ struct AppConfig: Codable, Equatable {
         code: Code(
             fontFamily: "SF Mono",
             fontSize: 13,
-            languageServers: []
+            languageServers: [],
+            dismissedInstallNudges: [],
+            userDefinedRecipes: [:]
         ),
         markdown: Markdown(defaultViewMode: .editor),
         changes: Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt),
@@ -236,9 +240,23 @@ extension AppConfig {
             let rawSize = (try? codeContainer.decode(Int.self, forKey: .fontSize)) ?? 13
             let fontSize = max(8, min(64, rawSize))
             let servers = (try? codeContainer.decode([LanguageServerConfig].self, forKey: .languageServers)) ?? []
-            code = Code(fontFamily: fontFamily, fontSize: fontSize, languageServers: servers)
+            let dismissed = (try? codeContainer.decode([String].self, forKey: .dismissedInstallNudges)) ?? []
+            let userRecipes = (try? codeContainer.decode([String: [InstallRecipe]].self, forKey: .userDefinedRecipes)) ?? [:]
+            code = Code(
+                fontFamily: fontFamily,
+                fontSize: fontSize,
+                languageServers: servers,
+                dismissedInstallNudges: dismissed,
+                userDefinedRecipes: userRecipes
+            )
         } else {
-            code = Code(fontFamily: "SF Mono", fontSize: 13, languageServers: [])
+            code = Code(
+                fontFamily: "SF Mono",
+                fontSize: 13,
+                languageServers: [],
+                dismissedInstallNudges: [],
+                userDefinedRecipes: [:]
+            )
         }
         if let mdContainer = try? c.nestedContainer(keyedBy: AppConfig.Markdown.CodingKeys.self, forKey: .markdown) {
             let raw = (try? mdContainer.decode(String.self, forKey: .defaultViewMode)) ?? "editor"

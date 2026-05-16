@@ -1,0 +1,345 @@
+#!/usr/bin/env bash
+# Generates Alas/Resources/mason-lsps.json from the upstream Mason package
+# registry (https://github.com/mason-org/mason-registry, Apache-2). Run this
+# when refreshing the snapshot — say, when adding new presets, or quarterly.
+#
+# Requirements: bash, git, yq (v4), jq, brew (for the `brew search` probe).
+#
+# This script is NOT run on CI. The output file is committed to the repo.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="$REPO_ROOT/Alas/Resources/mason-lsps.json"
+
+for bin in git yq jq brew; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+        echo "error: $bin is required but not on PATH" >&2
+        exit 1
+    fi
+done
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+# Mason's package.yaml lists `languages` (display names like "Rust", "TOML")
+# but not file extensions. We need extensions so the Add-language picker can
+# write a non-empty `extensions` array — without that, the LSP would never
+# be matched to a file. Maintain a hand-curated map here. Unknown languages
+# fall back to an empty array; the dialog blocks save until the user fills
+# them in manually.
+# Mason's package.yaml lists primary binaries in `bin` but not the launch
+# command/args used to start the LSP — that lives in mason-registry's Lua
+# plugin code. For packages where the LSP entrypoint differs from the
+# primary bin, or where flags like `--stdio` are required to switch the
+# binary into LSP mode, we override here. Keys are masonIds; values are
+# {command, args}. Unknown packages fall through to (bin, []), which works
+# for the many LSPs that default to stdio with no flags.
+# Mason's `languages` field uses display names ("Bash", "C++", "C#"). Our
+# registry uses canonical LSP languageIds — typically the lowercased display
+# name, but with a few well-known overrides where they diverge. We emit a
+# pre-resolved `languageId` field in the snapshot so the Add-language dialog
+# saves a config under the registry-aligned ID. Without this, saving the
+# bash-language-server prefill would write `language: "bash"` which then
+# beats the built-in `shellscript` entry alphabetically when resolving by
+# extension, opening .sh files with the wrong LSP languageId.
+LSP_LANG_ID_MAP=$(cat <<'JSON'
+{
+  "Bash":   "shellscript",
+  "Shell":  "shellscript",
+  "Zsh":    "shellscript",
+  "C":      "c",
+  "C++":    "cpp",
+  "C#":     "csharp",
+  "F#":     "fsharp",
+  "Docker": "dockerfile"
+}
+JSON
+)
+
+# Note: a few Mason LSPs are intentionally NOT in this override map even
+# though they need non-default args, because the correct invocation depends
+# on host-specific paths we can't statically produce. The biggest one is
+# angular-language-server (ngserver), which needs --tsProbeLocations and
+# --ngProbeLocations pointing at the global node_modules dir where the user
+# installed it (varies by npm/pnpm/bun). The prefill leaves args empty so
+# the user is forced to fill them in manually via the Add dialog.
+LSP_OVERRIDE_MAP=$(cat <<'JSON'
+{
+  "ansible-language-server":        {"command": "ansible-language-server", "args": ["--stdio"]},
+  "astro-language-server":          {"command": "astro-ls", "args": ["--stdio"]},
+  "awk-language-server":            {"command": "awk-language-server", "args": ["--stdio"]},
+  "azure-pipelines-language-server":{"command": "azure-pipelines-language-server", "args": ["--stdio"]},
+  "bash-language-server":           {"command": "bash-language-server", "args": ["start"]},
+  "basedpyright":                   {"command": "basedpyright-langserver", "args": ["--stdio"]},
+  "biome":                          {"command": "biome", "args": ["lsp-proxy"]},
+  "coffeesense-language-server":    {"command": "coffeesense-language-server", "args": ["--stdio"]},
+  "css-lsp":                        {"command": "vscode-css-language-server", "args": ["--stdio"]},
+  "cssmodules-language-server":     {"command": "cssmodules-language-server", "args": ["--stdio"]},
+  "cucumber-language-server":       {"command": "cucumber-language-server", "args": ["--stdio"]},
+  "cue":                            {"command": "cue", "args": ["lsp"]},
+  "deno":                           {"command": "deno",  "args": ["lsp"]},
+  "diagnostic-languageserver":      {"command": "diagnostic-languageserver", "args": ["--stdio"]},
+  "django-template-lsp":            {"command": "djlsp", "args": ["--stdio"]},
+  "dockerfile-language-server":     {"command": "docker-langserver", "args": ["--stdio"]},
+  "dot-language-server":            {"command": "dot-language-server", "args": ["--stdio"]},
+  "elm-language-server":            {"command": "elm-language-server", "args": ["--stdio"]},
+  "ember-language-server":          {"command": "ember-language-server", "args": ["--stdio"]},
+  "emmet-language-server":          {"command": "emmet-language-server", "args": ["--stdio"]},
+  "eslint-lsp":                     {"command": "vscode-eslint-language-server", "args": ["--stdio"]},
+  "gh-actions-language-server":     {"command": "gh-actions-language-server", "args": ["--stdio"]},
+  "glint":                          {"command": "glint", "args": ["--stdio"]},
+  "grammarly-languageserver":       {"command": "grammarly-languageserver", "args": ["--stdio"]},
+  "graphql-language-service-cli":   {"command": "graphql-lsp", "args": ["server", "-m", "stream"]},
+  "html-lsp":                       {"command": "vscode-html-language-server", "args": ["--stdio"]},
+  "intelephense":                   {"command": "intelephense", "args": ["--stdio"]},
+  "json-lsp":                       {"command": "vscode-json-language-server", "args": ["--stdio"]},
+  "lwc-language-server":            {"command": "lwc-language-server", "args": ["--stdio"]},
+  "marksman":                       {"command": "marksman", "args": ["server"]},
+  "mdx-analyzer":                   {"command": "mdx-language-server", "args": ["--stdio"]},
+  "perlnavigator":                  {"command": "perlnavigator", "args": ["--stdio"]},
+  "prisma-language-server":         {"command": "prisma-language-server", "args": ["--stdio"]},
+  "pyright":                        {"command": "pyright-langserver", "args": ["--stdio"]},
+  "ruff":                           {"command": "ruff",  "args": ["server"]},
+  "some-sass-language-server":      {"command": "some-sass-language-server", "args": ["--stdio"]},
+  "spyglassmc-language-server":     {"command": "spyglassmc-language-server", "args": ["--stdio"]},
+  "sqlls":                          {"command": "sql-language-server", "args": ["up", "--method", "stdio"]},
+  "stan-language-server":           {"command": "stan-language-server", "args": ["--stdio"]},
+  "starlark-rust":                  {"command": "starlark", "args": ["--lsp"]},
+  "stylelint-language-server":      {"command": "stylelint-language-server", "args": ["--stdio"]},
+  "stylelint-lsp":                  {"command": "stylelint-lsp", "args": ["--stdio"]},
+  "svelte-language-server":         {"command": "svelteserver", "args": ["--stdio"]},
+  "tailwindcss-language-server":    {"command": "tailwindcss-language-server", "args": ["--stdio"]},
+  "tsp-server":                     {"command": "tsp-server", "args": ["--stdio"]},
+  "twiggy-language-server":         {"command": "twiggy-language-server", "args": ["--stdio"]},
+  "ty":                             {"command": "ty", "args": ["server"]},
+  "typescript-language-server":     {"command": "typescript-language-server", "args": ["--stdio"]},
+  "vetur-vls":                      {"command": "vls", "args": ["--stdio"]},
+  "vim-language-server":            {"command": "vim-language-server", "args": ["--stdio"]},
+  "vscode-solidity-server":         {"command": "vscode-solidity-server", "args": ["--stdio"]},
+  "vue-language-server":            {"command": "vue-language-server", "args": ["--stdio"]},
+  "yaml-language-server":           {"command": "yaml-language-server", "args": ["--stdio"]}
+}
+JSON
+)
+
+LANG_EXT_MAP=$(cat <<'JSON'
+{
+  "AsciiDoc": ["adoc", "asciidoc"],
+  "Astro": ["astro"],
+  "Bash": ["sh", "bash"],
+  "Bicep": ["bicep"],
+  "C": ["c", "h"],
+  "C#": ["cs"],
+  "C++": ["cc", "cpp", "cxx", "hh", "hpp", "hxx"],
+  "CMake": ["cmake"],
+  "CSS": ["css"],
+  "Clojure": ["clj", "cljs", "cljc", "edn"],
+  "CoffeeScript": ["coffee"],
+  "Crystal": ["cr"],
+  "Cue": ["cue"],
+  "D": ["d"],
+  "Dart": ["dart"],
+  "EJS": ["ejs"],
+  "Elixir": ["ex", "exs"],
+  "Elm": ["elm"],
+  "Erlang": ["erl", "hrl"],
+  "F#": ["fs", "fsi", "fsx"],
+  "Fennel": ["fnl"],
+  "Fish": ["fish"],
+  "Gleam": ["gleam"],
+  "Go": ["go"],
+  "GraphQL": ["graphql", "gql"],
+  "Groovy": ["groovy", "gradle"],
+  "HCL": ["hcl"],
+  "HTML": ["html", "htm"],
+  "Haskell": ["hs", "lhs"],
+  "Helm": ["yaml", "yml"],
+  "JSON": ["json"],
+  "JSONC": ["jsonc"],
+  "Java": ["java"],
+  "JavaScript": ["js", "mjs", "cjs"],
+  "Julia": ["jl"],
+  "Kotlin": ["kt", "kts"],
+  "LaTeX": ["tex"],
+  "Lean": ["lean"],
+  "Liquid": ["liquid"],
+  "Lua": ["lua"],
+  "Markdown": ["md", "markdown"],
+  "Nim": ["nim"],
+  "Nix": ["nix"],
+  "OCaml": ["ml", "mli"],
+  "PHP": ["php"],
+  "Perl": ["pl", "pm"],
+  "PowerShell": ["ps1", "psm1"],
+  "Prisma": ["prisma"],
+  "Protobuf": ["proto"],
+  "PureScript": ["purs"],
+  "Python": ["py", "pyi"],
+  "R": ["r"],
+  "ReScript": ["res", "resi"],
+  "Reason": ["re", "rei"],
+  "Ruby": ["rb"],
+  "Rust": ["rs"],
+  "SCSS": ["scss"],
+  "SQL": ["sql"],
+  "Sass": ["sass"],
+  "Scala": ["scala", "sbt", "sc"],
+  "Shell": ["sh", "bash", "zsh"],
+  "Solidity": ["sol"],
+  "Stylus": ["styl"],
+  "Svelte": ["svelte"],
+  "Swift": ["swift"],
+  "TOML": ["toml"],
+  "Tcl": ["tcl"],
+  "Terraform": ["tf", "tfvars"],
+  "TypeScript": ["ts", "mts", "cts"],
+  "Twig": ["twig"],
+  "V": ["v"],
+  "Vala": ["vala"],
+  "Vim": ["vim"],
+  "Vue": ["vue"],
+  "Vimscript": ["vim"],
+  "WebAssembly": ["wat", "wasm"],
+  "XML": ["xml"],
+  "YAML": ["yaml", "yml"],
+  "Zig": ["zig"],
+  "Zsh": ["zsh"],
+  "haxe": ["hx"],
+  "shellscript": ["sh", "bash", "zsh"]
+}
+JSON
+)
+
+echo "Cloning mason-org/mason-registry into $TMP..." >&2
+git clone --depth 1 https://github.com/mason-org/mason-registry.git "$TMP/registry" >&2
+
+echo "[" > "$OUT.partial"
+FIRST=1
+
+shopt -s nullglob
+for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
+    # Only keep packages categorized as LSP.
+    if ! yq -e '.categories[] | select(. == "LSP")' "$pkg_yaml" >/dev/null 2>&1; then
+        continue
+    fi
+    name=$(yq -r '.name' "$pkg_yaml")
+    description=$(yq -r '.description // ""' "$pkg_yaml" | tr -d '\n')
+    languages=$(yq -o=json -I=0 '.languages // []' "$pkg_yaml")
+    bin_entry=$(yq -r '.bin | to_entries | .[0].key // ""' "$pkg_yaml" 2>/dev/null || true)
+    source_id=$(yq -r '.source.id // ""' "$pkg_yaml")
+
+    # Translate source.id into install recipes we know how to run.
+    # The purl spec URL-encodes '@' as '%40' for scoped npm packages (e.g.
+    # pkg:npm/%40angular/language-server@21.2.13). We decode %40 -> @ and
+    # strip the trailing @VERSION qualifier. The version pattern is
+    # `@[^@]*$` (last @ to end-of-string) rather than `@[0-9]` because some
+    # Go modules use `@vX.Y.Z` semver tags — anchoring to the final @ also
+    # correctly preserves npm scope prefixes (e.g. @biomejs/biome).
+    recipes="[]"
+    case "$source_id" in
+        pkg:cargo/*)
+            crate=$(printf '%s' "$source_id" | sed -E 's|^pkg:cargo/||; s|@[^@]*$||')
+            recipes=$(jq -n --arg pkg "$crate" '[{installer:"cargo", package:$pkg, extraArgs:[]}]')
+            ;;
+        pkg:npm/*)
+            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:npm/||; s|%40|@|g; s|@[^@]*$||')
+            recipes=$(jq -n --arg pkg "$n" '[{installer:"npm", package:$pkg, extraArgs:[]}]')
+            ;;
+        pkg:pypi/*)
+            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:pypi/||; s|@[^@]*$||')
+            recipes=$(jq -n --arg pkg "$n" '[{installer:"pipx", package:$pkg, extraArgs:[]}]')
+            ;;
+        pkg:golang/*)
+            # Mason Go source ids may carry both `@vX.Y.Z` and `#cmd/subpath`
+            # qualifiers (e.g. cuelang.org/go@v0.16.1#cmd/cue). Strip just the
+            # version (any chars between `@` and either `#` or end), then
+            # turn the `#subpath` separator into `/` so the final string is
+            # the full importable command path. `LSPInstaller.argv` appends
+            # `@latest` later.
+            n=$(printf '%s' "$source_id" | sed -E 's|^pkg:golang/||; s|@[^#]*||; s|#|/|')
+            recipes=$(jq -n --arg pkg "$n" '[{installer:"go", package:$pkg, extraArgs:[]}]')
+            ;;
+        pkg:github/*)
+            # GitHub binary downloads — out of scope, skip the package entirely.
+            continue
+            ;;
+        *)
+            # Unknown source kind — skip.
+            continue
+            ;;
+    esac
+
+    # Probe brew for an exact-name formula and prepend a brew recipe if found.
+    # Uses --eval-all to search offline without hitting the API.
+    if brew search --formula --eval-all "/^${name}\$/" 2>/dev/null | grep -qx "$name"; then
+        recipes=$(jq --arg pkg "$name" '[{installer:"brew", package:$pkg, extraArgs:[]}] + .' <<<"$recipes")
+    fi
+
+    cmd="$bin_entry"
+    if [ -z "$cmd" ]; then cmd="$name"; fi
+
+    # Apply any curated LSP-launch override (custom command and/or args).
+    override=$(jq -n --arg id "$name" --argjson map "$LSP_OVERRIDE_MAP" '$map[$id] // null')
+    if [ "$override" != "null" ]; then
+        cmd=$(jq -r '.command' <<<"$override")
+        cmd_args=$(jq -c '.args' <<<"$override")
+    else
+        cmd_args='[]'
+    fi
+
+    # Look up the FIRST language only in the curated extension map. We can't
+    # union across all of Mason's `languages` because our config model ties
+    # one entry to one languageId — unioning would route, e.g., .js files
+    # through a `typescript-language-server` entry whose languageId is
+    # "typescript", and `typescript-language-server` parses files based on
+    # the languageId it was opened with (see LanguageServerRegistry's
+    # comment on typescript/javascript). Users wanting coverage for the
+    # other languages add separate entries.
+    extensions=$(jq -n --argjson langs "$languages" --argjson map "$LANG_EXT_MAP" \
+        '($langs[0] // "") as $primary | $map[$primary] // []')
+
+    # Resolve the LSP languageId from the primary language. Use the override
+    # map first; fall back to a lowercased display name with non-alphanumeric
+    # characters stripped (handles "Plain Text" → "plaintext"). Empty when
+    # Mason gave us no language at all — the dialog falls back to the
+    # masonId in that case.
+    language_id=$(jq -nr --argjson langs "$languages" --argjson map "$LSP_LANG_ID_MAP" \
+        '($langs[0] // "") as $primary
+         | $map[$primary] // ($primary | ascii_downcase | gsub("[^a-z0-9]"; ""))')
+
+    entry=$(jq -n \
+        --arg masonId "$name" \
+        --arg displayName "$name" \
+        --arg languageId "$language_id" \
+        --argjson languages "$languages" \
+        --argjson extensions "$extensions" \
+        --arg command "$cmd" \
+        --argjson cmd_args "$cmd_args" \
+        --argjson recipes "$recipes" \
+        '{
+            masonId: $masonId,
+            displayName: $displayName,
+            languageId: $languageId,
+            languages: $languages,
+            extensions: $extensions,
+            command: $command,
+            args: $cmd_args,
+            recipes: $recipes
+        }')
+
+    if [ $FIRST -eq 1 ]; then FIRST=0; else echo "," >> "$OUT.partial"; fi
+    printf "%s" "$entry" >> "$OUT.partial"
+done
+echo "" >> "$OUT.partial"
+echo "]" >> "$OUT.partial"
+
+# Wrap in an envelope with attribution.
+jq '{
+    _notice: "Derived from mason-org/mason-registry (Apache-2.0). Regenerated by scripts/build-mason-snapshot.sh.",
+    packages: .
+}' "$OUT.partial" > "$OUT"
+rm -f "$OUT.partial"
+
+echo "Wrote $OUT" >&2
+echo "Package count: $(jq '.packages | length' "$OUT")" >&2

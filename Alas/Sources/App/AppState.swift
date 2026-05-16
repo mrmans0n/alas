@@ -114,6 +114,17 @@ final class AppState {
         if projectsChanged { saveProjects() }
     }
 
+    // MARK: - LSP installer
+
+    let lspInstaller = LSPInstaller()
+    private(set) var installerHost: InstallerHost = .detect()
+
+    /// Re-detect installers after an install completes so that, e.g., installing
+    /// `cargo` and then a cargo-based LSP works without app restart.
+    func refreshInstallerHost() {
+        installerHost = .detect()
+    }
+
     /// Set when a worktree deletion fails because the tree is dirty.
     /// The UI presents a confirmation dialog; confirming retries with force.
     struct PendingForceDeleteWorktree: Identifiable, Equatable {

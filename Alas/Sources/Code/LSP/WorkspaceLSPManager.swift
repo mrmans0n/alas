@@ -286,6 +286,18 @@ final class WorkspaceLSPManager {
         return holders[key]?.client
     }
 
+    /// True when `fileURL` has already been delivered to a live (non-dead)
+    /// server via `didOpen`. Lets a re-open path (e.g. after the install
+    /// nudge succeeds) skip the call entirely instead of reusing
+    /// `openDocument`, which unconditionally bumps `refsByURI` for an
+    /// existing holder and would unbalance the eventual `didClose`.
+    func isDocumentOpen(fileURL: URL, worktreeRoot: URL) -> Bool {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key] else { return false }
+        return holder.openedURIs.contains(uri)
+    }
+
     /// Locates the holder currently tracking `uri` (regardless of which
     /// registry entry version was used to spawn it). Used by close,
     /// didChange, didSave, and `client(forFile:)` so a registry edit
