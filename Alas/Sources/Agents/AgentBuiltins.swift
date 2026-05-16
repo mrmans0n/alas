@@ -63,15 +63,19 @@ enum AgentBuiltins {
             builtinLogoAssetName: "agent-pi"
         ),
         // Verified against `opencode run --help` v1.15.1 (2026-05-16). The
-        // `run` subcommand is the non-interactive entry point;
-        // --dangerously-skip-permissions auto-approves permissions.
+        // `run` subcommand is the non-interactive entry point. There is
+        // NO top-level "skip permissions" flag — `--dangerously-skip-permissions`
+        // is documented only under `opencode run`, so it can't be appended
+        // to a TUI auto-launch. Leave bypass nil: the AgentsPane toggle
+        // is gated on this field being non-nil, so the user can't enable
+        // a flag that would just fail.
         AgentDefinition(
             id: "opencode",
             displayName: "opencode",
             binary: "opencode",
             binaryOverride: nil,
             promptModeArgs: ["run"],
-            bypassPermissionsFlag: "--dangerously-skip-permissions",
+            bypassPermissionsFlag: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-opencode"
