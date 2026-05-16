@@ -94,6 +94,7 @@
 		42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */; };
 		43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */; };
 		4565825A901B119DCD1037ED /* SymbolsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDCB33A74DC088022E5BD5F /* SymbolsFeature.swift */; };
+		45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC68B05B719B9235865027F /* ThreePaneSizing.swift */; };
 		466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0240C5961343C3042D865570 /* GeneralPane.swift */; };
 		467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F68A9692F85197ED9E16262 /* WorktreesPane.swift */; };
 		4781661414034F09EA02E0BC /* CommitsOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8673293AD419AA36F7DF02A9 /* CommitsOlderTests.swift */; };
@@ -641,6 +642,7 @@
 		FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceUpstreamTests.swift; sourceTree = "<group>"; };
 		FE66950F2226F1182DCDD39A /* RightPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneView.swift; sourceTree = "<group>"; };
 		FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalPane.swift; sourceTree = "<group>"; };
+		FEC68B05B719B9235865027F /* ThreePaneSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneSizing.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1268,6 +1270,7 @@
 			children = (
 				7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */,
 				5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */,
+				FEC68B05B719B9235865027F /* ThreePaneSizing.swift */,
 			);
 			path = Layout;
 			sourceTree = "<group>";
@@ -1667,6 +1670,7 @@
 				32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */,
 				D7D45D387EEF0436834DF7AD /* ThemeStore.swift in Sources */,
 				5685074AFE30889AAC69EB8D /* ThreePaneLayout.swift in Sources */,
+				45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */,
 				AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */,
 				6EFCC2646A708D0938485654 /* TrafficLights.swift in Sources */,
 				5FF61283B11E2696A72727D1 /* TreeSitterHighlighter.swift in Sources */,
