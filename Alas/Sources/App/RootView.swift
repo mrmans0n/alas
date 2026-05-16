@@ -82,7 +82,7 @@ struct RootView: View {
             WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
         }
         .background(WindowConfigurator())
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(minWidth: 700, minHeight: 600)
         .ignoresSafeArea()
         .modifier(RootCommandHandlers(
             state: state,

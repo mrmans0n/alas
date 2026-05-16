@@ -13,33 +13,54 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     private let sidebarMax: Double = 420
     private let rightMin: Double = 240
     private let rightMax: Double = 560
+    private let centerMin: Double = 400
+    private let dividerWidth: Double = 6
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar()
-                .frame(width: CGFloat(sidebarWidth))
-                .frame(maxHeight: .infinity)
-            DragHandle(axis: .horizontal) { delta in
-                sidebarWidth = DragHandle.clamp(
-                    value: sidebarWidth + Double(delta),
-                    min: sidebarMin, max: sidebarMax
+        GeometryReader { proxy in
+            let sizing = ThreePaneSizing.calculate(
+                availableWidth: Double(proxy.size.width),
+                preferredSidebarWidth: sidebarWidth,
+                preferredRightWidth: rightWidth,
+                rightPreferredVisible: rightVisible,
+                configuration: ThreePaneSizing.Configuration(
+                    sidebarMin: sidebarMin,
+                    sidebarMax: sidebarMax,
+                    rightMin: rightMin,
+                    rightMax: rightMax,
+                    centerMin: centerMin,
+                    dividerWidth: dividerWidth
                 )
-                onWidthsChanged()
-            }
-            center()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if rightVisible {
+            )
+
+            HStack(spacing: 0) {
+                sidebar()
+                    .frame(width: CGFloat(sizing.sidebarWidth))
+                    .frame(maxHeight: .infinity)
                 DragHandle(axis: .horizontal) { delta in
-                    rightWidth = DragHandle.clamp(
-                        value: rightWidth - Double(delta),
-                        min: rightMin, max: rightMax
+                    sidebarWidth = DragHandle.clamp(
+                        value: sidebarWidth + Double(delta),
+                        min: sidebarMin, max: sidebarMax
                     )
                     onWidthsChanged()
                 }
-                right()
-                    .frame(width: CGFloat(rightWidth))
+                center()
+                    .frame(width: CGFloat(sizing.centerWidth))
                     .frame(maxHeight: .infinity)
+                if sizing.rightVisible {
+                    DragHandle(axis: .horizontal) { delta in
+                        rightWidth = DragHandle.clamp(
+                            value: rightWidth - Double(delta),
+                            min: rightMin, max: rightMax
+                        )
+                        onWidthsChanged()
+                    }
+                    right()
+                        .frame(width: CGFloat(sizing.rightWidth))
+                        .frame(maxHeight: .infinity)
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
     }
 }

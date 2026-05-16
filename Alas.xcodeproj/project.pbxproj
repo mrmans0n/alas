@@ -87,6 +87,7 @@
 		41C7E41360B2A443AE2A18B8 /* GhosttyHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 215C9AE9FBCB1FD9F6D030FE /* GhosttyHost.swift */; };
 		41F6712EA71CC9AF6AB7ED94 /* CodeEditorCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30CBB25BA2F2C558713FB0E4 /* CodeEditorCoordinator.swift */; };
 		41F7A0E0854B545F99062BDC /* EditorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */; };
+		422B560D70571FF42F0E78E6 /* ThreePaneSizingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60A6B7CB83D842FEE2D801C /* ThreePaneSizingTests.swift */; };
 		4239885256AB11FE8207D31E /* TextEditCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8062405A67C934905EE61D98 /* TextEditCoordinates.swift */; };
 		42502D6356225A4304C93818 /* TerminalTabStateCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */; };
 		4272DA5A4AB30C72A694CAE5 /* CommitContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4865995B2D4B92166321201F /* CommitContextBuilder.swift */; };
@@ -95,6 +96,7 @@
 		42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */; };
 		43EC5CF874B360B9092691A5 /* OKLCHTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9F9769B8C6EC2F87092F1B /* OKLCHTests.swift */; };
 		4565825A901B119DCD1037ED /* SymbolsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDCB33A74DC088022E5BD5F /* SymbolsFeature.swift */; };
+		45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC68B05B719B9235865027F /* ThreePaneSizing.swift */; };
 		466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0240C5961343C3042D865570 /* GeneralPane.swift */; };
 		467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F68A9692F85197ED9E16262 /* WorktreesPane.swift */; };
 		4781661414034F09EA02E0BC /* CommitsOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8673293AD419AA36F7DF02A9 /* CommitsOlderTests.swift */; };
@@ -563,6 +565,7 @@
 		C2AEA30B7C74A39A46448AF5 /* NotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationServiceTests.swift; sourceTree = "<group>"; };
 		C56EFAFF71ABDBCDECAAA305 /* StartupScriptInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptInstaller.swift; sourceTree = "<group>"; };
 		C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentSearcherTests.swift; sourceTree = "<group>"; };
+		C60A6B7CB83D842FEE2D801C /* ThreePaneSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneSizingTests.swift; sourceTree = "<group>"; };
 		C682FF74C86B77BDCF46CF25 /* ChangesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTabView.swift; sourceTree = "<group>"; };
 		C6CA79B71B4AA72697392702 /* NumstatParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParser.swift; sourceTree = "<group>"; };
 		C6E896FEA37B4691BD16E2DD /* EditorBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferTests.swift; sourceTree = "<group>"; };
@@ -645,6 +648,7 @@
 		FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceUpstreamTests.swift; sourceTree = "<group>"; };
 		FE66950F2226F1182DCDD39A /* RightPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneView.swift; sourceTree = "<group>"; };
 		FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalPane.swift; sourceTree = "<group>"; };
+		FEC68B05B719B9235865027F /* ThreePaneSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneSizing.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -775,6 +779,7 @@
 				71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */,
 				1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */,
 				88379ACE40F42BE4A3257659 /* ThemeTests.swift */,
+				C60A6B7CB83D842FEE2D801C /* ThreePaneSizingTests.swift */,
 				AE0A6F237480EE72CB8DBE28 /* TitlelessWindowTests.swift */,
 				D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */,
 				670C7B064EA079D045F0D0DE /* WorktreeWatcherFilterTests.swift */,
@@ -1274,6 +1279,7 @@
 			children = (
 				7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */,
 				5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */,
+				FEC68B05B719B9235865027F /* ThreePaneSizing.swift */,
 			);
 			path = Layout;
 			sourceTree = "<group>";
@@ -1673,6 +1679,7 @@
 				32A11F8AF508AA2A7D3EF788 /* ThemeEnvironment.swift in Sources */,
 				D7D45D387EEF0436834DF7AD /* ThemeStore.swift in Sources */,
 				5685074AFE30889AAC69EB8D /* ThreePaneLayout.swift in Sources */,
+				45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */,
 				AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */,
 				6EFCC2646A708D0938485654 /* TrafficLights.swift in Sources */,
 				5FF61283B11E2696A72727D1 /* TreeSitterHighlighter.swift in Sources */,
@@ -1791,6 +1798,7 @@
 				F20871AEC0E533818C8E1B95 /* TextEditCoordinatesTests.swift in Sources */,
 				59AFC96BD543D2520DBE7BB0 /* ThemeStoreTests.swift in Sources */,
 				BF9C16C33DF0BBAF2946AFC3 /* ThemeTests.swift in Sources */,
+				422B560D70571FF42F0E78E6 /* ThreePaneSizingTests.swift in Sources */,
 				75B5EE5F1761CF5C830F0549 /* TitlelessWindowTests.swift in Sources */,
 				67981D1D60512503BFD901C8 /* TreeSitterHighlighterTests.swift in Sources */,
 				CB549B27BB0E578776AA7ED0 /* WorktreeServiceTests.swift in Sources */,
