@@ -251,6 +251,7 @@
 		B35BD3304D3A9EC5BABBC56E /* CommitRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D46BDE72E52818061452ECB /* CommitRowTests.swift */; };
 		B3BA844FBD11333E74A05655 /* MarkdownImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE20A3822FC26672DFD552C /* MarkdownImageLoader.swift */; };
 		B40925F2FDA34DC0444D8632 /* EditorBufferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D921D1C8A44F1937769CDB60 /* EditorBufferStore.swift */; };
+		B614CD7F894DD6908C903254 /* InstallNudgeBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */; };
 		B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DEB85132B767DB3B253620C /* cool-slate.json */; };
 		B76AD708A9FD54304F84366A /* ImageFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3F942D660C7ABA8542C77D /* ImageFileType.swift */; };
 		B79D01EECD92181B710D2648 /* CommitInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C01FBF2EE3668E6772CEB1D /* CommitInfo.swift */; };
@@ -472,6 +473,7 @@
 		412B2AF1B68E3B56DE21EB91 /* DiagnosticsRangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsRangeTests.swift; sourceTree = "<group>"; };
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterSelectionState.swift; sourceTree = "<group>"; };
+		41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallNudgeBanner.swift; sourceTree = "<group>"; };
 		4261E417947C1A21E77C1587 /* GitStatusCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusCache.swift; sourceTree = "<group>"; };
 		43DF691FC778F3A71CE20FBB /* StartupScriptInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptInstallerTests.swift; sourceTree = "<group>"; };
 		447D95D444F6AE08FCFA27A3 /* AppStateCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCleanupTests.swift; sourceTree = "<group>"; };
@@ -1296,6 +1298,7 @@
 				C7A24E28C231CEA4225C23F0 /* EditorTheme.swift */,
 				35C3F234BEF9CE053CD4DB1E /* IndentationHelper.swift */,
 				3D105CB2C185958ED23164D1 /* IndentationMode.swift */,
+				41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */,
 				FC4A215AF2876091E31F6F8A /* LineEnding.swift */,
 			);
 			path = Editor;
@@ -1740,6 +1743,7 @@
 				9D6FE5A4589D73A7480CE2B2 /* IndentationHelper.swift in Sources */,
 				709F5006202FA86C750BBB69 /* IndentationMode.swift in Sources */,
 				BC98C2BCDB4F6C88C66117A6 /* InlineErrorStrip.swift in Sources */,
+				B614CD7F894DD6908C903254 /* InstallNudgeBanner.swift in Sources */,
 				E6CB573877637461E11CACAF /* InstallRecipe.swift in Sources */,
 				0407824F9DA8EEFC5B5EEA8A /* InstallerHost.swift in Sources */,
 				255E9EAE89D521E08EB90918 /* JSONHookSettingsFile.swift in Sources */,
