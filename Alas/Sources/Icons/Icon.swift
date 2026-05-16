@@ -49,6 +49,7 @@ struct Icon: View {
         case "keyboard":   return "keyboard"
         case "github":     return "circle.hexagongrid"
         case "alert":      return "exclamationmark.triangle"
+        case "sparkle":    return "sparkle"
         default:           return "questionmark"
         }
     }

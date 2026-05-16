@@ -34,6 +34,7 @@ struct SettingsWindow: View {
                     case .terminal:   TerminalPane(state: state)
                     case .code:       CodePane(state: state)
                     case .changes:    ChangesPane(state: state)
+                    case .agents:     AgentsPane(state: state)
                     case .appearance: AppearancePane(state: state)
                     }
                 }
