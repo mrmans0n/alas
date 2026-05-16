@@ -6,6 +6,7 @@ struct CodePane: View {
 
     @State private var selected: LanguageServerConfig?
     @State private var creatingNew = false
+    @State private var installSheetVisible = false
 
     var body: some View {
         ScrollView {
@@ -40,6 +41,7 @@ struct CodePane: View {
                                     desc: entry.extensions.joined(separator: ", ")) {
                             HStack(spacing: 8) {
                                 statusBadge(for: entry)
+                                installAffordance(for: entry)
                                 AlasButton(title: "Edit",
                                            style: .subtle,
                                            action: { selected = entry })
@@ -49,6 +51,15 @@ struct CodePane: View {
                     SettingsRow(name: "Add language",
                                 desc: "Register a custom language server.") {
                         AlasButton(title: "Add", action: { creatingNew = true })
+                    }
+                    if !state.config.code.dismissedInstallNudges.isEmpty {
+                        SettingsRow(name: "Reset dismissed nudges",
+                                    desc: "Re-show editor install prompts for languages you dismissed.") {
+                            AlasButton(title: "Reset", style: .subtle, action: {
+                                state.config.code.dismissedInstallNudges = []
+                                state.saveConfig()
+                            })
+                        }
                     }
                 }
             }
@@ -63,6 +74,12 @@ struct CodePane: View {
             CodeLanguageDetailView(initial: blank(),
                                    onSave: { save(originalLanguage: nil, $0) },
                                    onCancel: { creatingNew = false })
+        }
+        .sheet(isPresented: $installSheetVisible) {
+            LSPInstallProgressSheet(installer: state.lspInstaller) {
+                installSheetVisible = false
+                state.refreshInstallerHost()
+            }
         }
     }
 
@@ -88,6 +105,59 @@ struct CodePane: View {
             color = theme.color("warn")
         }
         return Text(label).font(.system(size: 10.5)).foregroundColor(color)
+    }
+
+    @ViewBuilder
+    private func installAffordance(for entry: LanguageServerConfig) -> some View {
+        let recipes = recipes(for: entry.language)
+        let status = availability.status(for: entry)
+        if status == .notInstalled, !recipes.isEmpty {
+            let available = state.installerHost.allAvailable(in: recipes)
+            if available.isEmpty {
+                AlasButton(title: "Install", style: .subtle, action: {})
+                    .disabled(true)
+                    .help("Install one of: \(recipes.map { $0.installer.rawValue }.joined(separator: ", "))")
+            } else if available.count == 1, let pair = available.first {
+                AlasButton(title: installBusy ? "Installing…" : "Install", style: .subtle, action: {
+                    runInstall(pair.installer, recipe: pair.recipe, language: entry.language)
+                })
+                .disabled(installBusy)
+            } else {
+                Menu {
+                    ForEach(available, id: \.installer.kind) { pair in
+                        Button("Install with \(pair.installer.kind.rawValue)") {
+                            runInstall(pair.installer, recipe: pair.recipe, language: entry.language)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(installBusy ? "Installing…" : "Install")
+                        Image(systemName: "chevron.down")
+                    }
+                }
+                .disabled(installBusy)
+                .menuStyle(.borderlessButton)
+            }
+        }
+    }
+
+    private var installBusy: Bool {
+        if case .running = state.lspInstaller.state { return true } else { return false }
+    }
+
+    private func recipes(for language: String) -> [InstallRecipe] {
+        if let curated = RecommendedLanguageCatalog.entry(forLanguage: language) {
+            let resolved = curated.resolvedRecipes
+            if !resolved.isEmpty { return resolved }
+        }
+        return state.config.code.userDefinedRecipes[language] ?? []
+    }
+
+    private func runInstall(_ installer: DetectedInstaller, recipe: InstallRecipe, language: String) {
+        installSheetVisible = true
+        Task {
+            try? await state.lspInstaller.install(recipe: recipe, using: installer, language: language)
+        }
     }
 
     private func save(originalLanguage: String?, _ entry: LanguageServerConfig) {
