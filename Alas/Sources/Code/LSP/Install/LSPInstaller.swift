@@ -173,18 +173,30 @@ final class LSPInstaller {
             }
         }
 
-        // The readabilityHandler and terminationHandler each enqueue independent
-        // @MainActor Tasks. Their main-actor execution order is not strictly
-        // guaranteed by Swift Concurrency, so the very last log lines may land
-        // after `.finished` is set. In practice this race window is microseconds
-        // (brew/cargo/npm flush before exit and the kernel signals EOF before
-        // terminationHandler fires). The progress sheet keeps the log visible
-        // after `.finished` anyway, so any late-arriving lines are still seen.
-        process.terminationHandler = { [weak self, buffer] proc in
+        // For fast-exiting processes (e.g. `brew install` printing "Already
+        // up to date." and quitting) the readabilityHandler may never fire,
+        // or fire after termination. We can't rely on streaming alone to
+        // capture all output. The terminationHandler nils the streaming
+        // handler and performs one final synchronous drain of any remaining
+        // bytes on the pipe before transitioning state, so observers seeing
+        // `.finished` are guaranteed to see all output that was written.
+        process.terminationHandler = { [weak self, buffer, pipe] proc in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            let finalData = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+            let finalLines: [String]
+            let finalTrailing: String?
+            if let chunk = String(data: finalData, encoding: .utf8), !chunk.isEmpty {
+                finalLines = buffer.feed(chunk)
+            } else {
+                finalLines = []
+            }
+            finalTrailing = buffer.flush()
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                // Drain whatever's still in the line buffer.
-                if let trailing = buffer.flush(), !trailing.isEmpty {
+                if !finalLines.isEmpty {
+                    self.logLines.append(contentsOf: finalLines)
+                }
+                if let trailing = finalTrailing, !trailing.isEmpty {
                     self.logLines.append(trailing)
                 }
                 self.currentProcess = nil
