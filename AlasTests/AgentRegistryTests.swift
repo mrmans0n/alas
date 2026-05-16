@@ -9,7 +9,7 @@ struct AgentRegistryTests {
             installedIds: []
         )
         let ids = r.agents.map(\.id)
-        #expect(ids == ["claude", "codex", "cursor-agent", "pi", "opencode", "gemini"])
+        #expect(ids == AgentBuiltins.catalog.map(\.id))
     }
 
     @Test func builtinStateAppliesEnabledFlag() {
@@ -94,5 +94,22 @@ struct AgentRegistryTests {
             builtinState: [:], customs: [custom], installedIds: ["c1"]
         )
         #expect(!r.enabled().contains(where: { $0.id == "c1" }))
+    }
+
+    @Test func unknownBuiltinIdInStateIsIgnored() {
+        // Forward-compat: a config from a newer app version may contain
+        // overlay entries for agents this version doesn't know. They
+        // must be silently dropped, leaving the catalog unchanged.
+        let r = AgentRegistry(
+            builtinState: ["unknown-agent-id": BuiltinAgentState(isEnabled: false, binaryOverride: "/x")],
+            customs: [],
+            installedIds: []
+        )
+        let ids = r.agents.map(\.id)
+        #expect(ids == AgentBuiltins.catalog.map(\.id))
+        // All built-ins still default-enabled (the unknown overlay didn't leak in).
+        for agent in r.agents {
+            #expect(agent.isEnabled)
+        }
     }
 }

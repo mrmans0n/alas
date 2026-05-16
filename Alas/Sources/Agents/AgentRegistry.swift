@@ -35,6 +35,10 @@ struct AgentRegistry: Equatable {
         self.installedIds = installedIds
     }
 
+    /// All agents whose binary was detected on PATH (or via
+    /// `binaryOverride`), regardless of `isEnabled`. Disabled agents are
+    /// still in this list — call `enabled()` for the picker-eligible
+    /// subset.
     func installed() -> [AgentDefinition] {
         agents.filter { installedIds.contains($0.id) }
     }
