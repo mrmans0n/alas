@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
     --write)             WRITE=1;     shift ;;
     --include-internal)  INCLUDE_INTERNAL=1; shift ;;
     -h|--help)
-      sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -48,10 +48,39 @@ preflight_promote_to_target() {
     exit 1
   }
 
-  if grep -qF "## [$target]" "$file"; then
+  if has_target_section "$target" "$file"; then
     echo "CHANGELOG.md already has a [$target] section." >&2
     exit 1
   fi
+}
+
+has_target_section() {
+  local target="$1"
+  local file="$2"
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      "## [$target]"*) return 0 ;;
+    esac
+  done < "$file"
+  return 1
+}
+
+current_unreleased_body() {
+  local file="CHANGELOG.md"
+  awk '
+    /^## \[Unreleased\]$/ { in_unr = 1; next }
+    in_unr && /^## \[/ { exit }
+    in_unr { print }
+  ' "$file" | awk '
+    NF { seen = 1 }
+    seen { lines = lines $0 ORS }
+    END { printf "%s", lines }
+  '
+}
+
+has_non_whitespace() {
+  awk 'NF { found = 1; exit } END { exit found ? 0 : 1 }'
 }
 
 if [[ "$WRITE" == 1 && -z "$TARGET" ]]; then
@@ -66,13 +95,60 @@ find_base_ref() {
     return
   fi
   local tag
-  tag=$(git tag --list 'v*' --sort=-v:refname | head -n1 || true)
+  tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
   if [[ -n "$tag" ]]; then
     echo "$tag"
     return
   fi
   git rev-list --max-parents=0 HEAD | head -n1
 }
+
+if [[ "$WRITE" == 1 && -n "$TARGET" ]]; then
+  body=$(current_unreleased_body)
+  if ! printf '%s\n' "$body" | has_non_whitespace; then
+    echo "No release-note-worthy commits to promote into [$TARGET]; refusing." >&2
+    exit 1
+  fi
+
+  promote_to_target() {
+    local target="$1"
+    local release_body="$2"
+    local file="CHANGELOG.md"
+    local today
+    today=$(date +%Y-%m-%d)
+
+    local tmp
+    tmp=$(mktemp)
+    target="$target" today="$today" release_body="$release_body" awk '
+      BEGIN {
+        in_unr = 0
+        target = ENVIRON["target"]
+        today = ENVIRON["today"]
+        release_body = ENVIRON["release_body"]
+      }
+      /^## \[Unreleased\]$/ {
+        print "## [Unreleased]"
+        print ""
+        print "## [" target "] - " today
+        print ""
+        print release_body
+        print ""
+        in_unr = 1
+        next
+      }
+      in_unr && /^## \[/ { in_unr = 0 }
+      in_unr { next }
+      { print }
+    ' "$file" > "$tmp"
+
+    awk 'BEGIN{b=0} /^$/{b++; if(b<=1) print; next} {b=0; print}' "$tmp" > "$file"
+    rm -f "$tmp"
+  }
+
+  promote_to_target "$TARGET" "$body"
+  echo "Promoted [Unreleased] to [$TARGET] in CHANGELOG.md." >&2
+  exit 0
+fi
 
 BASE=$(find_base_ref)
 
@@ -211,58 +287,6 @@ write_unreleased() {
   rm -f "$tmp"
 }
 
-promote_to_target() {
-  local target="$1"
-  local new_body="$2"
-  local file="CHANGELOG.md"
-  local today
-  today=$(date +%Y-%m-%d)
-
-  test -f "$file" || { echo "$file not found" >&2; exit 1; }
-
-  grep -qE '^## \[Unreleased\]$' "$file" || {
-    echo "No '## [Unreleased]' heading in $file." >&2
-    exit 1
-  }
-
-  if grep -qF "## [$target]" "$file"; then
-    echo "CHANGELOG.md already has a [$target] section." >&2
-    exit 1
-  fi
-
-  if [[ -z "$new_body" ]]; then
-    echo "No release-note-worthy commits to promote into [$target]; refusing." >&2
-    exit 1
-  fi
-
-  local tmp
-  tmp=$(mktemp)
-  target="$target" today="$today" new_body="$new_body" awk '
-    BEGIN {
-      in_unr = 0
-      target = ENVIRON["target"]
-      today = ENVIRON["today"]
-      new_body = ENVIRON["new_body"]
-    }
-    /^## \[Unreleased\]$/ {
-      print "## [Unreleased]"
-      print ""
-      print "## [" target "] - " today
-      print ""
-      print new_body
-      print ""
-      in_unr = 1
-      next
-    }
-    in_unr && /^## \[/ { in_unr = 0 }
-    in_unr { next }
-    { print }
-  ' "$file" > "$tmp"
-
-  awk 'BEGIN{b=0} /^$/{b++; if(b<=1) print; next} {b=0; print}' "$tmp" > "$file"
-  rm -f "$tmp"
-}
-
 emit_for_unreleased() {
   # Body without a heading (heading stays in CHANGELOG.md).
   echo "$body"
@@ -275,12 +299,7 @@ emit_for_target() {
 }
 
 if [[ -n "$TARGET" ]]; then
-  if [[ "$WRITE" == 1 ]]; then
-    promote_to_target "$TARGET" "$body"
-    echo "Promoted [Unreleased] to [$TARGET] in CHANGELOG.md." >&2
-  else
-    emit_for_target
-  fi
+  emit_for_target
 elif [[ "$WRITE" == 1 ]]; then
   write_unreleased "$body"
   echo "Updated [Unreleased] body in CHANGELOG.md." >&2

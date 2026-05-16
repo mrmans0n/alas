@@ -12,11 +12,11 @@ This doc covers the human side: cutting `CHANGELOG.md` and bumping the version.
 # 1. Draft entries from commits since the last v* tag.
 ./scripts/draft-release-notes.sh --write
 
-# 2. Promote the draft notes into the new version section.
-./scripts/draft-release-notes.sh --target 0.1.2 --write
-
-# 3. Open CHANGELOG.md and polish the new [0.1.2] section.
+# 2. Open CHANGELOG.md and polish the [Unreleased] section.
 $EDITOR CHANGELOG.md
+
+# 3. Promote the curated notes into the new version section.
+./scripts/draft-release-notes.sh --target 0.1.2 --write
 
 # 4. Bump the version in project.yml, regenerate Xcode project.
 $EDITOR project.yml   # bump CFBundleShortVersionString + CFBundleVersion
@@ -36,7 +36,7 @@ workflow hard-fails — fix and re-tag.
 
 ## Draft script flags
 
-- `--since <ref>` — override the base ref (default: latest `v*` tag).
+- `--since <ref>` — override the base ref (default: latest reachable `v*` tag).
 - `--target <version>` — render under a versioned heading instead of `[Unreleased]`.
 - `--write` — splice into `CHANGELOG.md` rather than printing.
 - `--include-internal` — include `ci`/`test`/`build`/`style` commits under

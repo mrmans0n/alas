@@ -95,7 +95,7 @@ jobs:
             body && index($0, "## [") == 1 { exit }
             body { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
-          test -s "$RUNNER_TEMP/release-notes.md" || {
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/release-notes.md" || {
             echo "::error::No CHANGELOG.md section found for v$VERSION"
             exit 1
           }
