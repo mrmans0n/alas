@@ -11,44 +11,58 @@ struct InstallNudgeBanner: View {
     @State private var installSheetVisible = false
 
     var body: some View {
-        if let nudge = nudgeData {
-            HStack(spacing: 8) {
-                Image(systemName: "info.circle")
-                    .foregroundColor(theme.color("fg-dim"))
-                Text("Install \(nudge.command) for \(nudge.displayName) support")
-                    .font(.system(size: 12.5))
-                Spacer()
-                installButton(for: nudge)
-                Button(action: { dismiss(language: nudge.language) }) {
-                    Image(systemName: "xmark")
-                        .foregroundColor(theme.color("fg-dim"))
-                }
-                .buttonStyle(.plain)
+        // The sheet modifier is attached to the OUTER container (always
+        // mounted) rather than the inner conditional banner. When the
+        // install succeeds, availability flips to .available, `nudgeData`
+        // returns nil, and the banner unmounts — if the sheet lived on the
+        // banner, SwiftUI would silently dismiss it and fire onDismiss
+        // instead of the sheet's own Done/Close callback, skipping the
+        // refresh + reopen-LSP path for the very install that just
+        // completed.
+        Group {
+            if let nudge = nudgeData {
+                bannerRow(nudge: nudge)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(theme.color("bg-1"))
-            .overlay(Rectangle()
-                .frame(height: 0.5)
-                .foregroundColor(theme.color("line")),
-                alignment: .bottom)
-            .sheet(isPresented: $installSheetVisible, onDismiss: {
-                // Interactive dismiss bypasses the sheet's own buttons; reset
-                // the installer so the next install starts from .idle.
-                appState.lspInstaller.reset()
-            }) {
-                LSPInstallProgressSheet(installer: appState.lspInstaller) { completedLanguage in
-                    installSheetVisible = false
-                    appState.refreshInstallerHost()
-                    // Re-fire didOpen for any open buffers in the just-
-                    // installed language so hover/diagnostics/definitions
-                    // wake up without a manual close-and-reopen.
-                    if let completedLanguage {
-                        appState.tabs.reopenLSPDocuments(forLanguage: completedLanguage)
-                    }
+        }
+        .sheet(isPresented: $installSheetVisible, onDismiss: {
+            // Interactive dismiss bypasses the sheet's own buttons; reset
+            // the installer so the next install starts from .idle.
+            appState.lspInstaller.reset()
+        }) {
+            LSPInstallProgressSheet(installer: appState.lspInstaller) { completedLanguage in
+                installSheetVisible = false
+                appState.refreshInstallerHost()
+                // Re-fire didOpen for any open buffers in the just-
+                // installed language so hover/diagnostics/definitions
+                // wake up without a manual close-and-reopen.
+                if let completedLanguage {
+                    appState.tabs.reopenLSPDocuments(forLanguage: completedLanguage)
                 }
             }
         }
+    }
+
+    private func bannerRow(nudge: NudgeData) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundColor(theme.color("fg-dim"))
+            Text("Install \(nudge.command) for \(nudge.displayName) support")
+                .font(.system(size: 12.5))
+            Spacer()
+            installButton(for: nudge)
+            Button(action: { dismiss(language: nudge.language) }) {
+                Image(systemName: "xmark")
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-1"))
+        .overlay(Rectangle()
+            .frame(height: 0.5)
+            .foregroundColor(theme.color("line")),
+            alignment: .bottom)
     }
 
     private struct NudgeData {
