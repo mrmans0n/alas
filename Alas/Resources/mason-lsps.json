@@ -10,9 +10,7 @@
       ],
       "extensions": [],
       "command": "ngserver",
-      "args": [
-        "--stdio"
-      ],
+      "args": [],
       "recipes": [
         {
           "installer": "npm",

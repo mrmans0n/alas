@@ -57,9 +57,15 @@ LSP_LANG_ID_MAP=$(cat <<'JSON'
 JSON
 )
 
+# Note: a few Mason LSPs are intentionally NOT in this override map even
+# though they need non-default args, because the correct invocation depends
+# on host-specific paths we can't statically produce. The biggest one is
+# angular-language-server (ngserver), which needs --tsProbeLocations and
+# --ngProbeLocations pointing at the global node_modules dir where the user
+# installed it (varies by npm/pnpm/bun). The prefill leaves args empty so
+# the user is forced to fill them in manually via the Add dialog.
 LSP_OVERRIDE_MAP=$(cat <<'JSON'
 {
-  "angular-language-server":        {"command": "ngserver", "args": ["--stdio"]},
   "ansible-language-server":        {"command": "ansible-language-server", "args": ["--stdio"]},
   "astro-language-server":          {"command": "astro-ls", "args": ["--stdio"]},
   "awk-language-server":            {"command": "awk-language-server", "args": ["--stdio"]},

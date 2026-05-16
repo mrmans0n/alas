@@ -4,12 +4,14 @@ import Testing
 
 @Suite("RecommendedLanguageCatalog")
 struct RecommendedLanguageCatalogTests {
-    @Test("rust entry exists with rustup → brew → cargo order")
+    @Test("rust entry exists with rustup → brew order (no cargo)")
     func rustRecipes() {
         let entry = RecommendedLanguageCatalog.entry(forLanguage: "rust")
         #expect(entry != nil)
         let installers = entry!.resolvedRecipes.map(\.installer)
-        #expect(installers == [.rustup, .brew, .cargo])
+        // `cargo install rust-analyzer` is a no-op (crates.io name is reserved),
+        // so we don't offer it as a recipe even when cargo is detected.
+        #expect(installers == [.rustup, .brew])
         // rustup uses extraArgs, not package
         #expect(entry!.resolvedRecipes[0].extraArgs == ["component", "add", "rust-analyzer"])
         #expect(entry!.resolvedRecipes[1].package == "rust-analyzer")

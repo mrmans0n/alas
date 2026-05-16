@@ -28,10 +28,14 @@ enum RecommendedLanguageCatalog {
             displayName: "Rust",
             masonId: "rust-analyzer",
             aliasOf: nil,
+            // No cargo recipe: the `rust-analyzer` crate on crates.io is a
+            // reserved/placeholder name (the actual programmatic crate is
+            // `ra_ap_rust_analyzer`), so `cargo install rust-analyzer`
+            // doesn't produce the LSP binary. The official install paths
+            // are rustup component-add and Homebrew.
             recipes: [
                 InstallRecipe(installer: .rustup, package: "", extraArgs: ["component", "add", "rust-analyzer"]),
                 InstallRecipe(installer: .brew, package: "rust-analyzer"),
-                InstallRecipe(installer: .cargo, package: "rust-analyzer"),
             ]
         ),
         RecommendedLanguage(
