@@ -1,28 +1,26 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, worktrees, terminal, code, changes, agents, appearance
+    case agents, appearance, changes, code, terminal, worktrees
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .general:    return "General"
-        case .worktrees:  return "Worktrees"
-        case .terminal:   return "Terminal"
-        case .code:       return "Code"
-        case .changes:    return "Changes"
         case .agents:     return "Agents"
         case .appearance: return "Appearance"
+        case .changes:    return "Changes"
+        case .code:       return "Code"
+        case .terminal:   return "Terminal"
+        case .worktrees:  return "Worktrees"
         }
     }
     var icon: String {
         switch self {
-        case .general:    return "gear"
-        case .worktrees:  return "branch"
-        case .terminal:   return "terminal"
-        case .code:       return "code"
-        case .changes:    return "diff"
         case .agents:     return "sparkle"
         case .appearance: return "palette"
+        case .changes:    return "diff"
+        case .code:       return "code"
+        case .terminal:   return "terminal"
+        case .worktrees:  return "branch"
         }
     }
 }
@@ -33,7 +31,7 @@ struct SettingsNavView: View {
 
     var body: some View {
         VStack(spacing: 1) {
-            ForEach(SettingsSection.allCases) { section in
+            ForEach(SettingsSection.allCases.sorted(by: { $0.label < $1.label })) { section in
                 Button { selection = section } label: {
                     HStack(spacing: 9) {
                         Icon(name: section.icon, size: 14,

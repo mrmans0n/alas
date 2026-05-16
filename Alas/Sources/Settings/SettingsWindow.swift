@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsWindow: View {
     @Bindable var state: AppState
-    @State private var section: SettingsSection = .general
+    @State private var section: SettingsSection = .agents
 
     var body: some View {
         let theme = state.themeStore.current
@@ -29,13 +29,12 @@ struct SettingsWindow: View {
                 SettingsNavView(selection: $section)
                 Group {
                     switch section {
-                    case .general:    GeneralPane(state: state)
-                    case .worktrees:  WorktreesPane(state: state)
-                    case .terminal:   TerminalPane(state: state)
-                    case .code:       CodePane(state: state)
-                    case .changes:    ChangesPane(state: state)
                     case .agents:     AgentsPane(state: state)
                     case .appearance: AppearancePane(state: state)
+                    case .changes:    ChangesPane(state: state)
+                    case .code:       CodePane(state: state)
+                    case .terminal:   TerminalPane(state: state)
+                    case .worktrees:  WorktreesPane(state: state)
                     }
                 }
                 .frame(width: 680)

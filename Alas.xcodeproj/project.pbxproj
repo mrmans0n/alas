@@ -111,7 +111,6 @@
 		4421A9D1E7481B49701B3131 /* mason-lsps.json in Resources */ = {isa = PBXBuildFile; fileRef = F0D567F7F894902AD192D220 /* mason-lsps.json */; };
 		4565825A901B119DCD1037ED /* SymbolsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDCB33A74DC088022E5BD5F /* SymbolsFeature.swift */; };
 		45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC68B05B719B9235865027F /* ThreePaneSizing.swift */; };
-		466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0240C5961343C3042D865570 /* GeneralPane.swift */; };
 		467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F68A9692F85197ED9E16262 /* WorktreesPane.swift */; };
 		4781661414034F09EA02E0BC /* CommitsOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8673293AD419AA36F7DF02A9 /* CommitsOlderTests.swift */; };
 		48E0B43B698544C1C4524242 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */; };
@@ -375,7 +374,6 @@
 		010B026A6251DEC1BD1961C0 /* WindowConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowConfigurator.swift; sourceTree = "<group>"; };
 		019A03B92542169A6595D432 /* HoverHighlightFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverHighlightFeature.swift; sourceTree = "<group>"; };
 		01F0314E357190EF2A1F861B /* CodexInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexInstaller.swift; sourceTree = "<group>"; };
-		0240C5961343C3042D865570 /* GeneralPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralPane.swift; sourceTree = "<group>"; };
 		028348C468E45161F567110A /* LSPInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPInstallerTests.swift; sourceTree = "<group>"; };
 		02FCDD45C23BAE141549D03F /* AlasGhostty.SurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.SurfaceView.swift; sourceTree = "<group>"; };
 		0326789AA29BD63CC1B8F81F /* DefinitionSnippetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefinitionSnippetCache.swift; sourceTree = "<group>"; };
@@ -1065,7 +1063,6 @@
 				A727D24652E45B98C10917F8 /* CodeLanguageDetailView.swift */,
 				93CDC9895F48619E97461875 /* CodePane.swift */,
 				12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */,
-				0240C5961343C3042D865570 /* GeneralPane.swift */,
 				2379C3F8504AD2EE73130AC4 /* LSPInstallProgressSheet.swift */,
 				0B2F41880B917155F7ADE622 /* MonospaceFontCatalog.swift */,
 				6A190D4B29B35C457AA9829F /* SettingsBinding.swift */,
@@ -1725,7 +1722,6 @@
 				AA8FEF94B861001AB643E005 /* FontFamilyPicker.swift in Sources */,
 				93B1DC70731B7F661D3AE26F /* FontSizeCommands.swift in Sources */,
 				B064B59D40A47026CDDEB189 /* FuzzyMatch.swift in Sources */,
-				466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */,
 				41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */,
 				41C7E41360B2A443AE2A18B8 /* GhosttyHost.swift in Sources */,
 				7D75AEB67376431930CB37E3 /* GitEventFilter.swift in Sources */,
