@@ -237,17 +237,24 @@ struct MarkdownRendererTests {
 
         let linkRange = (s.string as NSString).range(of: "docs")
         let url = s.attribute(.link, at: linkRange.location, effectiveRange: nil) as? URL
+        let linkBlock = tableBlock(at: "docs", in: s)
+        #expect(linkBlock != nil)
         #expect(url?.absoluteString == "https://example.com")
 
         let boldRange = (s.string as NSString).range(of: "bold")
         let boldFont = s.attribute(.font, at: boldRange.location, effectiveRange: nil) as? NSFont
+        let boldBlock = tableBlock(at: "bold", in: s)
+        #expect(boldBlock != nil)
         #expect(boldFont?.fontDescriptor.symbolicTraits.contains(.bold) == true)
 
         let codeRange = (s.string as NSString).range(of: "code")
         let codeFont = s.attribute(.font, at: codeRange.location, effectiveRange: nil) as? NSFont
         let codeBackground = s.attribute(.backgroundColor, at: codeRange.location, effectiveRange: nil) as? NSColor
+        let codeBlock = tableBlock(at: "code", in: s)
+        let boldBackground = s.attribute(.backgroundColor, at: boldRange.location, effectiveRange: nil) as? NSColor
+        #expect(codeBlock != nil)
         #expect(codeFont?.isFixedPitch == true)
-        #expect(codeBackground != nil)
+        #expect(codeBackground != boldBackground)
     }
 
     @Test func tableCellsUseGFMColumnAlignment() throws {
