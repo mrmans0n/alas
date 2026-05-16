@@ -89,7 +89,9 @@
         "astro"
       ],
       "command": "astro-ls",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -212,7 +214,9 @@
         "zsh"
       ],
       "command": "bash-language-server",
-      "args": [],
+      "args": [
+        "start"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -283,7 +287,9 @@
         "tsx"
       ],
       "command": "biome",
-      "args": [],
+      "args": [
+        "lsp-proxy"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -694,7 +700,9 @@
       ],
       "extensions": [],
       "command": "docker-langserver",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -769,7 +777,9 @@
       ],
       "extensions": [],
       "command": "emmet-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -1821,8 +1831,10 @@
         "py",
         "pyi"
       ],
-      "command": "pyright",
-      "args": [],
+      "command": "pyright-langserver",
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -2312,7 +2324,9 @@
         "svelte"
       ],
       "command": "svelteserver",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "npm",
@@ -2385,7 +2399,9 @@
         "css"
       ],
       "command": "tailwindcss-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -2585,7 +2601,9 @@
         "tsx"
       ],
       "command": "typescript-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -2735,7 +2753,9 @@
         "vue"
       ],
       "command": "vue-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",
@@ -2777,7 +2797,9 @@
         "yml"
       ],
       "command": "yaml-language-server",
-      "args": [],
+      "args": [
+        "--stdio"
+      ],
       "recipes": [
         {
           "installer": "brew",

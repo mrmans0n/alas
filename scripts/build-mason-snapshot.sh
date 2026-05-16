@@ -28,6 +28,37 @@ trap 'rm -rf "$TMP"' EXIT
 # be matched to a file. Maintain a hand-curated map here. Unknown languages
 # fall back to an empty array; the dialog blocks save until the user fills
 # them in manually.
+# Mason's package.yaml lists primary binaries in `bin` but not the launch
+# command/args used to start the LSP — that lives in mason-registry's Lua
+# plugin code. For packages where the LSP entrypoint differs from the
+# primary bin, or where flags like `--stdio` are required to switch the
+# binary into LSP mode, we override here. Keys are masonIds; values are
+# {command, args}. Unknown packages fall through to (bin, []), which works
+# for the many LSPs that default to stdio with no flags.
+LSP_OVERRIDE_MAP=$(cat <<'JSON'
+{
+  "pyright":                       {"command": "pyright-langserver", "args": ["--stdio"]},
+  "typescript-language-server":    {"command": "typescript-language-server", "args": ["--stdio"]},
+  "bash-language-server":          {"command": "bash-language-server", "args": ["start"]},
+  "vscode-css-language-server":    {"command": "vscode-css-language-server", "args": ["--stdio"]},
+  "vscode-html-language-server":   {"command": "vscode-html-language-server", "args": ["--stdio"]},
+  "vscode-json-language-server":   {"command": "vscode-json-language-server", "args": ["--stdio"]},
+  "vscode-eslint-language-server": {"command": "vscode-eslint-language-server", "args": ["--stdio"]},
+  "vue-language-server":           {"command": "vue-language-server", "args": ["--stdio"]},
+  "svelte-language-server":        {"command": "svelteserver", "args": ["--stdio"]},
+  "yaml-language-server":          {"command": "yaml-language-server", "args": ["--stdio"]},
+  "dockerfile-language-server":    {"command": "docker-langserver", "args": ["--stdio"]},
+  "tailwindcss-language-server":   {"command": "tailwindcss-language-server", "args": ["--stdio"]},
+  "graphql-language-service":      {"command": "graphql-lsp", "args": ["server", "-m", "stream"]},
+  "astro-language-server":         {"command": "astro-ls", "args": ["--stdio"]},
+  "emmet-language-server":         {"command": "emmet-language-server", "args": ["--stdio"]},
+  "marksman":                      {"command": "marksman", "args": ["server"]},
+  "deno":                          {"command": "deno",  "args": ["lsp"]},
+  "biome":                         {"command": "biome", "args": ["lsp-proxy"]}
+}
+JSON
+)
+
 LANG_EXT_MAP=$(cat <<'JSON'
 {
   "AsciiDoc": ["adoc", "asciidoc"],
@@ -185,6 +216,15 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
     cmd="$bin_entry"
     if [ -z "$cmd" ]; then cmd="$name"; fi
 
+    # Apply any curated LSP-launch override (custom command and/or args).
+    override=$(jq -n --arg id "$name" --argjson map "$LSP_OVERRIDE_MAP" '$map[$id] // null')
+    if [ "$override" != "null" ]; then
+        cmd=$(jq -r '.command' <<<"$override")
+        cmd_args=$(jq -c '.args' <<<"$override")
+    else
+        cmd_args='[]'
+    fi
+
     # Look up each language in the curated extension map and union the
     # results. Unknown languages contribute nothing; the dialog blocks save
     # if the final list is empty so the user has to fill them in.
@@ -197,6 +237,7 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
         --argjson languages "$languages" \
         --argjson extensions "$extensions" \
         --arg command "$cmd" \
+        --argjson cmd_args "$cmd_args" \
         --argjson recipes "$recipes" \
         '{
             masonId: $masonId,
@@ -204,7 +245,7 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
             languages: $languages,
             extensions: $extensions,
             command: $command,
-            args: [],
+            args: $cmd_args,
             recipes: $recipes
         }')
 
