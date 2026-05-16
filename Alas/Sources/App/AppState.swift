@@ -91,7 +91,11 @@ final class AppState {
 
         var projectsChanged = false
         for project in projectsManager.projects {
-            guard project.startupScripts.worktreeAgentMode == .overrideGlobal,
+            // Match the same modes AgentAutoLaunch.resolve treats as
+            // "use the project's agent" — both .overrideGlobal and
+            // .appendToGlobal qualify.
+            guard project.startupScripts.worktreeAgentMode == .overrideGlobal
+                    || project.startupScripts.worktreeAgentMode == .appendToGlobal,
                   let id = project.startupScripts.worktreeAgentId,
                   !enabledIds.contains(id) else { continue }
             var updated = project.startupScripts
@@ -286,15 +290,23 @@ final class AppState {
                     let argvJoined = autoLaunch.argv
                         .map { Self.shellQuote($0) }
                         .joined(separator: " ")
-                    // Spawn detached: we want the agent to keep running
-                    // beyond the worktree-create Task. zsh -c is used here
-                    // because the same shell-quoting and PATH semantics
-                    // apply as for the startup script.
-                    _ = try? await Process.run(
-                        "/bin/zsh",
-                        args: ["-c", argvJoined],
-                        cwd: newWorktree.path
-                    )
+                    // Truly detach the spawned agent: bypass our local
+                    // Process.run wrapper (which awaits + enforces a 30s
+                    // SIGTERM watchdog that would kill a long-lived
+                    // interactive agent like claude or codex). The outer
+                    // zsh forks the agent in a subshell, backgrounds it,
+                    // and exits — the agent is then re-parented to launchd
+                    // and outlives this Task. Caveat: the agent runs
+                    // hidden today (no terminal output visible). A future
+                    // PR plumbs it through the new TerminalService session
+                    // for visibility; tracked as a follow-up in the spec.
+                    let proc = Process()
+                    proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                    proc.arguments = ["-c", "( \(argvJoined) & ) </dev/null >/dev/null 2>&1"]
+                    proc.currentDirectoryURL = newWorktree.path
+                    try? proc.run()
+                    // Do NOT wait — the outer zsh exits immediately after
+                    // the subshell forks-and-backgrounds the agent.
                 }
 
                 do {
