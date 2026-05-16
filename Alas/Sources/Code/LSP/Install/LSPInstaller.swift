@@ -61,4 +61,200 @@ final class LSPInstaller {
         let basename = (argv.executable as NSString).lastPathComponent
         return ([basename] + argv.arguments).joined(separator: " ")
     }
+
+    // MARK: - Execution
+
+    private var currentProcess: Process?
+    private var watchdog: Task<Void, Never>?
+
+    func install(
+        recipe: InstallRecipe,
+        using installer: DetectedInstaller,
+        language: String
+    ) async throws {
+        guard state == .idle else {
+            throw InstallerBusy()
+        }
+        let argv = Self.argv(for: recipe, using: installer)
+        await _spawn(
+            executable: argv.executable,
+            arguments: argv.arguments,
+            language: language,
+            commandLineForDisplay: Self.displayCommandLine(for: recipe, using: installer)
+        )
+    }
+
+    func cancel() {
+        guard case .running = state else { return }
+        guard let process = currentProcess else { return }
+        // SIGINT first
+        kill(process.processIdentifier, SIGINT)
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self else { return }
+            await MainActor.run {
+                if case .running = self.state, let proc = self.currentProcess, proc.isRunning {
+                    proc.terminate()                // SIGTERM
+                }
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await MainActor.run {
+                if case .running = self.state, let proc = self.currentProcess, proc.isRunning {
+                    kill(proc.processIdentifier, SIGKILL)
+                }
+            }
+        }
+    }
+
+    func reset() {
+        state = .idle
+        logLines = []
+        currentProcess = nil
+        watchdog?.cancel()
+        watchdog = nil
+    }
+
+    /// Test seam: spawn without going through recipe argv. Production code calls
+    /// `install(...)`; tests call this directly with /bin/echo or /bin/sleep so
+    /// they don't depend on brew/npm being on PATH.
+    func _spawnForTesting(
+        executable: String,
+        arguments: [String],
+        language: String
+    ) async {
+        await _spawn(
+            executable: executable,
+            arguments: arguments,
+            language: language,
+            commandLineForDisplay: ([executable] + arguments).joined(separator: " ")
+        )
+    }
+
+    // MARK: - Private spawn
+
+    private func _spawn(
+        executable: String,
+        arguments: [String],
+        language: String,
+        commandLineForDisplay: String
+    ) async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+
+        var env = ProcessInfo.processInfo.environment
+        // Re-augment PATH so children (like brew shelling out to curl) see
+        // the same well-known directories the installer found.
+        env["PATH"] = augmentedPATH(base: env["PATH"])
+        process.environment = env
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        // No interactive stdin — close after launch so any prompting installer
+        // fails fast instead of hanging.
+        let stdinPipe = Pipe()
+        process.standardInput = stdinPipe
+
+        let buffer = LineBuffer()
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            let chunk = String(decoding: data, as: UTF8.self)
+            let lines = buffer.feed(chunk)
+            if lines.isEmpty { return }
+            Task { @MainActor [weak self] in
+                self?.logLines.append(contentsOf: lines)
+            }
+        }
+
+        process.terminationHandler = { [weak self, buffer] proc in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Drain whatever's still in the line buffer.
+                if let trailing = buffer.flush(), !trailing.isEmpty {
+                    self.logLines.append(trailing)
+                }
+                self.currentProcess = nil
+                self.watchdog?.cancel()
+                self.watchdog = nil
+                // Distinguish cancel from organic non-zero exit.
+                if case .running(let lang, _) = self.state {
+                    if proc.terminationStatus == 0 {
+                        self.state = .finished(language: lang, exitCode: 0)
+                    } else if proc.terminationReason == .uncaughtSignal {
+                        self.state = .cancelled(language: lang)
+                    } else {
+                        self.state = .finished(language: lang, exitCode: proc.terminationStatus)
+                    }
+                }
+            }
+        }
+
+        state = .running(language: language, commandLine: commandLineForDisplay)
+        logLines = []
+        currentProcess = process
+
+        do {
+            try process.run()
+        } catch {
+            state = .failed(language: language, message: String(describing: error))
+            currentProcess = nil
+            return
+        }
+
+        // Close our copies of the stdin read end and stdout/stderr write end
+        // immediately, same rationale as CommitAIAdapter.swift:90-115.
+        try? stdinPipe.fileHandleForReading.close()
+        try? stdinPipe.fileHandleForWriting.close()
+        try? pipe.fileHandleForWriting.close()
+    }
+
+    private func augmentedPATH(base: String?) -> String {
+        let basePath = base ?? ""
+        let additional = InstallerHost.defaultAdditionalPathDirectories()
+        var seen = Set<String>()
+        var parts: [String] = []
+        for dir in basePath.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        where seen.insert(dir).inserted {
+            parts.append(dir)
+        }
+        for dir in additional where !dir.isEmpty && seen.insert(dir).inserted {
+            parts.append(dir)
+        }
+        return parts.joined(separator: ":")
+    }
+}
+
+struct InstallerBusy: Error {}
+
+/// Accumulates partial reads and yields complete lines. Trailing newline-less
+/// content is held until either more data arrives or `flush()` is called.
+private final class LineBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: String = ""
+
+    func feed(_ chunk: String) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        pending += chunk
+        var out: [String] = []
+        while let newlineRange = pending.range(of: "\n") {
+            let line = String(pending[..<newlineRange.lowerBound])
+            out.append(line)
+            pending.removeSubrange(pending.startIndex...newlineRange.lowerBound)
+        }
+        return out
+    }
+
+    func flush() -> String? {
+        lock.lock(); defer { lock.unlock() }
+        if pending.isEmpty { return nil }
+        let tail = pending
+        pending = ""
+        return tail
+    }
 }

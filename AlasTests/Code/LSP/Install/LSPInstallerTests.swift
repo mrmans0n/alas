@@ -84,4 +84,84 @@ struct LSPInstallerTests {
         let line = LSPInstaller.displayCommandLine(for: recipe, using: installer)
         #expect(line == "rustup component add rust-analyzer")
     }
+
+    @Test("install with /bin/echo transitions idle → running → finished(0)")
+    @MainActor
+    func installEchoSucceeds() async throws {
+        let installer = LSPInstaller()
+        // Use a fake installer that points at /bin/echo so we don't need brew etc.
+        // The argv builder uses installer.kind for argv shape, so we work around
+        // by going through the lower-level `_spawn` test helper (added below).
+        await installer._spawnForTesting(
+            executable: "/bin/echo",
+            arguments: ["hello"],
+            language: "test"
+        )
+
+        // Wait briefly for the process to finish (echo is fast).
+        for _ in 0..<50 {
+            if case .finished = installer.state { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        if case .finished(let lang, let code) = installer.state {
+            #expect(lang == "test")
+            #expect(code == 0)
+        } else {
+            Issue.record("expected finished state, got \(installer.state)")
+        }
+
+        #expect(installer.logLines.joined(separator: "\n").contains("hello"))
+    }
+
+    @Test("cancel transitions running → cancelled")
+    @MainActor
+    func cancelInstall() async throws {
+        let installer = LSPInstaller()
+        // /bin/sleep 30 — long enough for us to cancel
+        await installer._spawnForTesting(
+            executable: "/bin/sleep",
+            arguments: ["30"],
+            language: "test"
+        )
+
+        // Wait until state flips to .running
+        for _ in 0..<50 {
+            if case .running = installer.state { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        if case .running = installer.state { } else {
+            Issue.record("expected running state, got \(installer.state)")
+            return
+        }
+
+        installer.cancel()
+
+        // Wait for state to become cancelled or failed
+        for _ in 0..<200 {  // up to 10s — beyond SIGTERM→SIGKILL escalation
+            if case .cancelled = installer.state { return }
+            if case .failed = installer.state { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        Issue.record("install did not cancel within timeout, state = \(installer.state)")
+    }
+
+    @Test("reset returns state to idle")
+    @MainActor
+    func resetClears() async {
+        let installer = LSPInstaller()
+        await installer._spawnForTesting(
+            executable: "/bin/echo",
+            arguments: ["x"],
+            language: "test"
+        )
+        for _ in 0..<50 {
+            if case .finished = installer.state { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        installer.reset()
+        #expect(installer.state == .idle)
+        #expect(installer.logLines.isEmpty)
+    }
 }
