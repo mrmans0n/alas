@@ -53,16 +53,20 @@ final class EditorFindController {
     /// Returns `true` if a replacement occurred.
     func replaceCurrent() -> Bool {
         guard let textView = textView else { return false }
+        guard textView.isEditable else { return false }
         guard !findString.isEmpty else { return false }
 
         let text = textView.string as NSString
         var foundRange = textView.selectedRange()
 
-        // If the selection is not a valid match, search from the beginning.
+        // If the selection is not a valid match, search from cursor position,
+        // wrapping to the start if no match is found ahead.
         let selectionIsMatch = foundRange.length == findString.utf16.count
             && text.substring(with: foundRange) == findString
         if !selectionIsMatch {
-            if let match = nextMatchRange(startingAt: 0) {
+            let searchStart = foundRange.location
+            if let match = nextMatchRange(startingAt: searchStart)
+                ?? nextMatchRange(startingAt: 0) {
                 textView.setSelectedRange(match)
                 foundRange = match
             }
@@ -89,6 +93,7 @@ final class EditorFindController {
     /// Returns the number of replacements performed.
     func replaceAll() -> Int {
         guard let textView = textView else { return 0 }
+        guard textView.isEditable else { return 0 }
         guard !findString.isEmpty else { return 0 }
 
         let text = textView.string as NSString

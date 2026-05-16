@@ -151,4 +151,56 @@ struct EditorFindControllerTests {
         #expect(range?.location == 12)
         #expect(range?.length == 5)
     }
+
+    @Test func replaceCurrentStartsFromCursor() {
+        let textView = makeTextView("aa bb aa bb")
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "aa"
+        controller.replacementString = "xx"
+
+        #expect(controller.replaceCurrent() == true)
+        #expect(textView.string == "xx bb aa bb")
+
+        textView.setSelectedRange(NSRange(location: 6, length: 0))
+        #expect(controller.replaceCurrent() == true)
+        #expect(textView.string == "xx bb xx bb")
+    }
+
+    @Test func replaceCurrentWrapsAround() {
+        let textView = makeTextView("aa bb aa")
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "aa"
+        controller.replacementString = "xx"
+
+        #expect(controller.replaceCurrent() == true)
+        #expect(textView.string == "xx bb aa")
+    }
+
+    @Test func replaceCurrentNoOpOnReadOnly() {
+        let textView = makeTextView("hello world")
+        textView.isEditable = false
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "world"
+        controller.replacementString = "universe"
+
+        #expect(controller.replaceCurrent() == false)
+        #expect(textView.string == "hello world")
+    }
+
+    @Test func replaceAllNoOpOnReadOnly() {
+        let textView = makeTextView("hello hello")
+        textView.isEditable = false
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "hello"
+        controller.replacementString = "bye"
+
+        #expect(controller.replaceAll() == 0)
+        #expect(textView.string == "hello hello")
+    }
 }

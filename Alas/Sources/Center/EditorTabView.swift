@@ -19,6 +19,7 @@ struct EditorTabView: View {
     @State private var replaceText: String = ""
     @State private var findBarMessage: String? = nil
     @State private var activeTextView: CodeTextView? = nil
+    @FocusState private var findFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +38,7 @@ struct EditorTabView: View {
                     findText: $findText,
                     replaceText: $replaceText,
                     message: $findBarMessage,
+                    findFieldFocused: $findFieldFocused,
                     onFind: { direction in
                         findController.findString = findText
                         guard !findText.isEmpty else { return }
@@ -127,11 +129,7 @@ struct EditorTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: .alasShowFindReplace)) { _ in
             guard appState.tabs.activeTabId(forWorktree: worktreeId) == tabId else { return }
             findBarVisible = true
-            DispatchQueue.main.async {
-                if let textView = activeTextView {
-                    textView.window?.makeFirstResponder(textView)
-                }
-            }
+            findFieldFocused = true
         }
     }
 

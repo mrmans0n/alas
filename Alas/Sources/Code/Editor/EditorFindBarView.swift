@@ -4,6 +4,7 @@ struct EditorFindBarView: View {
     @Binding var findText: String
     @Binding var replaceText: String
     @Binding var message: String?
+    @FocusState.Binding var findFieldFocused: Bool
 
     let onFind: (_ direction: FindDirection) -> Void
     let onReplace: () -> Void
@@ -24,6 +25,7 @@ struct EditorFindBarView: View {
                     .foregroundColor(theme.color("fg-muted"))
                     .font(.system(size: 11))
                 TextField("Find", text: $findText)
+                    .focused($findFieldFocused)
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 12))
                     .frame(minWidth: 120)
