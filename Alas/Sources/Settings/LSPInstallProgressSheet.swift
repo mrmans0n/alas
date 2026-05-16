@@ -2,7 +2,11 @@ import SwiftUI
 
 struct LSPInstallProgressSheet: View {
     @Bindable var installer: LSPInstaller
-    let onDone: () -> Void
+    /// Called when the user dismisses the sheet via Close/Done. The argument
+    /// carries the language whose install just succeeded, so callers can
+    /// re-open any editor buffers using that language. Nil on cancel,
+    /// failure, or close-before-finish.
+    let onDone: (_ completedLanguage: String?) -> Void
 
     @Environment(\.theme) var theme
 
@@ -83,12 +87,20 @@ struct LSPInstallProgressSheet: View {
                 } else {
                     AlasButton(title: "Close", style: .subtle) {
                         installer.reset()
-                        onDone()
+                        onDone(nil)
                     }
                     if isSuccess {
                         AlasButton(title: "Done", style: .primary) {
+                            // Snapshot the language BEFORE reset() flips state
+                            // back to .idle and drops the associated value.
+                            let completed: String?
+                            if case .finished(let lang, 0) = installer.state {
+                                completed = lang
+                            } else {
+                                completed = nil
+                            }
                             installer.reset()
-                            onDone()
+                            onDone(completed)
                         }
                     }
                 }

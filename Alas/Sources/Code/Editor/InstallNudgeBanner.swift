@@ -37,9 +37,15 @@ struct InstallNudgeBanner: View {
                 // the installer so the next install starts from .idle.
                 appState.lspInstaller.reset()
             }) {
-                LSPInstallProgressSheet(installer: appState.lspInstaller) {
+                LSPInstallProgressSheet(installer: appState.lspInstaller) { completedLanguage in
                     installSheetVisible = false
                     appState.refreshInstallerHost()
+                    // Re-fire didOpen for any open buffers in the just-
+                    // installed language so hover/diagnostics/definitions
+                    // wake up without a manual close-and-reopen.
+                    if let completedLanguage {
+                        appState.tabs.reopenLSPDocuments(forLanguage: completedLanguage)
+                    }
                 }
             }
         }

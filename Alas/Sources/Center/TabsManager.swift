@@ -1073,6 +1073,20 @@ final class TabsManager {
         }
     }
 
+    /// Re-fires `didOpen` for every live in-worktree buffer whose resolved
+    /// LSP language matches `language`. Used after the install nudge
+    /// finishes: the buffers tried to open their document at construction
+    /// time, the spawn failed (executable missing), and `WorkspaceLSPManager`
+    /// dropped the holder. Without a re-open the buffers stay LSP-less even
+    /// after the executable becomes available. External tabs follow a
+    /// different open path and are handled via `openExternalDocument`; not
+    /// included here.
+    func reopenLSPDocuments(forLanguage language: String) {
+        for buffer in buffers.values where buffer.language == language {
+            buffer.reopenLSPDocument()
+        }
+    }
+
     private func snapshotBufferForAllTabs(_ buffer: EditorBuffer) {
         for (tabId, _) in tabIdsSharing(buffer: buffer) {
             buffer.snapshotNow(tabId: tabId)
