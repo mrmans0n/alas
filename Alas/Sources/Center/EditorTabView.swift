@@ -46,7 +46,7 @@ struct EditorTabView: View {
                         let start: Int
                         switch direction {
                         case .previous:
-                            start = max(0, textView.selectedRange().location - 1)
+                            start = textView.selectedRange().location
                         case .next:
                             start = textView.selectedRange().location + textView.selectedRange().length
                         }
