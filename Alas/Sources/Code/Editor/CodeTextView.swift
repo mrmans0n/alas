@@ -68,9 +68,15 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
 
-        if let closing = Self.pairedDelimiters[character], shouldInsertPair(opening: character, closing: closing, range: range) {
-            insertPairedDelimiter(opening: character, closing: closing, replacementRange: range)
-            return
+        if let closing = Self.pairedDelimiters[character] {
+            if shouldInsertPair(opening: character, closing: closing, range: range) {
+                insertPairedDelimiter(opening: character, closing: closing, replacementRange: range)
+                return
+            }
+            if character == closing, range.length == 0, nextCharacter(at: range.location) == character {
+                setSelectedRange(NSRange(location: range.location + 1, length: 0))
+                return
+            }
         }
 
         if Self.closingDelimiters.contains(character), range.length == 0, nextCharacter(at: range.location) == character {

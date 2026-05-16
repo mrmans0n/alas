@@ -55,6 +55,16 @@ struct CodeTextViewAutoPairTests {
         #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
     }
 
+    @Test func quoteStepsOverClosingQuoteAfterIdentifier() {
+        let textView = makeTextView("\"foo\"")
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+
+        textView.insertText("\"", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(textView.string == "\"foo\"")
+        #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
+    }
+
     @Test func quoteAfterIdentifierFallsBackToNormalTextInsertion() {
         let textView = makeTextView("word")
 
