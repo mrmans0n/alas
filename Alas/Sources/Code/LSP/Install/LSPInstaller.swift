@@ -70,6 +70,13 @@ final class LSPInstaller {
     /// non-zero exit (e.g. `brew` trapping SIGINT and exiting 130) as a
     /// user-initiated cancel rather than an install failure.
     private var cancelRequested = false
+    /// Identity token for the currently-tracked install. Incremented on
+    /// every spawn and on every `reset()`. The terminationHandler captures
+    /// its spawn-time value and only mutates installer state if it still
+    /// matches — otherwise the handler is firing for a process whose
+    /// install has already been reset/superseded, and any log lines or
+    /// state transitions it would produce belong to a stale lifecycle.
+    private var generation: Int = 0
 
     func install(
         recipe: InstallRecipe,
@@ -117,8 +124,10 @@ final class LSPInstaller {
         // SwiftUI fires the sheet's onDismiss → reset(). Tear down the live
         // process synchronously — there's no UI left to watch the SIGINT→TERM
         // escalation, so just SIGKILL and move on. The terminationHandler
-        // still fires from a background queue but sees state == .idle and
-        // skips the state transition.
+        // will still fire from a background queue, but bumping `generation`
+        // here makes it a no-op for state/log mutation — preventing it from
+        // appending stale logs or marking a freshly-started next install
+        // as cancelled.
         if case .running = state, let proc = currentProcess, proc.isRunning {
             cancelRequested = true
             kill(proc.processIdentifier, SIGKILL)
@@ -129,6 +138,7 @@ final class LSPInstaller {
         watchdog?.cancel()
         watchdog = nil
         cancelRequested = false
+        generation &+= 1
     }
 
     /// Test seam: spawn without going through recipe argv. Production code calls
@@ -174,6 +184,14 @@ final class LSPInstaller {
         let stdinPipe = Pipe()
         process.standardInput = stdinPipe
 
+        // Capture our identity-at-spawn-time. The readability/termination
+        // handlers will only mutate installer state if this still matches
+        // `self.generation` on the main actor — otherwise reset() has
+        // bumped generation and a fresh install may be in flight; touching
+        // logLines/state from this stale lifecycle would corrupt it.
+        generation &+= 1
+        let myGeneration = generation
+
         let buffer = LineBuffer()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -185,7 +203,8 @@ final class LSPInstaller {
             let lines = buffer.feed(chunk)
             if lines.isEmpty { return }
             Task { @MainActor [weak self] in
-                self?.logLines.append(contentsOf: lines)
+                guard let self, self.generation == myGeneration else { return }
+                self.logLines.append(contentsOf: lines)
             }
         }
 
@@ -209,6 +228,10 @@ final class LSPInstaller {
             finalTrailing = buffer.flush()
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // If a reset (or another spawn) has happened since we
+                // launched, this handler is a ghost from a stale lifecycle.
+                // Drop on the floor.
+                guard self.generation == myGeneration else { return }
                 if !finalLines.isEmpty {
                     self.logLines.append(contentsOf: finalLines)
                 }
