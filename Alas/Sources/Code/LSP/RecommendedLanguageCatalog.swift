@@ -138,7 +138,6 @@ enum RecommendedLanguageCatalog {
             aliasOf: nil,
             recipes: [
                 InstallRecipe(installer: .brew, package: "marksman"),
-                InstallRecipe(installer: .cargo, package: "marksman"),
             ]
         ),
         RecommendedLanguage(
@@ -161,11 +160,12 @@ enum RecommendedLanguageCatalog {
         RecommendedLanguage(
             language: "kotlin",
             displayName: "Kotlin",
-            masonId: "kotlin-language-server",
+            masonId: nil,
             aliasOf: nil,
-            recipes: [
-                InstallRecipe(installer: .brew, package: "kotlin-language-server"),
-            ]
+            // kotlin-lsp (JetBrains) is distributed via GitHub releases only — out of scope.
+            // kotlin-language-server (community/fwcd) is a different server and would not
+            // satisfy the LanguageServerRegistry spawn expectation for "kotlin-lsp".
+            recipes: []
         ),
     ]
 
@@ -184,7 +184,7 @@ extension RecommendedLanguage {
     var resolvedRecipes: [InstallRecipe] {
         if let target = aliasOf,
            let canonical = RecommendedLanguageCatalog.entry(forLanguage: target) {
-            return canonical.recipes
+            return canonical.resolvedRecipes
         }
         return recipes
     }

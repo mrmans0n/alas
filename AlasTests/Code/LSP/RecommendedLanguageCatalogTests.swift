@@ -86,4 +86,11 @@ struct RecommendedLanguageCatalogTests {
         #expect(entry != nil)
         #expect(entry!.resolvedRecipes.isEmpty)
     }
+
+    @Test("go entry uses correct gopls module path")
+    func goRecipes() {
+        let entry = RecommendedLanguageCatalog.entry(forLanguage: "go")
+        let goRecipe = entry?.resolvedRecipes.first(where: { $0.installer == .go })
+        #expect(goRecipe?.package == "golang.org/x/tools/gopls")
+    }
 }
