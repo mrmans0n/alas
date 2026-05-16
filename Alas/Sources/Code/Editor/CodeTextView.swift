@@ -21,6 +21,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
+    var indentationMode: IndentationMode = .plain
 
     /// Set by `CodeEditorCoordinator.attach`. Each closure mutates the shared
     /// `code.fontSize` config in response to the matching menu command.
@@ -68,6 +69,15 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
 
+        // NEW: Closing delimiter dedent for whitespace-only lines
+        if Self.closingDelimiters.contains(character),
+           indentationMode == .bracketAware,
+           let edit = IndentationHelper.closingDelimiterEdit(in: string, selectedRange: range, delimiter: character, mode: indentationMode) {
+            super.insertText(edit.replacement, replacementRange: edit.replacementRange)
+            setSelectedRange(NSRange(location: edit.replacementRange.location + edit.selectedLocationDelta, length: 0))
+            return
+        }
+
         if let closing = Self.pairedDelimiters[character] {
             if shouldInsertPair(opening: character, closing: closing, range: range) {
                 insertPairedDelimiter(opening: character, closing: closing, replacementRange: range)
@@ -85,6 +95,24 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         }
 
         super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        guard isEditable else {
+            super.insertNewline(sender)
+            return
+        }
+        let range = selectedRange()
+        if range.length > 0 {
+            super.insertNewline(sender)
+            return
+        }
+        if let edit = IndentationHelper.newlineEdit(in: string, selectedRange: range, mode: indentationMode) {
+            super.insertText(edit.replacement, replacementRange: range)
+            setSelectedRange(NSRange(location: range.location + edit.selectedLocationDelta, length: 0))
+        } else {
+            super.insertNewline(sender)
+        }
     }
 
     override func mouseMoved(with event: NSEvent) {

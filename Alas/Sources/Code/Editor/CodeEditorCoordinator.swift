@@ -364,6 +364,7 @@ final class CodeEditorCoordinator {
         self.currentRelativePath = buffer.relativePath
         let ext = (buffer.relativePath as NSString).pathExtension
         currentLanguage = appState.lsp.language(forFileExtension: ext)
+        applyIndentationMode()
         if let layoutManager {
             buffer.storage.addLayoutManager(layoutManager)
         }
@@ -466,6 +467,14 @@ final class CodeEditorCoordinator {
     }
 
     // MARK: - Highlight + base styling
+
+    private func applyIndentationMode() {
+        if let language = currentLanguage, !language.isEmpty {
+            textView?.indentationMode = .bracketAware
+        } else {
+            textView?.indentationMode = .plain
+        }
+    }
 
     private func applyBaseStyle(theme: Theme) {
         guard let buffer, let textView else { return }

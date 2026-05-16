@@ -167,10 +167,8 @@ struct IndentationHelper {
         // Snap to common indent widths
         if minSpace <= 2 {
             return String(repeating: " ", count: minSpace)
-        } else if minSpace <= 4 {
-            return "    "
         } else {
-            return String(repeating: " ", count: minSpace)
+            return "    "
         }
     }
 }
