@@ -15,6 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
+- preserve curated changelog notes during release promotion.
 - detect and run commit-AI CLIs installed outside GUI app PATH (#123).
 - rename isDimmed to isHistorical and use warn color for dot (#121).
 
