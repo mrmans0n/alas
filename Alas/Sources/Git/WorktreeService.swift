@@ -141,11 +141,27 @@ struct WorktreeService {
         if force { args.append("--force") }
         let result = try await Process.git(args, cwd: repoPath)
         if result.exitCode != 0 {
+            // Treat any thrown helper error (timeout, malformed submodule,
+            // etc.) as "couldn't verify clean" so we propagate the original
+            // stderr from `git worktree remove` instead of surfacing the
+            // helper's internal failure to the user. Sequential bindings
+            // because `&&` autoclosures don't propagate `async`.
+            let okToForce: Bool
+            do {
+                let workClean = try await isWorktreeClean(worktree.path)
+                let subsClean = workClean
+                    ? try await areInitializedSubmodulesClean(worktree.path)
+                    : false
+                let subsNoLocal = subsClean
+                    ? try await initializedSubmodulesHaveNoLocalState(worktree.path)
+                    : false
+                okToForce = subsNoLocal
+            } catch {
+                okToForce = false
+            }
             guard !force,
                   Self.looksLikeSubmoduleWorktreeRemoveError(result.stderr),
-                  try await isWorktreeClean(worktree.path),
-                  try await areInitializedSubmodulesClean(worktree.path),
-                  try await initializedSubmodulesHaveNoLocalState(worktree.path)
+                  okToForce
             else {
                 throw WorktreeError.gitFailed(result.stderr)
             }
@@ -203,12 +219,26 @@ struct WorktreeService {
     }
 
     private func initializedSubmodulesHaveNoLocalState(_ path: URL) async throws -> Bool {
+        // Single git rev-list per submodule using set arithmetic — every
+        // commit reachable from local refs (branches, tags, reflog) that
+        // ISN'T reachable from any remote ref. Replaces an earlier O(reflog
+        // × remotes) shell loop that timed out on submodules with non-
+        // trivial reflogs. Notes/stash are checked separately because they
+        // need `refs/notes` / `refs/stash` paths, not their `:short` form.
         let localStateScript = """
-        remote_refs=$(git for-each-ref --format="%(refname)" refs/remotes); default_branch=$(git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's#^origin/##'); is_remote_reachable() { oid="$1"; for remote in $remote_refs; do if git merge-base --is-ancestor "$oid" "$remote"; then return 0; fi; done; return 1; }; git for-each-ref --format="%(refname:short)" refs/heads | while read -r branch; do oid=$(git rev-parse -q --verify "refs/heads/$branch^{}") || continue; if test -z "$default_branch" || test "$branch" != "$default_branch" || ! is_remote_reachable "$oid"; then echo "refs/heads/$branch"; fi; done; git for-each-ref --format="%(refname)" refs/notes refs/stash | while read -r ref; do oid=$(git rev-parse -q --verify "$ref^{}") || continue; if ! is_remote_reachable "$oid"; then echo "$ref"; fi; done; git for-each-ref --format="%(refname:short)" refs/tags | while read -r tag; do local_oid=$(git rev-parse -q --verify "refs/tags/$tag") || continue; remote_oid=$(git ls-remote --tags origin "refs/tags/$tag" | awk 'NR == 1 {print $1}'); if test -z "$remote_oid" || test "$local_oid" != "$remote_oid"; then echo "refs/tags/$tag"; fi; done; git reflog --all --format="%H" | while read -r oid; do if test -n "$oid" && ! is_remote_reachable "$oid"; then echo "reflog $oid"; fi; done
+        if test -n "$(git rev-list --max-count=1 --branches --tags --reflog --not --remotes 2>/dev/null)"; then
+          echo local
+          exit 0
+        fi
+        extra=$(git for-each-ref --format='%(refname)' refs/notes refs/stash)
+        if test -n "$extra" && test -n "$(git rev-list --max-count=1 $extra --not --remotes 2>/dev/null)"; then
+          echo notes-stash
+        fi
         """
         let result = try await Process.git(
             ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
-            cwd: path
+            cwd: path,
+            timeout: 120
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
