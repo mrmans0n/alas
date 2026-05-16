@@ -65,7 +65,7 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasShowFindReplace, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .option])
-                .disabled(!state.hasActiveEditorTab)
+                .disabled(!state.hasActiveCodeEditorTab)
             }
             CommandGroup(after: .toolbar) {
                 Button("Toggle Right Pane") {

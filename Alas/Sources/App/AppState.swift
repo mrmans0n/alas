@@ -972,6 +972,12 @@ final class AppState {
         return true
     }
 
+    var hasActiveCodeEditorTab: Bool {
+        guard case .editor(let state) = activeTab else { return false }
+        let path = state.isExternal ? (state.externalAbsolutePath ?? "") : state.relativePath
+        return !MarkdownFileType.isMarkdown(relativePath: path)
+    }
+
     var hasAnyDirtyEditorTab: Bool {
         var result = false
         for project in projects {

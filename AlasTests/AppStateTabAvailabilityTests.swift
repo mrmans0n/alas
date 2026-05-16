@@ -54,6 +54,68 @@ struct AppStateTabAvailabilityTests {
         #expect(state.hasActiveEditorTab)
     }
 
+    @Test func hasActiveCodeEditorTabTrueForCodeEditor() async throws {
+        let repo = try await makeRepo(name: "code-editor")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        _ = state.tabs.appendEditor(worktreeId: trees[0].id, title: "a.txt", relativePath: "a.txt")
+
+        #expect(state.hasActiveCodeEditorTab)
+    }
+
+    @Test func hasActiveCodeEditorTabFalseForMarkdownEditor() async throws {
+        let repo = try await makeRepo(name: "markdown-editor")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        _ = state.tabs.appendEditor(worktreeId: trees[0].id, title: "README.md", relativePath: "README.md")
+
+        #expect(state.hasActiveEditorTab)
+        #expect(!state.hasActiveCodeEditorTab)
+    }
+
+    @Test func hasActiveCodeEditorTabFalseForExternalMarkdownEditor() async throws {
+        let repo = try await makeRepo(name: "external-markdown-editor")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        _ = state.tabs.openExternalEditor(
+            worktreeId: trees[0].id,
+            absoluteURL: repo.appendingPathComponent("../README.md").standardizedFileURL,
+            revealLine: nil,
+            revealCharacter: nil,
+            originatingRelativePath: nil
+        )
+
+        #expect(state.hasActiveEditorTab)
+        #expect(!state.hasActiveCodeEditorTab)
+    }
+
     @Test func hasActiveEditorTabFalseForTerminal() async throws {
         let repo = try await makeRepo(name: "terminal")
         defer { try? FileManager.default.removeItem(at: repo) }
