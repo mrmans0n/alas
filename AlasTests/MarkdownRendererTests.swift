@@ -193,7 +193,14 @@ struct MarkdownRendererTests {
         #expect(font?.isFixedPitch == true)
     }
 
-    @Test func rendersTableAsAlignedMonospaceText() throws {
+    private func tableBlock(at substring: String, in attributed: NSAttributedString) -> NSTextTableBlock? {
+        let range = (attributed.string as NSString).range(of: substring)
+        guard range.location != NSNotFound else { return nil }
+        let style = attributed.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
+        return style?.textBlocks.compactMap { $0 as? NSTextTableBlock }.last
+    }
+
+    @Test func rendersTableAsNativeTextTable() throws {
         let source = """
         | h1 | h2 |
         | - | - |
@@ -202,13 +209,67 @@ struct MarkdownRendererTests {
         """
         let r = try MarkdownRendererTests.render(source)
         let s = r.attributedString.string
-        // All cells appear.
+
         #expect(s.contains("h1"))
         #expect(s.contains("h2"))
         #expect(s.contains("longer"))
-        // Aligned: the column for h1/longer is at least 6 wide, so "h1" is
-        // followed by trailing spaces before the next cell separator.
-        #expect(s.contains("h1    "))
+        #expect(!s.contains("|-"))
+
+        let headerBlock = tableBlock(at: "h1", in: r.attributedString)
+        let bodyBlock = tableBlock(at: "longer", in: r.attributedString)
+        #expect(headerBlock != nil)
+        #expect(bodyBlock != nil)
+        #expect(headerBlock?.startingRow == 0)
+        #expect(bodyBlock?.startingRow == 2)
+        #expect(headerBlock?.backgroundColor != nil)
+        #expect(bodyBlock?.backgroundColor != nil)
+        #expect(headerBlock?.borderColor(for: .minX) != nil)
+    }
+
+    @Test func tableCellsPreserveInlineMarkdownAttributes() throws {
+        let source = """
+        | Link | Styled |
+        | - | - |
+        | [docs](https://example.com) | **bold** `code` |
+        """
+        let r = try MarkdownRendererTests.render(source)
+        let s = r.attributedString
+
+        let linkRange = (s.string as NSString).range(of: "docs")
+        let url = s.attribute(.link, at: linkRange.location, effectiveRange: nil) as? URL
+        #expect(url?.absoluteString == "https://example.com")
+
+        let boldRange = (s.string as NSString).range(of: "bold")
+        let boldFont = s.attribute(.font, at: boldRange.location, effectiveRange: nil) as? NSFont
+        #expect(boldFont?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+
+        let codeRange = (s.string as NSString).range(of: "code")
+        let codeFont = s.attribute(.font, at: codeRange.location, effectiveRange: nil) as? NSFont
+        let codeBackground = s.attribute(.backgroundColor, at: codeRange.location, effectiveRange: nil) as? NSColor
+        #expect(codeFont?.isFixedPitch == true)
+        #expect(codeBackground != nil)
+    }
+
+    @Test func tableCellsUseGFMColumnAlignment() throws {
+        let source = """
+        | Left | Center | Right |
+        | :--- | :----: | ----: |
+        | L0 | C0 | R0 |
+        """
+        let r = try MarkdownRendererTests.render(source)
+        let s = r.attributedString
+
+        let leftRange = (s.string as NSString).range(of: "L0")
+        let centerRange = (s.string as NSString).range(of: "C0")
+        let rightRange = (s.string as NSString).range(of: "R0")
+
+        let leftStyle = s.attribute(.paragraphStyle, at: leftRange.location, effectiveRange: nil) as? NSParagraphStyle
+        let centerStyle = s.attribute(.paragraphStyle, at: centerRange.location, effectiveRange: nil) as? NSParagraphStyle
+        let rightStyle = s.attribute(.paragraphStyle, at: rightRange.location, effectiveRange: nil) as? NSParagraphStyle
+
+        #expect(leftStyle?.alignment == .left)
+        #expect(centerStyle?.alignment == .center)
+        #expect(rightStyle?.alignment == .right)
     }
 
     @Test func rendersLocalImageAsAttachment() throws {
