@@ -1,5 +1,3 @@
-import Foundation
-
 /// Hard-coded catalog of agents Alas ships knowledge for. The order here is
 /// the order they appear in the Agents pane. The fields live in code (not
 /// persistence) so app updates can fix CLI flag changes for every user

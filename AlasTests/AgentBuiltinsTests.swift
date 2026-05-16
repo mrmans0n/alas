@@ -1,5 +1,4 @@
 import Testing
-import Foundation
 @testable import Alas
 
 struct AgentBuiltinsTests {
@@ -34,6 +33,27 @@ struct AgentBuiltinsTests {
         let catalogIds = Set(AgentBuiltins.catalog.map(\.id))
         for id in preservedIds {
             #expect(catalogIds.contains(id), "\(id) must remain a built-in id")
+        }
+    }
+
+    @Test func entryLookupReturnsCorrectEntryForKnownId() {
+        let e = AgentBuiltins.entry(id: "gemini")
+        #expect(e?.displayName == "Gemini CLI")
+    }
+
+    @Test func entryLookupReturnsNilForUnknownId() {
+        #expect(AgentBuiltins.entry(id: "unknown-agent") == nil)
+    }
+
+    @Test func everyEntryHasNonEmptyPromptModeArgs() {
+        for entry in AgentBuiltins.catalog {
+            #expect(!entry.promptModeArgs.isEmpty, "\(entry.id) promptModeArgs missing")
+        }
+    }
+
+    @Test func everyBuiltinHasLogoAssetName() {
+        for entry in AgentBuiltins.catalog {
+            #expect(entry.builtinLogoAssetName != nil, "\(entry.id) missing builtinLogoAssetName")
         }
     }
 }
