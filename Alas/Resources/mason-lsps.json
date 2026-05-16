@@ -2109,7 +2109,9 @@
         "pyi"
       ],
       "command": "ruff",
-      "args": [],
+      "args": [
+        "server"
+      ],
       "recipes": [
         {
           "installer": "brew",

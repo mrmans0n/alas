@@ -75,7 +75,8 @@ LSP_OVERRIDE_MAP=$(cat <<'JSON'
   "emmet-language-server":          {"command": "emmet-language-server", "args": ["--stdio"]},
   "marksman":                       {"command": "marksman", "args": ["server"]},
   "deno":                           {"command": "deno",  "args": ["lsp"]},
-  "biome":                          {"command": "biome", "args": ["lsp-proxy"]}
+  "biome":                          {"command": "biome", "args": ["lsp-proxy"]},
+  "ruff":                           {"command": "ruff",  "args": ["server"]}
 }
 JSON
 )
