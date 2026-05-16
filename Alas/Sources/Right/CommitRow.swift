@@ -5,6 +5,7 @@ struct CommitRow: View {
     let isLast: Bool
     var isHistorical: Bool = false
     let onSelect: () -> Void
+    let onCopySHA: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -24,6 +25,9 @@ struct CommitRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Copy Commit SHA") { onCopySHA() }
+        }
     }
 
     private var rail: some View {

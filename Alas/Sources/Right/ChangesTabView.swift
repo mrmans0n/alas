@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ChangesTabView: View {
     @Bindable var rps: RightPaneState
@@ -50,6 +51,7 @@ struct ChangesTabView: View {
                     isLoadingOlder: rps.isLoadingOlder,
                     expanded: $rps.commitsExpanded,
                     onSelect: onSelectCommit,
+                    onCopySHA: copyCommitSHA,
                     onLoadOlder: { Task { @MainActor in await rps.loadOlder() } }
                 )
             }
@@ -72,5 +74,11 @@ struct ChangesTabView: View {
         let toolId = appState.config.changes.aiToolId
         guard let tool = CommitAITool(rawValue: toolId), tool != .none else { return }
         rps.generate(promptOverride: appState.config.changes.prompt, tool: tool)
+    }
+
+    private func copyCommitSHA(_ commit: CommitInfo) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(commit.sha, forType: .string)
     }
 }
