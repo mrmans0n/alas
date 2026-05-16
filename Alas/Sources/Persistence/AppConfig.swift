@@ -17,6 +17,7 @@ struct AppConfig: Codable, Equatable {
     var code: Code
     var markdown: Markdown
     var changes: Changes
+    var agents: Agents
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -101,6 +102,25 @@ struct AppConfig: Codable, Equatable {
         }
     }
 
+    struct Agents: Codable, Equatable {
+        var builtinState: [String: BuiltinAgentState]
+        var custom: [AgentDefinition]
+        var worktreeAutoLaunch: WorktreeAutoLaunch
+
+        enum CodingKeys: String, CodingKey {
+            case builtinState, custom, worktreeAutoLaunch
+        }
+    }
+
+    struct WorktreeAutoLaunch: Codable, Equatable {
+        var agentId: String?
+        var useBypassPermissions: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case agentId, useBypassPermissions
+        }
+    }
+
     static let defaults = AppConfig(
         themeId: "cool-slate",
         accent: "teal",
@@ -147,7 +167,15 @@ struct AppConfig: Codable, Equatable {
             languageServers: []
         ),
         markdown: Markdown(defaultViewMode: .editor),
-        changes: Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt)
+        changes: Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt),
+        agents: Agents(
+            builtinState: [:],
+            custom: [],
+            worktreeAutoLaunch: WorktreeAutoLaunch(
+                agentId: nil,
+                useBypassPermissions: false
+            )
+        )
     )
 }
 
@@ -178,7 +206,8 @@ extension AppConfig {
         case themeId, accent, density, matchSystemTheme,
              sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible,
              commitDetailSplitRatio,
-             general, worktrees, terminal, harness, code, markdown, changes
+             general, worktrees, terminal, harness, code, markdown, changes,
+             agents
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -224,6 +253,32 @@ extension AppConfig {
             changes = Changes(aiToolId: toolId, prompt: prompt)
         } else {
             changes = Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt)
+        }
+        if let agentsContainer = try? c.nestedContainer(
+            keyedBy: AppConfig.Agents.CodingKeys.self, forKey: .agents
+        ) {
+            let state = (try? agentsContainer.decode(
+                [String: BuiltinAgentState].self, forKey: .builtinState
+            )) ?? [:]
+            let custom = (try? agentsContainer.decode(
+                [AgentDefinition].self, forKey: .custom
+            )) ?? []
+            let autoLaunch = (try? agentsContainer.decode(
+                WorktreeAutoLaunch.self, forKey: .worktreeAutoLaunch
+            )) ?? WorktreeAutoLaunch(agentId: nil, useBypassPermissions: false)
+            agents = Agents(
+                builtinState: state,
+                custom: custom,
+                worktreeAutoLaunch: autoLaunch
+            )
+        } else {
+            agents = Agents(
+                builtinState: [:],
+                custom: [],
+                worktreeAutoLaunch: WorktreeAutoLaunch(
+                    agentId: nil, useBypassPermissions: false
+                )
+            )
         }
     }
 }
