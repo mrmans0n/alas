@@ -96,7 +96,13 @@ struct LSPInstallProgressSheet: View {
         .padding(24)
         .frame(width: 600)
         .background(theme.color("bg-1"))
-        .interactiveDismissDisabled(isRunning)
+        // Always non-interactively-dismissible: Close/Done are the only
+        // ways out. If we re-enabled it on success, an Escape press would
+        // route through the parent's `.sheet(onDismiss:)` which only does
+        // `installer.reset()` — never carrying the completed language to
+        // the reopen-LSP-documents path. Forcing button-only dismissal
+        // keeps the success → reopen handoff guaranteed.
+        .interactiveDismissDisabled(true)
     }
 
     /// Snapshot the completed language (if any) BEFORE `reset()` flips state
