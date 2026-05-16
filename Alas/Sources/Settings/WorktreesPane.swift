@@ -25,7 +25,14 @@ struct WorktreesPane: View {
                 SettingsGroup(title: "Branch defaults") {
                     SettingsRow(name: "Branch prefix",
                                 desc: "Default prefix when creating a new worktree.") {
-                        AlasField(text: bind(\.worktrees.branchPrefix), monospaced: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            AlasField(text: branchPrefixBinding, monospaced: true)
+                            if let prefixError = branchPrefixError {
+                                Text(prefixError)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.red)
+                            }
+                        }
                     }
                     SettingsRow(name: "Base branch",
                                 desc: "Default base branch for new worktrees; repo branches can be selected in the create dialog.") {
@@ -71,6 +78,28 @@ struct WorktreesPane: View {
             set: { state.config[keyPath: kp] = $0
             state.saveConfig() }
         )
+    }
+
+    private var branchPrefixBinding: Binding<String> {
+        Binding(
+            get: { state.config.worktrees.branchPrefix },
+            set: {
+                state.config.worktrees.branchPrefix = $0
+                state.saveConfig()
+            }
+        )
+    }
+
+    private var branchPrefixError: String? {
+        if state.config.worktrees.branchPrefix.isEmpty {
+            return nil
+        }
+        switch GitNameValidator.validateBranchName(state.config.worktrees.branchPrefix) {
+        case .valid:
+            return nil
+        case .invalid(let message):
+            return message
+        }
     }
 }
 

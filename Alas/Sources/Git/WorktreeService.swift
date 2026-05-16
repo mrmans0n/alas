@@ -63,6 +63,12 @@ struct WorktreeService {
         destination: URL,
         projectId: String
     ) async throws -> Worktree {
+        switch GitNameValidator.validateBranchName(branch) {
+        case .valid:
+            break
+        case .invalid(let message):
+            throw WorktreeError.gitFailed("Invalid branch name: \(message)")
+        }
         let refCheck = try await Process.git(
             ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
             cwd: repoPath

@@ -102,6 +102,10 @@ struct NewWorktreeDialogTests {
         #expect(!NewWorktreeDialog.canCreate(projectsEmpty: false, branchEmpty: true))
     }
 
+    @Test func canCreateBlockedByInvalidBranch() {
+        #expect(!NewWorktreeDialog.canCreate(projectsEmpty: false, branchEmpty: false, branchValidation: "Name cannot contain spaces."))
+    }
+
     @Test func canCreateSucceedsWithProjectsAndBranch() {
         #expect(NewWorktreeDialog.canCreate(projectsEmpty: false, branchEmpty: false))
     }
