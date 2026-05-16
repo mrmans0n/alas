@@ -7,7 +7,6 @@ import Testing
 /// These exercise the pure modifier/character logic without needing a live
 /// Ghostty surface.
 struct SurfaceViewKeyboardTests {
-
     // MARK: - Modifier translation
 
     @Test func noModifiersReturnsNone() {
