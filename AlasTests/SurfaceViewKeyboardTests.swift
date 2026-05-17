@@ -351,6 +351,15 @@ struct SurfaceViewKeyboardTests {
         #expect(rect.origin != .zero)
     }
 
+    @Test @MainActor func doCommand_doesNotForwardToIO() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.doCommand(by: #selector(NSResponder.deleteWordBackward(_:)))
+        view.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        view.doCommand(by: #selector(NSResponder.moveLeft(_:)))
+        #expect(io.calls.isEmpty)
+    }
+
     @Test @MainActor func testInitializerWiresFakeIO() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)

@@ -788,7 +788,9 @@ extension AlasGhostty.SurfaceView: NSTextInputClient {
     }
 
     override func doCommand(by selector: Selector) {
-        // Implemented in Task 9. Default: do nothing — the raw keyDown
-        // was already delivered to Ghostty.
+        // Intentionally do nothing. The raw keyDown was already delivered to
+        // Ghostty before interpretKeyEvents fired. Calling super would let
+        // AppKit beep or perform a default behavior that is wrong for a
+        // terminal.
     }
 }
