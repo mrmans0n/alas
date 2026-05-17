@@ -301,6 +301,7 @@ final class AppState {
                     repoPath: repoPath,
                     base: base, branch: branch, destination: destination, projectId: projectId
                 )
+                guard projects.contains(where: { $0.id == projectId }) else { return }
                 if runStartup && !startupScript.isEmpty {
                     _ = try? await Process.run(
                         "/bin/zsh",
@@ -308,6 +309,7 @@ final class AppState {
                         cwd: newWorktree.path
                     )
                 }
+                guard projects.contains(where: { $0.id == projectId }) else { return }
 
                 // Resolve the per-creation agent into a command line that
                 // will run inside the new terminal session — appended to
@@ -349,6 +351,7 @@ final class AppState {
                         hidden: false
                     )
                     let gcDropped = try await projectsManager.refreshWorktrees(projectId: project.id)
+                    guard projects.contains(where: { $0.id == projectId }) else { return }
                     if wasHidden || gcDropped {
                         saveProjects()
                     }
@@ -428,9 +431,72 @@ final class AppState {
     }
 
     func removeProject(id: String) {
+        guard let project = projects.first(where: { $0.id == id }) else { return }
+
+        let mainId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+        let liveWorktrees = projectsManager.worktrees(projectId: id)
+        var candidateIds = Set(liveWorktrees.map(\.id))
+        candidateIds.insert(mainId)
+        for hidden in project.hiddenWorktreePaths {
+            candidateIds.insert(hidden)
+        }
+        for ordered in project.worktreeOrder {
+            candidateIds.insert(ordered)
+        }
+
+        tabs.loadAll(worktreeIds: Array(candidateIds))
+
+        let liveById = Dictionary(uniqueKeysWithValues: liveWorktrees.map { ($0.id, $0) })
+        let dirtyByWorktree: [(worktree: Worktree, count: Int)] = candidateIds.compactMap { worktreeId in
+            let dirty = dirtyEditorTabIds(worktreeId: worktreeId)
+            guard !dirty.isEmpty else { return nil }
+            if let live = liveById[worktreeId] {
+                return (worktree: live, count: dirty.count)
+            }
+            let path = URL(fileURLWithPath: worktreeId)
+            let synthetic = Worktree(
+                id: worktreeId,
+                projectId: project.id,
+                name: path.lastPathComponent,
+                branch: path.lastPathComponent,
+                path: path,
+                status: .clean,
+                lastActivity: Date()
+            )
+            return (worktree: synthetic, count: dirty.count)
+        }
+
+        let dirtyTotal = dirtyByWorktree.reduce(0) { $0 + $1.count }
+
+        if dirtyTotal > 0 {
+            switch promptForDirtyBuffersOnRemoveProject(
+                name: project.name,
+                dirtyCount: dirtyTotal
+            ) {
+            case .save:
+                for entry in dirtyByWorktree {
+                    guard saveDirtyBuffers(in: entry.worktree) else { return }
+                }
+            case .discard:
+                break
+            case .cancel:
+                return
+            }
+        }
+
+        var beforeIds = allWorktreeIds()
+        for candidateId in candidateIds {
+            beforeIds.insert(candidateId)
+        }
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
         saveProjects()
+        let removedIds = beforeIds.subtracting(allWorktreeIds())
+        cleanupMissingWorktrees(beforeIds: beforeIds)
+        for worktreeId in removedIds {
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
+            try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
+        }
     }
 
     /// Start a ProjectGitWatcher for `project` and wire its callbacks into
@@ -1399,6 +1465,28 @@ final class AppState {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Save & \(action)")
         let discardButton = alert.addButton(withTitle: "Discard & \(action)")
+        alert.addButton(withTitle: "Cancel")
+        discardButton.hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    private func promptForDirtyBuffersOnRemoveProject(
+        name: String,
+        dirtyCount: Int
+    ) -> DirtyBufferChoice {
+        let alert = NSAlert()
+        alert.messageText = "Remove project '\(name)'?"
+        let countSentence = dirtyCount == 1
+            ? "1 file has unsaved changes."
+            : "\(dirtyCount) files have unsaved changes."
+        alert.informativeText = "\(countSentence) Saving will write them to disk; discarding will lose them. Alas will stop tracking this project. No files will be deleted from disk."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save & Remove")
+        let discardButton = alert.addButton(withTitle: "Discard & Remove")
         alert.addButton(withTitle: "Cancel")
         discardButton.hasDestructiveAction = true
         switch alert.runModal() {

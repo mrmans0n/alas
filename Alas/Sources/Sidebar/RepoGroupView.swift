@@ -10,6 +10,7 @@ struct RepoGroupView: View {
     let onSelect: (Worktree) -> Void
     let onNewWorktree: () -> Void
     let onEditProject: () -> Void
+    let onRemoveProject: () -> Void
     let onOpenTerminal: (Worktree) -> Void
     let onCopyPath: (Worktree) -> Void
     let onCopyBranch: (Worktree) -> Void
@@ -46,6 +47,8 @@ struct RepoGroupView: View {
             .onTapGesture { collapsed.toggle() }
             .contextMenu {
                 Button("Edit Project…", action: onEditProject)
+                Divider()
+                Button("Remove Project…", role: .destructive, action: onRemoveProject)
             }
             .overlay(alignment: .trailing) {
                 // The header dot lives OUTSIDE the count/plus swap group so

@@ -313,6 +313,203 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.operationState(for: wt.id) == nil)
     }
 
+    @Test func removeProjectClosesTabsForProjectWorktrees() async throws {
+        let repo = try await makeRepo(name: "remove-tabs")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "remove", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        let wt = trees[0]
+
+        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
+        #expect(state.tabs.tabs(forWorktree: wt.id).count == 1)
+
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
+    }
+
+    @Test func removeProjectResetsSelectionWhenSelectedWorktreeIsRemoved() async throws {
+        let repoA = try await makeRepo(name: "remove-sel-a")
+        let repoB = try await makeRepo(name: "remove-sel-b")
+        defer {
+            try? FileManager.default.removeItem(at: repoA)
+            try? FileManager.default.removeItem(at: repoB)
+        }
+
+        let state = AppState()
+        let projectA = try await state.projectsManager.addProject(
+            path: repoA, displayName: "projA", color: "#5fb7c4"
+        )
+        let projectB = try await state.projectsManager.addProject(
+            path: repoB, displayName: "projB", color: "#c89d6f"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: projectA.id)
+        try await state.projectsManager.refreshWorktrees(projectId: projectB.id)
+
+        let treesA = state.projectsManager.worktrees(projectId: projectA.id)
+        let treesB = state.projectsManager.worktrees(projectId: projectB.id)
+        #expect(treesA.count == 1)
+        #expect(treesB.count == 1)
+
+        state.selectedWorktreeId = treesA[0].id
+        state.removeProject(id: projectA.id)
+
+        #expect(state.selectedWorktreeId == treesB[0].id)
+    }
+
+    @Test func removeProjectClearsSelectionWhenNoWorktreesRemain() async throws {
+        let repo = try await makeRepo(name: "remove-last")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "only", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        state.selectedWorktreeId = trees[0].id
+
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.selectedWorktreeId == nil)
+    }
+
+    @Test func removeProjectClosesTabsForUnrefreshedMainWorktree() async throws {
+        let repo = try await makeRepo(name: "remove-unrefreshed")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "unrefreshed", color: "#5fb7c4"
+        )
+        // Deliberately skip refreshWorktrees: worktreesByProject is empty,
+        // simulating the post-launch window before refreshAll completes.
+        #expect(state.projectsManager.worktrees(projectId: project.id).isEmpty)
+
+        let mainWorktreeId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+        state.tabs.appendTerminal(worktreeId: mainWorktreeId, title: "term", sessionId: "s1")
+        #expect(state.tabs.tabs(forWorktree: mainWorktreeId).count == 1)
+
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.tabs.tabs(forWorktree: mainWorktreeId).isEmpty)
+    }
+
+    @Test func removeProjectDeletesPersistedTabsFile() async throws {
+        let repo = try await makeRepo(name: "remove-persisted")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "persisted", color: "#5fb7c4"
+        )
+        let mainWorktreeId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+
+        state.tabs.appendTerminal(worktreeId: mainWorktreeId, title: "term", sessionId: "s1")
+        let tabsFile = Paths.tabsFile(forWorktreeId: mainWorktreeId)
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path))
+
+        state.removeProject(id: project.id)
+
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path) == false)
+    }
+
+    @Test func removeProjectWithNoDirtyBuffersProceedsWithoutPrompt() async throws {
+        let repo = try await makeRepo(name: "remove-no-dirty")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "no-dirty", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        let wt = trees[0]
+        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
+        #expect(state.tabs.tabs(forWorktree: wt.id).count == 1)
+
+        // No editor tabs with unsaved changes → no prompt → proceed directly.
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
+    }
+
+    @Test func removeProjectLoadsPersistedTabsForMainWorktreeBeforeDeletion() async throws {
+        let repo = try await makeRepo(name: "remove-load-first")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "load-first", color: "#5fb7c4"
+        )
+        // Skip refreshWorktrees — worktreesByProject stays empty.
+        #expect(state.projectsManager.worktrees(projectId: project.id).isEmpty)
+
+        let mainId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+        // Seed an on-disk tabs file (no in-memory entry).
+        state.tabs.appendTerminal(worktreeId: mainId, title: "term", sessionId: "s1")
+        let tabsFile = Paths.tabsFile(forWorktreeId: mainId)
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path))
+
+        state.removeProject(id: project.id)
+
+        // After removal, the persisted tabs file is gone.
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path) == false)
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+    }
+
+    @Test func createWorktreeAfterProjectRemovalDoesNotMutateState() async throws {
+        let repo = try await makeRepo(name: "create-after-remove")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "race", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("race-wt-\(UUID().uuidString)")
+        _ = state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "race/wt",
+            destination: destination,
+            runStartup: false,
+            openTerminal: false
+        )
+
+        // Immediately remove the project — before the async create finishes.
+        state.removeProject(id: project.id)
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+
+        // Yield long enough for the create Task to complete and the guard to fire.
+        // The create writes to disk via `git worktree add` and may take ~1s on
+        // typical hardware. Sleep is the simplest way to wait without exposing
+        // Task handles through AppState.
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+
+        // Project remained removed; no selection was set for the orphan worktree.
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        let orphanId = Worktree.makeId(path: destination)
+        #expect(state.selectedWorktreeId != orphanId)
+        // Best-effort cleanup of the orphan worktree directory on disk.
+        try? FileManager.default.removeItem(at: destination)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,
