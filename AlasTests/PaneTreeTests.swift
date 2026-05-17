@@ -27,6 +27,39 @@ struct PaneTreeTests {
         #expect(tree.leaves().map(\.id) == ["a", "b", "c", "d"])
     }
 
+    @Test func decodingSplitWithEmptyChildrenThrows() {
+        let json = """
+        {
+          "kind": "split",
+          "id": "s1",
+          "axis": "vertical",
+          "fraction": 0.5,
+          "children": []
+        }
+        """
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(PaneNode.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test func decodingValidSplitPreservesChildren() throws {
+        let json = """
+        {
+          "kind": "split",
+          "id": "s1",
+          "axis": "vertical",
+          "fraction": 0.5,
+          "children": [
+            { "kind": "leaf", "id": "a", "sessionId": "sa" },
+            { "kind": "leaf", "id": "b", "sessionId": "sb" }
+          ]
+        }
+        """
+        let decoded = try JSONDecoder().decode(PaneNode.self, from: Data(json.utf8))
+        #expect(decoded.leaves().map(\.id) == ["a", "b"])
+        #expect(decoded.firstLeaf().id == "a")
+    }
+
     @Test func findReturnsLeafAndPath() throws {
         let tree = split("s1", .vertical, 0.5, [
             leaf("a"),

@@ -54,7 +54,14 @@ enum PaneNode: Codable, Equatable, Identifiable {
         case .leaf:
             self = .leaf(try single.decode(PaneLeafCodable.self).asLeaf)
         case .split:
-            self = .split(try single.decode(PaneSplitCodable.self).asSplit)
+            let split = try single.decode(PaneSplitCodable.self)
+            guard split.children.count == 2 else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Pane split must contain exactly two children"
+                ))
+            }
+            self = .split(split.asSplit)
         }
     }
 
