@@ -428,12 +428,35 @@ final class AppState {
     }
 
     func removeProject(id: String) {
-        var beforeIds = allWorktreeIds()
-        if let project = projects.first(where: { $0.id == id }) {
-            beforeIds.insert(Worktree.makeId(path: URL(fileURLWithPath: project.path)))
-            for hidden in project.hiddenWorktreePaths {
-                beforeIds.insert(hidden)
+        guard let project = projects.first(where: { $0.id == id }) else { return }
+
+        let worktrees = projectsManager.worktrees(projectId: id)
+        let dirtyByWorktree: [(worktree: Worktree, count: Int)] = worktrees.compactMap { worktree in
+            let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+            return dirty.isEmpty ? nil : (worktree: worktree, count: dirty.count)
+        }
+        let dirtyTotal = dirtyByWorktree.reduce(0) { $0 + $1.count }
+
+        if dirtyTotal > 0 {
+            switch promptForDirtyBuffersOnRemoveProject(
+                name: project.name,
+                dirtyCount: dirtyTotal
+            ) {
+            case .save:
+                for entry in dirtyByWorktree {
+                    guard saveDirtyBuffers(in: entry.worktree) else { return }
+                }
+            case .discard:
+                break
+            case .cancel:
+                return
             }
+        }
+
+        var beforeIds = allWorktreeIds()
+        beforeIds.insert(Worktree.makeId(path: URL(fileURLWithPath: project.path)))
+        for hidden in project.hiddenWorktreePaths {
+            beforeIds.insert(hidden)
         }
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
@@ -1412,6 +1435,28 @@ final class AppState {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Save & \(action)")
         let discardButton = alert.addButton(withTitle: "Discard & \(action)")
+        alert.addButton(withTitle: "Cancel")
+        discardButton.hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    private func promptForDirtyBuffersOnRemoveProject(
+        name: String,
+        dirtyCount: Int
+    ) -> DirtyBufferChoice {
+        let alert = NSAlert()
+        alert.messageText = "Remove project '\(name)'?"
+        let countSentence = dirtyCount == 1
+            ? "1 file has unsaved changes."
+            : "\(dirtyCount) files have unsaved changes."
+        alert.informativeText = "\(countSentence) Saving will write them to disk; discarding will lose them. Alas will stop tracking this project. No files will be deleted from disk."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save & Remove")
+        let discardButton = alert.addButton(withTitle: "Discard & Remove")
         alert.addButton(withTitle: "Cancel")
         discardButton.hasDestructiveAction = true
         switch alert.runModal() {

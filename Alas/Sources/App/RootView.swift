@@ -146,7 +146,7 @@ struct RootView: View {
                 }
             },
             message: { _ in
-                Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. You can re-add it later.")
+                Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
             }
         )
         .task {

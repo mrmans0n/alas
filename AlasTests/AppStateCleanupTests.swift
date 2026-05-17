@@ -425,6 +425,28 @@ struct AppStateCleanupTests {
         #expect(FileManager.default.fileExists(atPath: tabsFile.path) == false)
     }
 
+    @Test func removeProjectWithNoDirtyBuffersProceedsWithoutPrompt() async throws {
+        let repo = try await makeRepo(name: "remove-no-dirty")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "no-dirty", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        let wt = trees[0]
+        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
+        #expect(state.tabs.tabs(forWorktree: wt.id).count == 1)
+
+        // No editor tabs with unsaved changes → no prompt → proceed directly.
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,
