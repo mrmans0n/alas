@@ -99,6 +99,12 @@ extension AlasGhostty {
         /// time and never mutated afterward, so this is safe.
         nonisolated(unsafe) private(set) var cSurface: ghostty_surface_t?
 
+        /// Narrow IO seam around ghostty_surface_* calls used by the input
+        /// pipeline. Initialized after a successful ghostty_surface_new().
+        /// Force-unwrapping at use sites is unsafe — call sites must guard on
+        /// `cSurface != nil` first (already the existing pattern).
+        private var surfaceIO: GhosttySurfaceIO!
+
         /// Unretained back-reference to the owning App.
         private let app: App
 
@@ -136,6 +142,7 @@ extension AlasGhostty {
                 return
             }
             self.cSurface = surface
+            self.surfaceIO = LiveGhosttySurfaceIO(surface)
 
             // Set up mouse tracking so we receive mouseMoved events.
             updateTrackingAreas()
@@ -375,21 +382,21 @@ extension AlasGhostty {
             if let chars {
                 chars.withCString { ptr in
                     keyEv.text = ptr
-                    _ = ghostty_surface_key(surface, keyEv)
+                    _ = surfaceIO.sendKey(keyEv)
                 }
             } else {
-                _ = ghostty_surface_key(surface, keyEv)
+                _ = surfaceIO.sendKey(keyEv)
             }
         }
 
         override func keyUp(with event: NSEvent) {
-            guard let surface = cSurface else { return }
+            guard cSurface != nil else { return }
             let keyEv = event.alasGhosttyKeyEvent(GHOSTTY_ACTION_RELEASE)
-            _ = ghostty_surface_key(surface, keyEv)
+            _ = surfaceIO.sendKey(keyEv)
         }
 
         override func flagsChanged(with event: NSEvent) {
-            guard let surface = cSurface else { return }
+            guard cSurface != nil else { return }
 
             // Determine which modifier changed and whether it was pressed or released.
             let mod: UInt32
@@ -408,7 +415,7 @@ extension AlasGhostty {
                 : GHOSTTY_ACTION_RELEASE
 
             let keyEv = event.alasGhosttyKeyEvent(action)
-            _ = ghostty_surface_key(surface, keyEv)
+            _ = surfaceIO.sendKey(keyEv)
         }
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
