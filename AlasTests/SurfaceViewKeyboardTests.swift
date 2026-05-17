@@ -262,6 +262,29 @@ struct SurfaceViewKeyboardTests {
         #expect(view.characterIndex(for: .zero) == NSNotFound)
     }
 
+    @Test @MainActor func insertText_sendsTextAndClearsPreedit() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.insertText("é" as NSString, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.text("é"), .preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func insertText_acceptsAttributedString() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let attr = NSAttributedString(string: "ñ")
+        view.insertText(attr, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.text("ñ"), .preedit(nil)])
+    }
+
+    @Test @MainActor func insertText_emptyStringIsNoop() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.insertText("" as NSString, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls.isEmpty)
+    }
+
     @Test @MainActor func testInitializerWiresFakeIO() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)

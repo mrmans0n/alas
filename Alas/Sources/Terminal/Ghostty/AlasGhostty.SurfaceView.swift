@@ -738,7 +738,16 @@ extension AlasGhostty.SurfaceView: NSTextInputClient {
     // MARK: Active methods — full bodies arrive in later tasks
 
     func insertText(_ string: Any, replacementRange: NSRange) {
-        // Implemented in Task 5.
+        let text: String
+        if let s = string as? String { text = s }
+        else if let a = string as? NSAttributedString { text = a.string }
+        else { return }
+
+        guard !text.isEmpty else { return }
+
+        surfaceIO.sendText(text)
+        markedText = nil
+        surfaceIO.setPreedit(nil)
     }
 
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
