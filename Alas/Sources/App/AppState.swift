@@ -438,7 +438,12 @@ final class AppState {
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
         saveProjects()
+        let removedIds = beforeIds.subtracting(allWorktreeIds())
         cleanupMissingWorktrees(beforeIds: beforeIds)
+        for worktreeId in removedIds {
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
+            try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
+        }
     }
 
     /// Start a ProjectGitWatcher for `project` and wire its callbacks into

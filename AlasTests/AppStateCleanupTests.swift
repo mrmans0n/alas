@@ -406,6 +406,25 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: mainWorktreeId).isEmpty)
     }
 
+    @Test func removeProjectDeletesPersistedTabsFile() async throws {
+        let repo = try await makeRepo(name: "remove-persisted")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "persisted", color: "#5fb7c4"
+        )
+        let mainWorktreeId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+
+        state.tabs.appendTerminal(worktreeId: mainWorktreeId, title: "term", sessionId: "s1")
+        let tabsFile = Paths.tabsFile(forWorktreeId: mainWorktreeId)
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path))
+
+        state.removeProject(id: project.id)
+
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path) == false)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,
