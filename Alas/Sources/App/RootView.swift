@@ -5,6 +5,7 @@ struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
     @State private var editingProject: ProjectConfig?
+    @State private var removingProject: ProjectConfig?
     @State private var showNewWorktree = false
     @State private var newWorktreePresetProjectId: String?
     @State private var collapsedProjects: Set<String> = []
@@ -39,6 +40,9 @@ struct RootView: View {
                                 onAddProject: { showNewProject = true },
                                 onEditProject: { projectId in
                                     editingProject = state.projects.first { $0.id == projectId }
+                                },
+                                onRemoveProject: { projectId in
+                                    removingProject = state.projects.first { $0.id == projectId }
                                 },
                                 onNewWorktree: { projectId in
                                     newWorktreePresetProjectId = projectId
@@ -123,6 +127,26 @@ struct RootView: View {
             },
             message: {
                 Text(state.pendingForceDeleteWorktree?.reason.alertMessage ?? "Force delete?")
+            }
+        )
+        .alert(
+            "Remove \u{201C}\(removingProject?.name ?? "")\u{201D}?",
+            isPresented: Binding(
+                get: { removingProject != nil },
+                set: { if !$0 { removingProject = nil } }
+            ),
+            presenting: removingProject,
+            actions: { project in
+                Button("Remove", role: .destructive) {
+                    state.removeProject(id: project.id)
+                    removingProject = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    removingProject = nil
+                }
+            },
+            message: { _ in
+                Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. You can re-add it later.")
             }
         )
         .task {
