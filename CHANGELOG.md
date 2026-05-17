@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-17
+
+### ✨ Features
+
+- add multi-cursor editing in editor panes (#153).
+- add LSP format on save (#151).
+
+### 🐛 Fixes
+
+- pass unknown icon names through as SF Symbol names (#152).
+
+### 🏗️ Internal
+
+- sort Settings sections alphabetically and remove empty General section (#154).
+
 ## [0.3.1] - 2026-05-16
 
 ### ✨ Features
