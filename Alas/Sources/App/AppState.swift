@@ -301,6 +301,7 @@ final class AppState {
                     repoPath: repoPath,
                     base: base, branch: branch, destination: destination, projectId: projectId
                 )
+                guard projects.contains(where: { $0.id == projectId }) else { return }
                 if runStartup && !startupScript.isEmpty {
                     _ = try? await Process.run(
                         "/bin/zsh",

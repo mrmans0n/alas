@@ -471,6 +471,45 @@ struct AppStateCleanupTests {
         #expect(state.projects.contains(where: { $0.id == project.id }) == false)
     }
 
+    @Test func createWorktreeAfterProjectRemovalDoesNotMutateState() async throws {
+        let repo = try await makeRepo(name: "create-after-remove")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "race", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("race-wt-\(UUID().uuidString)")
+        _ = state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "race/wt",
+            destination: destination,
+            runStartup: false,
+            openTerminal: false
+        )
+
+        // Immediately remove the project — before the async create finishes.
+        state.removeProject(id: project.id)
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+
+        // Yield long enough for the create Task to complete and the guard to fire.
+        // The create writes to disk via `git worktree add` and may take ~1s on
+        // typical hardware. Sleep is the simplest way to wait without exposing
+        // Task handles through AppState.
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+
+        // Project remained removed; no selection was set for the orphan worktree.
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        let orphanId = Worktree.makeId(path: destination)
+        #expect(state.selectedWorktreeId != orphanId)
+        // Best-effort cleanup of the orphan worktree directory on disk.
+        try? FileManager.default.removeItem(at: destination)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,
