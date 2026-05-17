@@ -122,6 +122,46 @@ struct EditorBufferTests {
         #expect(buffer.dirty == true)
     }
 
+    @Test func restoreAfterDirtyMoveUsesSnapshotPath() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+
+        try buffer.moveTo(relativePath: "b.txt")
+
+        let restored = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        #expect(restored.relativePath == "b.txt")
+        try restored.save()
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("a.txt").path))
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "HELLO\n")
+    }
+
+    @Test func restoreAfterDirtyMoveRefreshesTargetPermissions() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.sh", "#!/bin/sh\necho old\n", perms: 0o644)
+        let target = try writeFile(root, "b.sh", "#!/bin/sh\necho old\n", perms: 0o755)
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let attrs = try FileManager.default.attributesOfItem(atPath: target.path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.sh",
+            content: "#!/bin/sh\necho new\n",
+            originalText: "#!/bin/sh\necho old\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: "t")
+
+        let restored = EditorBuffer(worktreeRoot: root, relativePath: "a.sh", store: store, worktreeId: "wt", tabId: "t")
+        try restored.save()
+
+        let savedAttrs = try FileManager.default.attributesOfItem(atPath: target.path)
+        let perms = (savedAttrs[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        #expect(restored.relativePath == "b.sh")
+        #expect(perms == 0o755)
+    }
+
     @Test func moveToAllowsCaseOnlyRename() throws {
         let root = tempWorktree()
         _ = try writeFile(root, "case.txt", "hello\n")

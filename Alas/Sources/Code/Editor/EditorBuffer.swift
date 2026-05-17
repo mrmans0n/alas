@@ -81,6 +81,8 @@ final class EditorBuffer {
     var onSnapshotRequested: (() -> Void)?
     @ObservationIgnored
     var onDiscardSnapshotsRequested: (() -> Void)?
+    @ObservationIgnored
+    private var pendingRestoredPathChange: (oldPath: String, newPath: String)?
     var persistenceTabId: String? { tabId }
 
     struct EditObserverToken { fileprivate let id: UUID }
@@ -154,7 +156,7 @@ final class EditorBuffer {
         }
         onEdit { [weak self] in self?.scheduleSnapshot() }
         if !isExternal, let lsp, let language {
-            let url = worktreeRoot.appendingPathComponent(relativePath)
+            let url = worktreeRoot.appendingPathComponent(self.relativePath)
             let text = storage.string
             Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
         }
@@ -198,6 +200,12 @@ final class EditorBuffer {
         guard self.tabId != tabId else { return }
         self.tabId = tabId
         if dirty { snapshotNow() }
+    }
+
+    func consumeRestoredPathChange() -> (oldPath: String, newPath: String)? {
+        guard let change = pendingRestoredPathChange else { return nil }
+        pendingRestoredPathChange = nil
+        return change
     }
 
     private func handleEdit(edit: EditorTextEdit?) {
@@ -492,6 +500,24 @@ final class EditorBuffer {
         updateOriginalFileIdentity(from: url)
     }
 
+    private func updateOriginalFileAttributes(from url: URL) {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
+            originalMtime = (attrs[.modificationDate] as? Date) ?? originalMtime
+            if let nsPerms = attrs[.posixPermissions] as? NSNumber {
+                permissions = mode_t(nsPerms.uint16Value)
+            }
+        }
+        updateOriginalFileIdentity(from: url)
+    }
+
+    private func updateOriginalFileIdentityAndPermissions(from url: URL) {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let nsPerms = attrs[.posixPermissions] as? NSNumber {
+            permissions = mode_t(nsPerms.uint16Value)
+        }
+        updateOriginalFileIdentity(from: url)
+    }
+
     private func updateOriginalFileIdentity(from url: URL) {
         guard let values = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey, .volumeIdentifierKey]),
               let file = values.fileResourceIdentifier,
@@ -682,6 +708,16 @@ final class EditorBuffer {
     // MARK: - Snapshot / restore (hot-exit)
 
     private func applySnapshot(_ snap: EditorBufferStore.Snapshot) {
+        guard canRestoreSnapshotPath(snap.relativePath) else {
+            discardSnapshot()
+            return
+        }
+        let oldRelativePath = relativePath
+        relativePath = snap.relativePath
+        if oldRelativePath != snap.relativePath {
+            pendingRestoredPathChange = (oldRelativePath, snap.relativePath)
+        }
+        language = lsp?.language(forFileExtension: (snap.relativePath as NSString).pathExtension)
         loading = true
         defer { loading = false }
         storage.setAttributedString(NSAttributedString(string: snap.content))
@@ -689,6 +725,17 @@ final class EditorBuffer {
         originalMtime = snap.originalMtime
         lineEnding = snap.lineEnding
         readOnly = false
+        updateOriginalFileIdentityAndPermissions(from: worktreeRoot.appendingPathComponent(snap.relativePath))
+    }
+
+    private func canRestoreSnapshotPath(_ path: String) -> Bool {
+        guard !path.isEmpty,
+              !path.contains("\0"),
+              !(path as NSString).isAbsolutePath else { return false }
+        let rootPath = worktreeRoot.standardizedFileURL.path
+        let targetPath = worktreeRoot.appendingPathComponent(path).standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        return targetPath.hasPrefix(prefix)
     }
 
     private func scheduleSnapshot() {
@@ -788,13 +835,7 @@ final class EditorBuffer {
         storage.setAttributedString(NSAttributedString(string: canonical))
         originalText = canonical
         lineEnding = detected
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
-            originalMtime = (attrs[.modificationDate] as? Date) ?? .distantPast
-            if let nsPerms = attrs[.posixPermissions] as? NSNumber {
-                permissions = mode_t(nsPerms.uint16Value)
-            }
-        }
-        updateOriginalFileIdentity(from: url)
+        updateOriginalFileAttributes(from: url)
         // External buffers remain read-only even after a successful reload;
         // the isExternal flag is the authoritative source of read-only-ness.
         readOnly = isExternal ? true : false
