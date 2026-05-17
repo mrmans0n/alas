@@ -291,6 +291,124 @@ struct TabsManagerBufferTests {
         #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "y")
     }
 
+    @Test func bufferRestoredToSnapshotPathUpdatesTabAndCacheKey() throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "edited\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
+
+        let restored = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "a.txt")
+        let cachedByRestoredPath = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "b.txt")
+        let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == tab.id }
+
+        #expect(restored === cachedByRestoredPath)
+        #expect(restored.relativePath == "b.txt")
+        #expect(updatedTab?.title == "b.txt")
+        #expect(updatedTab?.relativeFilePath == "b.txt")
+    }
+
+    @Test func bufferRestoreToOpenTargetPathIsDiscarded() throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let sourceTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let targetTab = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
+        let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        target.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "target ")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: sourceTab.id)
+
+        let restored = manager.buffer(worktreeId: "wt", tabId: sourceTab.id, worktreeRoot: root, relativePath: "a.txt")
+        let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == sourceTab.id }
+
+        #expect(restored !== target)
+        #expect(restored.relativePath == "a.txt")
+        #expect(target.storage.string == "target base\n")
+        #expect(manager.peekBuffer(tabId: targetTab.id) === target)
+        #expect(updatedTab?.relativeFilePath == "a.txt")
+        #expect(try store.read(worktreeId: "wt", tabId: sourceTab.id) == nil)
+    }
+
+    @Test func bufferRestoreToCleanUnloadedTargetPathIsDiscarded() throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let sourceTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let targetTab = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: sourceTab.id)
+
+        let restored = manager.buffer(worktreeId: "wt", tabId: sourceTab.id, worktreeRoot: root, relativePath: "a.txt")
+        let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == sourceTab.id }
+
+        #expect(restored !== target)
+        #expect(restored.relativePath == "a.txt")
+        #expect(target.relativePath == "b.txt")
+        #expect(updatedTab?.relativeFilePath == "a.txt")
+        #expect(try store.read(worktreeId: "wt", tabId: sourceTab.id) == nil)
+    }
+
+    @Test func bufferRestoreAllowsTargetTabSnapshotThatMovesAway() throws {
+        let root = tempWorktree()
+        try "a\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "b\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        try "c\n".write(to: root.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let first = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let second = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
+        let bAttrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let cAttrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("c.txt").path)
+        try store.write(EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "edited b\n",
+            originalText: "b\n",
+            originalMtime: (bAttrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        ), worktreeId: "wt", tabId: first.id)
+        try store.write(EditorBufferStore.Snapshot(
+            relativePath: "c.txt",
+            content: "edited c\n",
+            originalText: "c\n",
+            originalMtime: (cAttrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        ), worktreeId: "wt", tabId: second.id)
+
+        let firstBuffer = manager.buffer(worktreeId: "wt", tabId: first.id, worktreeRoot: root, relativePath: "a.txt")
+        let secondBuffer = manager.buffer(worktreeId: "wt", tabId: second.id, worktreeRoot: root, relativePath: "b.txt")
+
+        #expect(firstBuffer.relativePath == "b.txt")
+        #expect(secondBuffer.relativePath == "c.txt")
+        #expect(manager.tabs(forWorktree: "wt").first { $0.id == first.id }?.relativeFilePath == "b.txt")
+        #expect(manager.tabs(forWorktree: "wt").first { $0.id == second.id }?.relativeFilePath == "c.txt")
+    }
+
     @Test func saveAllSavesUnloadedDirtySnapshots() throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
@@ -311,6 +429,88 @@ struct TabsManagerBufferTests {
         #expect(manager.peekBuffer(tabId: tab.id) == nil)
         #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
         #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "edited\n")
+    }
+
+    @Test func saveAllUpdatesTabWhenUnloadedSnapshotRestoresMovedPath() throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "edited\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
+
+        let errors = manager.saveAll(worktreeRoots: ["wt": root])
+        let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == tab.id }
+
+        #expect(errors.isEmpty)
+        #expect(updatedTab?.title == "b.txt")
+        #expect(updatedTab?.relativeFilePath == "b.txt")
+        #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "edited\n")
+    }
+
+    @Test func saveAllSkipsUnloadedSnapshotThatWouldReplaceLiveTargetBuffer() throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let sourceTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let targetTab = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
+        let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        target.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "target ")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: sourceTab.id)
+
+        let errors = manager.saveAll(worktreeRoots: ["wt": root])
+        let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == sourceTab.id }
+
+        #expect(errors.isEmpty)
+        #expect(updatedTab?.relativeFilePath == "a.txt")
+        #expect(target.storage.string == "target base\n")
+        #expect(manager.peekBuffer(tabId: targetTab.id) === target)
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "target base\n")
+        #expect(try store.read(worktreeId: "wt", tabId: sourceTab.id) == nil)
+    }
+
+    @Test func saveAllUnsavedUpdatesTabWhenUnloadedSnapshotRestoresMovedPath() throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "edited\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
+
+        let errors = manager.saveAllUnsaved(forWorktree: "wt", root: root)
+        let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == tab.id }
+
+        #expect(errors.isEmpty)
+        #expect(updatedTab?.title == "b.txt")
+        #expect(updatedTab?.relativeFilePath == "b.txt")
+        #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "edited\n")
     }
 
     @Test func saveAllPreservesUnloadedSnapshotWhenSaveFails() throws {

@@ -629,8 +629,16 @@ final class TabsManager {
     /// hot-restore from snapshot) on first access.
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
         if let key = bufferKeys[tabId], let existing = buffers[key] { return existing }
+        let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
+        let restoresToDifferentPath = snapshot.map { $0.relativePath != relativePath } ?? false
+        if restoresToDifferentPath {
+            if let snapshot,
+               !canFollowBufferPathChange(worktreeId: worktreeId, oldPath: relativePath, newPath: snapshot.relativePath) {
+                bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
+            }
+        }
         let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
-        if let existing = buffers[key] {
+        if !restoresToDifferentPath, let existing = buffers[key] {
             bufferKeys[tabId] = key
             return existing
         }
@@ -669,8 +677,15 @@ final class TabsManager {
             guard let buffer else { return }
             self?.discardSnapshotsForAllTabs(buffer)
         }
-        buffers[key] = buffer
-        bufferKeys[tabId] = key
+        if let restoredPathChange = buffer.consumeRestoredPathChange() {
+            let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: restoredPathChange.newPath)
+            buffers[restoredKey] = buffer
+            bufferKeys[tabId] = restoredKey
+            _ = updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: restoredPathChange.newPath)
+        } else {
+            buffers[key] = buffer
+            bufferKeys[tabId] = key
+        }
         return buffer
     }
 
@@ -933,25 +948,7 @@ final class TabsManager {
                 guard case .editor(let state) = tab,
                       peekBuffer(tabId: state.id) == nil,
                       (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-                let buffer: EditorBuffer
-                if let lsp {
-                    buffer = EditorBuffer(
-                        worktreeRoot: root,
-                        relativePath: state.relativePath,
-                        store: bufferStore,
-                        worktreeId: worktreeId,
-                        tabId: state.id,
-                        lsp: lsp
-                    )
-                } else {
-                    buffer = EditorBuffer(
-                        worktreeRoot: root,
-                        relativePath: state.relativePath,
-                        store: bufferStore,
-                        worktreeId: worktreeId,
-                        tabId: state.id
-                    )
-                }
+                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
                 do {
                     try buffer.saveRecordingError()
                     buffer.close(persistDirtySnapshot: false)
@@ -991,25 +988,7 @@ final class TabsManager {
             guard case .editor(let state) = tab,
                   peekBuffer(tabId: state.id) == nil,
                   (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-            let buffer: EditorBuffer
-            if let lsp {
-                buffer = EditorBuffer(
-                    worktreeRoot: root,
-                    relativePath: state.relativePath,
-                    store: bufferStore,
-                    worktreeId: worktreeId,
-                    tabId: state.id,
-                    lsp: lsp
-                )
-            } else {
-                buffer = EditorBuffer(
-                    worktreeRoot: root,
-                    relativePath: state.relativePath,
-                    store: bufferStore,
-                    worktreeId: worktreeId,
-                    tabId: state.id
-                )
-            }
+            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
             do {
                 try buffer.saveRecordingError()
                 buffer.close(persistDirtySnapshot: false)
@@ -1019,6 +998,38 @@ final class TabsManager {
             }
         }
         return errors
+    }
+
+    private func materializeSnapshotBufferForSave(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer? {
+        guard let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil else { return nil }
+        if snapshot.relativePath != relativePath,
+           !canFollowBufferPathChange(worktreeId: worktreeId, oldPath: relativePath, newPath: snapshot.relativePath) {
+            bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
+            return nil
+        }
+        let buffer: EditorBuffer
+        if let lsp {
+            buffer = EditorBuffer(
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath,
+                store: bufferStore,
+                worktreeId: worktreeId,
+                tabId: tabId,
+                lsp: lsp
+            )
+        } else {
+            buffer = EditorBuffer(
+                worktreeRoot: worktreeRoot,
+                relativePath: relativePath,
+                store: bufferStore,
+                worktreeId: worktreeId,
+                tabId: tabId
+            )
+        }
+        if buffer.relativePath != relativePath {
+            _ = updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: buffer.relativePath)
+        }
+        return buffer
     }
 
     /// Save the active editor tab's buffer for `worktreeId`. No-op if the
@@ -1077,13 +1088,17 @@ final class TabsManager {
         guard oldKey != newKey else { return true }
         guard buffers[newKey] == nil else { return false }
         guard let file = byWorktree[worktreeId] else { return true }
-        return !file.tabs.contains { tab in
+        for tab in file.tabs {
             guard case .editor(let state) = tab,
                   state.relativePath == newPath,
-                  bufferKeys[state.id] == nil,
-                  (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { return false }
-            return true
+                  bufferKeys[state.id] == nil else { continue }
+            if let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) ?? nil,
+               snapshot.relativePath != newPath {
+                continue
+            }
+            return false
         }
+        return true
     }
 
     /// Re-fires `didOpen` for every live buffer whose resolved LSP language
