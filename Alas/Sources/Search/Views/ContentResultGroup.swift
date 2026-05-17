@@ -57,10 +57,12 @@ struct ContentResultGroupView: View {
 
     private func hitRow(hit: ContentSearchHit, absIndex: Int, isSelected: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text("\(hit.line)")
+            Text(verbatim: Self.lineNumberLabel(for: hit.line))
                 .font(.system(size: 10.5, design: .monospaced).monospacedDigit())
                 .foregroundColor(theme.color("fg-faint"))
-                .frame(width: 32, alignment: .trailing)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 32, alignment: .trailing)
             snippet(for: hit)
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundColor(theme.color("fg-dim"))
@@ -83,6 +85,10 @@ struct ContentResultGroupView: View {
         .contentShape(Rectangle())
         .onHover { if $0 { onHover(absIndex) } }
         .onTapGesture { onTap(hit) }
+    }
+
+    static func lineNumberLabel(for line: Int) -> String {
+        String(line)
     }
 
     @ViewBuilder
