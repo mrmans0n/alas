@@ -285,6 +285,37 @@ struct SurfaceViewKeyboardTests {
         #expect(io.calls.isEmpty)
     }
 
+    @Test @MainActor func setMarkedText_sendsPreeditAndTracksState() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.setMarkedText(
+            "か" as NSString,
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        #expect(io.calls == [.preedit("か")])
+        #expect(view.hasMarkedText() == true)
+        #expect(view.markedRange() == NSRange(location: 0, length: 1))
+    }
+
+    @Test @MainActor func setMarkedText_emptyClearsState() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.setMarkedText("" as NSString, selectedRange: NSRange(location: 0, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.preedit("か"), .preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func setMarkedText_acceptsAttributedString() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let attr = NSAttributedString(string: "한")
+        view.setMarkedText(attr, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.preedit("한")])
+        #expect(view.hasMarkedText() == true)
+    }
+
     @Test @MainActor func testInitializerWiresFakeIO() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)
