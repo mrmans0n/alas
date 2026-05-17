@@ -392,9 +392,21 @@ extension AlasGhostty {
                 ) ?? event
             }
 
+            // Step 0: While an IME composition is active, defer the entire
+            // keystroke to AppKit. Forwarding Backspace/Enter/arrows/Ctrl-H
+            // to Ghostty mid-composition would also mutate the shell line
+            // behind the preedit (Ghostty's encoder doesn't know that those
+            // keys are meant to edit/commit the composition rather than
+            // reach the PTY). The NSTextInputClient callbacks
+            // (setMarkedText / unmarkText / insertText / doCommand) carry
+            // whatever should actually reach the surface.
+            if hasMarkedText() {
+                interpretKeyEvents([translationEvent])
+                return
+            }
+
             // Step A: forward the raw key event to Ghostty so it can match a
-            // keybinding. composing = hasMarkedText() tells the backend that
-            // any text payload is part of an active IME composition.
+            // keybinding.
             //
             // For Cmd/Ctrl-modified keys we attach the layout-translated text
             // (alasGhosttyCharacters strips Ctrl and returns the unshifted
@@ -405,7 +417,6 @@ extension AlasGhostty {
             // leave text nil so the insertText callback can deliver it
             // (avoids doubling).
             var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
-            keyEv.composing = hasMarkedText()
 
             let cmdOrCtrl = event.modifierFlags.contains(.command)
                 || event.modifierFlags.contains(.control)
