@@ -148,6 +148,8 @@ private struct AgentCard: View {
                         get: { agent.isEnabled },
                         set: { onToggle($0) }
                     ))
+                    .disabled(!installed)
+                    .opacity(installed ? 1 : 0.4)
                 }
                 Text(agent.resolvedBinary)
                     .font(.system(size: 11, design: .monospaced))
