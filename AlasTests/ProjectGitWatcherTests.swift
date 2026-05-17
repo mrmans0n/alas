@@ -153,4 +153,33 @@ struct ProjectGitWatcherTests {
         #expect(heads.isEmpty)
         #expect(topologyFires >= 1)
     }
+
+    @Test func stopBeforeAsyncResolveCompletesDoesNotStartStream() async throws {
+        let (gitDir, _) = try setupRepo()
+        defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent().deletingLastPathComponent()) }
+
+        var streamStarts = 0
+        let watcher = ProjectGitWatcher(
+            repoPath: gitDir.deletingLastPathComponent(),
+            resolvedGitDir: nil,
+            resolvedWorktreeRoot: nil,
+            headDebounceInterval: 0.05,
+            headDebounceMaxWait: 0.2,
+            topologyDebounceInterval: 0.05,
+            topologyDebounceMaxWait: 0.2,
+            gitInfoResolver: { _ in
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                return (gitDir, gitDir.deletingLastPathComponent())
+            },
+            startStreamOverride: { _, _ in
+                streamStarts += 1
+            }
+        )
+
+        watcher.start()
+        watcher.stop()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(streamStarts == 0)
+    }
 }
