@@ -506,6 +506,19 @@ extension AlasGhostty {
             return false
         }
 
+        // MARK: - NSTextInputClient doCommand
+
+        // NSResponder declares doCommand(by:); the NSTextInputClient extension
+        // conforms our class to the protocol, but the override of NSResponder's
+        // method lives here in the main class body for conventional placement.
+        // The raw keyDown was already delivered to Ghostty before
+        // interpretKeyEvents fired, so we intentionally swallow the selector.
+        // Calling super would let AppKit beep or perform a default behavior
+        // that is wrong for a terminal.
+        override func doCommand(by selector: Selector) {
+            // intentionally empty
+        }
+
         // MARK: - Mouse events
 
         override func mouseDown(with event: NSEvent) {
@@ -825,10 +838,8 @@ extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
         return window.convertToScreen(windowRect)
     }
 
-    override func doCommand(by selector: Selector) {
-        // Intentionally do nothing. The raw keyDown was already delivered to
-        // Ghostty before interpretKeyEvents fired. Calling super would let
-        // AppKit beep or perform a default behavior that is wrong for a
-        // terminal.
-    }
+    // doCommand(by:) lives in SurfaceView's main class body (above) — Swift's
+    // convention is to place NSResponder overrides on the class itself, not
+    // in extensions. NSTextInputClient.doCommand(by:) is satisfied by that
+    // override.
 }
