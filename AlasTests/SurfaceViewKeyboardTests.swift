@@ -249,6 +249,19 @@ struct SurfaceViewKeyboardTests {
         ])
     }
 
+    @Test @MainActor func textInputClient_defaultsAreEmpty() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        #expect(view.hasMarkedText() == false)
+        #expect(view.selectedRange().location == NSNotFound)
+        #expect(view.selectedRange().length == 0)
+        #expect(view.markedRange().location == NSNotFound)
+        #expect(view.markedRange().length == 0)
+        #expect(view.attributedSubstring(forProposedRange: NSRange(location: 0, length: 0), actualRange: nil) == nil)
+        #expect(view.validAttributesForMarkedText().isEmpty)
+        #expect(view.characterIndex(for: .zero) == NSNotFound)
+    }
+
     @Test @MainActor func testInitializerWiresFakeIO() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)

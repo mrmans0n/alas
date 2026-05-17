@@ -16,6 +16,7 @@
 
 import AppKit
 import Metal
+import ObjectiveC
 import QuartzCore
 import GhosttyKit
 
@@ -691,5 +692,70 @@ private func alasGhosttyMomentum(_ phase: NSEvent.Phase) -> ghostty_input_mouse_
     case .cancelled:    return GHOSTTY_MOUSE_MOMENTUM_CANCELLED
     case .mayBegin:     return GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN
     default:            return GHOSTTY_MOUSE_MOMENTUM_NONE
+    }
+}
+
+// MARK: - NSTextInputClient
+
+extension AlasGhostty.SurfaceView: NSTextInputClient {
+    // State for tracking marked (composing) text. nil means "no composition active".
+    private static var markedTextKey: UInt8 = 0
+
+    private var markedText: String? {
+        get { objc_getAssociatedObject(self, &Self.markedTextKey) as? String }
+        set { objc_setAssociatedObject(self, &Self.markedTextKey, newValue, .OBJC_ASSOCIATION_COPY_NONATOMIC) }
+    }
+
+    // MARK: Query methods
+
+    func hasMarkedText() -> Bool {
+        return !(markedText ?? "").isEmpty
+    }
+
+    func selectedRange() -> NSRange {
+        return NSRange(location: NSNotFound, length: 0)
+    }
+
+    func markedRange() -> NSRange {
+        guard let marked = markedText, !marked.isEmpty else {
+            return NSRange(location: NSNotFound, length: 0)
+        }
+        return NSRange(location: 0, length: (marked as NSString).length)
+    }
+
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+        return nil
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        return []
+    }
+
+    func characterIndex(for point: NSPoint) -> Int {
+        return NSNotFound
+    }
+
+    // MARK: Active methods — full bodies arrive in later tasks
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        // Implemented in Task 5.
+    }
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        // Implemented in Task 6.
+    }
+
+    func unmarkText() {
+        // Implemented in Task 7.
+    }
+
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        // Implemented in Task 8.
+        return .zero
+    }
+
+    override func doCommand(by selector: Selector) {
+        // Implemented in Task 9. Default: do nothing — the raw keyDown
+        // was already delivered to Ghostty.
     }
 }
