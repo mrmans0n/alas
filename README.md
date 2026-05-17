@@ -2,7 +2,7 @@
 
 **Every agent. Every worktree. One window.**
 
-Spin up agents across worktrees, hop between them like browser tabs, and keep the terminal, diff, and files in one place. Native macOS, built on [libghostty](https://github.com/ghostty-org/ghostty). No Electron.
+Spin up agents across worktrees, hop between them like browser tabs, and keep the terminal, diff, and files in one place. Native macOS, built on [libghostty](https://github.com/ghostty-org/ghostty).
 
 > Requires macOS 14 Sonoma or later. Apple Silicon only.
 
