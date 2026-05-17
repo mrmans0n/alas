@@ -771,8 +771,20 @@ extension AlasGhostty.SurfaceView: NSTextInputClient {
     }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        // Implemented in Task 8.
-        return .zero
+        // Ghostty reports the IME caret in top-left-origin view coordinates
+        // (same convention used by mouseMoved which does `frame.height - y`).
+        // AppKit's NSView coordinate system is bottom-left-origin, so flip
+        // Y before converting to window/screen coordinates.
+        let ghosttyRect = surfaceIO.imePoint()
+        let viewRect = NSRect(
+            x: ghosttyRect.origin.x,
+            y: frame.height - ghosttyRect.origin.y - ghosttyRect.size.height,
+            width: ghosttyRect.size.width,
+            height: ghosttyRect.size.height
+        )
+        guard let window else { return .zero }
+        let windowRect = convert(viewRect, to: nil)
+        return window.convertToScreen(windowRect)
     }
 
     override func doCommand(by selector: Selector) {

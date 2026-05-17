@@ -325,6 +325,32 @@ struct SurfaceViewKeyboardTests {
         #expect(view.hasMarkedText() == false)
     }
 
+    @Test @MainActor func firstRect_noWindowReturnsZero() {
+        let io = FakeGhosttySurfaceIO()
+        io.imePointRect = CGRect(x: 10, y: 20, width: 8, height: 16)
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let rect = view.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+        #expect(rect == .zero)
+    }
+
+    @Test @MainActor func firstRect_withWindowConvertsToScreen() {
+        let io = FakeGhosttySurfaceIO()
+        io.imePointRect = CGRect(x: 10, y: 20, width: 8, height: 16)
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 200, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(view)
+        view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+
+        let rect = view.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+        #expect(rect.size == CGSize(width: 8, height: 16))
+        #expect(rect.origin != .zero)
+    }
+
     @Test @MainActor func testInitializerWiresFakeIO() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)
