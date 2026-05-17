@@ -384,6 +384,28 @@ struct AppStateCleanupTests {
         #expect(state.selectedWorktreeId == nil)
     }
 
+    @Test func removeProjectClosesTabsForUnrefreshedMainWorktree() async throws {
+        let repo = try await makeRepo(name: "remove-unrefreshed")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "unrefreshed", color: "#5fb7c4"
+        )
+        // Deliberately skip refreshWorktrees: worktreesByProject is empty,
+        // simulating the post-launch window before refreshAll completes.
+        #expect(state.projectsManager.worktrees(projectId: project.id).isEmpty)
+
+        let mainWorktreeId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+        state.tabs.appendTerminal(worktreeId: mainWorktreeId, title: "term", sessionId: "s1")
+        #expect(state.tabs.tabs(forWorktree: mainWorktreeId).count == 1)
+
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.tabs.tabs(forWorktree: mainWorktreeId).isEmpty)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,

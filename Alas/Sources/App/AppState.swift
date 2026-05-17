@@ -428,7 +428,13 @@ final class AppState {
     }
 
     func removeProject(id: String) {
-        let beforeIds = allWorktreeIds()
+        var beforeIds = allWorktreeIds()
+        if let project = projects.first(where: { $0.id == id }) {
+            beforeIds.insert(Worktree.makeId(path: URL(fileURLWithPath: project.path)))
+            for hidden in project.hiddenWorktreePaths {
+                beforeIds.insert(hidden)
+            }
+        }
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
         saveProjects()
