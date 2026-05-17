@@ -248,4 +248,20 @@ struct SurfaceViewKeyboardTests {
             .preedit(nil),
         ])
     }
+
+    @Test @MainActor func testInitializerWiresFakeIO() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        var keyEv = ghostty_input_key_s()
+        keyEv.action = GHOSTTY_ACTION_PRESS
+        keyEv.keycode = 42
+        _ = view.surfaceIOForTesting.sendKey(keyEv)
+        #expect(io.calls == [.key(
+            action: GHOSTTY_ACTION_PRESS.rawValue,
+            keycode: 42,
+            mods: 0,
+            text: nil,
+            composing: false
+        )])
+    }
 }

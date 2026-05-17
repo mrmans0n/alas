@@ -105,8 +105,9 @@ extension AlasGhostty {
         /// `cSurface != nil` first (already the existing pattern).
         private var surfaceIO: GhosttySurfaceIO!
 
-        /// Unretained back-reference to the owning App.
-        private let app: App
+        /// Unretained back-reference to the owning App. Optional so the
+        /// test-only `init(testIO:)` can omit it.
+        private let app: App?
 
         /// Whether the surface currently has keyboard focus.
         private var isFocused: Bool = false
@@ -147,6 +148,19 @@ extension AlasGhostty {
             // Set up mouse tracking so we receive mouseMoved events.
             updateTrackingAreas()
         }
+
+        /// Test-only initializer that bypasses ghostty_surface_new and uses
+        /// the supplied IO seam. Never call from production code.
+        init(testIO: GhosttySurfaceIO) {
+            self.app = nil
+            super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+            wantsLayer = true
+            self.cSurface = nil
+            self.surfaceIO = testIO
+        }
+
+        /// Test-only accessor for the IO seam.
+        var surfaceIOForTesting: GhosttySurfaceIO { surfaceIO }
 
         required init?(coder: NSCoder) {
             fatalError("SurfaceView does not support NSCoder")
