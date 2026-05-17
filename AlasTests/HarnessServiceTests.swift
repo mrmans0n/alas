@@ -172,6 +172,30 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["session-1"]?.state == .idle)
     }
 
+    @Test func cursorIdleDebounce_commitsLatestIdleEvent() async throws {
+        let (service, collector) = makeService(cursorIdleDebounceInterval: 0.05)
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .cursor, body: "first"),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .cursor, body: "second"),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { false }
+        )
+
+        try await Task.sleep(nanoseconds: 80_000_000)
+        #expect(service.activityBySession["session-1"]?.state == .idle)
+        #expect(service.activityBySession["session-1"]?.lastBody == "second")
+        #expect(collector.requests.count == 1)
+        #expect(collector.requests[0].content.body == "second")
+    }
+
     @Test func cursorIdleDebounce_isCancelledByBusy() async throws {
         let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
         service.handleSocketEvent(

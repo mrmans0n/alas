@@ -25,6 +25,7 @@ final class HarnessService {
     /// `.idle` events for Cursor so the `run` badge stays visible until
     /// work has actually settled.
     private var cursorIdleDebouncers: [String: DebounceTimer] = [:]
+    private var pendingCursorIdleEvents: [String: AgentHookEvent] = [:]
     private let cursorIdleDebounceInterval: TimeInterval
 
     init(cursorIdleDebounceInterval: TimeInterval = 2.0) {
@@ -94,6 +95,7 @@ final class HarnessService {
             // Cancel any pending cursor-idle debounce — work is actually ongoing.
             if event.agent == .cursor {
                 cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
+                pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
             }
             activityBySession[event.sessionId] = HarnessActivityState(
                 agent: event.agent, state: .busy, pid: event.pid,
@@ -104,6 +106,7 @@ final class HarnessService {
             // Cancel pending cursor-idle debounce; awaiting is a real state change.
             if event.agent == .cursor {
                 cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
+                pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
             }
             activityBySession[event.sessionId] = HarnessActivityState(
                 agent: event.agent, state: .awaitingInput, pid: event.pid,
@@ -123,7 +126,7 @@ final class HarnessService {
                 // Debounce cursor idle: keep the badge alive briefly in case
                 // a follow-up busy arrives (which cancels this timer).
                 let sid = event.sessionId
-                let ev = event
+                pendingCursorIdleEvents[sid] = event
                 if let existing = cursorIdleDebouncers[sid] {
                     existing.poke()
                 } else {
@@ -132,8 +135,11 @@ final class HarnessService {
                         queue: .main
                     )
                     debouncer.onFire = { [weak self] in
-                        self?.commitIdle(event: ev, stateLookup: stateLookup)
-                        self?.cursorIdleDebouncers.removeValue(forKey: sid)
+                        guard let self else { return }
+                        if let event = self.pendingCursorIdleEvents.removeValue(forKey: sid) {
+                            self.commitIdle(event: event, stateLookup: stateLookup)
+                        }
+                        self.cursorIdleDebouncers.removeValue(forKey: sid)
                     }
                     cursorIdleDebouncers[sid] = debouncer
                     debouncer.poke()
@@ -166,12 +172,14 @@ final class HarnessService {
         socketServer.shutdown()
         for debouncer in cursorIdleDebouncers.values { debouncer.cancel() }
         cursorIdleDebouncers.removeAll()
+        pendingCursorIdleEvents.removeAll()
     }
 
     func forgetSession(_ sessionId: String) {
         harnessBySession.removeValue(forKey: sessionId)
         activityBySession.removeValue(forKey: sessionId)
         cursorIdleDebouncers.removeValue(forKey: sessionId)?.cancel()
+        pendingCursorIdleEvents.removeValue(forKey: sessionId)
     }
 
     enum AggregatedState: String, Equatable {
