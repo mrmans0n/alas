@@ -122,6 +122,22 @@ struct EditorBufferTests {
         #expect(buffer.dirty == true)
     }
 
+    @Test func restoreAfterDirtyMoveUsesSnapshotPath() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
+
+        try buffer.moveTo(relativePath: "b.txt")
+
+        let restored = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        #expect(restored.relativePath == "b.txt")
+        try restored.save()
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("a.txt").path))
+        #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "HELLO\n")
+    }
+
     @Test func moveToAllowsCaseOnlyRename() throws {
         let root = tempWorktree()
         _ = try writeFile(root, "case.txt", "hello\n")

@@ -682,6 +682,12 @@ final class EditorBuffer {
     // MARK: - Snapshot / restore (hot-exit)
 
     private func applySnapshot(_ snap: EditorBufferStore.Snapshot) {
+        guard canRestoreSnapshotPath(snap.relativePath) else {
+            discardSnapshot()
+            return
+        }
+        relativePath = snap.relativePath
+        language = lsp?.language(forFileExtension: (snap.relativePath as NSString).pathExtension)
         loading = true
         defer { loading = false }
         storage.setAttributedString(NSAttributedString(string: snap.content))
@@ -689,6 +695,17 @@ final class EditorBuffer {
         originalMtime = snap.originalMtime
         lineEnding = snap.lineEnding
         readOnly = false
+        updateOriginalFileIdentity(from: worktreeRoot.appendingPathComponent(snap.relativePath))
+    }
+
+    private func canRestoreSnapshotPath(_ path: String) -> Bool {
+        guard !path.isEmpty,
+              !path.contains("\0"),
+              !(path as NSString).isAbsolutePath else { return false }
+        let rootPath = worktreeRoot.standardizedFileURL.path
+        let targetPath = worktreeRoot.appendingPathComponent(path).standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        return targetPath.hasPrefix(prefix)
     }
 
     private func scheduleSnapshot() {
