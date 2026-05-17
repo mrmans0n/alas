@@ -9,6 +9,7 @@ final class HoverFeature {
     private var debounce: Task<Void, Never>?
     private var popover: NSPopover?
     private var lastPosition: NSPoint?
+    private var requestID: UInt64 = 0
 
     init(textView: CodeTextView, getClient: @escaping () -> LSPClient?, getURI: @escaping () -> String?) {
         self.textView = textView
@@ -22,15 +23,17 @@ final class HoverFeature {
         if let last = lastPosition, hypot(last.x - point.x, last.y - point.y) < 3 { return }
         lastPosition = point
         debounce?.cancel()
+        requestID += 1
+        let currentRequestID = requestID
         let captured = point
         debounce = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
-            await self?.show(at: captured)
+            await self?.show(at: captured, requestID: currentRequestID)
         }
     }
 
-    private func show(at point: NSPoint) async {
+    private func show(at point: NSPoint, requestID currentRequestID: UInt64) async {
         guard let textView, let client = getClient(), let uri = getURI() else {
             closePopover()
             return
@@ -43,9 +46,11 @@ final class HoverFeature {
         do {
             result = try await client.hover(uri: uri, position: position)
         } catch {
+            guard isCurrentRequest(currentRequestID, uri: uri, position: position, point: point) else { return }
             closePopover()
             return
         }
+        guard isCurrentRequest(currentRequestID, uri: uri, position: position, point: point) else { return }
         guard let result else {
             closePopover()
             return
@@ -61,8 +66,18 @@ final class HoverFeature {
         }
         let textRect = textView.firstRect(for: position) ?? CGRect(origin: point, size: .zero)
         await MainActor.run {
+            guard self.isCurrentRequest(currentRequestID, uri: uri, position: position, point: point) else { return }
             self.presentPopover(text: body, anchor: textRect, in: textView)
         }
+    }
+
+    private func isCurrentRequest(_ currentRequestID: UInt64, uri: String, position: LSPPosition, point: NSPoint) -> Bool {
+        guard !Task.isCancelled,
+              requestID == currentRequestID,
+              getURI() == uri,
+              textView?.lspPosition(at: point) == position
+        else { return false }
+        return true
     }
 
     private func presentPopover(text: String, anchor: NSRect, in view: NSView) {
