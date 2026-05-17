@@ -393,7 +393,31 @@ extension AlasGhostty {
             // special selectors. The NSTextInputClient callbacks
             // (insertText / setMarkedText / unmarkText / doCommand) forward
             // to the IO seam as appropriate.
-            interpretKeyEvents([event])
+            //
+            // When Ghostty's translation modifiers differ from the physical
+            // event (e.g. `macos-option-as-alt` strips Option), build a
+            // synthetic event with the adjusted modifiers — otherwise AppKit
+            // would still see physical Option and commit Option-glyphs like
+            // `ƒ` via insertText after the raw Alt-modified key was already
+            // delivered to Ghostty in Step A.
+            let translationEvent: NSEvent
+            if translationFlags == event.modifierFlags {
+                translationEvent = event
+            } else {
+                translationEvent = NSEvent.keyEvent(
+                    with: event.type,
+                    location: event.locationInWindow,
+                    modifierFlags: translationFlags,
+                    timestamp: event.timestamp,
+                    windowNumber: event.windowNumber,
+                    context: nil,
+                    characters: event.characters(byApplyingModifiers: translationFlags) ?? "",
+                    charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+                    isARepeat: event.isARepeat,
+                    keyCode: event.keyCode
+                ) ?? event
+            }
+            interpretKeyEvents([translationEvent])
         }
 
         override func keyUp(with event: NSEvent) {
