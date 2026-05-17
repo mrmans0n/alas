@@ -368,38 +368,12 @@ extension AlasGhostty {
                 }
             }
 
-            // Step A: forward the raw key event to Ghostty so it can match a
-            // keybinding. composing = hasMarkedText() tells the backend that
-            // a text payload (if any) is part of an active IME composition.
-            // text is left nil here — the actual text payload is delivered
-            // separately via insertText → ghostty_surface_text.
-            var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
-            keyEv.composing = hasMarkedText()
-            let consumed = io.sendKey(keyEv)
-            if consumed { return }
-
-            // Step B: Cmd/Ctrl events bypass interpretKeyEvents so menus and
-            // IMEs can't swallow Cmd+C / Ctrl+C. The raw key was already
-            // delivered above, which is all Ghostty needs for these shortcuts.
-            // Option is intentionally NOT gated here — it must reach
-            // interpretKeyEvents so dead-key composition (Opt+e + letter on
-            // some layouts) and Opt+letter selectors (Opt+Backspace →
-            // deleteWordBackward:) can fire.
-            let cmdOrCtrl = event.modifierFlags.contains(.command)
-                || event.modifierFlags.contains(.control)
-            if cmdOrCtrl { return }
-
-            // Step C: let AppKit resolve dead keys, IME composition, and
-            // special selectors. The NSTextInputClient callbacks
-            // (insertText / setMarkedText / unmarkText / doCommand) forward
-            // to the IO seam as appropriate.
-            //
-            // When Ghostty's translation modifiers differ from the physical
-            // event (e.g. `macos-option-as-alt` strips Option), build a
-            // synthetic event with the adjusted modifiers — otherwise AppKit
-            // would still see physical Option and commit Option-glyphs like
-            // `ƒ` via insertText after the raw Alt-modified key was already
-            // delivered to Ghostty in Step A.
+            // Build a translation event whose modifiers match what Ghostty
+            // wants for character translation (handles `macos-option-as-alt`
+            // and similar). Used in two places below: to extract the layout-
+            // translated character for Cmd/Ctrl forwarding, and as the event
+            // fed to interpretKeyEvents so AppKit doesn't commit Option-
+            // glyphs like `ƒ` after the raw Alt-modified key was delivered.
             let translationEvent: NSEvent
             if translationFlags == event.modifierFlags {
                 translationEvent = event
@@ -417,6 +391,50 @@ extension AlasGhostty {
                     keyCode: event.keyCode
                 ) ?? event
             }
+
+            // Step A: forward the raw key event to Ghostty so it can match a
+            // keybinding. composing = hasMarkedText() tells the backend that
+            // any text payload is part of an active IME composition.
+            //
+            // For Cmd/Ctrl-modified keys we attach the layout-translated text
+            // (alasGhosttyCharacters strips Ctrl and returns the unshifted
+            // character, e.g. Ctrl+L on Dvorak → "l") because Step B below
+            // returns before interpretKeyEvents — so this is Ghostty's only
+            // chance to see the layout character it needs to encode the
+            // control byte correctly on non-US layouts. For plain keys we
+            // leave text nil so the insertText callback can deliver it
+            // (avoids doubling).
+            var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
+            keyEv.composing = hasMarkedText()
+
+            let cmdOrCtrl = event.modifierFlags.contains(.command)
+                || event.modifierFlags.contains(.control)
+            let consumed: Bool
+            if cmdOrCtrl, let chars = translationEvent.alasGhosttyCharacters {
+                consumed = chars.withCString { ptr -> Bool in
+                    keyEv.text = ptr
+                    return io.sendKey(keyEv)
+                }
+            } else {
+                consumed = io.sendKey(keyEv)
+            }
+            if consumed { return }
+
+            // Step B: Cmd/Ctrl events bypass interpretKeyEvents so menus and
+            // IMEs can't swallow Cmd+C / Ctrl+C. The raw key (with text, see
+            // Step A) was already delivered above, which is all Ghostty needs
+            // for these shortcuts.
+            //
+            // Option is intentionally NOT gated here — it must reach
+            // interpretKeyEvents so dead-key composition (Opt+e + letter on
+            // some layouts) and Opt+letter selectors (Opt+Backspace →
+            // deleteWordBackward:) can fire.
+            if cmdOrCtrl { return }
+
+            // Step C: let AppKit resolve dead keys, IME composition, and
+            // special selectors. The NSTextInputClient callbacks
+            // (insertText / setMarkedText / unmarkText / doCommand) forward
+            // to the IO seam as appropriate.
             interpretKeyEvents([translationEvent])
         }
 
