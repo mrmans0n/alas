@@ -101,10 +101,9 @@ extension AlasGhostty {
         nonisolated(unsafe) private(set) var cSurface: ghostty_surface_t?
 
         /// Narrow IO seam around ghostty_surface_* calls used by the input
-        /// pipeline. Initialized after a successful ghostty_surface_new().
-        /// Force-unwrapping at use sites is unsafe — call sites must guard on
-        /// `cSurface != nil` first (already the existing pattern).
-        private var surfaceIO: GhosttySurfaceIO!
+        /// pipeline. Initialized after a successful ghostty_surface_new();
+        /// `nil` when surface init failed. Call sites must guard before use.
+        private var surfaceIO: GhosttySurfaceIO?
 
         /// Unretained back-reference to the owning App. Optional so the
         /// test-only `init(testIO:)` can omit it.
@@ -161,7 +160,7 @@ extension AlasGhostty {
         }
 
         /// Test-only accessor for the IO seam.
-        var surfaceIOForTesting: GhosttySurfaceIO { surfaceIO }
+        var surfaceIOForTesting: GhosttySurfaceIO { surfaceIO! }
 
         required init?(coder: NSCoder) {
             fatalError("SurfaceView does not support NSCoder")
@@ -346,10 +345,10 @@ extension AlasGhostty {
         // MARK: - Keyboard events
 
         override func keyDown(with event: NSEvent) {
-            guard let surface = cSurface else {
-                interpretKeyEvents([event])
-                return
-            }
+            // If surface init failed, the view is in a broken state — drop the
+            // event rather than routing it into `interpretKeyEvents` and then
+            // crashing in an NSTextInputClient callback that needs surfaceIO.
+            guard let surface = cSurface, let io = surfaceIO else { return }
 
             let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
 
@@ -376,12 +375,16 @@ extension AlasGhostty {
             // separately via insertText → ghostty_surface_text.
             var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
             keyEv.composing = hasMarkedText()
-            let consumed = surfaceIO.sendKey(keyEv)
+            let consumed = io.sendKey(keyEv)
             if consumed { return }
 
             // Step B: Cmd/Ctrl events bypass interpretKeyEvents so menus and
             // IMEs can't swallow Cmd+C / Ctrl+C. The raw key was already
             // delivered above, which is all Ghostty needs for these shortcuts.
+            // Option is intentionally NOT gated here — it must reach
+            // interpretKeyEvents so dead-key composition (Opt+e + letter on
+            // some layouts) and Opt+letter selectors (Opt+Backspace →
+            // deleteWordBackward:) can fire.
             let cmdOrCtrl = event.modifierFlags.contains(.command)
                 || event.modifierFlags.contains(.control)
             if cmdOrCtrl { return }
@@ -394,13 +397,13 @@ extension AlasGhostty {
         }
 
         override func keyUp(with event: NSEvent) {
-            guard cSurface != nil else { return }
+            guard let io = surfaceIO else { return }
             let keyEv = event.alasGhosttyKeyEvent(GHOSTTY_ACTION_RELEASE)
-            _ = surfaceIO.sendKey(keyEv)
+            _ = io.sendKey(keyEv)
         }
 
         override func flagsChanged(with event: NSEvent) {
-            guard cSurface != nil else { return }
+            guard let io = surfaceIO else { return }
 
             // Determine which modifier changed and whether it was pressed or released.
             let mod: UInt32
@@ -419,7 +422,7 @@ extension AlasGhostty {
                 : GHOSTTY_ACTION_RELEASE
 
             let keyEv = event.alasGhosttyKeyEvent(action)
-            _ = surfaceIO.sendKey(keyEv)
+            _ = io.sendKey(keyEv)
         }
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -686,9 +689,9 @@ private func alasGhosttyMomentum(_ phase: NSEvent.Phase) -> ghostty_input_mouse_
 
 // MARK: - NSTextInputClient
 
-extension AlasGhostty.SurfaceView: NSTextInputClient {
+extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
     // State for tracking marked (composing) text. nil means "no composition active".
-    private static var markedTextKey: UInt8 = 0
+    private nonisolated(unsafe) static var markedTextKey: UInt8 = 0
 
     private var markedText: String? {
         get { objc_getAssociatedObject(self, &Self.markedTextKey) as? String }
@@ -733,10 +736,11 @@ extension AlasGhostty.SurfaceView: NSTextInputClient {
         else { return }
 
         guard !text.isEmpty else { return }
+        guard let io = surfaceIO else { return }
 
-        surfaceIO.sendText(text)
+        io.sendText(text)
         markedText = nil
-        surfaceIO.setPreedit(nil)
+        io.setPreedit(nil)
     }
 
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
@@ -745,18 +749,20 @@ extension AlasGhostty.SurfaceView: NSTextInputClient {
         else if let a = string as? NSAttributedString { text = a.string }
         else { return }
 
+        guard let io = surfaceIO else { return }
+
         if text.isEmpty {
             markedText = nil
-            surfaceIO.setPreedit(nil)
+            io.setPreedit(nil)
         } else {
             markedText = text
-            surfaceIO.setPreedit(text)
+            io.setPreedit(text)
         }
     }
 
     func unmarkText() {
         markedText = nil
-        surfaceIO.setPreedit(nil)
+        surfaceIO?.setPreedit(nil)
     }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
@@ -764,7 +770,8 @@ extension AlasGhostty.SurfaceView: NSTextInputClient {
         // (same convention used by mouseMoved which does `frame.height - y`).
         // AppKit's NSView coordinate system is bottom-left-origin, so flip
         // Y before converting to window/screen coordinates.
-        let ghosttyRect = surfaceIO.imePoint()
+        guard let io = surfaceIO else { return .zero }
+        let ghosttyRect = io.imePoint()
         let viewRect = NSRect(
             x: ghosttyRect.origin.x,
             y: frame.height - ghosttyRect.origin.y - ghosttyRect.size.height,
