@@ -16,8 +16,57 @@
 
 import AppKit
 import Metal
+import ObjectiveC
 import QuartzCore
 import GhosttyKit
+
+// MARK: - GhosttySurfaceIO
+
+/// Narrow seam around the four ghostty_surface_* C calls used by the input
+/// pipeline. Lets unit tests drive NSTextInputClient methods without standing
+/// up a real Ghostty surface.
+@MainActor
+protocol GhosttySurfaceIO {
+    func sendKey(_ event: ghostty_input_key_s) -> Bool
+    func sendText(_ text: String)
+    func setPreedit(_ text: String?)
+    func imePoint() -> CGRect
+}
+
+/// Production adapter that forwards to the C ABI of a real ghostty_surface_t.
+@MainActor
+final class LiveGhosttySurfaceIO: GhosttySurfaceIO {
+    nonisolated(unsafe) private let surface: ghostty_surface_t
+    init(_ surface: ghostty_surface_t) { self.surface = surface }
+
+    func sendKey(_ event: ghostty_input_key_s) -> Bool {
+        return ghostty_surface_key(surface, event)
+    }
+
+    func sendText(_ text: String) {
+        let bytes = text.utf8.count
+        text.withCString { ptr in
+            ghostty_surface_text(surface, ptr, UInt(bytes))
+        }
+    }
+
+    func setPreedit(_ text: String?) {
+        if let text {
+            let bytes = text.utf8.count
+            text.withCString { ptr in
+                ghostty_surface_preedit(surface, ptr, UInt(bytes))
+            }
+        } else {
+            ghostty_surface_preedit(surface, nil, 0)
+        }
+    }
+
+    func imePoint() -> CGRect {
+        var x: Double = 0, y: Double = 0, w: Double = 0, h: Double = 0
+        ghostty_surface_ime_point(surface, &x, &y, &w, &h)
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+}
 
 extension AlasGhostty {
     /// Terminal display view. Each session owns exactly one of these.
@@ -51,8 +100,14 @@ extension AlasGhostty {
         /// time and never mutated afterward, so this is safe.
         nonisolated(unsafe) private(set) var cSurface: ghostty_surface_t?
 
-        /// Unretained back-reference to the owning App.
-        private let app: App
+        /// Narrow IO seam around ghostty_surface_* calls used by the input
+        /// pipeline. Initialized after a successful ghostty_surface_new();
+        /// `nil` when surface init failed. Call sites must guard before use.
+        private var surfaceIO: GhosttySurfaceIO?
+
+        /// Unretained back-reference to the owning App. Optional so the
+        /// test-only `init(testIO:)` can omit it.
+        private let app: App?
 
         /// Whether the surface currently has keyboard focus.
         private var isFocused: Bool = false
@@ -88,10 +143,24 @@ extension AlasGhostty {
                 return
             }
             self.cSurface = surface
+            self.surfaceIO = LiveGhosttySurfaceIO(surface)
 
             // Set up mouse tracking so we receive mouseMoved events.
             updateTrackingAreas()
         }
+
+        /// Test-only initializer that bypasses ghostty_surface_new and uses
+        /// the supplied IO seam. Never call from production code.
+        init(testIO: GhosttySurfaceIO) {
+            self.app = nil
+            super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+            wantsLayer = true
+            self.cSurface = nil
+            self.surfaceIO = testIO
+        }
+
+        /// Test-only accessor for the IO seam.
+        var surfaceIOForTesting: GhosttySurfaceIO { surfaceIO! }
 
         required init?(coder: NSCoder) {
             fatalError("SurfaceView does not support NSCoder")
@@ -276,20 +345,19 @@ extension AlasGhostty {
         // MARK: - Keyboard events
 
         override func keyDown(with event: NSEvent) {
-            guard let surface = cSurface else {
-                interpretKeyEvents([event])
-                return
-            }
+            // If surface init failed, the view is in a broken state — drop the
+            // event rather than routing it into `interpretKeyEvents` and then
+            // crashing in an NSTextInputClient callback that needs surfaceIO.
+            guard let surface = cSurface, let io = surfaceIO else { return }
 
             let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
 
-            // Ask Ghostty which modifiers should be used for text translation.
-            // This handles configs such as `macos-option-as-alt` correctly.
+            // Translation-modifier dance: ask Ghostty which modifiers should
+            // participate in text translation for configs like
+            // `macos-option-as-alt`. The result feeds `consumed_mods` on the
+            // key event below.
             let rawMods = alasGhosttyMods(event.modifierFlags)
             let translatedGhosttyMods = ghostty_surface_key_translation_mods(surface, rawMods)
-
-            // Convert translated Ghostty mods back to AppKit flags so we can
-            // derive the correct composed characters (e.g. Option+n → ~).
             let translatedAppKitMods = alasAppKitModifierFlags(from: translatedGhosttyMods)
             var translationFlags = event.modifierFlags
             for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
@@ -300,9 +368,12 @@ extension AlasGhostty {
                 }
             }
 
-            // If translation modifiers differ we must build a new event.
-            // Reusing the original event when they're equal is required for
-            // some IME behaviours (see upstream Ghostty comment).
+            // Build a translation event whose modifiers match what Ghostty
+            // wants for character translation (handles `macos-option-as-alt`
+            // and similar). Used in two places below: to extract the layout-
+            // translated character for Cmd/Ctrl forwarding, and as the event
+            // fed to interpretKeyEvents so AppKit doesn't commit Option-
+            // glyphs like `ƒ` after the raw Alt-modified key was delivered.
             let translationEvent: NSEvent
             if translationFlags == event.modifierFlags {
                 translationEvent = event
@@ -321,27 +392,71 @@ extension AlasGhostty {
                 ) ?? event
             }
 
-            var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
-            let chars = translationEvent.alasGhosttyCharacters
+            // Step 0: While an IME composition is active, defer the entire
+            // keystroke to AppKit. Forwarding Backspace/Enter/arrows/Ctrl-H
+            // to Ghostty mid-composition would also mutate the shell line
+            // behind the preedit (Ghostty's encoder doesn't know that those
+            // keys are meant to edit/commit the composition rather than
+            // reach the PTY). The NSTextInputClient callbacks
+            // (setMarkedText / unmarkText / insertText / doCommand) carry
+            // whatever should actually reach the surface.
+            if hasMarkedText() {
+                interpretKeyEvents([translationEvent])
+                return
+            }
 
-            if let chars {
-                chars.withCString { ptr in
+            // Step A: forward the raw key event to Ghostty so it can match a
+            // keybinding.
+            //
+            // For Cmd/Ctrl-modified keys we attach the layout-translated text
+            // (alasGhosttyCharacters strips Ctrl and returns the unshifted
+            // character, e.g. Ctrl+L on Dvorak → "l") because Step B below
+            // returns before interpretKeyEvents — so this is Ghostty's only
+            // chance to see the layout character it needs to encode the
+            // control byte correctly on non-US layouts. For plain keys we
+            // leave text nil so the insertText callback can deliver it
+            // (avoids doubling).
+            var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
+
+            let cmdOrCtrl = event.modifierFlags.contains(.command)
+                || event.modifierFlags.contains(.control)
+            let consumed: Bool
+            if cmdOrCtrl, let chars = translationEvent.alasGhosttyCharacters {
+                consumed = chars.withCString { ptr -> Bool in
                     keyEv.text = ptr
-                    _ = ghostty_surface_key(surface, keyEv)
+                    return io.sendKey(keyEv)
                 }
             } else {
-                _ = ghostty_surface_key(surface, keyEv)
+                consumed = io.sendKey(keyEv)
             }
+            if consumed { return }
+
+            // Step B: Cmd/Ctrl events bypass interpretKeyEvents so menus and
+            // IMEs can't swallow Cmd+C / Ctrl+C. The raw key (with text, see
+            // Step A) was already delivered above, which is all Ghostty needs
+            // for these shortcuts.
+            //
+            // Option is intentionally NOT gated here — it must reach
+            // interpretKeyEvents so dead-key composition (Opt+e + letter on
+            // some layouts) and Opt+letter selectors (Opt+Backspace →
+            // deleteWordBackward:) can fire.
+            if cmdOrCtrl { return }
+
+            // Step C: let AppKit resolve dead keys, IME composition, and
+            // special selectors. The NSTextInputClient callbacks
+            // (insertText / setMarkedText / unmarkText / doCommand) forward
+            // to the IO seam as appropriate.
+            interpretKeyEvents([translationEvent])
         }
 
         override func keyUp(with event: NSEvent) {
-            guard let surface = cSurface else { return }
+            guard let io = surfaceIO else { return }
             let keyEv = event.alasGhosttyKeyEvent(GHOSTTY_ACTION_RELEASE)
-            _ = ghostty_surface_key(surface, keyEv)
+            _ = io.sendKey(keyEv)
         }
 
         override func flagsChanged(with event: NSEvent) {
-            guard let surface = cSurface else { return }
+            guard let io = surfaceIO else { return }
 
             // Determine which modifier changed and whether it was pressed or released.
             let mod: UInt32
@@ -360,7 +475,7 @@ extension AlasGhostty {
                 : GHOSTTY_ACTION_RELEASE
 
             let keyEv = event.alasGhosttyKeyEvent(action)
-            _ = ghostty_surface_key(surface, keyEv)
+            _ = io.sendKey(keyEv)
         }
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -400,6 +515,19 @@ extension AlasGhostty {
                 return true
             }
             return false
+        }
+
+        // MARK: - NSTextInputClient doCommand
+
+        // NSResponder declares doCommand(by:); the NSTextInputClient extension
+        // conforms our class to the protocol, but the override of NSResponder's
+        // method lives here in the main class body for conventional placement.
+        // The raw keyDown was already delivered to Ghostty before
+        // interpretKeyEvents fired, so we intentionally swallow the selector.
+        // Calling super would let AppKit beep or perform a default behavior
+        // that is wrong for a terminal.
+        override func doCommand(by selector: Selector) {
+            // intentionally empty
         }
 
         // MARK: - Mouse events
@@ -623,4 +751,113 @@ private func alasGhosttyMomentum(_ phase: NSEvent.Phase) -> ghostty_input_mouse_
     case .mayBegin:     return GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN
     default:            return GHOSTTY_MOUSE_MOMENTUM_NONE
     }
+}
+
+// MARK: - NSTextInputClient
+
+extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
+    // State for tracking marked (composing) text. nil means "no composition active".
+    private nonisolated(unsafe) static var markedTextKey: UInt8 = 0
+
+    private var markedText: String? {
+        get { objc_getAssociatedObject(self, &Self.markedTextKey) as? String }
+        set { objc_setAssociatedObject(self, &Self.markedTextKey, newValue, .OBJC_ASSOCIATION_COPY_NONATOMIC) }
+    }
+
+    // MARK: Query methods
+
+    func hasMarkedText() -> Bool {
+        return !(markedText ?? "").isEmpty
+    }
+
+    func selectedRange() -> NSRange {
+        return NSRange(location: NSNotFound, length: 0)
+    }
+
+    func markedRange() -> NSRange {
+        guard let marked = markedText, !marked.isEmpty else {
+            return NSRange(location: NSNotFound, length: 0)
+        }
+        return NSRange(location: 0, length: (marked as NSString).length)
+    }
+
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+        return nil
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        return []
+    }
+
+    func characterIndex(for point: NSPoint) -> Int {
+        return NSNotFound
+    }
+
+    // MARK: Active methods — full bodies arrive in later tasks
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        let text: String
+        if let s = string as? String { text = s }
+        else if let a = string as? NSAttributedString { text = a.string }
+        else { return }
+
+        guard !text.isEmpty else { return }
+        guard let io = surfaceIO else { return }
+
+        io.sendText(text)
+        markedText = nil
+        io.setPreedit(nil)
+    }
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        let text: String
+        if let s = string as? String { text = s }
+        else if let a = string as? NSAttributedString { text = a.string }
+        else { return }
+
+        guard let io = surfaceIO else { return }
+
+        if text.isEmpty {
+            markedText = nil
+            io.setPreedit(nil)
+        } else {
+            markedText = text
+            io.setPreedit(text)
+        }
+    }
+
+    func unmarkText() {
+        // Per Apple's NSTextInputClient.unmarkText contract, when an IME
+        // ends composition this way (without first sending insertText), the
+        // marked text must be accepted as normal text. Commit it before
+        // clearing so the composed character is not lost.
+        if let marked = markedText, !marked.isEmpty {
+            surfaceIO?.sendText(marked)
+        }
+        markedText = nil
+        surfaceIO?.setPreedit(nil)
+    }
+
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        // Ghostty reports the IME caret in top-left-origin view coordinates
+        // (same convention used by mouseMoved which does `frame.height - y`).
+        // AppKit's NSView coordinate system is bottom-left-origin, so flip
+        // Y before converting to window/screen coordinates.
+        guard let io = surfaceIO else { return .zero }
+        let ghosttyRect = io.imePoint()
+        let viewRect = NSRect(
+            x: ghosttyRect.origin.x,
+            y: frame.height - ghosttyRect.origin.y - ghosttyRect.size.height,
+            width: ghosttyRect.size.width,
+            height: ghosttyRect.size.height
+        )
+        guard let window else { return .zero }
+        let windowRect = convert(viewRect, to: nil)
+        return window.convertToScreen(windowRect)
+    }
+
+    // doCommand(by:) lives in SurfaceView's main class body (above) — Swift's
+    // convention is to place NSResponder overrides on the class itself, not
+    // in extensions. NSTextInputClient.doCommand(by:) is satisfied by that
+    // override.
 }

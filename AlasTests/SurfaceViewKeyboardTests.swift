@@ -3,6 +3,45 @@ import GhosttyKit
 import Testing
 @testable import Alas
 
+/// Records calls made by SurfaceView to the Ghostty surface, so tests can
+/// drive NSTextInputClient methods without standing up a real surface.
+@MainActor
+final class FakeGhosttySurfaceIO: GhosttySurfaceIO {
+    enum Call: Equatable {
+        case key(action: UInt32, keycode: UInt32, mods: UInt32, text: String?, composing: Bool)
+        case text(String)
+        case preedit(String?)
+    }
+
+    private(set) var calls: [Call] = []
+    var keyConsumed: Bool = false
+    var imePointRect: CGRect = CGRect(x: 0, y: 0, width: 0, height: 0)
+
+    func sendKey(_ event: ghostty_input_key_s) -> Bool {
+        let textStr: String? = event.text.map { String(cString: $0) }
+        calls.append(.key(
+            action: event.action.rawValue,
+            keycode: event.keycode,
+            mods: event.mods.rawValue,
+            text: textStr,
+            composing: event.composing
+        ))
+        return keyConsumed
+    }
+
+    func sendText(_ text: String) {
+        calls.append(.text(text))
+    }
+
+    func setPreedit(_ text: String?) {
+        calls.append(.preedit(text))
+    }
+
+    func imePoint() -> CGRect {
+        return imePointRect
+    }
+}
+
 /// Tests for the NSEvent keyboard-translation helpers that feed Ghostty.
 /// These exercise the pure modifier/character logic without needing a live
 /// Ghostty surface.
@@ -196,5 +235,154 @@ struct SurfaceViewKeyboardTests {
 
         #expect(keyEv.mods == GHOSTTY_MODS_SHIFT)
         #expect(keyEv.consumed_mods == GHOSTTY_MODS_SHIFT)
+    }
+
+    @Test @MainActor func fakeIOConformsToProtocol() {
+        let io = FakeGhosttySurfaceIO()
+        io.sendText("hi")
+        io.setPreedit("か")
+        io.setPreedit(nil)
+        #expect(io.calls == [
+            .text("hi"),
+            .preedit("か"),
+            .preedit(nil),
+        ])
+    }
+
+    @Test @MainActor func textInputClient_defaultsAreEmpty() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        #expect(view.hasMarkedText() == false)
+        #expect(view.selectedRange().location == NSNotFound)
+        #expect(view.selectedRange().length == 0)
+        #expect(view.markedRange().location == NSNotFound)
+        #expect(view.markedRange().length == 0)
+        #expect(view.attributedSubstring(forProposedRange: NSRange(location: 0, length: 0), actualRange: nil) == nil)
+        #expect(view.validAttributesForMarkedText().isEmpty)
+        #expect(view.characterIndex(for: .zero) == NSNotFound)
+    }
+
+    @Test @MainActor func insertText_sendsTextAndClearsPreedit() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.insertText("é" as NSString, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.text("é"), .preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func insertText_acceptsAttributedString() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let attr = NSAttributedString(string: "ñ")
+        view.insertText(attr, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.text("ñ"), .preedit(nil)])
+    }
+
+    @Test @MainActor func insertText_emptyStringIsNoop() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.insertText("" as NSString, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls.isEmpty)
+    }
+
+    @Test @MainActor func setMarkedText_sendsPreeditAndTracksState() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.setMarkedText(
+            "か" as NSString,
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        #expect(io.calls == [.preedit("か")])
+        #expect(view.hasMarkedText() == true)
+        #expect(view.markedRange() == NSRange(location: 0, length: 1))
+    }
+
+    @Test @MainActor func setMarkedText_emptyClearsState() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.setMarkedText("" as NSString, selectedRange: NSRange(location: 0, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.preedit("か"), .preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func setMarkedText_acceptsAttributedString() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let attr = NSAttributedString(string: "한")
+        view.setMarkedText(attr, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(io.calls == [.preedit("한")])
+        #expect(view.hasMarkedText() == true)
+    }
+
+    @Test @MainActor func unmarkText_commitsMarkedTextAndClearsPreedit() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        // Per Apple's contract: marked text is accepted (sent as text) and
+        // then preedit is cleared.
+        #expect(io.calls == [.preedit("か"), .text("か"), .preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func unmarkText_withoutMarkedTextOnlyClearsPreedit() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.unmarkText()
+        #expect(io.calls == [.preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func firstRect_noWindowReturnsZero() {
+        let io = FakeGhosttySurfaceIO()
+        io.imePointRect = CGRect(x: 10, y: 20, width: 8, height: 16)
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let rect = view.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+        #expect(rect == .zero)
+    }
+
+    @Test @MainActor func firstRect_withWindowConvertsToScreen() {
+        let io = FakeGhosttySurfaceIO()
+        io.imePointRect = CGRect(x: 10, y: 20, width: 8, height: 16)
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 200, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(view)
+        view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+
+        let rect = view.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+        #expect(rect.size == CGSize(width: 8, height: 16))
+        #expect(rect.origin != .zero)
+    }
+
+    @Test @MainActor func doCommand_doesNotForwardToIO() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.doCommand(by: #selector(NSResponder.deleteWordBackward(_:)))
+        view.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        view.doCommand(by: #selector(NSResponder.moveLeft(_:)))
+        #expect(io.calls.isEmpty)
+    }
+
+    @Test @MainActor func testInitializerWiresFakeIO() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        var keyEv = ghostty_input_key_s()
+        keyEv.action = GHOSTTY_ACTION_PRESS
+        keyEv.keycode = 42
+        _ = view.surfaceIOForTesting.sendKey(keyEv)
+        #expect(io.calls == [.key(
+            action: GHOSTTY_ACTION_PRESS.rawValue,
+            keycode: 42,
+            mods: 0,
+            text: nil,
+            composing: false
+        )])
     }
 }
