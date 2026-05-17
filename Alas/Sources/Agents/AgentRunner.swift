@@ -36,6 +36,7 @@ enum AgentRunner {
         agent: AgentDefinition,
         input: String,
         prompt: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
         timeout: TimeInterval = 120
     ) async throws -> GeneratedMessage {
         let binary = agent.resolvedBinary
@@ -48,7 +49,7 @@ enum AgentRunner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = [binary] + args
-        var env = ProcessInfo.processInfo.environment
+        var env = environment
         env["PATH"] = AgentPath.augmented(base: env["PATH"])
         process.environment = env
 

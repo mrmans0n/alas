@@ -2,7 +2,6 @@ import Testing
 import Foundation
 @testable import Alas
 
-@Suite(.serialized)
 struct AgentRunnerInvocationTests {
     private func shim(named name: String, in tmp: URL) throws -> (recordFile: URL, path: String) {
         let recordFile = tmp.appendingPathComponent("\(name).record")
@@ -21,13 +20,6 @@ struct AgentRunnerInvocationTests {
             ofItemAtPath: bin.path
         )
         return (recordFile, "\(tmp.path):/usr/bin:/bin")
-    }
-
-    private func withPath<T>(_ value: String, body: () async throws -> T) async throws -> T {
-        let prev = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        setenv("PATH", value, 1)
-        defer { setenv("PATH", prev, 1) }
-        return try await body()
     }
 
     private func makeTmp() throws -> URL {
@@ -50,13 +42,12 @@ struct AgentRunnerInvocationTests {
         let tmp = try makeTmp()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let (record, path) = try shim(named: "claude", in: tmp)
-        let result = try await withPath(path) {
-            try await AgentRunner.runPrompt(
-                agent: agent(id: "claude", binary: "claude", args: ["-p"]),
-                input: "DIFF GOES HERE\n",
-                prompt: "PROMPT"
-            )
-        }
+        let result = try await AgentRunner.runPrompt(
+            agent: agent(id: "claude", binary: "claude", args: ["-p"]),
+            input: "DIFF GOES HERE\n",
+            prompt: "PROMPT",
+            environment: ["PATH": path]
+        )
         #expect(result.subject == "subject from claude")
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("-p\n"))
@@ -68,13 +59,12 @@ struct AgentRunnerInvocationTests {
         let tmp = try makeTmp()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let (record, path) = try shim(named: "codex", in: tmp)
-        _ = try await withPath(path) {
-            try await AgentRunner.runPrompt(
-                agent: agent(id: "codex", binary: "codex", args: ["exec"]),
-                input: "DIFF\n",
-                prompt: "PROMPT"
-            )
-        }
+        _ = try await AgentRunner.runPrompt(
+            agent: agent(id: "codex", binary: "codex", args: ["exec"]),
+            input: "DIFF\n",
+            prompt: "PROMPT",
+            environment: ["PATH": path]
+        )
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("exec\n"))
         #expect(recorded.contains("PROMPT\n"))
@@ -84,13 +74,12 @@ struct AgentRunnerInvocationTests {
         let tmp = try makeTmp()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let (record, path) = try shim(named: "opencode", in: tmp)
-        _ = try await withPath(path) {
-            try await AgentRunner.runPrompt(
-                agent: agent(id: "opencode", binary: "opencode", args: ["run"]),
-                input: "DIFF\n",
-                prompt: "PROMPT"
-            )
-        }
+        _ = try await AgentRunner.runPrompt(
+            agent: agent(id: "opencode", binary: "opencode", args: ["run"]),
+            input: "DIFF\n",
+            prompt: "PROMPT",
+            environment: ["PATH": path]
+        )
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("run\n"))
         #expect(recorded.contains("PROMPT\n"))
@@ -101,13 +90,12 @@ struct AgentRunnerInvocationTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let path = "\(tmp.path):/usr/bin:/bin"  // empty: no shims
         do {
-            _ = try await withPath(path) {
-                try await AgentRunner.runPrompt(
-                    agent: agent(id: "ghost", binary: "no-such-binary", args: []),
-                    input: "x",
-                    prompt: "y"
-                )
-            }
+            _ = try await AgentRunner.runPrompt(
+                agent: agent(id: "ghost", binary: "no-such-binary", args: []),
+                input: "x",
+                prompt: "y",
+                environment: ["PATH": path]
+            )
             Issue.record("expected throw")
         } catch let AgentRunError.binaryNotFound(agentId, displayName) {
             #expect(agentId == "ghost")
