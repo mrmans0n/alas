@@ -309,6 +309,7 @@ final class AppState {
                         cwd: newWorktree.path
                     )
                 }
+                guard projects.contains(where: { $0.id == projectId }) else { return }
 
                 // Resolve the per-creation agent into a command line that
                 // will run inside the new terminal session — appended to
@@ -350,6 +351,7 @@ final class AppState {
                         hidden: false
                     )
                     let gcDropped = try await projectsManager.refreshWorktrees(projectId: project.id)
+                    guard projects.contains(where: { $0.id == projectId }) else { return }
                     if wasHidden || gcDropped {
                         saveProjects()
                     }
