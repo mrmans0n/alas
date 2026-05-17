@@ -78,6 +78,28 @@ struct GitServiceStagingTests {
         #expect(status.filter { $0.stage == .staged }.count == 2)
     }
 
+    @Test func statusExpandsUntrackedDirectoriesIntoFiles() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dir = repo.appendingPathComponent(".clawpatch")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try writeFile(repo, ".clawpatch/manifest.json", "{}\n")
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("nested"),
+            withIntermediateDirectories: true
+        )
+        try writeFile(repo, ".clawpatch/nested/change.json", "{\"ok\":true}\n")
+
+        let status = try await GitService().status(worktreePath: repo)
+        let paths = status.map(\.path).sorted()
+
+        #expect(paths == [
+            ".clawpatch/manifest.json",
+            ".clawpatch/nested/change.json"
+        ])
+        #expect(status.allSatisfy { $0.status == "A" && $0.stage == .unstaged })
+    }
+
     @Test func unstageAllClearsIndex() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

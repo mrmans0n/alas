@@ -73,7 +73,10 @@ extension GitService {
     }
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
-        async let statusResult = Process.git(["status", "--porcelain=v2", "-z"], cwd: worktreePath)
+        async let statusResult = Process.git(
+            ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+            cwd: worktreePath
+        )
         let s = try await statusResult
         guard s.exitCode == 0 else { return [] }
         var entries = try StatusParser.parse(s.stdout)
