@@ -67,7 +67,58 @@ struct AgentRunnerInvocationTests {
         )
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("exec\n"))
-        #expect(recorded.contains("PROMPT\n"))
+        #expect(recorded.contains("-\n"))
+    }
+
+    @Test func codexReadsPromptAndContextFromStdin() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let (record, path) = try shim(named: "codex", in: tmp)
+        _ = try await AgentRunner.runPrompt(
+            agent: agent(id: "codex", binary: "codex", args: ["exec"]),
+            input: "DIFF\n",
+            prompt: "PROMPT",
+            environment: ["PATH": path]
+        )
+        let recorded = try String(contentsOf: record, encoding: .utf8)
+        #expect(recorded.contains("exec\n"))
+        #expect(recorded.contains("-\n"))
+        #expect(!recorded.contains("PROMPT\nstdin="))
+        #expect(recorded.contains("stdin=\nPROMPT\n\nDIFF\n"))
+    }
+
+    @Test func customCodexExecDefinitionReadsPromptAndContextFromStdin() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let (record, path) = try shim(named: "codex", in: tmp)
+        _ = try await AgentRunner.runPrompt(
+            agent: agent(id: "custom-codex-profile", binary: "codex", args: ["exec"]),
+            input: "DIFF\n",
+            prompt: "PROMPT",
+            environment: ["PATH": path]
+        )
+        let recorded = try String(contentsOf: record, encoding: .utf8)
+        #expect(recorded.contains("exec\n"))
+        #expect(recorded.contains("-\n"))
+        #expect(!recorded.contains("PROMPT\nstdin="))
+        #expect(recorded.contains("stdin=\nPROMPT\n\nDIFF\n"))
+    }
+
+    @Test func customCodexExecAliasDefinitionReadsPromptAndContextFromStdin() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let (record, path) = try shim(named: "codex", in: tmp)
+        _ = try await AgentRunner.runPrompt(
+            agent: agent(id: "custom-codex-alias-profile", binary: "codex", args: ["e"]),
+            input: "DIFF\n",
+            prompt: "PROMPT",
+            environment: ["PATH": path]
+        )
+        let recorded = try String(contentsOf: record, encoding: .utf8)
+        #expect(recorded.contains("e\n"))
+        #expect(recorded.contains("-\n"))
+        #expect(!recorded.contains("PROMPT\nstdin="))
+        #expect(recorded.contains("stdin=\nPROMPT\n\nDIFF\n"))
     }
 
     @Test func opencodeUsesRunSubcommand() async throws {
