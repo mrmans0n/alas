@@ -24,13 +24,20 @@ struct AgentRegistry: Equatable {
     ) {
         var out: [AgentDefinition] = []
         for var builtin in AgentBuiltins.catalog {
+            let prefersEnabled: Bool
             if let state = builtinState[builtin.id] {
-                builtin.isEnabled = state.isEnabled
+                prefersEnabled = state.isEnabled
                 builtin.binaryOverride = state.binaryOverride
+            } else {
+                prefersEnabled = builtin.isEnabled
             }
+            builtin.isEnabled = prefersEnabled && installedIds.contains(builtin.id)
             out.append(builtin)
         }
-        out.append(contentsOf: customs)
+        for var c in customs {
+            c.isEnabled = c.isEnabled && installedIds.contains(c.id)
+            out.append(c)
+        }
         self.agents = out
         self.installedIds = installedIds
     }
@@ -43,6 +50,10 @@ struct AgentRegistry: Equatable {
         agents.filter { installedIds.contains($0.id) }
     }
 
+    /// Picker-eligible agents: installed AND not user-disabled. Note
+    /// that `isEnabled` is already clamped against install state in
+    /// `init`, so the explicit `installedIds.contains` check is
+    /// redundant but kept defensively.
     func enabled() -> [AgentDefinition] {
         agents.filter { $0.isEnabled && installedIds.contains($0.id) }
     }

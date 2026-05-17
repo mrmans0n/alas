@@ -107,9 +107,51 @@ struct AgentRegistryTests {
         )
         let ids = r.agents.map(\.id)
         #expect(ids == AgentBuiltins.catalog.map(\.id))
-        // All built-ins still default-enabled (the unknown overlay didn't leak in).
-        for agent in r.agents {
-            #expect(agent.isEnabled)
-        }
+        // Built-ins are now all disabled because nothing is installed; the
+        // important assertion is that the unknown overlay didn't change the
+        // set of agents (catalog identity).
+        #expect(r.agents.allSatisfy { !$0.isEnabled })
+    }
+
+    @Test func unconfiguredBuiltinIsEnabledOnlyWhenInstalled() {
+        let r = AgentRegistry(
+            builtinState: [:],
+            customs: [],
+            installedIds: ["claude"] // only claude is installed
+        )
+        let claude = r.agents.first(where: { $0.id == "claude" })!
+        let codex  = r.agents.first(where: { $0.id == "codex" })!
+        #expect(claude.isEnabled == true)
+        #expect(codex.isEnabled == false)
+    }
+
+    @Test func persistedEnabledBuiltinIsClampedWhenUninstalled() {
+        let r = AgentRegistry(
+            builtinState: ["gemini": BuiltinAgentState(isEnabled: true, binaryOverride: nil)],
+            customs: [],
+            installedIds: [] // gemini not installed
+        )
+        let gemini = r.agents.first(where: { $0.id == "gemini" })!
+        #expect(gemini.isEnabled == false)
+    }
+
+    @Test func customAgentIsEnabledOnlyWhenInstalled() {
+        let installed = AgentDefinition(
+            id: "c-installed", displayName: "C-In", binary: "c-in",
+            binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
+        )
+        let missing = AgentDefinition(
+            id: "c-missing", displayName: "C-Miss", binary: "c-miss",
+            binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
+        )
+        let r = AgentRegistry(
+            builtinState: [:],
+            customs: [installed, missing],
+            installedIds: ["c-installed"]
+        )
+        #expect(r.agents.first(where: { $0.id == "c-installed" })!.isEnabled == true)
+        #expect(r.agents.first(where: { $0.id == "c-missing"   })!.isEnabled == false)
     }
 }
