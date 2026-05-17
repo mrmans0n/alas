@@ -24,8 +24,8 @@ enum AgentMessageParser {
     }
 }
 
-/// Spawns the agent's resolved binary with `agent.promptModeArgs + [prompt]`,
-/// pipes `input` on stdin, parses stdout. 120s timeout. Cancellation is
+/// Spawns the agent's resolved binary with its non-interactive prompt shape,
+/// pipes any stdin payload, and parses stdout. 120s timeout. Cancellation is
 /// delivered by Task cancellation, which `Process.run` propagates as SIGTERM.
 ///
 /// Pipe-management and process-lifecycle logic mirrors `Process.run` in
@@ -40,7 +40,11 @@ enum AgentRunner {
         timeout: TimeInterval = 120
     ) async throws -> GeneratedMessage {
         let binary = agent.resolvedBinary
-        let args = agent.promptModeArgs + [prompt]
+        let invocation = AgentPromptInvocation.make(
+            agent: agent,
+            input: input,
+            prompt: prompt
+        )
         let pipe = Pipe()
         // We can't use Process.run directly because it doesn't accept
         // stdin. Inline a minimal variant that does, reusing gitEnv()
@@ -48,7 +52,7 @@ enum AgentRunner {
         // for these CLIs, but the parent-env passthrough does).
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [binary] + args
+        process.arguments = [binary] + invocation.arguments
         var env = environment
         env["PATH"] = AgentPath.augmented(base: env["PATH"])
         process.environment = env
@@ -127,7 +131,7 @@ enum AgentRunner {
         // reason: if the awaiting Task is cancelled while we're blocked
         // writing, `onCancel` terminates the child and the write unblocks.
         await withTaskCancellationHandler {
-            if let data = input.data(using: .utf8) {
+            if let data = invocation.stdin.data(using: .utf8) {
                 try? pipe.fileHandleForWriting.write(contentsOf: data)
             }
             try? pipe.fileHandleForWriting.close()
@@ -184,6 +188,41 @@ enum AgentRunner {
             throw AgentRunError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }
         return AgentMessageParser.parse(stdout)
+    }
+}
+
+private struct AgentPromptInvocation {
+    let arguments: [String]
+    let stdin: String
+
+    static func make(
+        agent: AgentDefinition,
+        input: String,
+        prompt: String
+    ) -> AgentPromptInvocation {
+        if isCodexExec(agent) {
+            return AgentPromptInvocation(
+                arguments: agent.promptModeArgs + ["-"],
+                stdin: combinedPrompt(prompt: prompt, input: input)
+            )
+        }
+
+        return AgentPromptInvocation(
+            arguments: agent.promptModeArgs + [prompt],
+            stdin: input
+        )
+    }
+
+    private static func combinedPrompt(prompt: String, input: String) -> String {
+        if input.isEmpty { return prompt }
+        if prompt.isEmpty { return input }
+        return "\(prompt)\n\n\(input)"
+    }
+
+    private static func isCodexExec(_ agent: AgentDefinition) -> Bool {
+        let binaryName = (agent.resolvedBinary as NSString).lastPathComponent
+        let subcommand = agent.promptModeArgs.first
+        return binaryName == "codex" && (subcommand == "exec" || subcommand == "e")
     }
 }
 
