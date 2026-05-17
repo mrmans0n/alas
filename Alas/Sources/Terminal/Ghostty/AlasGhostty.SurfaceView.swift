@@ -353,13 +353,12 @@ extension AlasGhostty {
 
             let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
 
-            // Ask Ghostty which modifiers should be used for text translation.
-            // This handles configs such as `macos-option-as-alt` correctly.
+            // Translation-modifier dance: ask Ghostty which modifiers should
+            // participate in text translation for configs like
+            // `macos-option-as-alt`. The result feeds `consumed_mods` on the
+            // key event below.
             let rawMods = alasGhosttyMods(event.modifierFlags)
             let translatedGhosttyMods = ghostty_surface_key_translation_mods(surface, rawMods)
-
-            // Convert translated Ghostty mods back to AppKit flags so we can
-            // derive the correct composed characters (e.g. Option+n → ~).
             let translatedAppKitMods = alasAppKitModifierFlags(from: translatedGhosttyMods)
             var translationFlags = event.modifierFlags
             for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
@@ -370,38 +369,28 @@ extension AlasGhostty {
                 }
             }
 
-            // If translation modifiers differ we must build a new event.
-            // Reusing the original event when they're equal is required for
-            // some IME behaviours (see upstream Ghostty comment).
-            let translationEvent: NSEvent
-            if translationFlags == event.modifierFlags {
-                translationEvent = event
-            } else {
-                translationEvent = NSEvent.keyEvent(
-                    with: event.type,
-                    location: event.locationInWindow,
-                    modifierFlags: translationFlags,
-                    timestamp: event.timestamp,
-                    windowNumber: event.windowNumber,
-                    context: nil,
-                    characters: event.characters(byApplyingModifiers: translationFlags) ?? "",
-                    charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
-                    isARepeat: event.isARepeat,
-                    keyCode: event.keyCode
-                ) ?? event
-            }
-
+            // Step A: forward the raw key event to Ghostty so it can match a
+            // keybinding. composing = hasMarkedText() tells the backend that
+            // a text payload (if any) is part of an active IME composition.
+            // text is left nil here — the actual text payload is delivered
+            // separately via insertText → ghostty_surface_text.
             var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
-            let chars = translationEvent.alasGhosttyCharacters
+            keyEv.composing = hasMarkedText()
+            let consumed = surfaceIO.sendKey(keyEv)
+            if consumed { return }
 
-            if let chars {
-                chars.withCString { ptr in
-                    keyEv.text = ptr
-                    _ = surfaceIO.sendKey(keyEv)
-                }
-            } else {
-                _ = surfaceIO.sendKey(keyEv)
-            }
+            // Step B: Cmd/Ctrl events bypass interpretKeyEvents so menus and
+            // IMEs can't swallow Cmd+C / Ctrl+C. The raw key was already
+            // delivered above, which is all Ghostty needs for these shortcuts.
+            let cmdOrCtrl = event.modifierFlags.contains(.command)
+                || event.modifierFlags.contains(.control)
+            if cmdOrCtrl { return }
+
+            // Step C: let AppKit resolve dead keys, IME composition, and
+            // special selectors. The NSTextInputClient callbacks
+            // (insertText / setMarkedText / unmarkText / doCommand) forward
+            // to the IO seam as appropriate.
+            interpretKeyEvents([event])
         }
 
         override func keyUp(with event: NSEvent) {
