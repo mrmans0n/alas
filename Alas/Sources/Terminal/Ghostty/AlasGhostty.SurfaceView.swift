@@ -827,6 +827,13 @@ extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
     }
 
     func unmarkText() {
+        // Per Apple's NSTextInputClient.unmarkText contract, when an IME
+        // ends composition this way (without first sending insertText), the
+        // marked text must be accepted as normal text. Commit it before
+        // clearing so the composed character is not lost.
+        if let marked = markedText, !marked.isEmpty {
+            surfaceIO?.sendText(marked)
+        }
         markedText = nil
         surfaceIO?.setPreedit(nil)
     }

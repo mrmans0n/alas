@@ -316,12 +316,22 @@ struct SurfaceViewKeyboardTests {
         #expect(view.hasMarkedText() == true)
     }
 
-    @Test @MainActor func unmarkText_clearsStateAndPreedit() {
+    @Test @MainActor func unmarkText_commitsMarkedTextAndClearsPreedit() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)
         view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
         view.unmarkText()
-        #expect(io.calls == [.preedit("か"), .preedit(nil)])
+        // Per Apple's contract: marked text is accepted (sent as text) and
+        // then preedit is cleared.
+        #expect(io.calls == [.preedit("か"), .text("か"), .preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func unmarkText_withoutMarkedTextOnlyClearsPreedit() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.unmarkText()
+        #expect(io.calls == [.preedit(nil)])
         #expect(view.hasMarkedText() == false)
     }
 
