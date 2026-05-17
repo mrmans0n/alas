@@ -13,6 +13,8 @@ final class DefinitionFeature {
     private let getURI: () -> String?
     private let openTarget: (URL, Int, Int) -> Void
     private var popover: NSPopover?
+    private var requestID: UInt64 = 0
+    private var inFlight: Task<Void, Never>?
     private let snippetCache = DefinitionSnippetCache()
 
     init(
@@ -32,11 +34,19 @@ final class DefinitionFeature {
         popover?.close()
         guard let textView, let client = getClient(), let uri = getURI() else { return }
         guard let position = textView.lspPosition(at: point) else { return }
-        Task { [weak self] in
+        inFlight?.cancel()
+        requestID += 1
+        let currentRequestID = requestID
+        inFlight = Task { [weak self] in
             guard let self else { return }
             let locations: [LSPLocation] = (try? await client.definition(uri: uri, position: position)) ?? []
+            guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
-                guard let self else { return }
+                guard let self,
+                      self.requestID == currentRequestID,
+                      self.getURI() == uri,
+                      self.textView?.lspPosition(at: point) == position
+                else { return }
                 self.handle(locations: locations, anchorPoint: point)
             }
         }

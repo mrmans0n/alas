@@ -4,6 +4,7 @@ import Foundation
 final class SymbolsFeature {
     private(set) var symbols: [Item] = []
     var onChange: (() -> Void)?
+    private var requestID: UInt64 = 0
 
     struct Item: Identifiable, Hashable {
         let id = UUID()
@@ -15,10 +16,15 @@ final class SymbolsFeature {
     }
 
     func refresh(client: LSPClient?, uri: String) async {
-        guard let client else { symbols = []
-        onChange?()
-        return }
+        requestID += 1
+        let currentRequestID = requestID
+        guard let client else {
+            symbols = []
+            onChange?()
+            return
+        }
         let raw = (try? await client.documentSymbol(uri: uri)) ?? []
+        guard !Task.isCancelled, requestID == currentRequestID else { return }
         var flat: [Item] = []
         func walk(_ list: [LSPDocumentSymbol], depth: Int) {
             for s in list {
