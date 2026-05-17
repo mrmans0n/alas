@@ -438,6 +438,9 @@ final class AppState {
         for hidden in project.hiddenWorktreePaths {
             candidateIds.insert(hidden)
         }
+        for ordered in project.worktreeOrder {
+            candidateIds.insert(ordered)
+        }
 
         tabs.loadAll(worktreeIds: Array(candidateIds))
 
