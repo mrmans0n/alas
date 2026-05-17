@@ -313,6 +313,77 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.operationState(for: wt.id) == nil)
     }
 
+    @Test func removeProjectClosesTabsForProjectWorktrees() async throws {
+        let repo = try await makeRepo(name: "remove-tabs")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "remove", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        let wt = trees[0]
+
+        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
+        #expect(state.tabs.tabs(forWorktree: wt.id).count == 1)
+
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
+    }
+
+    @Test func removeProjectResetsSelectionWhenSelectedWorktreeIsRemoved() async throws {
+        let repoA = try await makeRepo(name: "remove-sel-a")
+        let repoB = try await makeRepo(name: "remove-sel-b")
+        defer {
+            try? FileManager.default.removeItem(at: repoA)
+            try? FileManager.default.removeItem(at: repoB)
+        }
+
+        let state = AppState()
+        let projectA = try await state.projectsManager.addProject(
+            path: repoA, displayName: "projA", color: "#5fb7c4"
+        )
+        let projectB = try await state.projectsManager.addProject(
+            path: repoB, displayName: "projB", color: "#c89d6f"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: projectA.id)
+        try await state.projectsManager.refreshWorktrees(projectId: projectB.id)
+
+        let treesA = state.projectsManager.worktrees(projectId: projectA.id)
+        let treesB = state.projectsManager.worktrees(projectId: projectB.id)
+        #expect(treesA.count == 1)
+        #expect(treesB.count == 1)
+
+        state.selectedWorktreeId = treesA[0].id
+        state.removeProject(id: projectA.id)
+
+        #expect(state.selectedWorktreeId == treesB[0].id)
+    }
+
+    @Test func removeProjectClearsSelectionWhenNoWorktreesRemain() async throws {
+        let repo = try await makeRepo(name: "remove-last")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "only", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        state.selectedWorktreeId = trees[0].id
+
+        state.removeProject(id: project.id)
+
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+        #expect(state.selectedWorktreeId == nil)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,

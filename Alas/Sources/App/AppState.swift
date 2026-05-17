@@ -428,9 +428,11 @@ final class AppState {
     }
 
     func removeProject(id: String) {
+        let beforeIds = allWorktreeIds()
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
         saveProjects()
+        cleanupMissingWorktrees(beforeIds: beforeIds)
     }
 
     /// Start a ProjectGitWatcher for `project` and wire its callbacks into
