@@ -766,7 +766,8 @@ extension AlasGhostty.SurfaceView: NSTextInputClient {
     }
 
     func unmarkText() {
-        // Implemented in Task 7.
+        markedText = nil
+        surfaceIO.setPreedit(nil)
     }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {

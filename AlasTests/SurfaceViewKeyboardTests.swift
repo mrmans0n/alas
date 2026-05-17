@@ -316,6 +316,15 @@ struct SurfaceViewKeyboardTests {
         #expect(view.hasMarkedText() == true)
     }
 
+    @Test @MainActor func unmarkText_clearsStateAndPreedit() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        #expect(io.calls == [.preedit("か"), .preedit(nil)])
+        #expect(view.hasMarkedText() == false)
+    }
+
     @Test @MainActor func testInitializerWiresFakeIO() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)
