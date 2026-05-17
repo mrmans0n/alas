@@ -48,7 +48,7 @@ targets:
       path: Alas/Resources/Info.plist
       properties:
         CFBundleDevelopmentRegion: en
-        CFBundleShortVersionString: "0.3.3"
+        CFBundleShortVersionString: "0.3.4"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"
