@@ -630,11 +630,12 @@ final class TabsManager {
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
         if let key = bufferKeys[tabId], let existing = buffers[key] { return existing }
         let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
-        let restoresToDifferentPath = snapshot.map { $0.relativePath != relativePath } ?? false
+        var restoresToDifferentPath = snapshot.map { $0.relativePath != relativePath } ?? false
         if restoresToDifferentPath {
             if let snapshot,
                !canFollowBufferPathChange(worktreeId: worktreeId, oldPath: relativePath, newPath: snapshot.relativePath) {
                 bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
+                restoresToDifferentPath = false
             }
         }
         let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)

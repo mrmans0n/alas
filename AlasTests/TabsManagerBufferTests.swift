@@ -317,6 +317,42 @@ struct TabsManagerBufferTests {
         #expect(updatedTab?.relativeFilePath == "b.txt")
     }
 
+    @Test func bufferRestoreToOpenTargetPathReusesExistingOriginalPathBuffer() throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let sourceTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let existingTab = manager.appendEditor(worktreeId: "wt", title: "c.txt", relativePath: "c.txt")
+        let targetTab = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
+        // Create a live buffer at the original path from another tab
+        let existing = manager.buffer(worktreeId: "wt", tabId: existingTab.id, worktreeRoot: root, relativePath: "a.txt")
+        existing.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "shared ")
+        // Set up a dirty snapshot for sourceTab that would restore to b.txt
+        let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        target.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "target ")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: sourceTab.id)
+
+        let restored = manager.buffer(worktreeId: "wt", tabId: sourceTab.id, worktreeRoot: root, relativePath: "a.txt")
+        let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == sourceTab.id }
+
+        #expect(restored === existing)
+        #expect(restored.relativePath == "a.txt")
+        #expect(existing.storage.string == "shared old\n")
+        #expect(target.storage.string == "target base\n")
+        #expect(manager.peekBuffer(tabId: targetTab.id) === target)
+        #expect(updatedTab?.relativeFilePath == "a.txt")
+        #expect(try store.read(worktreeId: "wt", tabId: sourceTab.id) == nil)
+    }
+
     @Test func bufferRestoreToOpenTargetPathIsDiscarded() throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
