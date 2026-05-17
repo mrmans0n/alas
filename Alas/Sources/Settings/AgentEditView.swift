@@ -29,13 +29,25 @@ struct AgentEditView: View {
                 builtinLogoAssetName: nil
             ))
         case .existing(let id):
-            let agent = state.agentRegistry.agents.first(where: { $0.id == id })
-                ?? AgentBuiltins.entry(id: id)
-                ?? AgentDefinition(
+            // Source from config, not from `state.agentRegistry`. The registry
+            // clamps `isEnabled` against install detection, so reading the
+            // draft from there would silently persist `isEnabled = false`
+            // when the user opens a missing-binary card to fix its path.
+            let agent: AgentDefinition
+            if let custom = state.config.agents.custom.first(where: { $0.id == id }) {
+                agent = custom
+            } else if var builtin = AgentBuiltins.entry(id: id) {
+                let persisted = state.config.agents.builtinState[id]
+                builtin.isEnabled = persisted?.isEnabled ?? builtin.isEnabled
+                builtin.binaryOverride = persisted?.binaryOverride
+                agent = builtin
+            } else {
+                agent = AgentDefinition(
                     id: id, displayName: id, binary: "",
                     binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
                     isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
                 )
+            }
             _draft = State(initialValue: agent)
         }
     }
