@@ -3,6 +3,45 @@ import GhosttyKit
 import Testing
 @testable import Alas
 
+/// Records calls made by SurfaceView to the Ghostty surface, so tests can
+/// drive NSTextInputClient methods without standing up a real surface.
+@MainActor
+final class FakeGhosttySurfaceIO: GhosttySurfaceIO {
+    enum Call: Equatable {
+        case key(action: UInt32, keycode: UInt32, mods: UInt32, text: String?, composing: Bool)
+        case text(String)
+        case preedit(String?)
+    }
+
+    private(set) var calls: [Call] = []
+    var keyConsumed: Bool = false
+    var imePointRect: CGRect = CGRect(x: 0, y: 0, width: 0, height: 0)
+
+    func sendKey(_ event: ghostty_input_key_s) -> Bool {
+        let textStr: String? = event.text.map { String(cString: $0) }
+        calls.append(.key(
+            action: event.action.rawValue,
+            keycode: event.keycode,
+            mods: event.mods.rawValue,
+            text: textStr,
+            composing: event.composing
+        ))
+        return keyConsumed
+    }
+
+    func sendText(_ text: String) {
+        calls.append(.text(text))
+    }
+
+    func setPreedit(_ text: String?) {
+        calls.append(.preedit(text))
+    }
+
+    func imePoint() -> CGRect {
+        return imePointRect
+    }
+}
+
 /// Tests for the NSEvent keyboard-translation helpers that feed Ghostty.
 /// These exercise the pure modifier/character logic without needing a live
 /// Ghostty surface.
@@ -196,5 +235,17 @@ struct SurfaceViewKeyboardTests {
 
         #expect(keyEv.mods == GHOSTTY_MODS_SHIFT)
         #expect(keyEv.consumed_mods == GHOSTTY_MODS_SHIFT)
+    }
+
+    @Test @MainActor func fakeIOConformsToProtocol() {
+        let io = FakeGhosttySurfaceIO()
+        io.sendText("hi")
+        io.setPreedit("か")
+        io.setPreedit(nil)
+        #expect(io.calls == [
+            .text("hi"),
+            .preedit("か"),
+            .preedit(nil),
+        ])
     }
 }

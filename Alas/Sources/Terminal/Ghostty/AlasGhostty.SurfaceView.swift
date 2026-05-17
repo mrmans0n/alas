@@ -19,6 +19,54 @@ import Metal
 import QuartzCore
 import GhosttyKit
 
+// MARK: - GhosttySurfaceIO
+
+/// Narrow seam around the four ghostty_surface_* C calls used by the input
+/// pipeline. Lets unit tests drive NSTextInputClient methods without standing
+/// up a real Ghostty surface.
+@MainActor
+protocol GhosttySurfaceIO {
+    func sendKey(_ event: ghostty_input_key_s) -> Bool
+    func sendText(_ text: String)
+    func setPreedit(_ text: String?)
+    func imePoint() -> CGRect
+}
+
+/// Production adapter that forwards to the C ABI of a real ghostty_surface_t.
+@MainActor
+final class LiveGhosttySurfaceIO: GhosttySurfaceIO {
+    nonisolated(unsafe) private let surface: ghostty_surface_t
+    init(_ surface: ghostty_surface_t) { self.surface = surface }
+
+    func sendKey(_ event: ghostty_input_key_s) -> Bool {
+        return ghostty_surface_key(surface, event)
+    }
+
+    func sendText(_ text: String) {
+        let bytes = text.utf8.count
+        text.withCString { ptr in
+            ghostty_surface_text(surface, ptr, UInt(bytes))
+        }
+    }
+
+    func setPreedit(_ text: String?) {
+        if let text {
+            let bytes = text.utf8.count
+            text.withCString { ptr in
+                ghostty_surface_preedit(surface, ptr, UInt(bytes))
+            }
+        } else {
+            ghostty_surface_preedit(surface, nil, 0)
+        }
+    }
+
+    func imePoint() -> CGRect {
+        var x: Double = 0, y: Double = 0, w: Double = 0, h: Double = 0
+        ghostty_surface_ime_point(surface, &x, &y, &w, &h)
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+}
+
 extension AlasGhostty {
     /// Terminal display view. Each session owns exactly one of these.
     @MainActor
