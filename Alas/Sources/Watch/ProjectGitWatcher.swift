@@ -10,13 +10,19 @@ import os
 /// docs/superpowers/specs/2026-05-14-sidebar-auto-refresh-on-branch-change-design.md
 @MainActor
 final class ProjectGitWatcher {
+    typealias GitInfo = (gitDir: URL, worktreeRoot: URL)
+
     var onHeadChanged: (([URL: String]) -> Void)?
     var onTopologyChanged: (() -> Void)?
 
     private let repoPath: URL
+    private let gitInfoResolver: (URL) async -> GitInfo?
+    private let startStreamOverride: ((ProjectGitWatcher, URL) -> Void)?
     private var resolvedGitDir: URL?
     private var resolvedWorktreeRoot: URL?
     private var stream: FSEventStreamRef?
+    private var isRunning = false
+    private var startGeneration = 0
     private let headDebouncer: DebounceTimer
     private let topologyDebouncer: DebounceTimer
     private var pendingHeadFiles: Set<URL> = []
@@ -47,9 +53,13 @@ final class ProjectGitWatcher {
         headDebounceInterval: TimeInterval,
         headDebounceMaxWait: TimeInterval,
         topologyDebounceInterval: TimeInterval,
-        topologyDebounceMaxWait: TimeInterval
+        topologyDebounceMaxWait: TimeInterval,
+        gitInfoResolver: @escaping (URL) async -> GitInfo? = ProjectGitWatcher.resolveGitInfo,
+        startStreamOverride: ((ProjectGitWatcher, URL) -> Void)? = nil
     ) {
         self.repoPath = repoPath
+        self.gitInfoResolver = gitInfoResolver
+        self.startStreamOverride = startStreamOverride
         self.resolvedGitDir = resolvedGitDir
         self.resolvedWorktreeRoot = resolvedWorktreeRoot
         self.headDebouncer = DebounceTimer(
@@ -68,18 +78,21 @@ final class ProjectGitWatcher {
 
     func start() {
         stop()
-        if let gitDir = resolvedGitDir, let worktreeRoot = resolvedWorktreeRoot {
+        startGeneration += 1
+        isRunning = true
+        let generation = startGeneration
+        if let gitDir = resolvedGitDir, resolvedWorktreeRoot != nil {
             startStream(gitDir: gitDir)
             return
         }
         Task { [weak self] in
             guard let self else { return }
-            guard let info = await Self.resolveGitInfo(at: self.repoPath) else {
+            guard let info = await self.gitInfoResolver(self.repoPath) else {
                 self.logger.warning("could not resolve git-dir for \(self.repoPath.path, privacy: .public)")
                 return
             }
             await MainActor.run {
-                guard self.resolvedGitDir == nil else { return }  // started/stopped meanwhile
+                guard self.isRunning, self.startGeneration == generation, self.resolvedGitDir == nil else { return }
                 self.resolvedGitDir = info.gitDir
                 self.resolvedWorktreeRoot = info.worktreeRoot
                 self.startStream(gitDir: info.gitDir)
@@ -88,6 +101,8 @@ final class ProjectGitWatcher {
     }
 
     func stop() {
+        startGeneration += 1
+        isRunning = false
         if let stream {
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
@@ -200,6 +215,10 @@ final class ProjectGitWatcher {
     }
 
     private func startStream(gitDir: URL) {
+        if let startStreamOverride {
+            startStreamOverride(self, gitDir)
+            return
+        }
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
