@@ -447,6 +447,30 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
     }
 
+    @Test func removeProjectLoadsPersistedTabsForMainWorktreeBeforeDeletion() async throws {
+        let repo = try await makeRepo(name: "remove-load-first")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "load-first", color: "#5fb7c4"
+        )
+        // Skip refreshWorktrees — worktreesByProject stays empty.
+        #expect(state.projectsManager.worktrees(projectId: project.id).isEmpty)
+
+        let mainId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+        // Seed an on-disk tabs file (no in-memory entry).
+        state.tabs.appendTerminal(worktreeId: mainId, title: "term", sessionId: "s1")
+        let tabsFile = Paths.tabsFile(forWorktreeId: mainId)
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path))
+
+        state.removeProject(id: project.id)
+
+        // After removal, the persisted tabs file is gone.
+        #expect(FileManager.default.fileExists(atPath: tabsFile.path) == false)
+        #expect(state.projects.contains(where: { $0.id == project.id }) == false)
+    }
+
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,

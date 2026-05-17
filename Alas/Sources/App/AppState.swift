@@ -430,11 +430,36 @@ final class AppState {
     func removeProject(id: String) {
         guard let project = projects.first(where: { $0.id == id }) else { return }
 
-        let worktrees = projectsManager.worktrees(projectId: id)
-        let dirtyByWorktree: [(worktree: Worktree, count: Int)] = worktrees.compactMap { worktree in
-            let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
-            return dirty.isEmpty ? nil : (worktree: worktree, count: dirty.count)
+        let mainId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
+        let liveWorktrees = projectsManager.worktrees(projectId: id)
+        var candidateIds = Set(liveWorktrees.map(\.id))
+        candidateIds.insert(mainId)
+        for hidden in project.hiddenWorktreePaths {
+            candidateIds.insert(hidden)
         }
+
+        tabs.loadAll(worktreeIds: Array(candidateIds))
+
+        let liveById = Dictionary(uniqueKeysWithValues: liveWorktrees.map { ($0.id, $0) })
+        let dirtyByWorktree: [(worktree: Worktree, count: Int)] = candidateIds.compactMap { worktreeId in
+            let dirty = dirtyEditorTabIds(worktreeId: worktreeId)
+            guard !dirty.isEmpty else { return nil }
+            if let live = liveById[worktreeId] {
+                return (worktree: live, count: dirty.count)
+            }
+            let path = URL(fileURLWithPath: worktreeId)
+            let synthetic = Worktree(
+                id: worktreeId,
+                projectId: project.id,
+                name: path.lastPathComponent,
+                branch: path.lastPathComponent,
+                path: path,
+                status: .clean,
+                lastActivity: Date()
+            )
+            return (worktree: synthetic, count: dirty.count)
+        }
+
         let dirtyTotal = dirtyByWorktree.reduce(0) { $0 + $1.count }
 
         if dirtyTotal > 0 {
@@ -454,9 +479,8 @@ final class AppState {
         }
 
         var beforeIds = allWorktreeIds()
-        beforeIds.insert(Worktree.makeId(path: URL(fileURLWithPath: project.path)))
-        for hidden in project.hiddenWorktreePaths {
-            beforeIds.insert(hidden)
+        for candidateId in candidateIds {
+            beforeIds.insert(candidateId)
         }
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
