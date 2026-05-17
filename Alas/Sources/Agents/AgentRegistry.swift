@@ -50,11 +50,10 @@ struct AgentRegistry: Equatable {
         agents.filter { installedIds.contains($0.id) }
     }
 
-    /// Picker-eligible agents: installed AND not user-disabled. Note
-    /// that `isEnabled` is already clamped against install state in
-    /// `init`, so the explicit `installedIds.contains` check is
-    /// redundant but kept defensively.
+    /// Picker-eligible agents: installed AND not user-disabled.
+    /// `isEnabled` is clamped against install state in `init`, so a
+    /// simple `isEnabled` filter suffices.
     func enabled() -> [AgentDefinition] {
-        agents.filter { $0.isEnabled && installedIds.contains($0.id) }
+        agents.filter { $0.isEnabled }
     }
 }
