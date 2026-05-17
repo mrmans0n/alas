@@ -1,6 +1,11 @@
 import Foundation
 
-struct PersistenceStore {
+protocol PersistenceStoreProtocol {
+    func write<T: Encodable>(_ value: T, to url: URL) throws
+    func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T?
+}
+
+struct PersistenceStore: PersistenceStoreProtocol {
     private let encoder: JSONEncoder
     private let decoder = JSONDecoder()
 

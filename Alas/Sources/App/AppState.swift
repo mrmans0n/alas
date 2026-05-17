@@ -176,14 +176,24 @@ final class AppState {
         return manager
     }
 
-    private let store = PersistenceStore()
+    @ObservationIgnored
+    private let store: any PersistenceStoreProtocol
+    @ObservationIgnored
+    private let persistenceErrorHandler: (String, String) -> Void
 
     /// One FSEvents watcher per project, watching `<repo>/.git` to auto-refresh
     /// the sidebar when branches flip or worktrees appear/disappear externally.
     @ObservationIgnored
     private var projectGitWatchers: [String: ProjectGitWatcher] = [:]
 
-    init() {
+    init(
+        store: any PersistenceStoreProtocol = PersistenceStore(),
+        persistenceErrorHandler: ((String, String) -> Void)? = nil
+    ) {
+        self.store = store
+        self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
+            AppState.showWarningAlert(title: title, message: message)
+        }
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         self.config = config
@@ -239,13 +249,29 @@ final class AppState {
 
     var projects: [ProjectConfig] { projectsManager.projects }
 
-    func saveConfig() {
-        try? store.write(config, to: Paths.appConfigFile)
+    @discardableResult
+    func saveConfig() -> Bool {
+        let saved: Bool
+        do {
+            try store.write(config, to: Paths.appConfigFile)
+            saved = true
+        } catch {
+            saved = false
+            persistenceErrorHandler("Settings Save Failed", error.localizedDescription)
+        }
         lspManager?.updateRegistry(LanguageServerRegistry(userDefined: config.code.languageServers))
+        return saved
     }
 
-    func saveProjects() {
-        try? store.write(ProjectsFile(projects: projectsManager.projects), to: Paths.projectsFile)
+    @discardableResult
+    func saveProjects() -> Bool {
+        do {
+            try store.write(ProjectsFile(projects: projectsManager.projects), to: Paths.projectsFile)
+            return true
+        } catch {
+            persistenceErrorHandler("Projects Save Failed", error.localizedDescription)
+            return false
+        }
     }
 
     /// Optimistically insert a worktree row and run the git operation async.
@@ -1227,6 +1253,10 @@ final class AppState {
     }
 
     private func showFileActionError(title: String, message: String) {
+        Self.showWarningAlert(title: title, message: message)
+    }
+
+    private static func showWarningAlert(title: String, message: String) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
