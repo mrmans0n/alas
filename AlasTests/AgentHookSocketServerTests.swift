@@ -67,6 +67,14 @@ struct AgentHookSocketServerTests {
         #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
     }
 
+    @Test func oversizedPid_decodesAsNil() throws {
+        let json = #"{"v":1,"event":"busy","agent":"claude","session_id":"s1","pid":999999999999}"#
+
+        let event = try AgentHookEvent.decode(from: Data(json.utf8))
+
+        #expect(event.pid == nil)
+    }
+
     @Test func unknownEvent_acksOkButDoesNotDispatch() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }

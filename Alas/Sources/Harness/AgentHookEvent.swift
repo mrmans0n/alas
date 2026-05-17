@@ -47,7 +47,7 @@ extension AgentHookEvent {
         guard let sessionId = json["session_id"] as? String, !sessionId.isEmpty else {
             throw AgentHookEventError.malformed("Missing 'session_id'")
         }
-        let pid: pid_t? = (json["pid"] as? Int).flatMap { $0 > 0 ? pid_t($0) : nil }
+        let pid: pid_t? = (json["pid"] as? Int).flatMap { $0 > 0 ? pid_t(exactly: $0) : nil }
         let ts: Date? = (json["ts"] as? String).flatMap { try? Date($0, strategy: .iso8601) }
         let body = json["body"] as? String
         return AgentHookEvent(
