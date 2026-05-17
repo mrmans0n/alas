@@ -1,8 +1,43 @@
 import Foundation
+import SwiftTreeSitter
 import Testing
 @testable import Alas
 
 struct TextEditCoordinatesTests {
+    @Test func inputEditUsesUtf16BytesForAsciiInsertion() {
+        let oldText = "abcd"
+        let edit = EditorTextEdit(location: 2, oldLength: 0, replacementText: "X")
+        let newText = TextEditCoordinates.apply(edit, to: oldText)!
+        let inputEdit = TextEditCoordinates.inputEdit(for: edit, oldText: oldText, newText: newText)!
+
+        #expect(inputEdit.startByte == 4)
+        #expect(inputEdit.oldEndByte == 4)
+        #expect(inputEdit.newEndByte == 6)
+        #expect(inputEdit.startPoint.row == 0)
+        #expect(inputEdit.startPoint.column == 4)
+        #expect(inputEdit.oldEndPoint.row == 0)
+        #expect(inputEdit.oldEndPoint.column == 4)
+        #expect(inputEdit.newEndPoint.row == 0)
+        #expect(inputEdit.newEndPoint.column == 6)
+    }
+
+    @Test func inputEditUsesUtf16BytesAfterSurrogatePair() {
+        let oldText = "𐍈\nabcd"
+        let edit = EditorTextEdit(location: 3, oldLength: 0, replacementText: "X")
+        let newText = TextEditCoordinates.apply(edit, to: oldText)!
+        let inputEdit = TextEditCoordinates.inputEdit(for: edit, oldText: oldText, newText: newText)!
+
+        #expect(inputEdit.startByte == 6)
+        #expect(inputEdit.oldEndByte == 6)
+        #expect(inputEdit.newEndByte == 8)
+        #expect(inputEdit.startPoint.row == 1)
+        #expect(inputEdit.startPoint.column == 0)
+        #expect(inputEdit.oldEndPoint.row == 1)
+        #expect(inputEdit.oldEndPoint.column == 0)
+        #expect(inputEdit.newEndPoint.row == 1)
+        #expect(inputEdit.newEndPoint.column == 2)
+    }
+
     @Test func asciiOffsetRoundTrip() {
         let text = "hello\nworld"
         let pos = TextEditCoordinates.lspPosition(utf16Offset: 6, in: text)!
