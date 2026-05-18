@@ -218,6 +218,7 @@ final class ContentSearcher: Sendable {
         let colByte = (first?["start"] as? Int) ?? 0
         let endColByte = (first?["end"] as? Int) ?? colByte
         let rawSnippet = lineBlob.trimmingCharacters(in: .newlines)
+        let column = charOffset(forByteOffset: colByte, in: rawSnippet).map { $0 + 1 } ?? (colByte + 1)
 
         // `--max-columns=400` doesn't apply in `--json` mode (per rg --help).
         // For a single very long line — minified JS, generated JSON, lockfiles —
@@ -235,7 +236,7 @@ final class ContentSearcher: Sendable {
             projectId: worktree.projectId,
             relativePath: pathBlob,
             line: lineNumber,
-            column: colByte + 1,
+            column: column,
             snippet: trimmedSnippet,
             matchCharRange: charRange
         )
