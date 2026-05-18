@@ -3,6 +3,7 @@ import Foundation
 actor LSPClient {
     enum State { case starting, initializing, ready, dead }
     enum TextDocumentSyncKind: Int { case none = 0, full = 1, incremental = 2 }
+    private static let shutdownTimeoutNanoseconds: UInt64 = 2_000_000_000
 
     let language: String
     let rootURI: String
@@ -163,17 +164,28 @@ actor LSPClient {
         // clients that died during `initialize()` (or never started), the
         // request would be pointless or hang — but we still need to kill
         // the transport so the LSP server process doesn't leak.
-        if state == .ready {
-            _ = try? await sendRequest(method: "shutdown", params: nil)
-            try? sendNotification(method: "exit", params: nil)
+        defer {
+            transport.terminate()
+            state = .dead
         }
-        transport.terminate()
-        state = .dead
+        guard state == .ready else { return }
+        do {
+            _ = try await sendRequest(
+                method: "shutdown",
+                params: nil,
+                timeoutNanoseconds: Self.shutdownTimeoutNanoseconds
+            )
+            try? sendNotification(method: "exit", params: nil)
+        } catch LSPError.requestTimedOut {
+            try? sendNotification(method: "exit", params: nil)
+        } catch {
+            return
+        }
     }
 
     // MARK: - Plumbing
 
-    private func sendRequest(method: String, params: Any?) async throws -> Data? {
+    private func sendRequest(method: String, params: Any?, timeoutNanoseconds: UInt64? = nil) async throws -> Data? {
         nextId += 1
         let id = LSPID.int(nextId)
         let req = LSPRequest(
@@ -182,14 +194,33 @@ actor LSPClient {
             params: params.map { AnyEncodable($0) }
         )
         let data = try JSONEncoder().encode(req)
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data?, Error>) in
-            pending[id] = cont
-            do {
-                try transport.send(data)
-            } catch {
-                pending.removeValue(forKey: id)
-                cont.resume(throwing: error)
+        let timeoutTask = timeoutNanoseconds.map { timeoutNanoseconds in
+            Task {
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    await self.failPendingRequest(id: id, error: LSPError.requestTimedOut)
+                } catch {}
             }
+        }
+        return try await withTaskCancellationHandler {
+            defer { timeoutTask?.cancel() }
+            return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data?, Error>) in
+                pending[id] = cont
+                do {
+                    try transport.send(data)
+                } catch {
+                    pending.removeValue(forKey: id)
+                    cont.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            Task { await self.failPendingRequest(id: id, error: CancellationError()) }
+        }
+    }
+
+    private func failPendingRequest(id: LSPID, error: Error) {
+        if let cont = pending.removeValue(forKey: id) {
+            cont.resume(throwing: error)
         }
     }
 
@@ -376,4 +407,5 @@ actor LSPClient {
 enum LSPError: Error {
     case transportClosed
     case responseError(LSPResponseError)
+    case requestTimedOut
 }
