@@ -237,6 +237,44 @@ struct SurfaceViewKeyboardTests {
         #expect(keyEv.consumed_mods == GHOSTTY_MODS_SHIFT)
     }
 
+    @Test func shiftedPrintableCharacterIsForwardedAsGhosttyText() throws {
+        let event = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: .shift,
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "\"",
+                charactersIgnoringModifiers: "'",
+                isARepeat: false,
+                keyCode: 39
+            )
+        )
+
+        #expect(event.alasGhosttyForwardedText == "\"")
+    }
+
+    @Test func shiftedControlCharacterIsNotForwardedAsGhosttyText() throws {
+        let event = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: .shift,
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "\r",
+                charactersIgnoringModifiers: "\r",
+                isARepeat: false,
+                keyCode: 0x24
+            )
+        )
+
+        #expect(event.alasGhosttyForwardedText == nil)
+    }
+
     @Test @MainActor func fakeIOConformsToProtocol() {
         let io = FakeGhosttySurfaceIO()
         io.sendText("hi")

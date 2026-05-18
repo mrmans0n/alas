@@ -408,20 +408,16 @@ extension AlasGhostty {
             // Step A: forward the raw key event to Ghostty so it can match a
             // keybinding.
             //
-            // For Cmd/Ctrl-modified keys we attach the layout-translated text
-            // (alasGhosttyCharacters strips Ctrl and returns the unshifted
-            // character, e.g. Ctrl+L on Dvorak → "l") because Step B below
-            // returns before interpretKeyEvents — so this is Ghostty's only
-            // chance to see the layout character it needs to encode the
-            // control byte correctly on non-US layouts. For plain keys we
-            // leave text nil so the insertText callback can deliver it
-            // (avoids doubling).
+            // Attach translated printable text to the key event. If Ghostty
+            // consumes the key, this is the only payload the PTY/TUI receives;
+            // if it does not consume it, Step C still lets AppKit commit text
+            // through insertText so we avoid doubling.
             var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
 
             let cmdOrCtrl = event.modifierFlags.contains(.command)
                 || event.modifierFlags.contains(.control)
             let consumed: Bool
-            if cmdOrCtrl, let chars = translationEvent.alasGhosttyCharacters {
+            if let chars = translationEvent.alasGhosttyForwardedText {
                 consumed = chars.withCString { ptr -> Bool in
                     keyEv.text = ptr
                     return io.sendKey(keyEv)
@@ -686,6 +682,14 @@ extension NSEvent {
             }
         }
         return characters
+    }
+
+    /// Text payload to attach to the raw Ghostty key event before asking
+    /// Ghostty whether it consumes the key. Printable text is safe here
+    /// because unconsumed keys still fall through to AppKit's insertText path.
+    var alasGhosttyForwardedText: String? {
+        guard let text = alasGhosttyCharacters, !text.isEmpty else { return nil }
+        return text
     }
 }
 
