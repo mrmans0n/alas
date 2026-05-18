@@ -63,6 +63,18 @@ final class TabsManager {
         return tabs(forWorktree: id).first(where: { $0.id == activeId })
     }
 
+    func moveTab(worktreeId: String, fromId: TabID, toId: TabID) {
+        guard fromId != toId else { return }
+        guard var file = byWorktree[worktreeId] else { return }
+        guard let fromIndex = file.tabs.firstIndex(where: { $0.id == fromId }) else { return }
+        guard let toIndex = file.tabs.firstIndex(where: { $0.id == toId }) else { return }
+        let tab = file.tabs.remove(at: fromIndex)
+        let insertionIndex = fromIndex < toIndex ? toIndex : toIndex
+        file.tabs.insert(tab, at: insertionIndex)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
     @discardableResult
     func activateTabNumber(_ number: Int, worktreeId: String) -> TabID? {
         guard number > 0 else { return nil }
