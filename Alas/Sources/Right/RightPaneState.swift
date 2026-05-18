@@ -42,6 +42,13 @@ final class RightPaneState {
     /// without throwing away the rest of the cached state.
     var baseBranch: String
 
+    var pendingDiscard: PendingDiscard? = nil
+
+    /// Injected by `RightPaneStore` after creation so `confirmDiscard` can
+    /// close any open diff tabs whose path was just discarded. Nil in tests
+    /// that construct `RightPaneState` directly.
+    var closeDiffTabs: (([String]) -> Void)? = nil
+
     private let git = GitService()
     private let watcher: WorktreeWatcher
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-state")
@@ -333,6 +340,54 @@ final class RightPaneState {
             catch { self.composer.error = (error as NSError).localizedDescription }
             await self.refresh()
         }
+    }
+
+    func requestDiscardFile(path: String) {
+        let paths = Self.discardPaths(forFileAt: path, in: changes)
+        guard !paths.isEmpty else { return }
+        pendingDiscard = PendingDiscard(target: .file(path: path), paths: paths)
+    }
+
+    func requestDiscardFolder(path: String) {
+        let paths = Self.discardPaths(forFolderAt: path, in: changes)
+        // Folder count = distinct ChangedFile entries under the prefix, not
+        // path count (a staged rename contributes two paths but one file).
+        let prefix = path.hasSuffix("/") ? path : path + "/"
+        let fileCount = changes.filter { $0.path.hasPrefix(prefix) }.count
+        guard fileCount > 0 else { return }
+        pendingDiscard = PendingDiscard(
+            target: .folder(path: path, fileCount: fileCount),
+            paths: paths
+        )
+    }
+
+    func requestDiscardAll() {
+        let paths = Self.discardPaths(forAllIn: changes)
+        guard !changes.isEmpty else { return }
+        pendingDiscard = PendingDiscard(
+            target: .all(fileCount: changes.count),
+            paths: paths
+        )
+    }
+
+    func cancelDiscard() {
+        pendingDiscard = nil
+    }
+
+    @MainActor
+    func confirmDiscard() async {
+        guard let pending = pendingDiscard else { return }
+        let paths = pending.paths
+        pendingDiscard = nil
+        composer.error = nil
+        do {
+            try await git.discardPaths(worktreePath: worktree.path, files: paths)
+        } catch {
+            composer.error = (error as NSError).localizedDescription
+            return
+        }
+        await refresh()
+        closeDiffTabs?(paths)
     }
 
     /// Append a gitignore pattern for `path` to `destination` and refresh
