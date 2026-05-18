@@ -58,13 +58,11 @@ final class TerminalService {
             global: cfg,
             project: project
         )
-        let effectiveScript: String = {
-            let trimmedSuffix = startupScriptSuffix?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if trimmedSuffix.isEmpty { return baseScript }
-            let trimmedBase = baseScript.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmedBase.isEmpty ? trimmedSuffix : "\(trimmedBase)\n\(trimmedSuffix)"
-        }()
+        let effectiveScript = TerminalCLIInjection.compose(
+            shell: cfg.shell,
+            userStartupScript: baseScript,
+            startupScriptSuffix: startupScriptSuffix
+        )
         let plan = try StartupScriptInstaller.plan(
             shell: cfg.shell,
             startupScript: effectiveScript,
