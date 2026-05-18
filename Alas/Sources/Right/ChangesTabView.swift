@@ -59,6 +59,25 @@ struct ChangesTabView: View {
                 )
             }
         }
+        .alert(
+            PendingDiscard.alertTitle(for: rps.pendingDiscard ?? .placeholder),
+            isPresented: Binding(
+                get: { rps.pendingDiscard != nil },
+                set: { if !$0 { rps.cancelDiscard() } }
+            ),
+            presenting: rps.pendingDiscard,
+            actions: { _ in
+                Button("Discard", role: .destructive) {
+                    Task { @MainActor in await rps.confirmDiscard() }
+                }
+                Button("Cancel", role: .cancel) {
+                    rps.cancelDiscard()
+                }
+            },
+            message: { p in
+                Text(PendingDiscard.alertMessage(for: p))
+            }
+        )
     }
 
     private var branchName: String? {

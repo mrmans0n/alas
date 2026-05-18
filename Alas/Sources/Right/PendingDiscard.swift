@@ -39,3 +39,10 @@ struct PendingDiscard: Equatable {
         n == 1 ? "file" : "files"
     }
 }
+
+extension PendingDiscard {
+    /// Inert placeholder used as the `.alert` title fallback when there's
+    /// nothing pending. The alert is hidden in that state, so the title is
+    /// never visible — this is purely a type-system convenience.
+    static let placeholder = PendingDiscard(target: .all(fileCount: 0), paths: [])
+}
