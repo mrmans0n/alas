@@ -20,6 +20,11 @@ struct AgentHookSocketServerCLITests {
         return String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
 
+    private func responseObject(_ response: String) throws -> [String: Any] {
+        let data = try #require(response.data(using: .utf8))
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
     @Test func cliRequestDispatchesAndReturnsOK() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }
@@ -40,8 +45,9 @@ struct AgentHookSocketServerCLITests {
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
         let response = try sendToSocket(path: path, payload: json)
+        let object = try responseObject(response)
 
-        #expect(response.contains(#""ok":true"#) || response.contains(#""ok": true"#))
+        #expect(object["ok"] as? Bool == true)
         let request = await holder.current()
         #expect(request?.sessionId == "s1")
         #expect(request?.paths == ["/tmp/a.txt"])
@@ -58,25 +64,42 @@ struct AgentHookSocketServerCLITests {
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/missing.txt"]}"#
         let response = try sendToSocket(path: path, payload: json)
+        let object = try responseObject(response)
 
-        #expect(response.contains(#""ok":false"#) || response.contains(#""ok": false"#))
-        #expect(response.contains("Path does not exist."))
+        #expect(object["ok"] as? Bool == false)
+        #expect(object["error"] as? String == "Path does not exist.")
     }
 
-    @Test func cliRequestDoesNotDispatchHarnessEvent() throws {
+    @Test func cliRequestWithoutHandlerReturnsUnavailableError() throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }
         let path = "\(dir)/test.sock"
         let server = AgentHookSocketServer(socketPath: path)
         defer { server.shutdown() }
 
-        var harnessEventReceived = false
-        server.onEvent = { _ in harnessEventReceived = true }
+        let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
+        let response = try sendToSocket(path: path, payload: json)
+        let object = try responseObject(response)
+
+        #expect(object["ok"] as? Bool == false)
+        #expect(object["error"] as? String == "Alas CLI is not available.")
+    }
+
+    @Test func cliRequestDoesNotDispatchHarnessEvent() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/test.sock"
+        let server = AgentHookSocketServer(socketPath: path)
+        defer { server.shutdown() }
+
+        let holder = EventHolder()
+        server.onEvent = { event in holder.deliver(event) }
         server.onCLIRequest = { _ in .ok }
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
         _ = try sendToSocket(path: path, payload: json)
+        let event = await holder.wait(timeoutMs: 300)
 
-        #expect(!harnessEventReceived)
+        #expect(event == nil)
     }
 }
