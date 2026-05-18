@@ -12,15 +12,21 @@ enum TerminalCLIInjection {
           fi
           case "${1:-}" in
             open)
+              local response status
               shift
               if [ "$#" -eq 0 ]; then
                 printf '%s\n' 'usage: alas open <path> [path...]' >&2
                 return 2
               fi
-              response=$(/usr/bin/python3 - "$ALAS_SESSION_ID" "$@" <<'PY' | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH"
+              response=$(/usr/bin/python3 - "$ALAS_SESSION_ID" "$@" <<'PY' | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH" 2>/dev/null
         import json, os, sys
         session_id = sys.argv[1]
-        paths = [os.path.abspath(path) for path in sys.argv[2:]]
+        base = os.environ.get("PWD") or os.getcwd()
+        def resolve(path):
+            if os.path.isabs(path):
+                return os.path.abspath(path)
+            return os.path.abspath(os.path.join(base, path))
+        paths = [resolve(path) for path in sys.argv[2:]]
         print(json.dumps({"v": 1, "kind": "cli", "command": "open", "session_id": session_id, "paths": paths}))
         PY
         )
