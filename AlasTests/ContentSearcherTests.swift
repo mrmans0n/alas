@@ -99,6 +99,30 @@ struct ContentSearcherTests {
         ) { hitsCS.append(h) }
         #expect(hitsCS.count == 1)
     }
+
+    @Test func columnsUseCharacterOffsetsForNonASCIIPrefixes() async throws {
+        try #require(rgAvailable())
+        let repo = try await makeRepo(files: [
+            ("a.txt", "éneedle\n"),
+        ])
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let cs = ContentSearcher()
+        var hits: [ContentSearchHit] = []
+        for try await h in cs.search(
+            query: "needle",
+            options: SearchContentOptions(),
+            worktrees: [SearchWorktree(
+                id: "w1", projectId: "p1", displayName: "w",
+                absolutePath: repo
+            )]
+        ) { hits.append(h) }
+
+        let hit = try #require(hits.first)
+        #expect(hit.column == 2)
+        #expect(hit.snippet == "éneedle")
+        #expect(hit.matchCharRange == 1..<7)
+    }
 }
 
 // `String * Int` operator for the cancellation test fixture.
