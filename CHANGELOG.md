@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-05-18
+
+### 🐛 Fixes
+
+- fix tab drag reordering after separating tab drag from window drag (#186).
+- hide the new worktree branch error while only the required prefix is typed (#187).
+- handle missing Git LFS during worktree removal (#188).
+
 ## [0.3.4] - 2026-05-18
 
 ### ✨ Features
