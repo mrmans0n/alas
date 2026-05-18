@@ -80,4 +80,13 @@ struct StatusParserTests {
         #expect(entry.stage == .unstaged)
         #expect(entry.path == "scratch.txt")
     }
+
+    @Test func parsesUnmergedPathWithSpaces() throws {
+        let raw = "u UU N... 100644 100644 100644 100644 a b c dir/a b.txt\u{0}"
+        let entries = try StatusParser.parse(raw)
+        let entry = try #require(entries.first)
+        #expect(entry.status == "M")
+        #expect(entry.stage == .unstaged)
+        #expect(entry.path == "dir/a b.txt")
+    }
 }
