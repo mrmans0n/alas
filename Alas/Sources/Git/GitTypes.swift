@@ -35,6 +35,20 @@ enum ChangeStage: String, Codable {
     case unstaged
 }
 
+enum FileVisibility: String, Equatable, Codable {
+    case tracked
+    case untracked
+    case ignored
+    case excluded
+}
+
+enum DirectoryChildrenState: String, Equatable, Codable {
+    case loaded
+    case notLoaded
+    case loading
+    case failed
+}
+
 struct FileTreeNode: Identifiable, Equatable, Codable {
     var id: String { "\(kind.rawValue):\(path)" }
     let name: String
@@ -42,6 +56,8 @@ struct FileTreeNode: Identifiable, Equatable, Codable {
     let kind: Kind
     var children: [FileTreeNode]?
     var badge: String?        // "A"|"M"|"D"|"R" if status non-empty
+    var visibility: FileVisibility = .tracked
+    var childrenState: DirectoryChildrenState = .loaded
 
     enum Kind: String, Codable { case dir, file }
 }
