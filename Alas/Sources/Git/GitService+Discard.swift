@@ -1,19 +1,16 @@
 import Foundation
 
 extension GitService {
-    /// Discard worktree + index changes for the given paths. Splits paths
-    /// into tracked vs untracked: tracked paths go through
+    /// Discard worktree + index changes for the given paths. Splits paths into
+    /// three buckets: in-index (`indexTracked`), in-HEAD-only (`headOnlyPaths`,
+    /// e.g. staged-rename origins no longer in the index), and truly untracked.
+    /// In-index and HEAD-only paths route through
     /// `git restore --staged --worktree --source=HEAD --` (one batched call);
     /// untracked paths are removed via `FileManager`. On unborn HEAD where
-    /// `--source=HEAD` won't resolve, every tracked path is necessarily a
+    /// `--source=HEAD` won't resolve, every in-index path is necessarily a
     /// staged add, so we use `git rm -f --cached --` + `FileManager` removal.
     /// Empty `files` is a no-op. Missing untracked paths (ENOENT) are
     /// silently tolerated — the user already saw what they wanted gone.
-    ///
-    /// Staged renames are handled correctly: after `git mv a.txt b.txt` the
-    /// old path `a.txt` is no longer in the index but still exists in HEAD.
-    /// We detect such paths via `git cat-file -e HEAD:<path>` and include
-    /// them in the restore call so both halves of the rename are undone.
     func discardPaths(worktreePath: URL, files: [String]) async throws {
         guard !files.isEmpty else { return }
 
@@ -73,7 +70,12 @@ extension GitService {
                 try Self.assertSuccess(rm, op: "discard")
                 for path in indexTracked {
                     let url = worktreePath.appendingPathComponent(path)
-                    try? FileManager.default.removeItem(at: url)
+                    do {
+                        try FileManager.default.removeItem(at: url)
+                    } catch CocoaError.fileNoSuchFile {
+                        continue
+                    }
+                    // any other error propagates
                 }
             }
         } else if !headOnlyPaths.isEmpty {
@@ -90,8 +92,6 @@ extension GitService {
             let url = worktreePath.appendingPathComponent(path)
             do {
                 try FileManager.default.removeItem(at: url)
-            } catch let error as NSError where error.code == NSFileNoSuchFileError {
-                continue
             } catch CocoaError.fileNoSuchFile {
                 continue
             }
