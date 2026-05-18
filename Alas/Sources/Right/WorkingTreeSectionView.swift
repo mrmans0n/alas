@@ -7,6 +7,7 @@ struct WorkingTreeSectionView: View {
     var onToggleStage: ((ChangedFile) -> Void)? = nil
     var onStageAll: (([ChangedFile]) -> Void)? = nil
     var onUnstageAll: (([ChangedFile]) -> Void)? = nil
+    var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -110,6 +111,41 @@ struct WorkingTreeSectionView: View {
         }
     }
 
+    /// A ChangedFile is "untracked" when status parser produced ("A",
+    /// .unstaged). Staged adds parse to ("A", .staged) so the stage check
+    /// is required.
+    private func isUntracked(_ file: ChangedFile) -> Bool {
+        file.status == "A" && file.stage == .unstaged
+    }
+
+    /// True when every ChangedFile reachable through `node` is untracked.
+    /// Folders that contain any tracked entry get no Ignore menu.
+    private func isUntrackedSubtree(
+        _ node: FileTreeNode,
+        filesByPath: [String: ChangedFile]
+    ) -> Bool {
+        if node.kind == .file {
+            return filesByPath[node.path].map(isUntracked) ?? false
+        }
+        guard let kids = node.children, !kids.isEmpty else { return false }
+        return kids.allSatisfy { isUntrackedSubtree($0, filesByPath: filesByPath) }
+    }
+
+    @ViewBuilder
+    private func ignoreMenu(path: String, isDirectory: Bool) -> some View {
+        Menu("Ignore") {
+            Button("Add to .gitignore (repo root)") {
+                onIgnore?(path, isDirectory, .repoRoot)
+            }
+            Button("Add to nearest .gitignore") {
+                onIgnore?(path, isDirectory, .nearest)
+            }
+            Button("Add to .git/info/exclude") {
+                onIgnore?(path, isDirectory, .infoExclude)
+            }
+        }
+    }
+
     private func renderNode(
         _ node: FileTreeNode,
         filesByPath: [String: ChangedFile],
@@ -119,6 +155,7 @@ struct WorkingTreeSectionView: View {
         if node.kind == .dir {
             let collapseKey = "\(collapseNamespace):\(node.path)"
             let open = !collapsedChangePaths.contains(collapseKey)
+            let folderUntracked = isUntrackedSubtree(node, filesByPath: filesByPath)
             return AnyView(
                 Group {
                     Button {
@@ -145,6 +182,11 @@ struct WorkingTreeSectionView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        if folderUntracked {
+                            ignoreMenu(path: node.path, isDirectory: true)
+                        }
+                    }
                     if open, let kids = node.children {
                         ForEach(kids) {
                             renderNode(
@@ -158,6 +200,7 @@ struct WorkingTreeSectionView: View {
                 }
             )
         } else if let file = filesByPath[node.path] {
+            let fileUntracked = isUntracked(file)
             return AnyView(
                 ChangedRow(
                     file: file,
@@ -165,6 +208,11 @@ struct WorkingTreeSectionView: View {
                     onSelect: { onSelect(file) },
                     onStage: onToggleStage.map { fn in { fn(file) } }
                 )
+                .contextMenu {
+                    if fileUntracked {
+                        ignoreMenu(path: file.path, isDirectory: false)
+                    }
+                }
             )
         } else {
             return AnyView(EmptyView())
