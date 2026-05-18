@@ -43,12 +43,12 @@ final class ThemeStore {
     }
 
     func activate(id: String) throws {
+        var next = try Theme.loadBundled(id: id)
+        next.accentOverrideHex = current.accentOverrideHex
         userPickedId = id
         // Manual selection turns off match-system implicitly so the user's
         // pick actually shows up.
         matchSystem = false
-        var next = try Theme.loadBundled(id: id)
-        next.accentOverrideHex = current.accentOverrideHex
         self.current = next
     }
 
