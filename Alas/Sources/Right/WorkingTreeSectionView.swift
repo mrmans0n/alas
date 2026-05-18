@@ -9,6 +9,7 @@ struct WorkingTreeSectionView: View {
     var onUnstageAll: (([ChangedFile]) -> Void)? = nil
     var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
     var onDiscardAll: (() -> Void)? = nil
+    var onDiscardFolder: ((String) -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -190,6 +191,9 @@ struct WorkingTreeSectionView: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
+                        Button("Discard Changes...") {
+                            onDiscardFolder?(node.path)
+                        }
                         if folderUntracked {
                             ignoreMenu(path: node.path, isDirectory: true)
                         }

@@ -44,7 +44,8 @@ struct ChangesTabView: View {
                     onIgnore: { path, isDir, dest in
                         rps.ignore(path: path, isDirectory: isDir, destination: dest)
                     },
-                    onDiscardAll: { rps.requestDiscardAll() }
+                    onDiscardAll: { rps.requestDiscardAll() },
+                    onDiscardFolder: { path in rps.requestDiscardFolder(path: path) }
                 )
                 Divider().opacity(0.4)
                 CommitsSectionView(
