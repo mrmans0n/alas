@@ -13,6 +13,9 @@ final class RightPaneState {
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
+    private(set) var loadedFileTreeChildPaths: Set<String> = [""]
+    private(set) var loadingFileTreeChildPaths: Set<String> = []
+    private(set) var fileTreeGeneration: Int = 0
 
     // New in right-sidebar-refactor:
     var activeTab: RightPaneTab = .changes
@@ -62,6 +65,7 @@ final class RightPaneState {
     func refresh() async {
         loading = true
         defer { loading = false }
+        invalidateFileTreeChildLoadsForRefresh()
         do {
             // Any refresh re-anchors the older-history cursor; drop the
             // accumulated pages so we don't accidentally splice an old
@@ -104,6 +108,13 @@ final class RightPaneState {
         }
     }
 
+    func invalidateFileTreeChildLoadsForRefresh() {
+        fileTreeGeneration += 1
+        loadedFileTreeChildPaths = [""]
+        loadingFileTreeChildPaths = []
+        fileTree = Self.resetLoadingFileTreeChildren(in: fileTree)
+    }
+
     func toggleStage(_ file: ChangedFile) {
         composer.error = nil
         Task { @MainActor in
@@ -128,6 +139,89 @@ final class RightPaneState {
             return [file.path, from]
         }
         return [file.path]
+    }
+
+    nonisolated static func mergingChildren(
+        in nodes: [FileTreeNode],
+        for path: String,
+        with children: [FileTreeNode],
+        state: DirectoryChildrenState
+    ) -> (nodes: [FileTreeNode], didMerge: Bool) {
+        var didMerge = false
+        let updatedNodes = nodes.map { node in
+            if node.path == path {
+                didMerge = true
+                var updated = node
+                var merged: [String: FileTreeNode] = [:]
+                for child in node.children ?? [] {
+                    merged[child.id] = child
+                }
+                for child in children where merged[child.id] == nil {
+                    merged[child.id] = child
+                }
+                updated.children = merged.values.sorted { lhs, rhs in
+                    if lhs.kind != rhs.kind { return lhs.kind == .dir }
+                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                }
+                updated.childrenState = state
+                return updated
+            }
+            guard let existing = node.children else { return node }
+            var updated = node
+            let result = mergingChildren(in: existing, for: path, with: children, state: state)
+            didMerge = didMerge || result.didMerge
+            updated.children = result.nodes
+            return updated
+        }
+        return (updatedNodes, didMerge)
+    }
+
+    nonisolated static func resetLoadingFileTreeChildren(in nodes: [FileTreeNode]) -> [FileTreeNode] {
+        nodes.map { node in
+            var updated = node
+            if let children = node.children {
+                updated.children = resetLoadingFileTreeChildren(in: children)
+            }
+            if node.kind == .dir, node.childrenState == .loading {
+                updated.children = nil
+                updated.childrenState = .notLoaded
+            }
+            return updated
+        }
+    }
+
+    func loadFileTreeChildren(path: String) {
+        guard !loadedFileTreeChildPaths.contains(path),
+              !loadingFileTreeChildPaths.contains(path) else { return }
+        loadingFileTreeChildPaths.insert(path)
+        let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
+        guard loadingMerge.didMerge else {
+            loadingFileTreeChildPaths.remove(path)
+            return
+        }
+        fileTree = loadingMerge.nodes
+        let generation = fileTreeGeneration
+        Task { @MainActor in
+            defer {
+                if self.fileTreeGeneration == generation {
+                    self.loadingFileTreeChildPaths.remove(path)
+                }
+            }
+            do {
+                let children = try await git.fileTreeChildren(worktreePath: worktree.path, path: path)
+                guard self.fileTreeGeneration == generation else { return }
+                let result = Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
+                guard result.didMerge else { return }
+                self.loadedFileTreeChildPaths.insert(path)
+                self.fileTree = result.nodes
+            } catch {
+                guard self.fileTreeGeneration == generation else { return }
+                let result = Self.mergingChildren(in: self.fileTree, for: path, with: [], state: .failed)
+                guard result.didMerge else { return }
+                self.fileTree = result.nodes
+                logger.error("file tree child load failed for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     func stageAll(_ files: [ChangedFile]) {

@@ -225,4 +225,26 @@ struct GitServiceTests {
         #expect(generated.childrenState == .loaded)
         #expect(generated.children?.contains { $0.path == "local-generated/keep.txt" } == true)
     }
+
+    @Test func loadFileTreeChildrenLoadsOnlyImmediateIgnoredChildren() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "ignored-root/\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        let nested = repo.appendingPathComponent("ignored-root/nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "one\n".write(to: repo.appendingPathComponent("ignored-root/one.txt"), atomically: true, encoding: .utf8)
+        try "two\n".write(to: nested.appendingPathComponent("two.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        let children = try await GitService().fileTreeChildren(worktreePath: repo, path: "ignored-root")
+
+        #expect(children.map(\.path).sorted() == ["ignored-root/nested", "ignored-root/one.txt"])
+        #expect(children.first { $0.path == "ignored-root/one.txt" }?.visibility == .ignored)
+        let nestedNode = children.first { $0.path == "ignored-root/nested" }!
+        #expect(nestedNode.kind == .dir)
+        #expect(nestedNode.childrenState == .notLoaded)
+        #expect(nestedNode.children == nil)
+    }
 }

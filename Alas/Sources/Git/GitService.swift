@@ -305,6 +305,55 @@ extension GitService {
         )
     }
 
+    func fileTreeChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
+        let directory = worktreePath.appendingPathComponent(path)
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: []
+        )
+
+        var childPaths: [String] = []
+        var directories = Set<String>()
+        var lazyDirectories = Set<String>()
+        var candidates: [RootIgnoreCandidate] = []
+
+        for url in urls where url.lastPathComponent != ".git" {
+            let rel = path.isEmpty ? url.lastPathComponent : "\(path)/\(url.lastPathComponent)"
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            childPaths.append(rel)
+            candidates.append(RootIgnoreCandidate(path: rel, isDirectory: isDirectory))
+            if isDirectory {
+                directories.insert(rel)
+                lazyDirectories.insert(rel)
+            }
+        }
+
+        let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
+        var visibility = try await ignoredOrExcludedVisibility(
+            candidates: candidates,
+            worktreePath: worktreePath,
+            excludedSourcePaths: excludedSources
+        )
+        for path in childPaths where visibility[path] == nil {
+            visibility[path] = .tracked
+        }
+
+        let built = FileTreeBuilder.build(
+            paths: childPaths,
+            badges: [:],
+            visibility: visibility,
+            directories: directories,
+            lazyDirectories: lazyDirectories
+        )
+        return built.flatMap { node in
+            if node.path == path, let children = node.children {
+                return children
+            }
+            return [node]
+        }
+    }
+
     private func gitVisibleFilePaths(worktreePath: URL) async throws -> [String] {
         let result = try await Process.git(
             ["ls-files", "--cached", "--others", "--exclude-standard"],
