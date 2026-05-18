@@ -32,4 +32,20 @@ struct GitIgnoreServiceTests {
         #expect(written == gi)
         #expect(try read(gi) == "existing.log\nsrc/foo/bar.log\n")
     }
+
+    @Test func appendsFolderPatternWithTrailingSlash() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let gi = repo.appendingPathComponent(".gitignore")
+        try "".write(to: gi, atomically: true, encoding: .utf8)
+
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "build",
+            isDirectory: true,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+
+        #expect(try read(gi) == "build/\n")
+    }
 }
