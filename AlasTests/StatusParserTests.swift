@@ -82,7 +82,7 @@ struct StatusParserTests {
     }
 
     @Test func parsesUnmergedPathWithSpaces() throws {
-        let raw = "u UU N... 100644 100644 100644 100644 a b c d dir/a b.txt\u{0}"
+        let raw = "u UU N... 100644 100644 100644 100644 a b c dir/a b.txt\u{0}"
         let entries = try StatusParser.parse(raw)
         let entry = try #require(entries.first)
         #expect(entry.status == "M")

@@ -36,9 +36,9 @@ enum StatusParser {
                 i += 1
             } else if line.hasPrefix("u ") {
                 // unmerged: surface as M for v1
-                let tokens = line.split(separator: " ", maxSplits: 11, omittingEmptySubsequences: true).map(String.init)
-                if tokens.count >= 12 {
-                    let path = tokens[11]
+                let tokens = line.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: true).map(String.init)
+                if tokens.count >= 11 {
+                    let path = tokens[10]
                     result.append(ChangedFile(path: path, status: "M", stage: .unstaged, add: 0, del: 0, renameFrom: nil))
                 }
                 i += 1
