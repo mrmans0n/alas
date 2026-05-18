@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import os
@@ -388,6 +389,41 @@ final class RightPaneState {
         }
         await refresh()
         closeDiffTabs?(paths)
+    }
+
+    /// Run `git diff HEAD -- <file>` (or `/dev/null` for untracked) and put
+    /// the unified-diff output on the general pasteboard. Best-effort: errors
+    /// are surfaced via `composer.error`. Single source of truth so the
+    /// context menu and any future "Copy Diff" affordances agree.
+    func copyDiff(for path: String) {
+        let wt = worktree.path
+        Task { @MainActor in
+            do {
+                let tracked = (try? await Process.git(
+                    ["ls-files", "--error-unmatch", "--", path],
+                    cwd: wt
+                ))?.exitCode == 0
+                let args: [String]
+                if tracked {
+                    args = ["diff", "--no-color", "HEAD", "--", path]
+                } else {
+                    args = ["diff", "--no-color", "--no-index", "--", "/dev/null", path]
+                }
+                let result = try await Process.git(args, cwd: wt)
+                // `--no-index` exits 1 when there ARE differences (the expected
+                // case for an untracked file).
+                if result.exitCode > 1 {
+                    self.composer.error = result.stderr
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return
+                }
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(result.stdout, forType: .string)
+            } catch {
+                self.composer.error = (error as NSError).localizedDescription
+            }
+        }
     }
 
     /// Append a gitignore pattern for `path` to `destination` and refresh

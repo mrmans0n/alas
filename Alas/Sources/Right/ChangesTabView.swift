@@ -45,7 +45,33 @@ struct ChangesTabView: View {
                         rps.ignore(path: path, isDirectory: isDir, destination: dest)
                     },
                     onDiscardAll: { rps.requestDiscardAll() },
-                    onDiscardFolder: { path in rps.requestDiscardFolder(path: path) }
+                    onDiscardFolder: { path in rps.requestDiscardFolder(path: path) },
+                    onOpenFile: { file in
+                        appState.openFile(relativePath: file.path, worktreeId: rps.worktree.id)
+                    },
+                    onCopyRelative: { file in
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(file.path, forType: .string)
+                    },
+                    onCopyFull: { file in
+                        let absolute = rps.worktree.path.appendingPathComponent(file.path).path
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(absolute, forType: .string)
+                    },
+                    onRevealInFinder: { file in
+                        let url = rps.worktree.path.appendingPathComponent(file.path)
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    },
+                    onCopyDiff: { file in rps.copyDiff(for: file.path) },
+                    onDiscardFile: { file in rps.requestDiscardFile(path: file.path) },
+                    isOpenFileEnabled: { file in
+                        DiffOpenFileAvailability.isAvailable(
+                            worktreePath: rps.worktree.path,
+                            relativePath: file.path
+                        )
+                    }
                 )
                 Divider().opacity(0.4)
                 CommitsSectionView(

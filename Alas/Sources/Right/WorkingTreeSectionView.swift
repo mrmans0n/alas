@@ -10,6 +10,13 @@ struct WorkingTreeSectionView: View {
     var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
     var onDiscardAll: (() -> Void)? = nil
     var onDiscardFolder: ((String) -> Void)? = nil
+    var onOpenFile:        ((ChangedFile) -> Void)? = nil
+    var onCopyRelative:    ((ChangedFile) -> Void)? = nil
+    var onCopyFull:        ((ChangedFile) -> Void)? = nil
+    var onRevealInFinder:  ((ChangedFile) -> Void)? = nil
+    var onCopyDiff:        ((ChangedFile) -> Void)? = nil
+    var onDiscardFile:     ((ChangedFile) -> Void)? = nil
+    var isOpenFileEnabled: ((ChangedFile) -> Bool)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -212,18 +219,24 @@ struct WorkingTreeSectionView: View {
             )
         } else if let file = filesByPath[node.path] {
             let fileUntracked = isUntracked(file)
+            let ignore: AnyView? = fileUntracked
+                ? AnyView(ignoreMenu(path: file.path, isDirectory: false))
+                : nil
             return AnyView(
                 ChangedRow(
                     file: file,
                     depth: depth,
                     onSelect: { onSelect(file) },
-                    onStage: onToggleStage.map { fn in { fn(file) } }
+                    onStage: onToggleStage.map { fn in { fn(file) } },
+                    onOpenFile: onOpenFile.map { fn in { fn(file) } },
+                    onCopyRelative: onCopyRelative.map { fn in { fn(file) } },
+                    onCopyFull: onCopyFull.map { fn in { fn(file) } },
+                    onRevealInFinder: onRevealInFinder.map { fn in { fn(file) } },
+                    onCopyDiff: onCopyDiff.map { fn in { fn(file) } },
+                    onDiscard: onDiscardFile.map { fn in { fn(file) } },
+                    openFileEnabled: isOpenFileEnabled?(file) ?? true,
+                    ignoreMenu: ignore
                 )
-                .contextMenu {
-                    if fileUntracked {
-                        ignoreMenu(path: file.path, isDirectory: false)
-                    }
-                }
             )
         } else {
             return AnyView(EmptyView())
