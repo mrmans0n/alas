@@ -64,7 +64,9 @@ struct ChangesTabView: View {
                         let url = rps.worktree.path.appendingPathComponent(file.path)
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     },
-                    onCopyDiff: { file in rps.copyDiff(for: file.path) },
+                    onCopyDiff: { file in
+                        rps.copyDiff(for: file.path, renameFrom: file.renameFrom)
+                    },
                     onDiscardFile: { file in rps.requestDiscardFile(path: file.path) },
                     isOpenFileEnabled: { file in
                         DiffOpenFileAvailability.isAvailable(

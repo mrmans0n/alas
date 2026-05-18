@@ -410,10 +410,13 @@ final class RightPaneState {
 
     /// Run `git diff HEAD -- <file>` (or `--cached` on unborn HEAD, or
     /// `/dev/null` for untracked) and put the unified-diff output on the
-    /// general pasteboard. Best-effort: errors are surfaced via
-    /// `composer.error`. Single source of truth so the context menu and any
-    /// future "Copy Diff" affordances agree.
-    func copyDiff(for path: String) {
+    /// general pasteboard. `renameFrom` is the staged-rename origin path
+    /// (from `ChangedFile.renameFrom`); when present it's included in the
+    /// pathspec so `git diff` emits the rename-from/rename-to header
+    /// instead of an add-only patch. Best-effort: errors are surfaced via
+    /// `composer.error`. Single source of truth so the context menu and
+    /// any future "Copy Diff" affordances agree.
+    func copyDiff(for path: String, renameFrom: String? = nil) {
         let wt = worktree.path
         Task { @MainActor in
             do {
@@ -435,9 +438,18 @@ final class RightPaneState {
                 } else {
                     inHead = false
                 }
+                // For staged renames, `git diff HEAD -- <new>` strips the
+                // rename header (emits an add-only patch). Pass both paths
+                // in the pathspec so the rename-from/rename-to header is
+                // preserved. Only relevant when we're using a HEAD-based
+                // diff; the rename concept doesn't apply to untracked or
+                // unborn-HEAD cases.
+                let extraPath: String? = (renameFrom?.isEmpty == false) ? renameFrom : nil
                 let args: [String]
                 if head, inIndex || inHead {
-                    args = ["diff", "--no-color", "HEAD", "--", path]
+                    var a = ["diff", "--no-color", "HEAD", "--", path]
+                    if let extraPath { a.append(extraPath) }
+                    args = a
                 } else if !head, inIndex {
                     // Unborn HEAD: staged-add — diff index vs empty tree.
                     args = ["diff", "--no-color", "--cached", "--", path]
