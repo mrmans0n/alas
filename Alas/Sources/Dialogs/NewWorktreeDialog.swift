@@ -60,7 +60,7 @@ struct NewWorktreeDialog: View {
                     Text("Open in new terminal pane").font(.system(size: 12))
                         .foregroundColor(theme.color("fg"))
                 }
-                if let validationMessage = branchValidationMessage {
+                if let validationMessage = branchValidationMessage, branch != state.config.worktrees.branchPrefix {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
                 if !state.agentRegistry.enabled().isEmpty {
