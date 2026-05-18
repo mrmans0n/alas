@@ -176,6 +176,27 @@ struct GitServiceTests {
         #expect(excluded.children == nil)
     }
 
+    @Test func fileTreeDoesNotMarkNegatedIgnoredRootDirectoryAsIgnored() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "ignored-root/\n!ignored-root/\n".write(
+            to: repo.appendingPathComponent(".gitignore"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent("ignored-root"), withIntermediateDirectories: true)
+        try "tracked\n".write(to: repo.appendingPathComponent("ignored-root/keep.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        let tree = try await GitService().fileTree(worktreePath: repo, statusEntries: [])
+
+        let root = try #require(tree.first { $0.path == "ignored-root" })
+        #expect(root.visibility == .tracked)
+        #expect(root.children?.contains { $0.path == "ignored-root/keep.txt" } == true)
+    }
+
     @Test func fileTreeKeepsTrackedChildrenLoadedInIgnoredRootDirectory() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

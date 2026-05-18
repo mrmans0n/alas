@@ -427,6 +427,7 @@ extension GitService {
         var visibility: [String: FileVisibility] = [:]
         for entry in checkIgnoreMatches(result.stdout) {
             guard let root = queriedPathToRoot[entry.path] else { continue }
+            guard !entry.pattern.hasPrefix("!") else { continue }
             let source = normalizedPath(entry.source, relativeTo: worktreePath)
             visibility[root] = excludedSourcePaths.contains(source) ? .excluded : .ignored
         }
@@ -435,6 +436,7 @@ extension GitService {
 
     private struct CheckIgnoreMatch {
         let source: String
+        let pattern: String
         let path: String
     }
 
@@ -443,7 +445,7 @@ extension GitService {
         var matches: [CheckIgnoreMatch] = []
         var index = 0
         while index + 3 < fields.count {
-            matches.append(CheckIgnoreMatch(source: fields[index], path: fields[index + 3]))
+            matches.append(CheckIgnoreMatch(source: fields[index], pattern: fields[index + 2], path: fields[index + 3]))
             index += 4
         }
         return matches
