@@ -48,4 +48,22 @@ struct GitIgnoreServiceTests {
 
         #expect(try read(gi) == "build/\n")
     }
+
+    @Test func dedupSkipsExistingPattern() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let gi = repo.appendingPathComponent(".gitignore")
+        try "src/foo/bar.log\nother.txt\n".write(to: gi, atomically: true, encoding: .utf8)
+        let before = try Data(contentsOf: gi)
+
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "src/foo/bar.log",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+
+        let after = try Data(contentsOf: gi)
+        #expect(before == after)
+    }
 }
