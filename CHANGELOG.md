@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-18
+
+### ✨ Features
+
+- add reveal control for auto-hidden right sidebar (#181).
+- add context-menu Ignore action for untracked files and folders in the right pane (#182).
+- allow tab drag-and-drop without dragging the window (#185).
+
+### 🐛 Fixes
+
+- preserve dirty-move snapshot cache fallback when rejected (#171).
+- bound LSP shutdown wait for unresponsive servers (#172).
+- report character columns for non-ASCII search matches (#173).
+- reset commit diff state when loading commits (#174).
+- clear stale commit details before loading commit (#175).
+- SIGKILL child processes after SIGTERM grace period (#176).
+- keep existing theme state if theme load fails (#177).
+- run Codex AI commit in the worktree and skip trust check (#178).
+- fix shifted TUI input in terminal sessions (#179).
+- handle unmerged status paths containing spaces (#180).
+- trim whitespace when saving agent and language server configs (#183).
+- keep file and directory entries with the same name in the file tree (#184).
+
 ## [0.3.3] - 2026-05-17
 
 ### ✨ Features
