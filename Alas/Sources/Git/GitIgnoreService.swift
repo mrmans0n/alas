@@ -141,23 +141,42 @@ enum GitIgnoreService {
 
     private static func escapeForGitignore(_ pattern: String) -> String {
         guard !pattern.isEmpty else { return pattern }
-        var out = pattern
 
-        // Escape leading '#', '!', or '[' so gitignore doesn't treat them
-        // as comment / negation / character-class markers.
-        if let first = out.first, first == "#" || first == "!" || first == "[" {
-            out = "\\" + out
+        // Escape gitignore glob metacharacters wherever they appear in the
+        // body so the pattern matches the literal path. '/' is the path
+        // separator and must stay unescaped. '\\' is itself the gitignore
+        // escape character, so a literal backslash in a filename is
+        // doubled. Without this, paths like `src/[draft].md` or
+        // `weird*name.log` get written verbatim and git interprets them
+        // as patterns, leaving the actual file untracked.
+        var body = ""
+        body.reserveCapacity(pattern.count)
+        for ch in pattern {
+            switch ch {
+            case "\\", "*", "?", "[":
+                body.append("\\")
+                body.append(ch)
+            default:
+                body.append(ch)
+            }
+        }
+
+        // Escape leading '#' or '!' so gitignore doesn't treat them as
+        // comment / negation markers. '[' is already escaped by the body
+        // loop above.
+        if let first = body.first, first == "#" || first == "!" {
+            body = "\\" + body
         }
 
         // Escape a single trailing space so gitignore doesn't strip it.
         // (Multiple trailing spaces are exceptionally rare in real paths;
         // escape just the last one — that's enough to preserve all of them
         // because gitignore strips unescaped trailing whitespace only.)
-        if out.hasSuffix(" ") {
-            out = String(out.dropLast()) + "\\ "
+        if body.hasSuffix(" ") {
+            body = String(body.dropLast()) + "\\ "
         }
 
-        return out
+        return body
     }
 
     private static func appendPatternIfMissing(_ pattern: String, to file: URL) throws {

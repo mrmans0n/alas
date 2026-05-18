@@ -270,4 +270,48 @@ struct GitIgnoreServiceTests {
         """
         #expect(try read(gi) == expected)
     }
+
+    /// Interior glob metacharacters (`[`, `*`, `?`) must be escaped too,
+    /// otherwise git interprets the path as a pattern and the file stays
+    /// untracked. Backslashes in filenames must be escaped to themselves.
+    @Test func escapesInteriorGlobMetacharacters() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let gi = repo.appendingPathComponent(".gitignore")
+        try "".write(to: gi, atomically: true, encoding: .utf8)
+
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "src/[draft].md",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "logs/wild*name.log",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "data/who?.csv",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "weird\\name.txt",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+
+        let expected = """
+        src/\\[draft].md
+        logs/wild\\*name.log
+        data/who\\?.csv
+        weird\\\\name.txt
+
+        """
+        #expect(try read(gi) == expected)
+    }
 }
