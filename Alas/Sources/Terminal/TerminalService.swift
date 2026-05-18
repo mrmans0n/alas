@@ -54,12 +54,18 @@ final class TerminalService {
             project: project, worktree: worktree, sessionId: sessionId,
             socketPath: socketPath, inheritParent: cfg.inheritParentEnv
         )
+        if socketPath != nil {
+            let cliURL = try TerminalCLIInjection.installExecutable()
+            env["PATH"] = TerminalCLIInjection.pathValue(
+                prepending: cliURL.deletingLastPathComponent().path,
+                to: env["PATH"]
+            )
+        }
         let baseScript = StartupScriptResolver.sessionOpenScript(
             global: cfg,
             project: project
         )
-        let effectiveScript = TerminalCLIInjection.compose(
-            shell: cfg.shell,
+        let effectiveScript = Self.composeStartupScript(
             userStartupScript: baseScript,
             startupScriptSuffix: startupScriptSuffix
         )
@@ -121,5 +127,17 @@ final class TerminalService {
         default:
             return worktree.path
         }
+    }
+
+    private static func composeStartupScript(
+        userStartupScript: String,
+        startupScriptSuffix: String?
+    ) -> String {
+        [userStartupScript, startupScriptSuffix]
+            .compactMap { part in
+                let trimmed = part?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .joined(separator: "\n")
     }
 }

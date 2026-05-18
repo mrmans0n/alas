@@ -1,24 +1,24 @@
 import Foundation
 
 enum TerminalCLIInjection {
-    static func script(forShell shell: String) -> String? {
-        let basename = (shell as NSString).lastPathComponent
-        guard basename == "zsh" || basename == "bash" else { return nil }
+    static let executableName = "alas"
+
+    static func executableScript() -> String {
         return """
-        alas() {
-          if [ -z "${ALAS_SOCKET_PATH:-}" ] || [ -z "${ALAS_SESSION_ID:-}" ]; then
-            printf '%s\n' 'alas: only available in Alas terminals' >&2
-            return 2
-          fi
-          case "${1:-}" in
-            open)
-              local response alas_status
-              shift
-              if [ "$#" -eq 0 ]; then
-                printf '%s\n' 'usage: alas open <path> [path...]' >&2
-                return 2
-              fi
-              response=$(/usr/bin/python3 - "$ALAS_SESSION_ID" "$@" <<'PY' | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH" 2>/dev/null
+        #!/bin/sh
+        if [ -z "${ALAS_SOCKET_PATH:-}" ] || [ -z "${ALAS_SESSION_ID:-}" ]; then
+          printf '%s\n' 'alas: only available in Alas terminals' >&2
+          exit 2
+        fi
+
+        case "${1:-}" in
+          open)
+            shift
+            if [ "$#" -eq 0 ]; then
+              printf '%s\n' 'usage: alas open <path> [path...]' >&2
+              exit 2
+            fi
+            response=$(/usr/bin/python3 - "$ALAS_SESSION_ID" "$@" <<'PY' | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH" 2>/dev/null
         import json, os, sys
         session_id = sys.argv[1]
         base = os.environ.get("PWD") or os.getcwd()
@@ -30,12 +30,12 @@ enum TerminalCLIInjection {
         print(json.dumps({"v": 1, "kind": "cli", "command": "open", "session_id": session_id, "paths": paths}))
         PY
         )
-              alas_status=$?
-              if [ "$alas_status" -ne 0 ]; then
-                printf '%s\n' 'alas: could not reach Alas' >&2
-                return "$alas_status"
-              fi
-              /usr/bin/python3 - "$response" <<'PY'
+            alas_status=$?
+            if [ "$alas_status" -ne 0 ]; then
+              printf '%s\n' 'alas: could not reach Alas' >&2
+              exit "$alas_status"
+            fi
+            /usr/bin/python3 - "$response" <<'PY'
         import json, sys
         try:
             response = json.loads(sys.argv[1] or "{}")
@@ -47,26 +47,32 @@ enum TerminalCLIInjection {
         print("alas: " + str(response.get("error") or "request failed"), file=sys.stderr)
         sys.exit(1)
         PY
-              ;;
-            *)
-              printf '%s\n' 'usage: alas open <path> [path...]' >&2
-              return 2
-              ;;
-          esac
-        }
+            ;;
+          *)
+            printf '%s\n' 'usage: alas open <path> [path...]' >&2
+            exit 2
+            ;;
+        esac
         """
     }
 
-    static func compose(
-        shell: String,
-        userStartupScript: String,
-        startupScriptSuffix: String?
-    ) -> String {
-        [script(forShell: shell), userStartupScript, startupScriptSuffix]
-            .compactMap { part in
-                let trimmed = part?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return trimmed.isEmpty ? nil : trimmed
-            }
-            .joined(separator: "\n")
+    static func installExecutable() throws -> URL {
+        let dir = Paths.appSupportRoot.appendingPathComponent("bin", isDirectory: true)
+        try Paths.ensureDirectoryExists(dir)
+        let url = dir.appendingPathComponent(executableName, isDirectory: false)
+        let script = executableScript()
+        if (try? String(contentsOf: url, encoding: .utf8)) != script {
+            try script.write(to: url, atomically: true, encoding: .utf8)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        return url
+    }
+
+    static func pathValue(prepending directory: String, to current: String?) -> String {
+        guard let current,
+              !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return directory
+        }
+        return "\(directory):\(current)"
     }
 }

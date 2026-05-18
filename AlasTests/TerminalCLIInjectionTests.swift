@@ -4,69 +4,44 @@ import Foundation
 
 @Suite(.serialized)
 struct TerminalCLIInjectionTests {
-    @Test func zshAndBashReceiveAlasFunction() {
-        let zsh = TerminalCLIInjection.script(forShell: "/bin/zsh") ?? ""
-        let bash = TerminalCLIInjection.script(forShell: "/opt/homebrew/bin/bash") ?? ""
+    @Test func executableScriptSendsOpenRequest() {
+        let script = TerminalCLIInjection.executableScript()
 
-        for script in [zsh, bash] {
-            #expect(script.contains("alas()"))
-            #expect(script.contains("ALAS_SOCKET_PATH"))
-            #expect(script.contains("ALAS_SESSION_ID"))
-            #expect(script.contains(#""kind": "cli""#))
-            #expect(script.contains(#""command": "open""#))
-            #expect(script.contains("os.path.abspath"))
-            #expect(script.contains("/usr/bin/nc -U -w1"))
-        }
+        #expect(script.contains("ALAS_SOCKET_PATH"))
+        #expect(script.contains("ALAS_SESSION_ID"))
+        #expect(script.contains(#""kind": "cli""#))
+        #expect(script.contains(#""command": "open""#))
+        #expect(script.contains("os.path.abspath"))
+        #expect(script.contains("/usr/bin/nc -U -w1"))
     }
 
-    @Test func unsupportedShellReceivesNoSnippet() {
-        #expect(TerminalCLIInjection.script(forShell: "/opt/homebrew/bin/fish") == nil)
+    @Test func installExecutableWritesAlasCommand() throws {
+        let url = try TerminalCLIInjection.installExecutable()
+        var isDirectory: ObjCBool = false
+
+        #expect(FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory))
+        #expect(!isDirectory.boolValue)
+        #expect(FileManager.default.isExecutableFile(atPath: url.path))
+        #expect(url.lastPathComponent == "alas")
     }
 
-    @Test func composePrependsInjectionBeforeUserScriptAndSuffix() {
-        let composed = TerminalCLIInjection.compose(
-            shell: "/bin/zsh",
-            userStartupScript: "echo user",
-            startupScriptSuffix: "echo agent"
-        )
-
-        #expect(composed.contains("alas()"))
-        #expect(composed.range(of: "alas()")!.lowerBound < composed.range(of: "echo user")!.lowerBound)
-        #expect(composed.range(of: "echo user")!.lowerBound < composed.range(of: "echo agent")!.lowerBound)
+    @Test func bashExecutableSendsOpenRequestFromLogicalPWD() async throws {
+        try await assertExecutableSendsOpenRequestFromLogicalPWD(shell: "/bin/bash")
     }
 
-    @Test func composeKeepsUnsupportedShellUserScriptOnly() {
-        let composed = TerminalCLIInjection.compose(
-            shell: "/opt/homebrew/bin/fish",
-            userStartupScript: "echo user",
-            startupScriptSuffix: nil
-        )
-
-        #expect(composed == "echo user")
+    @Test func zshExecutableSendsOpenRequestFromLogicalPWD() async throws {
+        try await assertExecutableSendsOpenRequestFromLogicalPWD(shell: "/bin/zsh")
     }
 
-    @Test func bashFunctionSendsOpenRequestFromLogicalPWD() async throws {
-        try await assertFunctionSendsOpenRequestFromLogicalPWD(shell: "/bin/bash")
-    }
-
-    @Test func zshFunctionSendsOpenRequestFromLogicalPWD() async throws {
-        try await assertFunctionSendsOpenRequestFromLogicalPWD(shell: "/bin/zsh")
-    }
-
-    private func assertFunctionSendsOpenRequestFromLogicalPWD(shell: String) async throws {
+    private func assertExecutableSendsOpenRequestFromLogicalPWD(shell: String) async throws {
         let root = "/tmp/alas-cli-injection-\(UUID().uuidString)"
         let realDir = "\(root)/real"
         let logicalDir = "\(root)/logical"
         let nestedDir = "\(realDir)/dir with spaces"
-        let scriptPath = "\(root)/alas-injection.sh"
         let socketPath = "\(root)/test.sock"
         try FileManager.default.createDirectory(atPath: nestedDir, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: logicalDir, withDestinationPath: realDir)
-        try TerminalCLIInjection.script(forShell: shell)!.write(
-            toFile: scriptPath,
-            atomically: true,
-            encoding: .utf8
-        )
+        let cliURL = try TerminalCLIInjection.installExecutable()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
         let server = AgentHookSocketServer(socketPath: socketPath)
@@ -85,9 +60,10 @@ struct TerminalCLIInjectionTests {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-c", #"source "$0"; cd "$ALAS_LOGICAL_DIR"; alas open "dir with spaces/file.txt""#, scriptPath]
+        process.arguments = ["-c", #"cd "$ALAS_LOGICAL_DIR"; alas open "dir with spaces/file.txt""#]
         process.currentDirectoryURL = URL(fileURLWithPath: root, isDirectory: true)
         var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "\(cliURL.deletingLastPathComponent().path):\(env["PATH"] ?? "")"
         env["ALAS_SOCKET_PATH"] = socketPath
         env["ALAS_SESSION_ID"] = "test-session"
         env["ALAS_LOGICAL_DIR"] = logicalDir
