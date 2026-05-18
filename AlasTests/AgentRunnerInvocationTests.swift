@@ -67,6 +67,7 @@ struct AgentRunnerInvocationTests {
         )
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("exec\n"))
+        #expect(recorded.contains("--skip-git-repo-check\n"))
         #expect(recorded.contains("-\n"))
     }
 
@@ -82,6 +83,7 @@ struct AgentRunnerInvocationTests {
         )
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("exec\n"))
+        #expect(recorded.contains("--skip-git-repo-check\n"))
         #expect(recorded.contains("-\n"))
         #expect(!recorded.contains("PROMPT\nstdin="))
         #expect(recorded.contains("stdin=\nPROMPT\n\nDIFF\n"))
@@ -99,6 +101,7 @@ struct AgentRunnerInvocationTests {
         )
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("exec\n"))
+        #expect(recorded.contains("--skip-git-repo-check\n"))
         #expect(recorded.contains("-\n"))
         #expect(!recorded.contains("PROMPT\nstdin="))
         #expect(recorded.contains("stdin=\nPROMPT\n\nDIFF\n"))
@@ -116,9 +119,46 @@ struct AgentRunnerInvocationTests {
         )
         let recorded = try String(contentsOf: record, encoding: .utf8)
         #expect(recorded.contains("e\n"))
+        #expect(recorded.contains("--skip-git-repo-check\n"))
         #expect(recorded.contains("-\n"))
         #expect(!recorded.contains("PROMPT\nstdin="))
         #expect(recorded.contains("stdin=\nPROMPT\n\nDIFF\n"))
+    }
+
+    @Test func workingDirectorySetsCwdForChild() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let cwdRecord = tmp.appendingPathComponent("cwd.record")
+        let script = """
+        #!/bin/sh
+        pwd > "\(cwdRecord.path)"
+        cat > /dev/null
+        printf 'subject\\n'
+        """
+        let bin = tmp.appendingPathComponent("claude")
+        try script.write(to: bin, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: bin.path
+        )
+        let workdir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cwd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workdir) }
+
+        _ = try await AgentRunner.runPrompt(
+            agent: agent(id: "claude", binary: "claude", args: ["-p"]),
+            input: "x",
+            prompt: "y",
+            workingDirectory: workdir.path,
+            environment: ["PATH": "\(tmp.path):/usr/bin:/bin"]
+        )
+
+        let recorded = try String(contentsOf: cwdRecord, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // resolveSymlinksInPath handles /tmp → /private/tmp on macOS.
+        let expected = (workdir.resolvingSymlinksInPath().path)
+        let actual = URL(fileURLWithPath: recorded).resolvingSymlinksInPath().path
+        #expect(actual == expected)
     }
 
     @Test func opencodeUsesRunSubcommand() async throws {

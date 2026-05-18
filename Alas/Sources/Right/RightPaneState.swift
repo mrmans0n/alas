@@ -211,7 +211,8 @@ final class RightPaneState {
                 let message = try await AgentRunner.runPrompt(
                     agent: agent,
                     input: payload,
-                    prompt: promptOverride
+                    prompt: promptOverride,
+                    workingDirectory: wt.path
                 )
                 guard !Task.isCancelled else { return }
                 self.composer.subject = message.subject
