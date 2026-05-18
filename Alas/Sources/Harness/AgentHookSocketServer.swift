@@ -90,8 +90,7 @@ final class AgentHookSocketServer {
         let clientFD = accept(socketFD, nil, nil)
         guard clientFD >= 0 else { return }
 
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        Self.configureClientSocket(clientFD)
 
         guard let data = Self.readPayload(from: clientFD) else {
             close(clientFD)
@@ -156,6 +155,14 @@ final class AgentHookSocketServer {
             }
         }
         return nil
+    }
+
+    static func configureClientSocket(_ clientFD: Int32) {
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var noSigPipe: Int32 = 1
+        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
     }
 
     private static func sendResponse(clientFD: Int32, ok: Bool, error: String? = nil) {
