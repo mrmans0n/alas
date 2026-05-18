@@ -30,6 +30,14 @@ struct AlasCLIRequestTests {
         }
     }
 
+    @Test func rejectsRelativePathsForOpen() throws {
+        let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["relative.txt"]}"#
+
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(json.utf8))
+        }
+    }
+
     @Test func responseEncodesOKAndError() throws {
         let ok = String(data: try AlasCLIResponse.ok.encode(), encoding: .utf8) ?? ""
         let error = String(data: try AlasCLIResponse.error("No file.").encode(), encoding: .utf8) ?? ""

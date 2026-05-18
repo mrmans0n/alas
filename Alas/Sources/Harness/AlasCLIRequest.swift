@@ -46,7 +46,10 @@ struct AlasCLIRequest: Equatable {
         }
         guard let paths = raw.paths,
               !paths.isEmpty,
-              paths.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+              paths.allSatisfy({
+                  let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                  return !trimmed.isEmpty && URL(fileURLWithPath: trimmed).path == trimmed && trimmed.hasPrefix("/")
+              }) else {
             throw AlasCLIRequestError.missingPaths
         }
         return AlasCLIRequest(version: 1, command: command, sessionId: sessionId, paths: paths)
