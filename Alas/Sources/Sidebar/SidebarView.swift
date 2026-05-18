@@ -9,6 +9,7 @@ struct SidebarView: View {
     let onEditProject: (_ projectId: String) -> Void
     let onRemoveProject: (_ projectId: String) -> Void
     let onNewWorktree: (_ projectId: String?) -> Void
+    let rightSidebarHidden: Bool
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -20,7 +21,12 @@ struct SidebarView: View {
                     onAddProject: onAddProject,
                     onSearch: {
                         NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
-                    }
+                    },
+                    onRevealRightSidebar: {
+                        state.config.rightPaneVisible = true
+                        state.saveConfig()
+                    },
+                    rightSidebarHidden: rightSidebarHidden
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
