@@ -124,7 +124,11 @@ struct CodeLanguageDetailView: View {
             HStack(spacing: 8) {
                 Spacer()
                 AlasButton(title: "Cancel", style: .subtle, action: onCancel)
-                AlasButton(title: "Save", style: .primary, action: { onSave(entry, pendingRecipes) })
+                AlasButton(
+                    title: "Save",
+                    style: .primary,
+                    action: { onSave(entry.normalizedForSettingsSave(), pendingRecipes) }
+                )
                     .disabled(validationMessage != nil)
             }
             .padding(.top, 16)
@@ -162,5 +166,20 @@ struct CodeLanguageDetailView: View {
         entry.command = pkg.command
         entry.args = pkg.args
         pendingRecipes = pkg.recipes
+    }
+}
+
+extension LanguageServerConfig {
+    func normalizedForSettingsSave() -> LanguageServerConfig {
+        var normalized = self
+        normalized.language = language.trimmingCharacters(in: .whitespaces)
+        normalized.command = command.trimmingCharacters(in: .whitespaces)
+        normalized.args = args
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        normalized.rootMarkers = rootMarkers
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return normalized
     }
 }
