@@ -408,10 +408,11 @@ final class RightPaneState {
         closeDiffTabs?(paths)
     }
 
-    /// Run `git diff HEAD -- <file>` (or `/dev/null` for untracked) and put
-    /// the unified-diff output on the general pasteboard. Best-effort: errors
-    /// are surfaced via `composer.error`. Single source of truth so the
-    /// context menu and any future "Copy Diff" affordances agree.
+    /// Run `git diff HEAD -- <file>` (or `--cached` on unborn HEAD, or
+    /// `/dev/null` for untracked) and put the unified-diff output on the
+    /// general pasteboard. Best-effort: errors are surfaced via
+    /// `composer.error`. Single source of truth so the context menu and any
+    /// future "Copy Diff" affordances agree.
     func copyDiff(for path: String) {
         let wt = worktree.path
         Task { @MainActor in
@@ -422,7 +423,16 @@ final class RightPaneState {
                 ))?.exitCode == 0
                 let args: [String]
                 if tracked {
-                    args = ["diff", "--no-color", "HEAD", "--", path]
+                    // Unborn HEAD doesn't resolve, so `diff HEAD` errors with
+                    // "bad revision 'HEAD'". A staged-add in that state is still
+                    // ls-files-tracked — fall back to `--cached` (index vs empty
+                    // tree) so initial-commit workflows still produce a patch.
+                    let head = (try? await self.git.hasHead(worktreePath: wt)) ?? true
+                    if head {
+                        args = ["diff", "--no-color", "HEAD", "--", path]
+                    } else {
+                        args = ["diff", "--no-color", "--cached", "--", path]
+                    }
                 } else {
                     args = ["diff", "--no-color", "--no-index", "--", "/dev/null", path]
                 }
