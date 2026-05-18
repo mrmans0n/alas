@@ -192,4 +192,45 @@ struct GitIgnoreServiceTests {
         #expect(written == info.appendingPathComponent("exclude"))
         #expect(try read(written) == "dropped.local\n")
     }
+
+    @Test func escapesLeadingHashBangBracketAndTrailingSpaces() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let gi = repo.appendingPathComponent(".gitignore")
+        try "".write(to: gi, atomically: true, encoding: .utf8)
+
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "#hash.txt",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "!bang.txt",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "[bracket].txt",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "trailing space ",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+
+        let expected = """
+        \\#hash.txt
+        \\!bang.txt
+        \\[bracket].txt
+        trailing space\\ 
+
+        """
+        #expect(try read(gi) == expected)
+    }
 }

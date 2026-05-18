@@ -127,8 +127,24 @@ enum GitIgnoreService {
     }
 
     private static func escapeForGitignore(_ pattern: String) -> String {
-        // Will be implemented when escaping tests land. For now, identity.
-        return pattern
+        guard !pattern.isEmpty else { return pattern }
+        var out = pattern
+
+        // Escape leading '#', '!', or '[' so gitignore doesn't treat them
+        // as comment / negation / character-class markers.
+        if let first = out.first, first == "#" || first == "!" || first == "[" {
+            out = "\\" + out
+        }
+
+        // Escape a single trailing space so gitignore doesn't strip it.
+        // (Multiple trailing spaces are exceptionally rare in real paths;
+        // escape just the last one — that's enough to preserve all of them
+        // because gitignore strips unescaped trailing whitespace only.)
+        if out.hasSuffix(" ") {
+            out = String(out.dropLast()) + "\\ "
+        }
+
+        return out
     }
 
     private static func appendPatternIfMissing(_ pattern: String, to file: URL) throws {
