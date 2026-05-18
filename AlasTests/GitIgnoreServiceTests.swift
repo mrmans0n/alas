@@ -119,4 +119,36 @@ struct GitIgnoreServiceTests {
         // Pattern is relative to the .gitignore's directory (src/).
         #expect(try read(srcGi) == "other\nfoo/bar.log\n")
     }
+
+    @Test func nearestFallbackCreatesGitignoreAtEntryParent() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let foo = repo.appendingPathComponent("src").appendingPathComponent("foo")
+        try FileManager.default.createDirectory(at: foo, withIntermediateDirectories: true)
+
+        let written = try GitIgnoreService.appendIgnore(
+            entryPath: "src/foo/bar.log",
+            isDirectory: false,
+            destination: .nearest,
+            repoURL: repo
+        )
+
+        #expect(written == foo.appendingPathComponent(".gitignore"))
+        #expect(try read(written) == "bar.log\n")
+    }
+
+    @Test func nearestFallbackForTopLevelEntryUsesRepoRoot() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let written = try GitIgnoreService.appendIgnore(
+            entryPath: "top.log",
+            isDirectory: false,
+            destination: .nearest,
+            repoURL: repo
+        )
+
+        #expect(written == repo.appendingPathComponent(".gitignore"))
+        #expect(try read(written) == "top.log\n")
+    }
 }
