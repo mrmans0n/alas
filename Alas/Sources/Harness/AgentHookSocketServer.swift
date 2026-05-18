@@ -5,6 +5,7 @@ final class AgentHookSocketServer {
     private(set) var socketPath: String?
     private var listenTask: Task<Void, Never>?
     var onEvent: ((AgentHookEvent) -> Void)?
+    var onCLIRequest: ((AlasCLIRequest) async -> AlasCLIResponse)?
 
     static let maxPayloadSize = 65_536
 
@@ -79,13 +80,13 @@ final class AgentHookSocketServer {
                     continue
                 }
                 guard ready > 0 else { continue }
-                self?.acceptAndHandle(socketFD: socketFD)
+                await self?.acceptAndHandle(socketFD: socketFD)
             }
         }
         return true
     }
 
-    private func acceptAndHandle(socketFD: Int32) {
+    private func acceptAndHandle(socketFD: Int32) async {
         let clientFD = accept(socketFD, nil, nil)
         guard clientFD >= 0 else { return }
 
@@ -94,6 +95,17 @@ final class AgentHookSocketServer {
 
         guard let data = Self.readPayload(from: clientFD) else {
             close(clientFD)
+            return
+        }
+
+        if let request = try? AlasCLIRequest.decode(from: data) {
+            let response: AlasCLIResponse
+            if let handler = onCLIRequest {
+                response = await handler(request)
+            } else {
+                response = .error("Alas CLI is not available.")
+            }
+            Self.sendResponse(clientFD: clientFD, response: response)
             return
         }
 
@@ -147,6 +159,23 @@ final class AgentHookSocketServer {
         data.withUnsafeBytes { buffer in
             guard let base = buffer.baseAddress else { return }
             _ = Darwin.write(clientFD, base, data.count)
+        }
+        close(clientFD)
+    }
+
+    private static func sendResponse(clientFD: Int32, response: AlasCLIResponse) {
+        do {
+            let data = try response.encode()
+            data.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                _ = Darwin.write(clientFD, base, data.count)
+            }
+        } catch {
+            let fallback = #"{"ok":false,"error":"Malformed response."}"#.data(using: .utf8)!
+            fallback.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                _ = Darwin.write(clientFD, base, fallback.count)
+            }
         }
         close(clientFD)
     }
