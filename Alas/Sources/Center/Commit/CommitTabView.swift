@@ -100,6 +100,7 @@ struct CommitTabView: View {
         activeDetailsKey = requestedKey
         loadingDetails = true
         detailsError = nil
+        details = nil
         activeDiffKey = nil
         selectedPath = nil
         diff = ParsedDiff(hunks: [])
