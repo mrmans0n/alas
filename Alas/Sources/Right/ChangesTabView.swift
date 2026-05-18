@@ -43,7 +43,8 @@ struct ChangesTabView: View {
                     onUnstageAll: { rps.unstageAll($0) },
                     onIgnore: { path, isDir, dest in
                         rps.ignore(path: path, isDirectory: isDir, destination: dest)
-                    }
+                    },
+                    onDiscardAll: { rps.requestDiscardAll() }
                 )
                 Divider().opacity(0.4)
                 CommitsSectionView(

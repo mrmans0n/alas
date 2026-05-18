@@ -8,6 +8,7 @@ struct WorkingTreeSectionView: View {
     var onStageAll: (([ChangedFile]) -> Void)? = nil
     var onUnstageAll: (([ChangedFile]) -> Void)? = nil
     var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
+    var onDiscardAll: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -40,6 +41,12 @@ struct WorkingTreeSectionView: View {
                         AlasButton(title: "Stage all", style: .subtle, action: { onStageAll?(unstaged) })
                     }
                 }
+            }
+            .contextMenu {
+                Button("Discard all working tree changes...") {
+                    onDiscardAll?()
+                }
+                .disabled(changes.isEmpty)
             }
 
             if expanded {
