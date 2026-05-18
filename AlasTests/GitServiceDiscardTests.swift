@@ -158,4 +158,48 @@ struct GitServiceDiscardTests {
         let svc = GitService()
         try await svc.discardPaths(worktreePath: repo, files: ["ghost.txt"])
     }
+
+    @Test func applyPatchReverseRemovesOneHunk() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // 10 lines so changes to line 1 and line 10 produce two separate hunks
+        // (git's 3-line context windows do not overlap).
+        try writeFile(repo, "a.txt", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        // Two distinct hunks: change line 1 → A, change line 10 → E.
+        try writeFile(repo, "a.txt", "A\n2\n3\n4\n5\n6\n7\n8\n9\nE\n")
+
+        let svc = GitService()
+        let parsed = try await svc.diff(worktreePath: repo, file: "a.txt")
+        #expect(parsed.hunks.count == 2)
+        let firstHunk = parsed.hunks[0]
+        let patch = HunkPatchBuilder.patch(file: "a.txt", hunk: firstHunk, tracked: true)
+        try await svc.applyPatchReverse(worktreePath: repo, patch: patch)
+
+        let contents = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        // First hunk discarded → line 1 back to "1", line 10 still "E".
+        #expect(contents == "1\n2\n3\n4\n5\n6\n7\n8\n9\nE\n")
+    }
+
+    @Test func applyPatchReverseThrowsWhenAlreadyApplied() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeFile(repo, "a.txt", "1\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        // Build a patch that doesn't match current state.
+        let bogus = """
+        diff --git a/a.txt b/a.txt
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -1,1 +1,1 @@
+        -nope
+        +never
+        """ + "\n"
+        let svc = GitService()
+        await #expect(throws: (any Error).self) {
+            try await svc.applyPatchReverse(worktreePath: repo, patch: bogus)
+        }
+    }
 }

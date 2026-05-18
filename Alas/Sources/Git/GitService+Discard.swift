@@ -97,4 +97,22 @@ extension GitService {
             }
         }
     }
+
+    /// Apply a unified-diff patch in reverse against the worktree. Used by
+    /// per-hunk "Discard hunk" for tracked files. Writes the patch to a
+    /// temp file (git apply needs a real path, not stdin) and removes it
+    /// on completion. Throws if `git apply --reverse` exits non-zero —
+    /// typically because the patch context no longer matches the working
+    /// copy (e.g. the user already discarded it elsewhere).
+    func applyPatchReverse(worktreePath: URL, patch: String) async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-discard-\(UUID().uuidString).patch")
+        try patch.write(to: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let result = try await Process.git(
+            ["apply", "--reverse", tmp.path],
+            cwd: worktreePath
+        )
+        try Self.assertSuccess(result, op: "applyPatchReverse")
+    }
 }
