@@ -6,6 +6,7 @@ final class FakeTransport: LSPTransporting, @unchecked Sendable {
     var incoming: AsyncStream<LSPTransport.Incoming>
     private let cont: AsyncStream<LSPTransport.Incoming>.Continuation
     private(set) var sent: [String] = []
+    private(set) var terminateCount = 0
     var onSend: ((String) -> Void)?
 
     init() {
@@ -20,7 +21,7 @@ final class FakeTransport: LSPTransporting, @unchecked Sendable {
         sent.append(s)
         onSend?(s)
     }
-    func terminate() {}
+    func terminate() { terminateCount += 1 }
     func deliverFrame(_ json: String) {
         cont.yield(.frame(json.data(using: .utf8)!))
     }
@@ -28,6 +29,22 @@ final class FakeTransport: LSPTransporting, @unchecked Sendable {
     /// actor's background Task drains. Call at the end of each test.
     func finish() {
         cont.finish()
+    }
+}
+
+private func withTimeout<T: Sendable>(
+    nanoseconds: UInt64,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(nanoseconds: nanoseconds)
+            throw LSPError.requestTimedOut
+        }
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
     }
 }
 
@@ -120,6 +137,25 @@ struct LSPClientLifecycleTests {
         #expect(change.contains(#""range":{"#))
         #expect(change.contains(#""rangeLength":10"#))
         #expect(change.contains(#""text":"let y = 2\n""#))
+        transport.finish()
+    }
+
+    @Test("shutdown terminates even when the server never replies")
+    func shutdownTerminatesUnresponsiveServer() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            }
+        }
+        try await client.initialize()
+
+        try await withTimeout(nanoseconds: 3_000_000_000) {
+            await client.shutdown()
+        }
+
+        #expect(transport.terminateCount == 1)
         transport.finish()
     }
 
