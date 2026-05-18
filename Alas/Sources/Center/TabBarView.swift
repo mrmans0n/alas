@@ -15,6 +15,7 @@ struct TabBarView: View {
     let onCopyRelativePath: (TabID) -> Void
     let onRenameTerminal: (TabID) -> Void
     let onNewTerminal: () -> Void
+    let onMove: (TabID, TabID) -> Void
     @Environment(\.theme) var theme
 
     private var isTerminalActive: Bool {
@@ -53,6 +54,12 @@ struct TabBarView: View {
                         Button("Copy Path") { onCopyPath(tab.id) }
                         Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
                     }
+                }
+                .draggable(tab.id)
+                .dropDestination(for: String.self) { ids, _ in
+                    guard let draggedId = ids.first, draggedId != tab.id else { return false }
+                    onMove(draggedId, tab.id)
+                    return true
                 }
             }
             Spacer()

@@ -322,6 +322,87 @@ struct TabsManagerTests {
             Issue.record("expected editor tab")
         }
     }
+
+    @Test func moveTabReordersTabs() {
+        let worktreeId = "tabs-manager-move-tab"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let a = mgr.appendTerminal(worktreeId: worktreeId, title: "a", sessionId: "s1")
+        let b = mgr.appendTerminal(worktreeId: worktreeId, title: "b", sessionId: "s2")
+        let c = mgr.appendTerminal(worktreeId: worktreeId, title: "c", sessionId: "s3")
+
+        mgr.moveTab(worktreeId: worktreeId, fromId: a.id, toId: c.id)
+
+        let ids = mgr.tabs(forWorktree: worktreeId).map(\.id)
+        #expect(ids == [b.id, c.id, a.id])
+    }
+
+    @Test func moveTabPreservesActiveTabId() {
+        let worktreeId = "tabs-manager-move-tab-active"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let a = mgr.appendTerminal(worktreeId: worktreeId, title: "a", sessionId: "s1")
+        let b = mgr.appendTerminal(worktreeId: worktreeId, title: "b", sessionId: "s2")
+        mgr.activate(worktreeId: worktreeId, tabId: a.id)
+
+        mgr.moveTab(worktreeId: worktreeId, fromId: a.id, toId: b.id)
+
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == a.id)
+    }
+
+    @Test func moveTabMissingSourceIsNoOp() {
+        let worktreeId = "tabs-manager-move-tab-missing-source"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let a = mgr.appendTerminal(worktreeId: worktreeId, title: "a", sessionId: "s1")
+        let b = mgr.appendTerminal(worktreeId: worktreeId, title: "b", sessionId: "s2")
+
+        mgr.moveTab(worktreeId: worktreeId, fromId: "missing", toId: b.id)
+
+        let ids = mgr.tabs(forWorktree: worktreeId).map(\.id)
+        #expect(ids == [a.id, b.id])
+    }
+
+    @Test func moveTabMissingDestinationIsNoOp() {
+        let worktreeId = "tabs-manager-move-tab-missing-destination"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let a = mgr.appendTerminal(worktreeId: worktreeId, title: "a", sessionId: "s1")
+        let b = mgr.appendTerminal(worktreeId: worktreeId, title: "b", sessionId: "s2")
+
+        mgr.moveTab(worktreeId: worktreeId, fromId: a.id, toId: "missing")
+
+        let ids = mgr.tabs(forWorktree: worktreeId).map(\.id)
+        #expect(ids == [a.id, b.id])
+    }
+
+    @Test func moveTabSameIdIsNoOp() {
+        let worktreeId = "tabs-manager-move-tab-same"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let a = mgr.appendTerminal(worktreeId: worktreeId, title: "a", sessionId: "s1")
+        let b = mgr.appendTerminal(worktreeId: worktreeId, title: "b", sessionId: "s2")
+
+        mgr.moveTab(worktreeId: worktreeId, fromId: a.id, toId: a.id)
+
+        let ids = mgr.tabs(forWorktree: worktreeId).map(\.id)
+        #expect(ids == [a.id, b.id])
+    }
+
+    @Test func moveTabPersistsOrder() {
+        let worktreeId = "tabs-manager-move-tab-persist"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let firstMgr = TabsManager()
+        let a = firstMgr.appendTerminal(worktreeId: worktreeId, title: "a", sessionId: "s1")
+        let b = firstMgr.appendTerminal(worktreeId: worktreeId, title: "b", sessionId: "s2")
+        let c = firstMgr.appendTerminal(worktreeId: worktreeId, title: "c", sessionId: "s3")
+        firstMgr.moveTab(worktreeId: worktreeId, fromId: a.id, toId: c.id)
+
+        let secondMgr = TabsManager()
+        secondMgr.loadAll(worktreeIds: [worktreeId])
+        let ids = secondMgr.tabs(forWorktree: worktreeId).map(\.id)
+        #expect(ids == [b.id, c.id, a.id])
+    }
 }
 
 // MARK: - Pane tree mutations
