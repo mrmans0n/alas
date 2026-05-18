@@ -17,6 +17,10 @@ struct TabBarView: View {
     let onNewTerminal: () -> Void
     let onMove: (TabID, TabID) -> Void
     @Environment(\.theme) var theme
+    @State private var draggedTabId: TabID?
+    @State private var tabFrames: [TabID: CGRect] = [:]
+
+    private static let dragCoordinateSpace = "alas-tab-bar-drag"
 
     private var isTerminalActive: Bool {
         guard let activeId, let active = tabs.first(where: { $0.id == activeId }) else { return false }
@@ -36,6 +40,16 @@ struct TabBarView: View {
                     onActivate: { onActivate(tab.id) },
                     onClose: { onClose(tab.id) }
                 )
+                .opacity(draggedTabId == tab.id ? 0.75 : 1)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: TabButtonFramePreferenceKey.self,
+                            value: [tab.id: proxy.frame(in: .named(Self.dragCoordinateSpace))]
+                        )
+                    }
+                )
+                .highPriorityGesture(tabDragGesture(for: tab.id))
                 .contextMenu {
                     if case .terminal = tab {
                         Button("Rename…") { onRenameTerminal(tab.id) }
@@ -55,12 +69,6 @@ struct TabBarView: View {
                         Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
                     }
                 }
-                .draggable(tab.id)
-                .dropDestination(for: String.self) { ids, _ in
-                    guard let draggedId = ids.first, draggedId != tab.id else { return false }
-                    onMove(draggedId, tab.id)
-                    return true
-                }
             }
             Spacer()
             if isTerminalActive {
@@ -79,9 +87,40 @@ struct TabBarView: View {
             .help("New terminal")
             .padding(.horizontal, 8)
         }
+        .coordinateSpace(name: Self.dragCoordinateSpace)
         .frame(height: 34)
-        .background(theme.color("bg-2"))
+        .background {
+            theme.color("bg-2")
+            TabDragWindowShield()
+        }
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .onPreferenceChange(TabButtonFramePreferenceKey.self) { frames in
+            tabFrames = frames
+        }
+    }
+
+    private func tabDragGesture(for tabId: TabID) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.dragCoordinateSpace))
+            .onChanged { value in
+                if draggedTabId == nil {
+                    draggedTabId = tabId
+                }
+                guard draggedTabId == tabId,
+                      let targetId = tabFrames.first(where: { $0.value.contains(value.location) })?.key,
+                      targetId != tabId else { return }
+                onMove(tabId, targetId)
+            }
+            .onEnded { _ in
+                draggedTabId = nil
+            }
+    }
+}
+
+private struct TabButtonFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [TabID: CGRect] = [:]
+
+    static func reduce(value: inout [TabID: CGRect], nextValue: () -> [TabID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 
