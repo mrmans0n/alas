@@ -150,6 +150,26 @@ final class RightPaneState {
         }
     }
 
+    /// Append a gitignore pattern for `path` to `destination` and refresh
+    /// the changes list. Idempotent at the service level — calling this for
+    /// a pattern that already exists in the destination is a no-op.
+    func ignore(path: String, isDirectory: Bool, destination: IgnoreDestination) {
+        let repoURL = worktree.path
+        Task { @MainActor in
+            do {
+                _ = try GitIgnoreService.appendIgnore(
+                    entryPath: path,
+                    isDirectory: isDirectory,
+                    destination: destination,
+                    repoURL: repoURL
+                )
+            } catch {
+                logger.error("ignore failed for \(path, privacy: .public) in worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+            await self.refresh()
+        }
+    }
+
     // MARK: - Commit composer wiring
 
     /// Run an AI commit-message CLI with the staged diff + repo context as
