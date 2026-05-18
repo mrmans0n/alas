@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import Alas
 
+@Suite(.serialized)
 struct TerminalCLIInjectionTests {
     @Test func zshAndBashReceiveAlasFunction() {
         let zsh = TerminalCLIInjection.script(forShell: "/bin/zsh") ?? ""

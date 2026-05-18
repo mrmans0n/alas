@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@Suite(.serialized)
 struct AgentHookSocketServerTests {
     private func tmpSocketDir() -> (dir: String, cleanup: () -> Void) {
         // Use /tmp directly: NSTemporaryDirectory() on macOS returns a path that

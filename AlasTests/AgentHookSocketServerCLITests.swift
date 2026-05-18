@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@Suite(.serialized)
 struct AgentHookSocketServerCLITests {
     private func tmpSocketDir() -> (dir: String, cleanup: () -> Void) {
         let dir = "/tmp/alas-cli-test-\(UUID().uuidString)"
