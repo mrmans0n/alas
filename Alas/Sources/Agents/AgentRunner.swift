@@ -37,6 +37,7 @@ enum AgentRunner {
         agent: AgentDefinition,
         input: String,
         prompt: String,
+        workingDirectory: String? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         timeout: TimeInterval = 120
     ) async throws -> GeneratedMessage {
@@ -54,6 +55,13 @@ enum AgentRunner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = [binary] + invocation.arguments
+        // Without an explicit cwd, the child inherits the app bundle's
+        // launch directory (typically `/`), which breaks CLIs whose first
+        // act is to inspect the surrounding git repo — codex refuses with
+        // "Not inside a trusted directory" before reading stdin.
+        if let workingDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
+        }
         var env = environment
         env["PATH"] = AgentPath.augmented(base: env["PATH"])
         process.environment = env
@@ -204,8 +212,12 @@ private struct AgentPromptInvocation {
         prompt: String
     ) -> AgentPromptInvocation {
         if isCodexExec(agent) {
+            // `--skip-git-repo-check` is required because codex refuses to
+            // start in a directory it hasn't been told to trust (and there
+            // is no interactive prompt to satisfy in non-interactive exec).
+            // The trailing `-` makes codex read the prompt from stdin.
             return AgentPromptInvocation(
-                arguments: agent.promptModeArgs + ["-"],
+                arguments: agent.promptModeArgs + ["--skip-git-repo-check", "-"],
                 stdin: combinedPrompt(prompt: prompt, input: input)
             )
         }
