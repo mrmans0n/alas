@@ -5,6 +5,7 @@ struct DiffTabView: View {
     let relativePath: String
     let staged: Bool
     let onOpenFile: (() -> Void)?
+    let onRequestDiscardFile: (() -> Void)?
     @Environment(\.theme) var theme
 
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
@@ -13,12 +14,22 @@ struct DiffTabView: View {
     @State private var loaded = false
     @State private var error: String?
     @State private var activeLoadKey: String?
+    @State private var confirmingDiscardHunk: ParsedDiff.Hunk? = nil
+    @State private var isFileTracked: Bool = true
 
     private let git = GitService()
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let error {
+                Text(error)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("del"))
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(theme.color("bg-2"))
+            }
             ScrollView {
                 if !loaded {
                     ProgressView().padding()
@@ -27,7 +38,13 @@ struct DiffTabView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
-                            HunkView(hunk: hunk, fileExtension: (relativePath as NSString).pathExtension)
+                            let actions = stagedHunkActions(hunk: hunk)
+                            HunkView(
+                                hunk: hunk,
+                                fileExtension: (relativePath as NSString).pathExtension,
+                                onStage: actions.stage,
+                                onDiscard: actions.discard
+                            )
                         }
                     }
                     .padding(.vertical, 8)
@@ -36,6 +53,25 @@ struct DiffTabView: View {
         }
         .background(theme.color("bg-1"))
         .task(id: loadKey) { await load() }
+        .alert(
+            "Discard this hunk in \u{201C}\((relativePath as NSString).lastPathComponent)\u{201D}?",
+            isPresented: Binding(
+                get: { confirmingDiscardHunk != nil },
+                set: { if !$0 { confirmingDiscardHunk = nil } }
+            ),
+            actions: {
+                Button("Discard", role: .destructive) {
+                    if let h = confirmingDiscardHunk {
+                        confirmingDiscardHunk = nil
+                        performDiscardHunk(h)
+                    }
+                }
+                Button("Cancel", role: .cancel) { confirmingDiscardHunk = nil }
+            },
+            message: {
+                Text("This permanently removes the selected hunk from your working copy. This cannot be undone.")
+            }
+        )
     }
 
     private var loadKey: String {
@@ -71,10 +107,9 @@ struct DiffTabView: View {
                 if let onOpenFile {
                     AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
                 }
-                if !staged, let first = diff.hunks.first {
-                    AlasButton(title: "Stage hunk", style: .subtle, action: { stageHunk(first) })
+                if let onRequestDiscardFile {
+                    AlasButton(title: "Discard Changes...", style: .subtle, action: onRequestDiscardFile)
                 }
-                AlasButton(title: "Discard", style: .subtle, action: discard)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -95,11 +130,16 @@ struct DiffTabView: View {
             let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
             let loadedTotalAdd = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count
             let loadedTotalDel = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count
+            let tracked = (try? await Process.git(
+                ["ls-files", "--error-unmatch", "--", relativePath],
+                cwd: worktreePath
+            ))?.exitCode == 0
 
             guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
             diff = loadedDiff
             totalAdd = loadedTotalAdd
             totalDel = loadedTotalDel
+            isFileTracked = tracked
             loaded = true
         } catch {
             guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
@@ -131,30 +171,26 @@ struct DiffTabView: View {
         }
     }
 
-    private func discard() {
-        // `git checkout -- <path>` only restores a TRACKED file's worktree
-        // copy from the index. It silently no-ops for untracked files (still
-        // there) and doesn't unstage staged changes. Discard from the diff
-        // view is opened from `git status --porcelain=v2` entries which
-        // include both — handle each case explicitly:
-        //
-        //   tracked   → `git restore --staged --worktree --source=HEAD --` so
-        //               both the index and the worktree go back to HEAD,
-        //               covering staged-only, unstaged-only, and mixed states.
-        //   untracked → `rm -f` since git won't touch it.
+    private func stagedHunkActions(hunk: ParsedDiff.Hunk) -> (stage: (() -> Void)?, discard: (() -> Void)?) {
+        // Staged view: no per-hunk actions for now (out of scope).
+        if staged { return (nil, nil) }
+        // Unstaged tracked: stage + discard.
+        // Unstaged untracked: stage only (Discard hidden — whole file IS the hunk).
+        let stage: () -> Void = { stageHunk(hunk) }
+        let discard: (() -> Void)? = isFileTracked
+            ? { confirmingDiscardHunk = hunk }
+            : nil
+        return (stage, discard)
+    }
+
+    private func performDiscardHunk(_ hunk: ParsedDiff.Hunk) {
         Task {
-            let tracked = (try? await Process.git(
-                ["ls-files", "--error-unmatch", "--", relativePath],
-                cwd: worktreePath
-            ))?.exitCode == 0
-            if tracked {
-                _ = try? await Process.git(
-                    ["restore", "--staged", "--worktree", "--source=HEAD", "--", relativePath],
-                    cwd: worktreePath
-                )
-            } else {
-                let absolute = worktreePath.appendingPathComponent(relativePath)
-                try? FileManager.default.removeItem(at: absolute)
+            let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: true)
+            do {
+                let git = GitService()
+                try await git.applyPatchReverse(worktreePath: worktreePath, patch: patch)
+            } catch {
+                self.error = (error as NSError).localizedDescription
             }
             await load()
         }
@@ -164,17 +200,28 @@ struct DiffTabView: View {
 struct HunkView: View {
     let hunk: ParsedDiff.Hunk
     let fileExtension: String
+    var onStage:   (() -> Void)? = nil
+    var onDiscard: (() -> Void)? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(hunk.header)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(theme.color("fg-dim"))
-                .padding(.horizontal, 14).padding(.vertical, 4)
-                .background(theme.color("bg-2"))
-                .overlay(Divider().opacity(0.5), alignment: .top)
-                .overlay(Divider().opacity(0.5), alignment: .bottom)
+            HStack(spacing: 8) {
+                Text(hunk.header)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-dim"))
+                Spacer(minLength: 8)
+                if onStage != nil {
+                    AlasButton(title: "Stage hunk", style: .subtle, action: { onStage?() })
+                }
+                if onDiscard != nil {
+                    AlasButton(title: "Discard hunk...", style: .subtle, action: { onDiscard?() })
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 4)
+            .background(theme.color("bg-2"))
+            .overlay(Divider().opacity(0.5), alignment: .top)
+            .overlay(Divider().opacity(0.5), alignment: .bottom)
             ForEach(Array(hunk.lines.enumerated()), id: \.offset) { (_, line) in
                 HStack(alignment: .top, spacing: 16) {
                     Text(lineMarker(line))
