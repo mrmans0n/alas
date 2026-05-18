@@ -168,9 +168,9 @@ struct AgentEditView: View {
             entry.binaryOverride = (trimmed?.isEmpty == false) ? trimmed : nil
             state.config.agents.builtinState[draft.id] = entry
         } else if isNew {
-            state.config.agents.custom.append(draft)
+            state.config.agents.custom.append(draft.normalizedForSettingsSave())
         } else if let idx = state.config.agents.custom.firstIndex(where: { $0.id == draft.id }) {
-            state.config.agents.custom[idx] = draft
+            state.config.agents.custom[idx] = draft.normalizedForSettingsSave()
         }
         state.saveConfig()
         state.rescanAgents()
@@ -190,5 +190,17 @@ struct AgentEditView: View {
         state.saveConfig()
         state.rescanAgents()
         onDismiss()
+    }
+}
+
+extension AgentDefinition {
+    func normalizedForSettingsSave() -> AgentDefinition {
+        var normalized = self
+        normalized.displayName = displayName.trimmingCharacters(in: .whitespaces)
+        normalized.binary = binary.trimmingCharacters(in: .whitespaces)
+        normalized.binaryOverride = nil
+        let trimmedBypass = bypassPermissionsFlag?.trimmingCharacters(in: .whitespaces)
+        normalized.bypassPermissionsFlag = (trimmedBypass?.isEmpty == false) ? trimmedBypass : nil
+        return normalized
     }
 }

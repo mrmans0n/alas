@@ -168,6 +168,7 @@ struct CodePane: View {
     }
 
     private func save(originalLanguage: String?, _ entry: LanguageServerConfig, recipes: [InstallRecipe]?) {
+        let entry = entry.normalizedForSettingsSave()
         var list = state.config.code.languageServers
         // Look up by the original language ID so renaming an entry replaces
         // it in place. Searching by the edited value (`entry.language`) would
