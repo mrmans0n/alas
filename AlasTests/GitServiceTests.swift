@@ -247,4 +247,21 @@ struct GitServiceTests {
         #expect(nestedNode.childrenState == .notLoaded)
         #expect(nestedNode.children == nil)
     }
+
+    @Test func fileTreeChildrenRevealsIgnoredChildInsideTrackedDirectory() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "Sources/cache.log\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent("Sources"), withIntermediateDirectories: true)
+        try "tracked\n".write(to: repo.appendingPathComponent("Sources/App.swift"), atomically: true, encoding: .utf8)
+        try "ignored\n".write(to: repo.appendingPathComponent("Sources/cache.log"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore", "Sources/App.swift"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        let children = try await GitService().fileTreeChildren(worktreePath: repo, path: "Sources")
+
+        #expect(children.contains { $0.path == "Sources/App.swift" && $0.visibility == .tracked })
+        #expect(children.contains { $0.path == "Sources/cache.log" && $0.visibility == .ignored })
+    }
 }
