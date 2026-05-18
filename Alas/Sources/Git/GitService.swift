@@ -1,6 +1,9 @@
 import Foundation
+import os
 
 struct GitService {
+    private static let logger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
+
     func isGitRepository(_ path: URL) async throws -> Bool {
         let result = try await Process.git(["rev-parse", "--is-inside-work-tree"], cwd: path)
         return result.exitCode == 0 &&
@@ -252,17 +255,262 @@ extension GitService {
     }
 
     func fileTree(worktreePath: URL, statusEntries: [ChangedFile]) async throws -> [FileTreeNode] {
+        let visiblePaths = try await gitVisibleFilePaths(worktreePath: worktreePath)
+        var paths = Set(visiblePaths)
+        var badges: [String: String] = [:]
+        var visibility: [String: FileVisibility] = [:]
+        var directories = Set<String>()
+        var lazyDirectories = Set<String>()
+
+        for entry in statusEntries {
+            badges[entry.path] = entry.status
+            if entry.status == "A" {
+                visibility[entry.path] = .untracked
+            }
+        }
+
+        do {
+            let rootEntries = try FileManager.default.contentsOfDirectory(
+                at: worktreePath,
+                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+                options: []
+            )
+            let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
+            let candidateRootEntries = rootEntries.compactMap { url -> RootIgnoreCandidate? in
+                let rel = url.lastPathComponent
+                guard rel != ".git", !paths.contains(rel) else { return nil }
+                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                return RootIgnoreCandidate(path: rel, isDirectory: isDirectory)
+            }
+            let rootVisibility = try await ignoredOrExcludedVisibility(
+                candidates: candidateRootEntries,
+                worktreePath: worktreePath,
+                excludedSourcePaths: excludedSources
+            )
+
+            for candidate in candidateRootEntries {
+                let rel = candidate.path
+                guard let kind = rootVisibility[rel] else { continue }
+                visibility[rel] = kind
+                if candidate.isDirectory {
+                    directories.insert(rel)
+                    guard !hasVisibleDescendant(of: rel, in: paths) else { continue }
+                    lazyDirectories.insert(rel)
+                }
+                paths.insert(rel)
+            }
+        } catch {
+            // Git-visible paths are still useful if the best-effort all-files
+            // root scan or ignore classification fails.
+            Self.logger.error("file tree root scan failed for \(worktreePath.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+
+        return FileTreeBuilder.build(
+            paths: Array(paths),
+            badges: badges,
+            visibility: visibility,
+            directories: directories,
+            lazyDirectories: lazyDirectories
+        )
+    }
+
+    func fileTreeChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
+        let directory = worktreePath.appendingPathComponent(path)
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: []
+        )
+
+        var childPaths: [String] = []
+        var directories = Set<String>()
+        var lazyDirectories = Set<String>()
+        var candidates: [RootIgnoreCandidate] = []
+
+        for url in urls where url.lastPathComponent != ".git" {
+            let rel = path.isEmpty ? url.lastPathComponent : "\(path)/\(url.lastPathComponent)"
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            childPaths.append(rel)
+            candidates.append(RootIgnoreCandidate(path: rel, isDirectory: isDirectory))
+            if isDirectory {
+                directories.insert(rel)
+                lazyDirectories.insert(rel)
+            }
+        }
+
+        let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
+        let visiblePaths = Set(try await gitVisibleFilePaths(worktreePath: worktreePath))
+        var visibility: [String: FileVisibility] = [:]
+        let ignoredCandidates = candidates.filter { candidate in
+            if visiblePaths.contains(candidate.path) {
+                visibility[candidate.path] = .tracked
+                return false
+            }
+            return true
+        }
+        let ignoredVisibility = try await ignoredOrExcludedVisibility(
+            candidates: ignoredCandidates,
+            worktreePath: worktreePath,
+            excludedSourcePaths: excludedSources
+        )
+        visibility.merge(ignoredVisibility) { current, _ in current }
+        for path in childPaths where visibility[path] == nil {
+            visibility[path] = .tracked
+        }
+
+        let built = FileTreeBuilder.build(
+            paths: childPaths,
+            badges: [:],
+            visibility: visibility,
+            directories: directories,
+            lazyDirectories: lazyDirectories
+        )
+        guard !path.isEmpty else { return built }
+        return findFileTreeNode(path: path, in: built)?.children ?? []
+    }
+
+    private func findFileTreeNode(path: String, in nodes: [FileTreeNode]) -> FileTreeNode? {
+        for node in nodes {
+            if node.path == path {
+                return node
+            }
+            if let children = node.children,
+               let found = findFileTreeNode(path: path, in: children) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func gitVisibleFilePaths(worktreePath: URL) async throws -> [String] {
         let result = try await Process.git(
             ["ls-files", "--cached", "--others", "--exclude-standard"],
             cwd: worktreePath
         )
-        let paths = result.stdout
+        return result.stdout
             .split(separator: "\n")
             .map(String.init)
             .filter { !$0.isEmpty }
-        var badges: [String: String] = [:]
-        for entry in statusEntries { badges[entry.path] = entry.status }
-        return FileTreeBuilder.build(paths: paths, badges: badges)
+    }
+
+    private struct RootIgnoreCandidate {
+        let path: String
+        let isDirectory: Bool
+    }
+
+    private func ignoredOrExcludedVisibility(
+        candidates: [RootIgnoreCandidate],
+        worktreePath: URL,
+        excludedSourcePaths: Set<String>
+    ) async throws -> [String: FileVisibility] {
+        guard !candidates.isEmpty else { return [:] }
+
+        var queriedPathToRoot: [String: String] = [:]
+        var inputPaths: [String] = []
+        for candidate in candidates {
+            inputPaths.append(candidate.path)
+            queriedPathToRoot[candidate.path] = candidate.path
+            if candidate.isDirectory {
+                let directoryPath = "\(candidate.path)/"
+                inputPaths.append(directoryPath)
+                queriedPathToRoot[directoryPath] = candidate.path
+            }
+        }
+
+        let result = try await Process.git(
+            ["check-ignore", "--stdin", "--no-index", "-v", "-z"],
+            cwd: worktreePath,
+            stdin: inputPaths.joined(separator: "\0") + "\0"
+        )
+        guard result.exitCode == 0 else { return [:] }
+
+        var visibility: [String: FileVisibility] = [:]
+        for entry in checkIgnoreMatches(result.stdout) {
+            guard let root = queriedPathToRoot[entry.path] else { continue }
+            guard !entry.pattern.hasPrefix("!") else { continue }
+            let source = normalizedPath(entry.source, relativeTo: worktreePath)
+            visibility[root] = excludedSourcePaths.contains(source) ? .excluded : .ignored
+        }
+        return visibility
+    }
+
+    private struct CheckIgnoreMatch {
+        let source: String
+        let pattern: String
+        let path: String
+    }
+
+    private func checkIgnoreMatches(_ output: String) -> [CheckIgnoreMatch] {
+        let fields = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        var matches: [CheckIgnoreMatch] = []
+        var index = 0
+        while index + 3 < fields.count {
+            matches.append(CheckIgnoreMatch(source: fields[index], pattern: fields[index + 2], path: fields[index + 3]))
+            index += 4
+        }
+        return matches
+    }
+
+    private func hasVisibleDescendant(of root: String, in paths: Set<String>) -> Bool {
+        let prefix = "\(root)/"
+        return paths.contains { $0.hasPrefix(prefix) }
+    }
+
+    private func excludedSourcePaths(worktreePath: URL) async throws -> Set<String> {
+        var paths: Set<String> = []
+
+        let infoExclude = try await Process.git(
+            ["rev-parse", "--git-path", "info/exclude"],
+            cwd: worktreePath
+        )
+        if infoExclude.exitCode == 0 {
+            let path = infoExclude.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                paths.insert(normalizedPath(path, relativeTo: worktreePath))
+            }
+        }
+
+        let result = try await Process.git(
+            ["config", "--path", "--get", "core.excludesfile"],
+            cwd: worktreePath
+        )
+        if result.exitCode == 0 {
+            let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                paths.insert(normalizedPath(path, relativeTo: worktreePath))
+            }
+        }
+        if let defaultGlobalExcludes = defaultGlobalExcludesPath() {
+            paths.insert(normalizedPath(defaultGlobalExcludes, relativeTo: worktreePath))
+        }
+
+        return paths
+    }
+
+    private func defaultGlobalExcludesPath() -> String? {
+        if let xdgConfigHome = getenv("XDG_CONFIG_HOME").flatMap({ String(validatingUTF8: $0) }),
+           !xdgConfigHome.isEmpty {
+            return URL(fileURLWithPath: xdgConfigHome)
+                .appendingPathComponent("git")
+                .appendingPathComponent("ignore")
+                .path
+        }
+        guard let home = getenv("HOME").flatMap({ String(validatingUTF8: $0) }),
+              !home.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: home)
+            .appendingPathComponent(".config")
+            .appendingPathComponent("git")
+            .appendingPathComponent("ignore")
+            .path
+    }
+
+    private func normalizedPath(_ path: String, relativeTo base: URL) -> String {
+        let url = path.hasPrefix("/")
+            ? URL(fileURLWithPath: path)
+            : base.appendingPathComponent(path)
+        return url.standardizedFileURL.path
     }
 }
 

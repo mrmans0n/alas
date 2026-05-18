@@ -143,6 +143,10 @@
 3. Confirm the Files section shows worktree files and supports directory expand/collapse.
 4. Confirm file loading errors remain scoped to the Files section and do not break terminal input.
 5. Confirm Git status loading errors remain scoped to the Changed section and do not break terminal input.
+6. Create an ignored root directory such as `.build/` and confirm it appears in the Files section with a dimmed ghost-rail row and an `ignored` pill.
+7. Expand the ignored root directory and confirm only the first level appears at first; deeper directories load only when expanded.
+8. Add a path to `.git/info/exclude`, create the matching file or folder, and confirm it appears with an `excluded` pill.
+9. Create a normal untracked file and confirm it still uses the existing `A` badge instead of the ignored/excluded affordance.
 
 ## ACP Agent Chat
 
