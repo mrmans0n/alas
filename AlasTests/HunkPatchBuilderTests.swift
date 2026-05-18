@@ -41,6 +41,7 @@ struct HunkPatchBuilderTests {
         #expect(lines[3] == "+++ b/new.txt")
         #expect(lines[4] == "@@ -0,0 +1,1 @@")
         #expect(lines[5] == "+hello")
+        #expect(patch.hasSuffix("\n"))
     }
 
     @Test func nonAsciiPathPassesThroughUnescaped() {
