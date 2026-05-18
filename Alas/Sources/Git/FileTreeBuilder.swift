@@ -34,17 +34,24 @@ enum FileTreeBuilder {
         guard let head = parts.first else { return }
         let isLeaf = parts.count == 1
         let nodePath = prefix.isEmpty ? head : "\(prefix)/\(head)"
-        let existing = map[head]
         if isLeaf {
+            let key = nodeKey(name: head, isDir: false)
+            let existing = map[key]
             let badge = badges[fullPath]
             if existing == nil {
-                map[head] = TreeBuildNode(name: head, path: nodePath, isDir: false, badge: badge)
+                map[key] = TreeBuildNode(name: head, path: nodePath, isDir: false, badge: badge)
             }
         } else {
+            let key = nodeKey(name: head, isDir: true)
+            let existing = map[key]
             let dir = existing ?? TreeBuildNode(name: head, path: nodePath, isDir: true, badge: nil)
-            map[head] = dir
+            map[key] = dir
             insert(parts: Array(parts.dropFirst()), into: &dir.children, fullPath: fullPath, badges: badges, prefix: nodePath)
         }
+    }
+
+    private static func nodeKey(name: String, isDir: Bool) -> String {
+        "\(isDir ? "dir" : "file"):\(name)"
     }
 
     private static func finalise(_ map: [String: TreeBuildNode]) -> [FileTreeNode] {
