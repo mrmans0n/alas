@@ -193,6 +193,43 @@ struct GitIgnoreServiceTests {
         #expect(try read(written) == "dropped.local\n")
     }
 
+    /// Linked worktrees store `info/exclude` in the per-worktree git dir,
+    /// not under `<worktree>/.git/info/exclude`. The caller resolves the
+    /// real path via `git rev-parse --git-path info/exclude` and passes
+    /// it as `infoExcludeURL`. The pattern is still written relative to
+    /// the worktree root.
+    @Test func infoExcludeURLOverrideTargetsLinkedWorktreeGitDir() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Simulate a per-worktree git dir outside the working tree.
+        let externalGitDir = repo
+            .deletingLastPathComponent()
+            .appendingPathComponent("alas-ign-linked-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: externalGitDir) }
+        let override = externalGitDir
+            .appendingPathComponent("info")
+            .appendingPathComponent("exclude")
+
+        let written = try GitIgnoreService.appendIgnore(
+            entryPath: "src/foo/secret.local",
+            isDirectory: false,
+            destination: .infoExclude,
+            repoURL: repo,
+            infoExcludeURL: override
+        )
+
+        #expect(written == override)
+        #expect(try read(override) == "src/foo/secret.local\n")
+        // The default path under <repo>/.git/info/exclude must not have been
+        // written (overwriting `git init`'s seeded header would be a regression).
+        let defaultPath = repo
+            .appendingPathComponent(".git")
+            .appendingPathComponent("info")
+            .appendingPathComponent("exclude")
+        let defaultContents = (try? String(contentsOf: defaultPath, encoding: .utf8)) ?? ""
+        #expect(!defaultContents.contains("src/foo/secret.local"))
+    }
+
     @Test func escapesLeadingHashBangBracketAndTrailingSpaces() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

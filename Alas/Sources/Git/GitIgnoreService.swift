@@ -11,16 +11,27 @@ enum GitIgnoreService {
     /// `entryPath` is repo-relative (POSIX `/` separators).
     /// Returns the file written to. Idempotent: if the pattern already
     /// exists in the destination, returns the URL without modifying it.
+    ///
+    /// `infoExcludeURL` overrides the destination URL when
+    /// `destination == .infoExclude`. Linked worktrees store
+    /// `info/exclude` outside the working tree (in the per-worktree git
+    /// dir under `.git/worktrees/<name>/info/exclude`), so callers
+    /// managing worktrees should resolve the path via
+    /// `git rev-parse --git-path info/exclude` and pass the result here.
+    /// When `nil`, the service falls back to `repoURL/.git/info/exclude`
+    /// — correct for primary worktrees only.
     static func appendIgnore(
         entryPath: String,
         isDirectory: Bool,
         destination: IgnoreDestination,
-        repoURL: URL
+        repoURL: URL,
+        infoExcludeURL: URL? = nil
     ) throws -> URL {
         let target = try resolveTarget(
             destination: destination,
             repoURL: repoURL,
-            entryPath: entryPath
+            entryPath: entryPath,
+            infoExcludeURL: infoExcludeURL
         )
         let pattern = computePattern(
             entryPath: entryPath,
@@ -37,13 +48,15 @@ enum GitIgnoreService {
     private static func resolveTarget(
         destination: IgnoreDestination,
         repoURL: URL,
-        entryPath: String
+        entryPath: String,
+        infoExcludeURL: URL?
     ) throws -> URL {
         let fm = FileManager.default
         switch destination {
         case .repoRoot:
             return repoURL.appendingPathComponent(".gitignore")
         case .infoExclude:
+            if let infoExcludeURL { return infoExcludeURL }
             return repoURL
                 .appendingPathComponent(".git")
                 .appendingPathComponent("info")
