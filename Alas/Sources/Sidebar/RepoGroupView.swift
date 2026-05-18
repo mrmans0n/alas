@@ -35,6 +35,8 @@ struct RepoGroupView: View {
             // fire the collapse action.
             HStack(spacing: 7) {
                 Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
                 RepoDot(color: project.color, letter: letter)
                 Text(project.name)
                     .font(.system(size: 11.5, weight: .semibold))
