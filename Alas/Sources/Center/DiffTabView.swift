@@ -71,8 +71,8 @@ struct DiffTabView: View {
                 if let onOpenFile {
                     AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
                 }
-                if !staged {
-                    AlasButton(title: "Stage hunk", style: .subtle, action: stageHunk)
+                if !staged, let first = diff.hunks.first {
+                    AlasButton(title: "Stage hunk", style: .subtle, action: { stageHunk(first) })
                 }
                 AlasButton(title: "Discard", style: .subtle, action: discard)
             }
@@ -108,47 +108,25 @@ struct DiffTabView: View {
         }
     }
 
-    private func stageHunk() {
+    private func stageHunk(_ hunk: ParsedDiff.Hunk) {
         Task {
-            guard let hunk = diff.hunks.first else { return }
-            let patchLines = hunk.lines.map { line -> String in
-                switch line.kind {
-                case .add:     return "+\(line.text)"
-                case .delete:  return "-\(line.text)"
-                case .context: return " \(line.text)"
-                }
-            }
-            // For untracked files the diff base is /dev/null; the patch header
-            // must reflect that or `git apply --cached` rejects it with
-            // "does not exist in index". For tracked files the conventional
-            // a/<path> b/<path> headers work.
             let tracked = (try? await Process.git(
                 ["ls-files", "--error-unmatch", "--", relativePath],
                 cwd: worktreePath
             ))?.exitCode == 0
-            let header: [String]
-            if tracked {
-                header = [
-                    "diff --git a/\(relativePath) b/\(relativePath)",
-                    "--- a/\(relativePath)",
-                    "+++ b/\(relativePath)",
-                    hunk.header,
-                ]
-            } else {
-                header = [
-                    "diff --git a/\(relativePath) b/\(relativePath)",
-                    "new file mode 100644",
-                    "--- /dev/null",
-                    "+++ b/\(relativePath)",
-                    hunk.header,
-                ]
-            }
-            let patch = header.joined(separator: "\n") + "\n"
-                + patchLines.joined(separator: "\n") + "\n"
-            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
+            let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: tracked)
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
             try? patch.write(to: tmp, atomically: true, encoding: .utf8)
-            _ = try? await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)
-            try? FileManager.default.removeItem(at: tmp)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            do {
+                let result = try await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)
+                if result.exitCode != 0 {
+                    self.error = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            } catch {
+                self.error = (error as NSError).localizedDescription
+            }
             await load()
         }
     }
