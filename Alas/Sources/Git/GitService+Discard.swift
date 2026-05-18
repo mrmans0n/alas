@@ -89,6 +89,25 @@ extension GitService {
             try Self.assertSuccess(result, op: "discard")
         }
 
+        // `git restore --recurse-submodules` resets the submodule's commit
+        // and tracked content, but leaves nested untracked files behind. For
+        // any path in the discard set that IS a submodule, run `git clean`
+        // inside it so "Discard … (staged, unstaged, and untracked)" really
+        // does leave the worktree clean.
+        if head {
+            for path in indexTracked + headOnlyPaths {
+                guard try await isSubmodule(worktreePath: worktreePath, path: path) else {
+                    continue
+                }
+                let submoduleURL = worktreePath.appendingPathComponent(path)
+                let clean = try await Process.git(
+                    ["clean", "-fd"],
+                    cwd: submoduleURL
+                )
+                try Self.assertSuccess(clean, op: "discard")
+            }
+        }
+
         // Remove truly untracked files from disk.
         for path in trulyUntracked {
             let url = worktreePath.appendingPathComponent(path)
@@ -98,6 +117,26 @@ extension GitService {
                 continue
             }
         }
+    }
+
+    /// True iff `path` is a submodule registered in the index or HEAD.
+    /// Submodules are mode 160000 ("gitlink") in the tree object. We probe
+    /// the index first (the common case after a restore) and fall back to
+    /// HEAD for rename origins that aren't in the current index.
+    private func isSubmodule(worktreePath: URL, path: String) async throws -> Bool {
+        if let stage = try? await Process.git(
+            ["ls-files", "--stage", "--", path],
+            cwd: worktreePath
+        ), stage.exitCode == 0, stage.stdout.hasPrefix("160000") {
+            return true
+        }
+        if let tree = try? await Process.git(
+            ["ls-tree", "HEAD", "--", path],
+            cwd: worktreePath
+        ), tree.exitCode == 0, tree.stdout.hasPrefix("160000") {
+            return true
+        }
+        return false
     }
 
     /// Apply a unified-diff patch in reverse against the worktree. Used by
