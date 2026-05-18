@@ -47,6 +47,64 @@ struct RightPaneStateFileTreeTests {
         #expect(root.children?.contains { $0.path == "Sources/cache.log" && $0.visibility == .ignored } == true)
     }
 
+    @Test func mergingChildrenRefreshesExistingChildMetadataAndPreservesDescendants() {
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated",
+                        path: "Sources/Generated",
+                        kind: .dir,
+                        children: [
+                            FileTreeNode(
+                                name: "keep.txt",
+                                path: "Sources/Generated/keep.txt",
+                                kind: .file,
+                                children: nil,
+                                badge: "A",
+                                visibility: .tracked,
+                                childrenState: .loaded
+                            )
+                        ],
+                        badge: nil,
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        let children = [
+            FileTreeNode(
+                name: "Generated",
+                path: "Sources/Generated",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+
+        let result = RightPaneState.mergingChildren(in: tree, for: "Sources", with: children, state: .loaded)
+        let generated = result.nodes.first?.children?.first
+        let keep = generated?.children?.first
+
+        #expect(result.didMerge)
+        #expect(generated?.name == "Generated")
+        #expect(generated?.path == "Sources/Generated")
+        #expect(generated?.kind == .dir)
+        #expect(generated?.visibility == .ignored)
+        #expect(generated?.childrenState == .notLoaded)
+        #expect(keep?.path == "Sources/Generated/keep.txt")
+        #expect(keep?.badge == "A")
+    }
+
     @Test func mergingChildrenReportsMissingTargetWithoutMutatingTree() {
         let tree = [
             FileTreeNode(

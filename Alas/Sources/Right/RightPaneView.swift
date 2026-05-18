@@ -34,7 +34,8 @@ struct RightPaneView: View {
                             get: { rps.openPaths },
                             set: { rps.openPaths = $0 }
                         ),
-                        onSelectFile: onSelectTreeFile
+                        onSelectFile: onSelectTreeFile,
+                        onLoadChildren: { rps.loadFileTreeChildren(path: $0) }
                     )
                 }
             }

@@ -156,8 +156,19 @@ final class RightPaneState {
                 for child in node.children ?? [] {
                     merged[child.id] = child
                 }
-                for child in children where merged[child.id] == nil {
-                    merged[child.id] = child
+                for child in children {
+                    if let existing = merged[child.id] {
+                        var refreshed = existing
+                        refreshed.badge = child.badge ?? existing.badge
+                        refreshed.visibility = child.visibility
+                        refreshed.childrenState = child.childrenState
+                        if refreshed.children == nil {
+                            refreshed.children = child.children
+                        }
+                        merged[child.id] = refreshed
+                    } else {
+                        merged[child.id] = child
+                    }
                 }
                 updated.children = merged.values.sorted { lhs, rhs in
                     if lhs.kind != rhs.kind { return lhs.kind == .dir }
