@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct GeneratedMessage: Equatable {
@@ -123,7 +124,7 @@ enum AgentRunner {
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             if !Task.isCancelled && process.isRunning {
                 timeoutState.markTimedOut()
-                process.terminate()
+                AgentRunnerProcessKiller.terminateThenKillIfNeeded(process)
             }
         }
 
@@ -137,7 +138,9 @@ enum AgentRunner {
             try? pipe.fileHandleForWriting.close()
             await exit.wait()
         } onCancel: {
-            if process.isRunning { process.terminate() }
+            if process.isRunning {
+                AgentRunnerProcessKiller.terminateThenKillIfNeeded(process)
+            }
         }
         watchdog.cancel()
 
@@ -223,6 +226,20 @@ private struct AgentPromptInvocation {
         let binaryName = (agent.resolvedBinary as NSString).lastPathComponent
         let subcommand = agent.promptModeArgs.first
         return binaryName == "codex" && (subcommand == "exec" || subcommand == "e")
+    }
+}
+
+private enum AgentRunnerProcessKiller {
+    static let sigtermGraceNanoseconds: UInt64 = 500_000_000
+
+    static func terminateThenKillIfNeeded(_ process: Process) {
+        process.terminate()
+        Task {
+            try? await Task.sleep(nanoseconds: sigtermGraceNanoseconds)
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
     }
 }
 
