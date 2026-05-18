@@ -1,6 +1,9 @@
 import Foundation
+import os
 
 struct GitService {
+    private static let logger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
+
     func isGitRepository(_ path: URL) async throws -> Bool {
         let result = try await Process.git(["rev-parse", "--is-inside-work-tree"], cwd: path)
         return result.exitCode == 0 &&
@@ -266,34 +269,40 @@ extension GitService {
             }
         }
 
-        let rootEntries = try FileManager.default.contentsOfDirectory(
-            at: worktreePath,
-            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
-            options: []
-        )
-        let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
-        let candidateRootEntries = rootEntries.compactMap { url -> RootIgnoreCandidate? in
-            let rel = url.lastPathComponent
-            guard rel != ".git", !paths.contains(rel) else { return nil }
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-            return RootIgnoreCandidate(path: rel, isDirectory: isDirectory)
-        }
-        let rootVisibility = try await ignoredOrExcludedVisibility(
-            candidates: candidateRootEntries,
-            worktreePath: worktreePath,
-            excludedSourcePaths: excludedSources
-        )
-
-        for candidate in candidateRootEntries {
-            let rel = candidate.path
-            guard let kind = rootVisibility[rel] else { continue }
-            visibility[rel] = kind
-            if candidate.isDirectory {
-                directories.insert(rel)
-                guard !hasVisibleDescendant(of: rel, in: paths) else { continue }
-                lazyDirectories.insert(rel)
+        do {
+            let rootEntries = try FileManager.default.contentsOfDirectory(
+                at: worktreePath,
+                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+                options: []
+            )
+            let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
+            let candidateRootEntries = rootEntries.compactMap { url -> RootIgnoreCandidate? in
+                let rel = url.lastPathComponent
+                guard rel != ".git", !paths.contains(rel) else { return nil }
+                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                return RootIgnoreCandidate(path: rel, isDirectory: isDirectory)
             }
-            paths.insert(rel)
+            let rootVisibility = try await ignoredOrExcludedVisibility(
+                candidates: candidateRootEntries,
+                worktreePath: worktreePath,
+                excludedSourcePaths: excludedSources
+            )
+
+            for candidate in candidateRootEntries {
+                let rel = candidate.path
+                guard let kind = rootVisibility[rel] else { continue }
+                visibility[rel] = kind
+                if candidate.isDirectory {
+                    directories.insert(rel)
+                    guard !hasVisibleDescendant(of: rel, in: paths) else { continue }
+                    lazyDirectories.insert(rel)
+                }
+                paths.insert(rel)
+            }
+        } catch {
+            // Git-visible paths are still useful if the best-effort all-files
+            // root scan or ignore classification fails.
+            Self.logger.error("file tree root scan failed for \(worktreePath.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
 
         return FileTreeBuilder.build(
@@ -330,11 +339,21 @@ extension GitService {
         }
 
         let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
-        var visibility = try await ignoredOrExcludedVisibility(
-            candidates: candidates,
+        let visiblePaths = Set(try await gitVisibleFilePaths(worktreePath: worktreePath))
+        var visibility: [String: FileVisibility] = [:]
+        let ignoredCandidates = candidates.filter { candidate in
+            if visiblePaths.contains(candidate.path) || hasVisibleDescendant(of: candidate.path, in: visiblePaths) {
+                visibility[candidate.path] = .tracked
+                return false
+            }
+            return true
+        }
+        let ignoredVisibility = try await ignoredOrExcludedVisibility(
+            candidates: ignoredCandidates,
             worktreePath: worktreePath,
             excludedSourcePaths: excludedSources
         )
+        visibility.merge(ignoredVisibility) { current, _ in current }
         for path in childPaths where visibility[path] == nil {
             visibility[path] = .tracked
         }
@@ -346,12 +365,21 @@ extension GitService {
             directories: directories,
             lazyDirectories: lazyDirectories
         )
-        return built.flatMap { node in
-            if node.path == path, let children = node.children {
-                return children
+        guard !path.isEmpty else { return built }
+        return findFileTreeNode(path: path, in: built)?.children ?? []
+    }
+
+    private func findFileTreeNode(path: String, in nodes: [FileTreeNode]) -> FileTreeNode? {
+        for node in nodes {
+            if node.path == path {
+                return node
             }
-            return [node]
+            if let children = node.children,
+               let found = findFileTreeNode(path: path, in: children) {
+                return found
+            }
         }
+        return nil
     }
 
     private func gitVisibleFilePaths(worktreePath: URL) async throws -> [String] {

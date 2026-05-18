@@ -30,11 +30,15 @@ struct RightPaneView: View {
                 case .files:
                     FilesTabView(
                         nodes: rps.fileTree,
+                        fileTreeGeneration: rps.fileTreeGeneration,
                         openPaths: Binding(
                             get: { rps.openPaths },
                             set: { rps.openPaths = $0 }
                         ),
                         onSelectFile: onSelectTreeFile,
+                        shouldAutoLoadChildren: { path, childrenState in
+                            rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
+                        },
                         onLoadChildren: { rps.loadFileTreeChildren(path: $0) }
                     )
                 }

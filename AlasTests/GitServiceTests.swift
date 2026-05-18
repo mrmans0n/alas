@@ -248,6 +248,40 @@ struct GitServiceTests {
         #expect(nestedNode.children == nil)
     }
 
+    @Test func fileTreeChildrenLoadsNestedIgnoredDirectoryChildren() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "ignored-root/\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        let nested = repo.appendingPathComponent("ignored-root/nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "two\n".write(to: nested.appendingPathComponent("two.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        let children = try await GitService().fileTreeChildren(worktreePath: repo, path: "ignored-root/nested")
+
+        #expect(children.map(\.path) == ["ignored-root/nested/two.txt"])
+        #expect(children.first?.visibility == .ignored)
+    }
+
+    @Test func fileTreeChildrenKeepsForceTrackedChildTrackedInsideIgnoredDirectory() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "generated/\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent("generated"), withIntermediateDirectories: true)
+        try "tracked\n".write(to: repo.appendingPathComponent("generated/keep.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
+        _ = try await Process.git(["add", "-f", "generated/keep.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        let children = try await GitService().fileTreeChildren(worktreePath: repo, path: "generated")
+
+        let keep = try #require(children.first { $0.path == "generated/keep.txt" })
+        #expect(keep.visibility == .tracked)
+    }
+
     @Test func fileTreeChildrenRevealsIgnoredChildInsideTrackedDirectory() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

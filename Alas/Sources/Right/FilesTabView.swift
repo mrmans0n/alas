@@ -2,8 +2,10 @@ import SwiftUI
 
 struct FilesTabView: View {
     let nodes: [FileTreeNode]
+    let fileTreeGeneration: Int
     @Binding var openPaths: Set<String>
     let onSelectFile: (FileTreeNode) -> Void
+    let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
     let onLoadChildren: (String) -> Void
 
     @Environment(\.theme) private var theme
@@ -115,11 +117,11 @@ struct FilesTabView: View {
     }
 
     private func loadTaskID(for node: FileTreeNode, open: Bool) -> String {
-        "\(node.path):\(open):\(node.childrenState.rawValue)"
+        "\(fileTreeGeneration):\(node.path):\(open):\(node.childrenState.rawValue)"
     }
 
     private func shouldAutoLoadChildren(for node: FileTreeNode, open: Bool) -> Bool {
-        open && node.childrenState == .notLoaded
+        open && shouldAutoLoadChildren(node.path, node.childrenState)
     }
 
     private func renderChildren(of node: FileTreeNode, depth: Int) -> some View {

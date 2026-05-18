@@ -15,6 +15,7 @@ final class RightPaneState {
     var openPaths: Set<String> = []   // expanded directories in the tree
     private(set) var loadedFileTreeChildPaths: Set<String> = [""]
     private(set) var loadingFileTreeChildPaths: Set<String> = []
+    private(set) var failedFileTreeChildPaths: Set<String> = []
     private(set) var fileTreeGeneration: Int = 0
 
     // New in right-sidebar-refactor:
@@ -112,6 +113,7 @@ final class RightPaneState {
         fileTreeGeneration += 1
         loadedFileTreeChildPaths = [""]
         loadingFileTreeChildPaths = []
+        failedFileTreeChildPaths = []
         fileTree = Self.resetLoadingFileTreeChildren(in: fileTree)
     }
 
@@ -160,7 +162,7 @@ final class RightPaneState {
                     if let existing = merged[child.id] {
                         var refreshed = existing
                         refreshed.badge = child.badge ?? existing.badge
-                        refreshed.visibility = child.visibility
+                        refreshed.visibility = mergedVisibility(existing: existing.visibility, incoming: child.visibility)
                         refreshed.childrenState = child.childrenState
                         if refreshed.children == nil {
                             refreshed.children = child.children
@@ -187,6 +189,16 @@ final class RightPaneState {
         return (updatedNodes, didMerge)
     }
 
+    nonisolated private static func mergedVisibility(
+        existing: FileVisibility,
+        incoming: FileVisibility
+    ) -> FileVisibility {
+        if incoming == .tracked, existing != .tracked {
+            return existing
+        }
+        return incoming
+    }
+
     nonisolated static func resetLoadingFileTreeChildren(in nodes: [FileTreeNode]) -> [FileTreeNode] {
         nodes.map { node in
             var updated = node
@@ -199,6 +211,29 @@ final class RightPaneState {
             }
             return updated
         }
+    }
+
+    nonisolated static func shouldAutoLoadFileTreeChildren(
+        path: String,
+        childrenState: DirectoryChildrenState,
+        loadedPaths: Set<String>,
+        loadingPaths: Set<String>,
+        failedPaths: Set<String>
+    ) -> Bool {
+        guard !loadedPaths.contains(path),
+              !loadingPaths.contains(path),
+              !failedPaths.contains(path) else { return false }
+        return childrenState == .notLoaded || childrenState == .loaded
+    }
+
+    func shouldAutoLoadFileTreeChildren(path: String, childrenState: DirectoryChildrenState) -> Bool {
+        Self.shouldAutoLoadFileTreeChildren(
+            path: path,
+            childrenState: childrenState,
+            loadedPaths: loadedFileTreeChildPaths,
+            loadingPaths: loadingFileTreeChildPaths,
+            failedPaths: failedFileTreeChildPaths
+        )
     }
 
     func loadFileTreeChildren(path: String) {
@@ -224,11 +259,13 @@ final class RightPaneState {
                 let result = Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
                 guard result.didMerge else { return }
                 self.loadedFileTreeChildPaths.insert(path)
+                self.failedFileTreeChildPaths.remove(path)
                 self.fileTree = result.nodes
             } catch {
                 guard self.fileTreeGeneration == generation else { return }
                 let result = Self.mergingChildren(in: self.fileTree, for: path, with: [], state: .failed)
                 guard result.didMerge else { return }
+                self.failedFileTreeChildPaths.insert(path)
                 self.fileTree = result.nodes
                 logger.error("file tree child load failed for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }

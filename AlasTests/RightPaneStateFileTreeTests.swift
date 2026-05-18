@@ -105,6 +105,48 @@ struct RightPaneStateFileTreeTests {
         #expect(keep?.badge == "A")
     }
 
+    @Test func mergingChildrenPreservesSpecificExistingVisibilityWhenReturnedVisibilityIsDefaultTracked() {
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "New.swift",
+                        path: "Sources/New.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "A",
+                        visibility: .untracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        let children = [
+            FileTreeNode(
+                name: "New.swift",
+                path: "Sources/New.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.mergingChildren(in: tree, for: "Sources", with: children, state: .loaded)
+        let file = result.nodes.first?.children?.first
+
+        #expect(result.didMerge)
+        #expect(file?.badge == "A")
+        #expect(file?.visibility == .untracked)
+    }
+
     @Test func mergingChildrenReportsMissingTargetWithoutMutatingTree() {
         let tree = [
             FileTreeNode(
@@ -157,6 +199,7 @@ struct RightPaneStateFileTreeTests {
         #expect(state.fileTreeGeneration == generation + 1)
         #expect(state.loadedFileTreeChildPaths == [""])
         #expect(state.loadingFileTreeChildPaths.isEmpty)
+        #expect(state.failedFileTreeChildPaths.isEmpty)
     }
 
     @Test func invalidatingFileTreeChildLoadsResetsLoadingDirectoriesInRetainedTree() {
@@ -245,5 +288,50 @@ struct RightPaneStateFileTreeTests {
         #expect(sources?.childrenState == .loaded)
         #expect(generated?.childrenState == .notLoaded)
         #expect(generated?.children == nil)
+    }
+
+    @Test func shouldAutoLoadFileTreeChildrenReconcilesOpenLoadedDirectoriesOnce() {
+        #expect(RightPaneState.shouldAutoLoadFileTreeChildren(
+            path: "Sources",
+            childrenState: .loaded,
+            loadedPaths: [""],
+            loadingPaths: [],
+            failedPaths: []
+        ))
+        #expect(RightPaneState.shouldAutoLoadFileTreeChildren(
+            path: "Sources",
+            childrenState: .notLoaded,
+            loadedPaths: [""],
+            loadingPaths: [],
+            failedPaths: []
+        ))
+        #expect(!RightPaneState.shouldAutoLoadFileTreeChildren(
+            path: "Sources",
+            childrenState: .loaded,
+            loadedPaths: ["", "Sources"],
+            loadingPaths: [],
+            failedPaths: []
+        ))
+        #expect(!RightPaneState.shouldAutoLoadFileTreeChildren(
+            path: "Sources",
+            childrenState: .loaded,
+            loadedPaths: [""],
+            loadingPaths: ["Sources"],
+            failedPaths: []
+        ))
+        #expect(!RightPaneState.shouldAutoLoadFileTreeChildren(
+            path: "Sources",
+            childrenState: .loaded,
+            loadedPaths: [""],
+            loadingPaths: [],
+            failedPaths: ["Sources"]
+        ))
+        #expect(!RightPaneState.shouldAutoLoadFileTreeChildren(
+            path: "Sources",
+            childrenState: .failed,
+            loadedPaths: [""],
+            loadingPaths: [],
+            failedPaths: []
+        ))
     }
 }
