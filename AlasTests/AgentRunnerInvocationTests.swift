@@ -1,4 +1,5 @@
 import Testing
+import Darwin
 import Foundation
 @testable import Alas
 
@@ -154,5 +155,62 @@ struct AgentRunnerInvocationTests {
         } catch {
             Issue.record("wrong error: \(error)")
         }
+    }
+
+    @Test func timeoutCompletesWhenChildIgnoresSIGTERM() async throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let pidFile = tmp.appendingPathComponent("ignore-term.pid")
+        let script = """
+        #!/bin/sh
+        echo $$ > "\(pidFile.path)"
+        trap '' TERM
+        while true; do sleep 1; done
+        """
+        let bin = tmp.appendingPathComponent("ignore-term")
+        try script.write(to: bin, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: bin.path
+        )
+
+        let start = Date()
+        let completed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    _ = try await AgentRunner.runPrompt(
+                        agent: self.agent(id: "ignore-term", binary: "ignore-term", args: []),
+                        input: "",
+                        prompt: "",
+                        environment: ["PATH": "\(tmp.path):/usr/bin:/bin"],
+                        timeout: 0.1
+                    )
+                    Issue.record("expected timeout")
+                } catch AgentRunError.timedOut(let seconds) {
+                    #expect(seconds == 0.1)
+                    return true
+                } catch {
+                    Issue.record("wrong error: \(error)")
+                }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if let pid = try? String(contentsOf: pidFile, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   let processId = Int32(pid) {
+                    kill(processId, SIGKILL)
+                }
+                return false
+            }
+
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(completed)
+        #expect(elapsed < 1.5, "expected timeout to complete before test cleanup kill, took \(elapsed)s")
     }
 }
