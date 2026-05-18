@@ -53,10 +53,12 @@ extension GitService {
         }
 
         // Restore index-tracked paths (modifications, staged adds, renames).
+        // `--recurse-submodules` is required for dirty submodule worktrees;
+        // without it `git restore` leaves them at their current commit.
         if !indexTracked.isEmpty {
             if head {
                 let result = try await Process.git(
-                    ["restore", "--staged", "--worktree", "--source=HEAD", "--"]
+                    ["restore", "--staged", "--worktree", "--recurse-submodules", "--source=HEAD", "--"]
                         + indexTracked + headOnlyPaths,
                     cwd: worktreePath
                 )
@@ -81,7 +83,7 @@ extension GitService {
         } else if !headOnlyPaths.isEmpty {
             // No index-tracked paths but we have head-only paths (edge case).
             let result = try await Process.git(
-                ["restore", "--staged", "--worktree", "--source=HEAD", "--"] + headOnlyPaths,
+                ["restore", "--staged", "--worktree", "--recurse-submodules", "--source=HEAD", "--"] + headOnlyPaths,
                 cwd: worktreePath
             )
             try Self.assertSuccess(result, op: "discard")
