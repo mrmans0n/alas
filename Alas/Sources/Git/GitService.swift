@@ -342,7 +342,7 @@ extension GitService {
         let visiblePaths = Set(try await gitVisibleFilePaths(worktreePath: worktreePath))
         var visibility: [String: FileVisibility] = [:]
         let ignoredCandidates = candidates.filter { candidate in
-            if visiblePaths.contains(candidate.path) || hasVisibleDescendant(of: candidate.path, in: visiblePaths) {
+            if visiblePaths.contains(candidate.path) {
                 visibility[candidate.path] = .tracked
                 return false
             }

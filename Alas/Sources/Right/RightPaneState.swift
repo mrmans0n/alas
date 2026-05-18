@@ -163,7 +163,7 @@ final class RightPaneState {
                         var refreshed = existing
                         refreshed.badge = child.badge ?? existing.badge
                         refreshed.visibility = mergedVisibility(existing: existing.visibility, incoming: child.visibility)
-                        refreshed.childrenState = child.childrenState
+                        refreshed.childrenState = mergedChildrenState(existing: existing.childrenState, incoming: child.childrenState)
                         if refreshed.children == nil {
                             refreshed.children = child.children
                         }
@@ -194,6 +194,16 @@ final class RightPaneState {
         incoming: FileVisibility
     ) -> FileVisibility {
         if incoming == .tracked, existing != .tracked {
+            return existing
+        }
+        return incoming
+    }
+
+    nonisolated private static func mergedChildrenState(
+        existing: DirectoryChildrenState,
+        incoming: DirectoryChildrenState
+    ) -> DirectoryChildrenState {
+        if incoming == .notLoaded, existing != .notLoaded {
             return existing
         }
         return incoming

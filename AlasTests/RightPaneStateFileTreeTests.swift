@@ -100,7 +100,7 @@ struct RightPaneStateFileTreeTests {
         #expect(generated?.path == "Sources/Generated")
         #expect(generated?.kind == .dir)
         #expect(generated?.visibility == .ignored)
-        #expect(generated?.childrenState == .notLoaded)
+        #expect(generated?.childrenState == .loaded)
         #expect(keep?.path == "Sources/Generated/keep.txt")
         #expect(keep?.badge == "A")
     }
