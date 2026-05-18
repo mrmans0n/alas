@@ -150,6 +150,52 @@ final class RightPaneState {
         }
     }
 
+    /// Append a gitignore pattern for `path` to `destination` and refresh
+    /// the changes list. Idempotent at the service level — calling this for
+    /// a pattern that already exists in the destination is a no-op.
+    ///
+    /// For `.infoExclude`, resolves the actual `info/exclude` path via
+    /// `git rev-parse --git-path` so linked worktrees write to the
+    /// per-worktree git dir (where `.git` is a gitfile, not a directory).
+    func ignore(path: String, isDirectory: Bool, destination: IgnoreDestination) {
+        let repoURL = worktree.path
+        Task { @MainActor in
+            do {
+                let infoExcludeURL: URL?
+                if destination == .infoExclude {
+                    infoExcludeURL = try await resolveInfoExcludeURL(worktreePath: repoURL)
+                } else {
+                    infoExcludeURL = nil
+                }
+                _ = try GitIgnoreService.appendIgnore(
+                    entryPath: path,
+                    isDirectory: isDirectory,
+                    destination: destination,
+                    repoURL: repoURL,
+                    infoExcludeURL: infoExcludeURL
+                )
+            } catch {
+                logger.error("ignore failed for \(path, privacy: .public) in worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+            await self.refresh()
+        }
+    }
+
+    /// Resolve the absolute URL of `info/exclude` for this worktree via
+    /// `git rev-parse --git-path info/exclude`. Output is relative to the
+    /// worktree path unless git emits an absolute path.
+    private func resolveInfoExcludeURL(worktreePath: URL) async throws -> URL {
+        let result = try await Process.git(
+            ["rev-parse", "--git-path", "info/exclude"],
+            cwd: worktreePath
+        )
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.hasPrefix("/") {
+            return URL(fileURLWithPath: raw)
+        }
+        return URL(fileURLWithPath: raw, relativeTo: worktreePath).standardizedFileURL
+    }
+
     // MARK: - Commit composer wiring
 
     /// Run an AI commit-message CLI with the staged diff + repo context as
