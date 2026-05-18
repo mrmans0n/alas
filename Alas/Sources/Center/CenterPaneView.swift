@@ -52,7 +52,10 @@ struct CenterPaneView: View {
                 onRenameTerminal: { id in
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
                 },
-                onNewTerminal: openTerminal
+                onNewTerminal: openTerminal,
+                onMove: { draggedId, destinationId in
+                    state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
+                }
             )
             Group {
                 if tabs.isEmpty {
