@@ -66,4 +66,36 @@ struct GitIgnoreServiceTests {
         let after = try Data(contentsOf: gi)
         #expect(before == after)
     }
+
+    @Test func createsGitignoreWhenAbsent() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let gi = repo.appendingPathComponent(".gitignore")
+        #expect(!FileManager.default.fileExists(atPath: gi.path))
+
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "fresh.log",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+
+        #expect(try read(gi) == "fresh.log\n")
+    }
+
+    @Test func addsMissingTrailingNewlineBeforeAppending() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let gi = repo.appendingPathComponent(".gitignore")
+        try "no-newline-at-end".write(to: gi, atomically: true, encoding: .utf8)
+
+        _ = try GitIgnoreService.appendIgnore(
+            entryPath: "new.log",
+            isDirectory: false,
+            destination: .repoRoot,
+            repoURL: repo
+        )
+
+        #expect(try read(gi) == "no-newline-at-end\nnew.log\n")
+    }
 }
