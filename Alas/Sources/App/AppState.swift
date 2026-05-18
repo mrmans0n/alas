@@ -651,11 +651,56 @@ final class AppState {
             }
         )
         terminal.socketPath = harness.socketServer.socketPath
+        harness.socketServer.onCLIRequest = { [weak self] request in
+            await MainActor.run {
+                guard let self else { return .error("Alas is not available.") }
+                let router = self.makeCLICommandRouter { [weak self] sessionId in
+                    self?.terminal.registry.session(for: sessionId)?.worktreeId
+                }
+                return router.handle(request)
+            }
+        }
         harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
             self?.activateHarnessSession(
                 projectId: projectId, worktreeId: worktreeId, sessionId: sessionId
             )
         }
+    }
+
+    func makeCLICommandRouter(
+        sessionWorktreeLookup: @escaping (String) -> String?
+    ) -> AlasCLICommandRouter {
+        AlasCLICommandRouter(
+            sessionWorktreeId: sessionWorktreeLookup,
+            originatingWorktree: { [weak self] worktreeId in
+                self?.worktree(withId: worktreeId)
+            },
+            visibleWorktrees: { [weak self] in
+                guard let self else { return [] }
+                return self.projects.flatMap { project in
+                    self.projectsManager.visibleWorktrees(projectId: project.id)
+                }
+            },
+            openRelativeFile: { [weak self] relativePath, worktreeId in
+                self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
+            },
+            openExternalFile: { [weak self] url, worktreeId in
+                guard let self else { return }
+                _ = self.tabs.openExternalEditor(
+                    worktreeId: worktreeId,
+                    absoluteURL: url,
+                    revealLine: nil,
+                    revealCharacter: nil,
+                    originatingRelativePath: nil
+                )
+                if self.selectedWorktreeId != worktreeId {
+                    self.selectedWorktreeId = worktreeId
+                }
+            },
+            activateApp: {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        )
     }
 
     /// Activate a specific harness session: bring the app to front, select
