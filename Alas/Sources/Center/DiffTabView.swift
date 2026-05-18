@@ -16,6 +16,7 @@ struct DiffTabView: View {
     @State private var activeLoadKey: String?
     @State private var confirmingDiscardHunk: ParsedDiff.Hunk? = nil
     @State private var isFileTracked: Bool = true
+    @State private var isFileDeleted: Bool = false
 
     private let git = GitService()
 
@@ -134,12 +135,20 @@ struct DiffTabView: View {
                 ["ls-files", "--error-unmatch", "--", relativePath],
                 cwd: worktreePath
             ))?.exitCode == 0
+            // A tracked file that's gone from disk is an unstaged deletion.
+            // The diff for it has `+++ /dev/null`, so reverse-applying a
+            // per-hunk patch (which uses `+++ b/<path>`) would fail — hide
+            // Discard hunk in that case and rely on file-level Discard.
+            let deleted = tracked && !FileManager.default.fileExists(
+                atPath: worktreePath.appendingPathComponent(relativePath).path
+            )
 
             guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
             diff = loadedDiff
             totalAdd = loadedTotalAdd
             totalDel = loadedTotalDel
             isFileTracked = tracked
+            isFileDeleted = deleted
             loaded = true
         } catch {
             guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
@@ -177,10 +186,13 @@ struct DiffTabView: View {
     private func stagedHunkActions(hunk: ParsedDiff.Hunk) -> (stage: (() -> Void)?, discard: (() -> Void)?) {
         // Staged view: no per-hunk actions for now (out of scope).
         if staged { return (nil, nil) }
-        // Unstaged tracked: stage + discard.
+        // Unstaged tracked, file exists: stage + discard.
         // Unstaged untracked: stage only (Discard hidden — whole file IS the hunk).
+        // Unstaged tracked, file deleted: stage only (Discard hidden — the
+        // generated patch would have `+++ b/<path>` but reverse-apply needs
+        // /dev/null; file-level Discard restores the whole file).
         let stage: () -> Void = { stageHunk(hunk) }
-        let discard: (() -> Void)? = isFileTracked
+        let discard: (() -> Void)? = (isFileTracked && !isFileDeleted)
             ? { confirmingDiscardHunk = hunk }
             : nil
         return (stage, discard)
