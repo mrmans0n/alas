@@ -46,6 +46,17 @@ struct RightPaneStateDiscardPathsTests {
         #expect(paths.sorted() == ["src/new.txt", "src/old.txt"])
     }
 
+    @Test func discardPathsForFolderIncludesCrossFolderRenameOrigin() {
+        // Staged rename whose origin lives OUTSIDE the folder being discarded.
+        // The folder discard must still expand to both new and origin paths so
+        // the deletion of the cross-folder origin is also restored.
+        let changes = [
+            cf("src/new.txt", stage: .staged, status: "R", renameFrom: "docs/old.txt"),
+        ]
+        let paths = RightPaneState.discardPaths(forFolderAt: "src", in: changes)
+        #expect(paths.sorted() == ["docs/old.txt", "src/new.txt"])
+    }
+
     @Test func discardPathsForAllExpandsRenamesAndDeduplicates() {
         let changes = [
             cf("a.txt"),

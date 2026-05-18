@@ -378,8 +378,25 @@ final class RightPaneState {
     @MainActor
     func confirmDiscard() async {
         guard let pending = pendingDiscard else { return }
-        let paths = pending.paths
         pendingDiscard = nil
+        await runDiscard(pending)
+    }
+
+    /// Run a previously-snapshotted discard. Used by view-layer callers that
+    /// need to capture and clear `pendingDiscard` synchronously in the alert
+    /// button action — the alert's `isPresented` binding fires its `set`
+    /// closure synchronously on dismissal, which would clear `pendingDiscard`
+    /// before the async `confirmDiscard()` could read it.
+    @MainActor
+    func confirmDiscard(_ pending: PendingDiscard) async {
+        // Defensive: if the caller didn't clear `pendingDiscard`, do it now.
+        if pendingDiscard == pending { pendingDiscard = nil }
+        await runDiscard(pending)
+    }
+
+    @MainActor
+    private func runDiscard(_ pending: PendingDiscard) async {
+        let paths = pending.paths
         composer.error = nil
         do {
             try await git.discardPaths(worktreePath: worktree.path, files: paths)

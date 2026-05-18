@@ -150,16 +150,13 @@ struct DiffTabView: View {
 
     private func stageHunk(_ hunk: ParsedDiff.Hunk) {
         Task {
-            let tracked = (try? await Process.git(
-                ["ls-files", "--error-unmatch", "--", relativePath],
-                cwd: worktreePath
-            ))?.exitCode == 0
+            let tracked = isFileTracked
             let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: tracked)
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
-            try? patch.write(to: tmp, atomically: true, encoding: .utf8)
             defer { try? FileManager.default.removeItem(at: tmp) }
             do {
+                try patch.write(to: tmp, atomically: true, encoding: .utf8)
                 let result = try await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)
                 if result.exitCode != 0 {
                     self.error = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -187,7 +184,6 @@ struct DiffTabView: View {
         Task {
             let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: true)
             do {
-                let git = GitService()
                 try await git.applyPatchReverse(worktreePath: worktreePath, patch: patch)
             } catch {
                 self.error = (error as NSError).localizedDescription

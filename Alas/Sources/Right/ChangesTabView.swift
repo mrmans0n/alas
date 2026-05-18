@@ -96,7 +96,10 @@ struct ChangesTabView: View {
             presenting: rps.pendingDiscard,
             actions: { _ in
                 Button("Discard", role: .destructive) {
-                    Task { @MainActor in await rps.confirmDiscard() }
+                    if let pending = rps.pendingDiscard {
+                        rps.pendingDiscard = nil
+                        Task { @MainActor in await rps.confirmDiscard(pending) }
+                    }
                 }
                 Button("Cancel", role: .cancel) {
                     rps.cancelDiscard()
