@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@Suite(.serialized)
 struct AgentHookSocketServerTests {
     private func tmpSocketDir() -> (dir: String, cleanup: () -> Void) {
         // Use /tmp directly: NSTemporaryDirectory() on macOS returns a path that
@@ -146,5 +147,26 @@ struct AgentHookSocketServerTests {
 
         server.shutdown()
         #expect(!FileManager.default.fileExists(atPath: path))
+    }
+
+    @Test func configureClientSocket_enablesNoSigPipe() throws {
+        var fds: [Int32] = [0, 0]
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
+            Issue.record("socketpair failed")
+            return
+        }
+        defer {
+            close(fds[0])
+            close(fds[1])
+        }
+
+        AgentHookSocketServer.configureClientSocket(fds[0])
+
+        var value: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        let result = getsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &value, &length)
+
+        #expect(result == 0)
+        #expect(value == 1)
     }
 }

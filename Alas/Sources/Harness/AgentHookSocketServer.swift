@@ -5,6 +5,7 @@ final class AgentHookSocketServer {
     private(set) var socketPath: String?
     private var listenTask: Task<Void, Never>?
     var onEvent: ((AgentHookEvent) -> Void)?
+    var onCLIRequest: ((AlasCLIRequest) async -> AlasCLIResponse)?
 
     static let maxPayloadSize = 65_536
 
@@ -79,21 +80,35 @@ final class AgentHookSocketServer {
                     continue
                 }
                 guard ready > 0 else { continue }
-                self?.acceptAndHandle(socketFD: socketFD)
+                await self?.acceptAndHandle(socketFD: socketFD)
             }
         }
         return true
     }
 
-    private func acceptAndHandle(socketFD: Int32) {
+    private func acceptAndHandle(socketFD: Int32) async {
         let clientFD = accept(socketFD, nil, nil)
         guard clientFD >= 0 else { return }
 
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        Self.configureClientSocket(clientFD)
 
         guard let data = Self.readPayload(from: clientFD) else {
             close(clientFD)
+            return
+        }
+
+        if Self.payloadKind(data) == "cli" {
+            guard let request = try? AlasCLIRequest.decode(from: data) else {
+                Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
+                return
+            }
+            let response: AlasCLIResponse
+            if let handler = onCLIRequest {
+                response = await handler(request)
+            } else {
+                response = .error("Alas CLI is not available.")
+            }
+            Self.sendResponse(clientFD: clientFD, response: response)
             return
         }
 
@@ -107,6 +122,11 @@ final class AgentHookSocketServer {
         } catch {
             Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
         }
+    }
+
+    private static func payloadKind(_ data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["kind"] as? String
     }
 
     static func readPayload(from clientFD: Int32) -> Data? {
@@ -137,6 +157,14 @@ final class AgentHookSocketServer {
         return nil
     }
 
+    static func configureClientSocket(_ clientFD: Int32) {
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var noSigPipe: Int32 = 1
+        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+    }
+
     private static func sendResponse(clientFD: Int32, ok: Bool, error: String? = nil) {
         var json: [String: Any] = ["ok": ok]
         if let error { json["error"] = error }
@@ -147,6 +175,23 @@ final class AgentHookSocketServer {
         data.withUnsafeBytes { buffer in
             guard let base = buffer.baseAddress else { return }
             _ = Darwin.write(clientFD, base, data.count)
+        }
+        close(clientFD)
+    }
+
+    private static func sendResponse(clientFD: Int32, response: AlasCLIResponse) {
+        do {
+            let data = try response.encode()
+            data.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                _ = Darwin.write(clientFD, base, data.count)
+            }
+        } catch {
+            let fallback = #"{"ok":false,"error":"Malformed response."}"#.data(using: .utf8)!
+            fallback.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                _ = Darwin.write(clientFD, base, fallback.count)
+            }
         }
         close(clientFD)
     }
