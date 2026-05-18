@@ -2,6 +2,11 @@ import Foundation
 
 @MainActor
 struct AlasCLICommandRouter {
+    private struct FileIdentity: Equatable {
+        let systemNumber: UInt64
+        let fileNumber: UInt64
+    }
+
     var sessionWorktreeId: (String) -> String?
     var originatingWorktree: (String) -> Worktree?
     var visibleWorktrees: () -> [Worktree]
@@ -71,7 +76,7 @@ struct AlasCLICommandRouter {
         return relativePathAndDepth(
             targetComponents: url.resolvingSymlinksInPath().standardizedFileURL.pathComponents,
             rootComponents: rootURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        )
+        ) ?? fileSystemRelativePathAndDepth(for: url, in: rootURL)
     }
 
     private func relativePathAndDepth(
@@ -83,6 +88,28 @@ struct AlasCLICommandRouter {
         let relative = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
         guard !relative.isEmpty else { return nil }
         return (relative, rootComponents.count)
+    }
+
+    private func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
+        guard let rootIdentity = fileIdentity(at: rootURL.path) else { return nil }
+        var ancestor = url.deletingLastPathComponent()
+        var relativeComponents = [url.lastPathComponent]
+
+        while ancestor.path != "/" {
+            if fileIdentity(at: ancestor.path) == rootIdentity {
+                return (relativeComponents.reversed().joined(separator: "/"), rootURL.pathComponents.count)
+            }
+            relativeComponents.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        return nil
+    }
+
+    private func fileIdentity(at path: String) -> FileIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let systemNumber = attributes[.systemNumber] as? NSNumber,
+              let fileNumber = attributes[.systemFileNumber] as? NSNumber else { return nil }
+        return FileIdentity(systemNumber: systemNumber.uint64Value, fileNumber: fileNumber.uint64Value)
     }
 
     private func fileExists(at url: URL) -> Bool {

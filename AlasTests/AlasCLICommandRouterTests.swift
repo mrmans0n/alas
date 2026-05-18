@@ -101,6 +101,38 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "Sources/App.swift")
     }
 
+    @Test func opensCaseVariantWorktreePathByRelativePathOnCaseInsensitiveVolumes() throws {
+        let realRoot = try makeFile("repo/Sources/App.swift")
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let caseVariantRoot = realRoot.deletingLastPathComponent().appendingPathComponent(realRoot.lastPathComponent.uppercased())
+        let caseVariantFile = caseVariantRoot.appendingPathComponent("Sources/App.swift")
+        guard FileManager.default.fileExists(atPath: caseVariantFile.path) else {
+            return
+        }
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: realRoot, status: .clean, lastActivity: Date()
+        )
+        var opened: [(worktreeId: String, relativePath: String)] = []
+
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in "wt1" },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
+            openExternalFile: { _, _ in Issue.record("expected relative open") },
+            activateApp: {}
+        )
+
+        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [caseVariantFile.path]))
+
+        #expect(response == .ok)
+        #expect(opened.count == 1)
+        #expect(opened[0].worktreeId == "wt1")
+        #expect(opened[0].relativePath == "Sources/App.swift")
+    }
+
     @Test func opensExternalFileOwnedByOriginatingWorktree() throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let external = try makeFile("external/note.txt")
