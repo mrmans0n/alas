@@ -160,7 +160,16 @@ struct DiffTabView: View {
     private func stageHunk(_ hunk: ParsedDiff.Hunk) {
         Task {
             let tracked = isFileTracked
-            let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: tracked)
+            // For untracked files we need the real file mode so `git apply
+            // --cached` doesn't drop the +x bit or rewrite a symlink as a
+            // regular file. Tracked patches ignore this argument.
+            let untrackedMode = Self.fileMode(at: worktreePath.appendingPathComponent(relativePath))
+            let patch = HunkPatchBuilder.patch(
+                file: relativePath,
+                hunk: hunk,
+                tracked: tracked,
+                untrackedMode: untrackedMode
+            )
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
             defer { try? FileManager.default.removeItem(at: tmp) }
@@ -211,6 +220,25 @@ struct DiffTabView: View {
             // See stageHunk: load() clears `error`, so only reload on success.
             if !didFail { await load() }
         }
+    }
+
+    /// Map a worktree file to the git mode string used in a `new file mode`
+    /// patch header. Symlinks → "120000", executable regular files → "100755",
+    /// everything else → "100644". Falls back to "100644" when the file isn't
+    /// readable (caller probably already errored out elsewhere).
+    static func fileMode(at url: URL) -> String {
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            if let type = attrs[.type] as? FileAttributeType, type == .typeSymbolicLink {
+                return "120000"
+            }
+            if let perms = attrs[.posixPermissions] as? NSNumber, perms.uintValue & 0o111 != 0 {
+                return "100755"
+            }
+        } catch {
+            // Fall through to default.
+        }
+        return HunkPatchBuilder.defaultUntrackedMode
     }
 }
 

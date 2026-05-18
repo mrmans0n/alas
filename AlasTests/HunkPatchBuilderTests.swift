@@ -51,6 +51,17 @@ struct HunkPatchBuilderTests {
         #expect(patch.contains("b/café/π.swift"))
     }
 
+    @Test func untrackedFilePatchUsesProvidedMode() {
+        // Stage hunk on a new executable script must emit `new file mode 100755`
+        // so `git apply --cached` doesn't drop the +x bit.
+        let h = hunk("@@ -0,0 +1,1 @@", [add("#!/bin/sh")])
+        let patch = HunkPatchBuilder.patch(
+            file: "run.sh", hunk: h, tracked: false, untrackedMode: "100755"
+        )
+        #expect(patch.contains("new file mode 100755"))
+        #expect(!patch.contains("new file mode 100644"))
+    }
+
     @Test func emitsNoTrailingNewlineSentinelAfterAffectedLines() {
         // Mark both the delete and add as missing their trailing newline.
         // The builder must re-emit the `\ No newline at end of file` marker

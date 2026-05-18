@@ -4,7 +4,20 @@ import Foundation
 /// Output is suitable for `git apply --cached` (stage) or `git apply --reverse`
 /// (discard) when paired with the right `tracked` flag.
 enum HunkPatchBuilder {
-    static func patch(file: String, hunk: ParsedDiff.Hunk, tracked: Bool) -> String {
+    /// Git's mode string for a regular non-executable file. Used as the
+    /// default `untrackedMode` when the caller doesn't know the source
+    /// file's actual mode. Real callers staging from disk should probe
+    /// the file (executable bit / symlink) and pass the right value so
+    /// `git apply --cached` doesn't drop +x or turn a symlink into a regular
+    /// file.
+    static let defaultUntrackedMode = "100644"
+
+    static func patch(
+        file: String,
+        hunk: ParsedDiff.Hunk,
+        tracked: Bool,
+        untrackedMode: String = defaultUntrackedMode
+    ) -> String {
         var bodyLines: [String] = []
         for line in hunk.lines {
             let sigil: String
@@ -31,7 +44,7 @@ enum HunkPatchBuilder {
         } else {
             headerLines = [
                 "diff --git a/\(file) b/\(file)",
-                "new file mode 100644",
+                "new file mode \(untrackedMode)",
                 "--- /dev/null",
                 "+++ b/\(file)",
                 hunk.header,
