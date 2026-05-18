@@ -5,6 +5,14 @@ struct ChangedRow: View {
     var depth: Int = 0
     let onSelect: () -> Void
     var onStage: (() -> Void)? = nil
+    var onOpenFile:       (() -> Void)? = nil
+    var onCopyRelative:   (() -> Void)? = nil
+    var onCopyFull:       (() -> Void)? = nil
+    var onRevealInFinder: (() -> Void)? = nil
+    var onCopyDiff:       (() -> Void)? = nil
+    var onDiscard:        (() -> Void)? = nil
+    var openFileEnabled:  Bool = true
+    var ignoreMenu:       AnyView? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -32,6 +40,24 @@ struct ChangedRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Open File") { onOpenFile?() }
+                .disabled(!openFileEnabled || onOpenFile == nil)
+            Button("Copy Relative Path") { onCopyRelative?() }
+            Button("Copy Full Path") { onCopyFull?() }
+            Button("Reveal in Finder") { onRevealInFinder?() }
+            Divider()
+            Button("Copy Diff") { onCopyDiff?() }
+            Divider()
+            if onStage != nil {
+                Button(file.stage == .staged ? "Unstage" : "Stage") { onStage?() }
+            }
+            Button("Discard Changes...") { onDiscard?() }
+            if let ignoreMenu {
+                Divider()
+                ignoreMenu
+            }
+        }
     }
 }
 

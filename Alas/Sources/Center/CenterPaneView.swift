@@ -95,13 +95,20 @@ struct CenterPaneView: View {
                         let openAvailable = DiffOpenFileAvailability.isAvailable(
                             worktreePath: worktree.path, relativePath: s.relativePath
                         )
+                        let rps = state.rightPaneStore.state(
+                            for: worktree,
+                            baseBranch: state.config.worktrees.baseBranch
+                        )
                         DiffTabView(
                             worktreePath: worktree.path,
                             relativePath: s.relativePath,
                             staged: s.staged,
                             onOpenFile: openAvailable
                                 ? { state.openFile(relativePath: s.relativePath, worktreeId: worktree.id) }
-                                : nil
+                                : nil,
+                            onRequestDiscardFile: {
+                                rps.requestDiscardFile(path: s.relativePath)
+                            }
                         )
                     case .commit(let s):
                         CommitTabView(

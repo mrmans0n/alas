@@ -6,6 +6,11 @@ import Observation
 final class RightPaneStore {
     private var states: [String: RightPaneState] = [:]
 
+    /// Weak back-reference used to close diff tabs after a successful discard.
+    /// Set by `AppState` after both objects exist. Weak so the store doesn't
+    /// retain the app.
+    weak var appState: AppState?
+
     func state(for worktree: Worktree, baseBranch: String) -> RightPaneState {
         if let existing = states[worktree.id] {
             // Keep the cached state in sync with the currently-configured
@@ -21,14 +26,22 @@ final class RightPaneStore {
             return existing
         }
         let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+        let worktreeId = worktree.id
+        new.closeDiffTabs = { [weak self] paths in
+            guard let app = self?.appState else { return }
+            let pathSet = Set(paths)
+            for tab in app.tabs.tabs(forWorktree: worktreeId) {
+                if case .diff(let s) = tab, pathSet.contains(s.relativePath) {
+                    app.closeTab(worktreeId: worktreeId, tabId: s.id)
+                }
+            }
+        }
         states[worktree.id] = new
         new.start()
         return new
     }
 
     func releaseUnselected(keep id: String) {
-        // No-op for v1; states are cheap to keep.
-        // Stop watchers for backgrounded worktrees if memory becomes an issue.
         _ = id
     }
 }

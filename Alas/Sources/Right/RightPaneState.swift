@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import os
@@ -41,6 +42,13 @@ final class RightPaneState {
     /// `AppConfig.worktrees.baseBranch` when the user edits it in Settings,
     /// without throwing away the rest of the cached state.
     var baseBranch: String
+
+    var pendingDiscard: PendingDiscard? = nil
+
+    /// Injected by `RightPaneStore` after creation so `confirmDiscard` can
+    /// close any open diff tabs whose path was just discarded. Nil in tests
+    /// that construct `RightPaneState` directly.
+    var closeDiffTabs: (([String]) -> Void)? = nil
 
     private let git = GitService()
     private let watcher: WorktreeWatcher
@@ -282,6 +290,39 @@ final class RightPaneState {
         }
     }
 
+    /// Paths to discard for the given file path. Expands staged renames into
+    /// both new and original paths so the deletion of the old side is also
+    /// restored. Returns `[]` if the path is not in `changes` (stale request).
+    static func discardPaths(forFileAt path: String, in changes: [ChangedFile]) -> [String] {
+        guard let file = changes.first(where: { $0.path == path }) else { return [] }
+        return unstagePaths(for: file)
+    }
+
+    /// Paths to discard for every change under a folder (recursive). Folders
+    /// in the Changes tree are virtual — built from changed paths only — so
+    /// a prefix match against `"<folder>/"` is exhaustive. Staged renames
+    /// under the folder include their original path even if the origin lives
+    /// outside the folder (rare but possible after a refactor).
+    static func discardPaths(forFolderAt folder: String, in changes: [ChangedFile]) -> [String] {
+        let prefix = folder.hasSuffix("/") ? folder : folder + "/"
+        let matching = changes.filter { $0.path.hasPrefix(prefix) }
+        return matching.flatMap(unstagePaths(for:))
+    }
+
+    /// Every changed path in the worktree (staged + unstaged + untracked),
+    /// with staged renames expanded.
+    static func discardPaths(forAllIn changes: [ChangedFile]) -> [String] {
+        // Deduplicate while preserving first-seen order.
+        var seen = Set<String>()
+        var out: [String] = []
+        for file in changes {
+            for p in unstagePaths(for: file) where seen.insert(p).inserted {
+                out.append(p)
+            }
+        }
+        return out
+    }
+
     func stageAll(_ files: [ChangedFile]) {
         let paths = files.map(\.path)
         composer.error = nil
@@ -299,6 +340,136 @@ final class RightPaneState {
             do { try await git.unstageAll(worktreePath: worktree.path, files: paths) }
             catch { self.composer.error = (error as NSError).localizedDescription }
             await self.refresh()
+        }
+    }
+
+    func requestDiscardFile(path: String) {
+        let paths = Self.discardPaths(forFileAt: path, in: changes)
+        guard !paths.isEmpty else { return }
+        pendingDiscard = PendingDiscard(target: .file(path: path), paths: paths)
+    }
+
+    func requestDiscardFolder(path: String) {
+        let paths = Self.discardPaths(forFolderAt: path, in: changes)
+        // Folder count = distinct ChangedFile entries under the prefix, not
+        // path count (a staged rename contributes two paths but one file).
+        let prefix = path.hasSuffix("/") ? path : path + "/"
+        let fileCount = changes.filter { $0.path.hasPrefix(prefix) }.count
+        guard fileCount > 0 else { return }
+        pendingDiscard = PendingDiscard(
+            target: .folder(path: path, fileCount: fileCount),
+            paths: paths
+        )
+    }
+
+    func requestDiscardAll() {
+        let paths = Self.discardPaths(forAllIn: changes)
+        guard !changes.isEmpty else { return }
+        pendingDiscard = PendingDiscard(
+            target: .all(fileCount: changes.count),
+            paths: paths
+        )
+    }
+
+    func cancelDiscard() {
+        pendingDiscard = nil
+    }
+
+    @MainActor
+    func confirmDiscard() async {
+        guard let pending = pendingDiscard else { return }
+        pendingDiscard = nil
+        await runDiscard(pending)
+    }
+
+    /// Run a previously-snapshotted discard. Used by view-layer callers that
+    /// need to capture and clear `pendingDiscard` synchronously in the alert
+    /// button action — the alert's `isPresented` binding fires its `set`
+    /// closure synchronously on dismissal, which would clear `pendingDiscard`
+    /// before the async `confirmDiscard()` could read it.
+    @MainActor
+    func confirmDiscard(_ pending: PendingDiscard) async {
+        // Defensive: if the caller didn't clear `pendingDiscard`, do it now.
+        if pendingDiscard == pending { pendingDiscard = nil }
+        await runDiscard(pending)
+    }
+
+    @MainActor
+    private func runDiscard(_ pending: PendingDiscard) async {
+        let paths = pending.paths
+        composer.error = nil
+        do {
+            try await git.discardPaths(worktreePath: worktree.path, files: paths)
+        } catch {
+            composer.error = (error as NSError).localizedDescription
+            return
+        }
+        await refresh()
+        closeDiffTabs?(paths)
+    }
+
+    /// Run `git diff HEAD -- <file>` (or `--cached` on unborn HEAD, or
+    /// `/dev/null` for untracked) and put the unified-diff output on the
+    /// general pasteboard. `renameFrom` is the staged-rename origin path
+    /// (from `ChangedFile.renameFrom`); when present it's included in the
+    /// pathspec so `git diff` emits the rename-from/rename-to header
+    /// instead of an add-only patch. Best-effort: errors are surfaced via
+    /// `composer.error`. Single source of truth so the context menu and
+    /// any future "Copy Diff" affordances agree.
+    func copyDiff(for path: String, renameFrom: String? = nil) {
+        let wt = worktree.path
+        Task { @MainActor in
+            do {
+                // A staged deletion is *not* in the index (`ls-files` returns
+                // non-zero) but IS in HEAD — falling back to `--no-index` for
+                // that case yields an empty patch. Probe HEAD via `cat-file`
+                // so staged D entries still route through HEAD-based diff.
+                let inIndex = (try? await Process.git(
+                    ["ls-files", "--error-unmatch", "--", path],
+                    cwd: wt
+                ))?.exitCode == 0
+                let head = (try? await self.git.hasHead(worktreePath: wt)) ?? true
+                let inHead: Bool
+                if head {
+                    inHead = (try? await Process.git(
+                        ["cat-file", "-e", "HEAD:\(path)"],
+                        cwd: wt
+                    ))?.exitCode == 0
+                } else {
+                    inHead = false
+                }
+                // For staged renames, `git diff HEAD -- <new>` strips the
+                // rename header (emits an add-only patch). Pass both paths
+                // in the pathspec so the rename-from/rename-to header is
+                // preserved. Only relevant when we're using a HEAD-based
+                // diff; the rename concept doesn't apply to untracked or
+                // unborn-HEAD cases.
+                let extraPath: String? = (renameFrom?.isEmpty == false) ? renameFrom : nil
+                let args: [String]
+                if head, inIndex || inHead {
+                    var a = ["diff", "--no-color", "HEAD", "--", path]
+                    if let extraPath { a.append(extraPath) }
+                    args = a
+                } else if !head, inIndex {
+                    // Unborn HEAD: staged-add — diff index vs empty tree.
+                    args = ["diff", "--no-color", "--cached", "--", path]
+                } else {
+                    args = ["diff", "--no-color", "--no-index", "--", "/dev/null", path]
+                }
+                let result = try await Process.git(args, cwd: wt)
+                // `--no-index` exits 1 when there ARE differences (the expected
+                // case for an untracked file).
+                if result.exitCode > 1 {
+                    self.composer.error = result.stderr
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return
+                }
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(result.stdout, forType: .string)
+            } catch {
+                self.composer.error = (error as NSError).localizedDescription
+            }
         }
     }
 

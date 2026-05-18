@@ -5,6 +5,7 @@ struct DiffTabView: View {
     let relativePath: String
     let staged: Bool
     let onOpenFile: (() -> Void)?
+    let onRequestDiscardFile: (() -> Void)?
     @Environment(\.theme) var theme
 
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
@@ -13,12 +14,23 @@ struct DiffTabView: View {
     @State private var loaded = false
     @State private var error: String?
     @State private var activeLoadKey: String?
+    @State private var confirmingDiscardHunk: ParsedDiff.Hunk? = nil
+    @State private var isFileTracked: Bool = true
+    @State private var isFileDeleted: Bool = false
 
     private let git = GitService()
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let error {
+                Text(error)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("del"))
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(theme.color("bg-2"))
+            }
             ScrollView {
                 if !loaded {
                     ProgressView().padding()
@@ -27,7 +39,13 @@ struct DiffTabView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
-                            HunkView(hunk: hunk, fileExtension: (relativePath as NSString).pathExtension)
+                            let actions = stagedHunkActions(hunk: hunk)
+                            HunkView(
+                                hunk: hunk,
+                                fileExtension: (relativePath as NSString).pathExtension,
+                                onStage: actions.stage,
+                                onDiscard: actions.discard
+                            )
                         }
                     }
                     .padding(.vertical, 8)
@@ -36,6 +54,25 @@ struct DiffTabView: View {
         }
         .background(theme.color("bg-1"))
         .task(id: loadKey) { await load() }
+        .alert(
+            "Discard this hunk in \u{201C}\((relativePath as NSString).lastPathComponent)\u{201D}?",
+            isPresented: Binding(
+                get: { confirmingDiscardHunk != nil },
+                set: { if !$0 { confirmingDiscardHunk = nil } }
+            ),
+            actions: {
+                Button("Discard", role: .destructive) {
+                    if let h = confirmingDiscardHunk {
+                        confirmingDiscardHunk = nil
+                        performDiscardHunk(h)
+                    }
+                }
+                Button("Cancel", role: .cancel) { confirmingDiscardHunk = nil }
+            },
+            message: {
+                Text("This permanently removes the selected hunk from your working copy. This cannot be undone.")
+            }
+        )
     }
 
     private var loadKey: String {
@@ -71,10 +108,9 @@ struct DiffTabView: View {
                 if let onOpenFile {
                     AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
                 }
-                if !staged {
-                    AlasButton(title: "Stage hunk", style: .subtle, action: stageHunk)
+                if let onRequestDiscardFile {
+                    AlasButton(title: "Discard Changes...", style: .subtle, action: onRequestDiscardFile)
                 }
-                AlasButton(title: "Discard", style: .subtle, action: discard)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -95,11 +131,24 @@ struct DiffTabView: View {
             let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
             let loadedTotalAdd = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count
             let loadedTotalDel = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count
+            let tracked = (try? await Process.git(
+                ["ls-files", "--error-unmatch", "--", relativePath],
+                cwd: worktreePath
+            ))?.exitCode == 0
+            // A tracked file that's gone from disk is an unstaged deletion.
+            // The diff for it has `+++ /dev/null`, so reverse-applying a
+            // per-hunk patch (which uses `+++ b/<path>`) would fail — hide
+            // Discard hunk in that case and rely on file-level Discard.
+            let deleted = tracked && !FileManager.default.fileExists(
+                atPath: worktreePath.appendingPathComponent(relativePath).path
+            )
 
             guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
             diff = loadedDiff
             totalAdd = loadedTotalAdd
             totalDel = loadedTotalDel
+            isFileTracked = tracked
+            isFileDeleted = deleted
             loaded = true
         } catch {
             guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
@@ -108,95 +157,116 @@ struct DiffTabView: View {
         }
     }
 
-    private func stageHunk() {
+    private func stageHunk(_ hunk: ParsedDiff.Hunk) {
         Task {
-            guard let hunk = diff.hunks.first else { return }
-            let patchLines = hunk.lines.map { line -> String in
-                switch line.kind {
-                case .add:     return "+\(line.text)"
-                case .delete:  return "-\(line.text)"
-                case .context: return " \(line.text)"
+            let tracked = isFileTracked
+            // For untracked files we need the real file mode so `git apply
+            // --cached` doesn't drop the +x bit or rewrite a symlink as a
+            // regular file. Tracked patches ignore this argument.
+            let untrackedMode = Self.fileMode(at: worktreePath.appendingPathComponent(relativePath))
+            let patch = HunkPatchBuilder.patch(
+                file: relativePath,
+                hunk: hunk,
+                tracked: tracked,
+                untrackedMode: untrackedMode
+            )
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            var didFail = false
+            do {
+                try patch.write(to: tmp, atomically: true, encoding: .utf8)
+                let result = try await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)
+                if result.exitCode != 0 {
+                    self.error = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    didFail = true
                 }
+            } catch {
+                self.error = (error as NSError).localizedDescription
+                didFail = true
             }
-            // For untracked files the diff base is /dev/null; the patch header
-            // must reflect that or `git apply --cached` rejects it with
-            // "does not exist in index". For tracked files the conventional
-            // a/<path> b/<path> headers work.
-            let tracked = (try? await Process.git(
-                ["ls-files", "--error-unmatch", "--", relativePath],
-                cwd: worktreePath
-            ))?.exitCode == 0
-            let header: [String]
-            if tracked {
-                header = [
-                    "diff --git a/\(relativePath) b/\(relativePath)",
-                    "--- a/\(relativePath)",
-                    "+++ b/\(relativePath)",
-                    hunk.header,
-                ]
-            } else {
-                header = [
-                    "diff --git a/\(relativePath) b/\(relativePath)",
-                    "new file mode 100644",
-                    "--- /dev/null",
-                    "+++ b/\(relativePath)",
-                    hunk.header,
-                ]
-            }
-            let patch = header.joined(separator: "\n") + "\n"
-                + patchLines.joined(separator: "\n") + "\n"
-            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
-            try? patch.write(to: tmp, atomically: true, encoding: .utf8)
-            _ = try? await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)
-            try? FileManager.default.removeItem(at: tmp)
-            await load()
+            // Only reload on success — load() resets `error` at its start, so
+            // calling it after a failure would erase the error we just set
+            // and make the action look like a silent no-op.
+            if !didFail { await load() }
         }
     }
 
-    private func discard() {
-        // `git checkout -- <path>` only restores a TRACKED file's worktree
-        // copy from the index. It silently no-ops for untracked files (still
-        // there) and doesn't unstage staged changes. Discard from the diff
-        // view is opened from `git status --porcelain=v2` entries which
-        // include both — handle each case explicitly:
-        //
-        //   tracked   → `git restore --staged --worktree --source=HEAD --` so
-        //               both the index and the worktree go back to HEAD,
-        //               covering staged-only, unstaged-only, and mixed states.
-        //   untracked → `rm -f` since git won't touch it.
+    private func stagedHunkActions(hunk: ParsedDiff.Hunk) -> (stage: (() -> Void)?, discard: (() -> Void)?) {
+        // Staged view: no per-hunk actions for now (out of scope).
+        if staged { return (nil, nil) }
+        // Unstaged tracked, file exists: stage + discard.
+        // Unstaged untracked: stage only (Discard hidden — whole file IS the hunk).
+        // Unstaged tracked, file deleted: stage only (Discard hidden — the
+        // generated patch would have `+++ b/<path>` but reverse-apply needs
+        // /dev/null; file-level Discard restores the whole file).
+        let stage: () -> Void = { stageHunk(hunk) }
+        let discard: (() -> Void)? = (isFileTracked && !isFileDeleted)
+            ? { confirmingDiscardHunk = hunk }
+            : nil
+        return (stage, discard)
+    }
+
+    private func performDiscardHunk(_ hunk: ParsedDiff.Hunk) {
         Task {
-            let tracked = (try? await Process.git(
-                ["ls-files", "--error-unmatch", "--", relativePath],
-                cwd: worktreePath
-            ))?.exitCode == 0
-            if tracked {
-                _ = try? await Process.git(
-                    ["restore", "--staged", "--worktree", "--source=HEAD", "--", relativePath],
-                    cwd: worktreePath
-                )
-            } else {
-                let absolute = worktreePath.appendingPathComponent(relativePath)
-                try? FileManager.default.removeItem(at: absolute)
+            let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: true)
+            var didFail = false
+            do {
+                try await git.applyPatchReverse(worktreePath: worktreePath, patch: patch)
+            } catch {
+                self.error = (error as NSError).localizedDescription
+                didFail = true
             }
-            await load()
+            // See stageHunk: load() clears `error`, so only reload on success.
+            if !didFail { await load() }
         }
+    }
+
+    /// Map a worktree file to the git mode string used in a `new file mode`
+    /// patch header. Symlinks → "120000", executable regular files → "100755",
+    /// everything else → "100644". Falls back to "100644" when the file isn't
+    /// readable (caller probably already errored out elsewhere).
+    static func fileMode(at url: URL) -> String {
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            if let type = attrs[.type] as? FileAttributeType, type == .typeSymbolicLink {
+                return "120000"
+            }
+            if let perms = attrs[.posixPermissions] as? NSNumber, perms.uintValue & 0o111 != 0 {
+                return "100755"
+            }
+        } catch {
+            // Fall through to default.
+        }
+        return HunkPatchBuilder.defaultUntrackedMode
     }
 }
 
 struct HunkView: View {
     let hunk: ParsedDiff.Hunk
     let fileExtension: String
+    var onStage:   (() -> Void)? = nil
+    var onDiscard: (() -> Void)? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(hunk.header)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(theme.color("fg-dim"))
-                .padding(.horizontal, 14).padding(.vertical, 4)
-                .background(theme.color("bg-2"))
-                .overlay(Divider().opacity(0.5), alignment: .top)
-                .overlay(Divider().opacity(0.5), alignment: .bottom)
+            HStack(spacing: 8) {
+                Text(hunk.header)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-dim"))
+                Spacer(minLength: 8)
+                if onStage != nil {
+                    AlasButton(title: "Stage hunk", style: .subtle, action: { onStage?() })
+                }
+                if onDiscard != nil {
+                    AlasButton(title: "Discard hunk...", style: .subtle, action: { onDiscard?() })
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 4)
+            .background(theme.color("bg-2"))
+            .overlay(Divider().opacity(0.5), alignment: .top)
+            .overlay(Divider().opacity(0.5), alignment: .bottom)
             ForEach(Array(hunk.lines.enumerated()), id: \.offset) { (_, line) in
                 HStack(alignment: .top, spacing: 16) {
                     Text(lineMarker(line))

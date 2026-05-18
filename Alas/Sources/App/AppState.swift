@@ -214,6 +214,7 @@ final class AppState {
         // happens async in RootView.task), so worktreesByProject is empty and
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
+        rightPaneStore.appState = self
     }
 
     /// All worktree IDs currently known to the projects manager (including
