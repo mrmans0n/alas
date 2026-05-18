@@ -282,6 +282,39 @@ final class RightPaneState {
         }
     }
 
+    /// Paths to discard for the given file path. Expands staged renames into
+    /// both new and original paths so the deletion of the old side is also
+    /// restored. Returns `[]` if the path is not in `changes` (stale request).
+    static func discardPaths(forFileAt path: String, in changes: [ChangedFile]) -> [String] {
+        guard let file = changes.first(where: { $0.path == path }) else { return [] }
+        return unstagePaths(for: file)
+    }
+
+    /// Paths to discard for every change under a folder (recursive). Folders
+    /// in the Changes tree are virtual — built from changed paths only — so
+    /// a prefix match against `"<folder>/"` is exhaustive. Staged renames
+    /// under the folder include their original path even if the origin lives
+    /// outside the folder (rare but possible after a refactor).
+    static func discardPaths(forFolderAt folder: String, in changes: [ChangedFile]) -> [String] {
+        let prefix = folder.hasSuffix("/") ? folder : folder + "/"
+        let matching = changes.filter { $0.path.hasPrefix(prefix) }
+        return matching.flatMap(unstagePaths(for:))
+    }
+
+    /// Every changed path in the worktree (staged + unstaged + untracked),
+    /// with staged renames expanded.
+    static func discardPaths(forAllIn changes: [ChangedFile]) -> [String] {
+        // Deduplicate while preserving first-seen order.
+        var seen = Set<String>()
+        var out: [String] = []
+        for file in changes {
+            for p in unstagePaths(for: file) where seen.insert(p).inserted {
+                out.append(p)
+            }
+        }
+        return out
+    }
+
     func stageAll(_ files: [ChangedFile]) {
         let paths = files.map(\.path)
         composer.error = nil
