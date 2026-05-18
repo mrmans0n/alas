@@ -151,4 +151,45 @@ struct GitIgnoreServiceTests {
         #expect(written == repo.appendingPathComponent(".gitignore"))
         #expect(try read(written) == "top.log\n")
     }
+
+    @Test func appendsToInfoExclude() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let exclude = repo
+            .appendingPathComponent(".git")
+            .appendingPathComponent("info")
+            .appendingPathComponent("exclude")
+
+        // `git init` typically creates .git/info/exclude with a header comment;
+        // overwrite with empty so we can assert exact contents.
+        try "".write(to: exclude, atomically: true, encoding: .utf8)
+
+        let written = try GitIgnoreService.appendIgnore(
+            entryPath: "secret.local",
+            isDirectory: false,
+            destination: .infoExclude,
+            repoURL: repo
+        )
+
+        #expect(written == exclude)
+        #expect(try read(exclude) == "secret.local\n")
+    }
+
+    @Test func appendsToInfoExcludeCreatingDirectoryIfMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let info = repo.appendingPathComponent(".git").appendingPathComponent("info")
+        try? FileManager.default.removeItem(at: info)
+        #expect(!FileManager.default.fileExists(atPath: info.path))
+
+        let written = try GitIgnoreService.appendIgnore(
+            entryPath: "dropped.local",
+            isDirectory: false,
+            destination: .infoExclude,
+            repoURL: repo
+        )
+
+        #expect(written == info.appendingPathComponent("exclude"))
+        #expect(try read(written) == "dropped.local\n")
+    }
 }
