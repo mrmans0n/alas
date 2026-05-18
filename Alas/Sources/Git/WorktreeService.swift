@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct WorktreeService {
@@ -113,14 +114,10 @@ struct WorktreeService {
             fallbackArgs = ["worktree", "add", destination.path, "-b", branch, base]
         }
 
-        let lfsOverride = [
-            "-c", "filter.lfs.process=",
-            "-c", "filter.lfs.smudge=",
-            "-c", "filter.lfs.clean=",
-            "-c", "filter.lfs.required=false",
-            "-c", "core.hooksPath=/dev/null"
-        ]
-        let fallbackResult = try await Process.git(lfsOverride + fallbackArgs, cwd: repoPath)
+        let fallbackResult = try await Process.git(
+            Self.lfsFilterOverride + ["-c", "core.hooksPath=/dev/null"] + fallbackArgs,
+            cwd: repoPath
+        )
         guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
         return makeWorktree(destination: destination, branch: branch, projectId: projectId)
     }
@@ -139,7 +136,21 @@ struct WorktreeService {
     ) async throws {
         var args = ["worktree", "remove", worktree.path.path]
         if force { args.append("--force") }
-        let result = try await Process.git(args, cwd: repoPath)
+        var result = try await Process.git(args, cwd: repoPath)
+        if result.exitCode != 0 {
+            if Self.looksLikeMissingLFS(result.stderr) {
+                result = try await Process.git(Self.lfsFilterOverride + args, cwd: repoPath)
+            }
+            if !force,
+               result.exitCode != 0,
+               Self.looksLikeDirtyWorktreeRemoveError(result.stderr),
+               try await canForceRemoveAfterMissingLFS(worktree.path) {
+                result = try await Process.git(
+                    Self.lfsFilterOverride + ["worktree", "remove", worktree.path.path, "--force"],
+                    cwd: repoPath
+                )
+            }
+        }
         if result.exitCode != 0 {
             // Treat any thrown helper error (timeout, malformed submodule,
             // etc.) as "couldn't verify clean" so we propagate the original
@@ -185,10 +196,24 @@ struct WorktreeService {
 
     // MARK: - Helpers
 
+    private static let lfsFilterOverride = [
+        "-c", "filter.lfs.process=",
+        "-c", "filter.lfs.smudge=",
+        "-c", "filter.lfs.clean=",
+        "-c", "filter.lfs.required=false"
+    ]
+
     private static func looksLikeMissingLFS(_ stderr: String) -> Bool {
         let lower = stderr.lowercased()
         return (lower.contains("command not found") || lower.contains("not found"))
             && (lower.contains("git-lfs") || lower.contains("filter-process"))
+    }
+
+    private static func looksLikeDirtyWorktreeRemoveError(_ stderr: String) -> Bool {
+        let lower = stderr.lowercased()
+        return lower.contains("contains modified or untracked files")
+            || lower.contains("is dirty")
+            || lower.contains("dirty worktree")
     }
 
     private static func looksLikeSubmoduleWorktreeRemoveError(_ stderr: String) -> Bool {
@@ -278,6 +303,119 @@ struct WorktreeService {
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func canForceRemoveAfterMissingLFS(_ path: URL) async throws -> Bool {
+        guard try await isWorktreeCleanAllowingSmudgedLFS(path) else { return false }
+        let subsClean = try await areInitializedSubmodulesClean(path)
+        guard subsClean else { return false }
+        return try await initializedSubmodulesHaveNoLocalState(path)
+    }
+
+    private func isWorktreeCleanAllowingSmudgedLFS(_ path: URL) async throws -> Bool {
+        let result = try await Process.git(
+            Self.lfsFilterOverride + [
+                "status", "--porcelain=v2", "-z",
+                "--ignore-submodules=none", "--untracked-files=all"
+            ],
+            cwd: path
+        )
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+
+        let records = result.stdout.split(separator: "\u{0}", omittingEmptySubsequences: true)
+        for record in records {
+            if record.hasPrefix("? ") { return false }
+            guard record.hasPrefix("1 ") else { return false }
+
+            let fields = record.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: false)
+            guard fields.count == 9 else { return false }
+            let xy = fields[1]
+            guard xy.count == 2,
+                  xy.first == ".",
+                  xy.last == "M",
+                  fields[4] == fields[5]
+            else { return false }
+
+            let relativePath = String(fields[8])
+            guard try await isCleanLFSFile(relativePath, in: path) else { return false }
+        }
+        return true
+    }
+
+    private func isCleanLFSFile(_ relativePath: String, in worktreePath: URL) async throws -> Bool {
+        guard try await usesLFSFilter(relativePath, in: worktreePath),
+              let pointer = try await indexLFSPointer(relativePath, in: worktreePath)
+        else { return false }
+
+        let fileURL = worktreePath.appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return false }
+        let pointerData = Data(pointer.raw.utf8)
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileSize = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+        if fileSize == UInt64(pointerData.count),
+           let data = try? Data(contentsOf: fileURL),
+           data == pointerData {
+            return true
+        }
+
+        let actual = try sha256AndSize(of: fileURL)
+        return actual.oid == pointer.oid && actual.size == pointer.size
+    }
+
+    private func usesLFSFilter(_ relativePath: String, in worktreePath: URL) async throws -> Bool {
+        let result = try await Process.git(["check-attr", "-z", "filter", "--", relativePath], cwd: worktreePath)
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        let parts = result.stdout.split(separator: "\u{0}", omittingEmptySubsequences: false)
+        return parts.count >= 3 && parts[2] == "lfs"
+    }
+
+    private func indexLFSPointer(_ relativePath: String, in worktreePath: URL) async throws -> LFSPointer? {
+        let listed = try await Process.git(["ls-files", "-s", "--", relativePath], cwd: worktreePath)
+        guard listed.exitCode == 0 else { throw WorktreeError.gitFailed(listed.stderr) }
+        guard let sha = listed.stdout.split(whereSeparator: \.isWhitespace).dropFirst().first else {
+            return nil
+        }
+
+        let blob = try await Process.git(["cat-file", "-p", String(sha)], cwd: worktreePath)
+        guard blob.exitCode == 0 else { throw WorktreeError.gitFailed(blob.stderr) }
+        return Self.parseLFSPointer(blob.stdout)
+    }
+
+    private func sha256AndSize(of fileURL: URL) throws -> (oid: String, size: UInt64) {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        var size: UInt64 = 0
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            size += UInt64(chunk.count)
+            hasher.update(data: chunk)
+        }
+        let oid = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return (oid, size)
+    }
+
+    private struct LFSPointer {
+        let raw: String
+        let oid: String
+        let size: UInt64
+    }
+
+    private static func parseLFSPointer(_ text: String) -> LFSPointer? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard lines.first == "version https://git-lfs.github.com/spec/v1" else { return nil }
+
+        var oid: String?
+        var size: UInt64?
+        for line in lines {
+            if line.hasPrefix("oid sha256:") {
+                oid = String(line.dropFirst("oid sha256:".count))
+            } else if line.hasPrefix("size ") {
+                size = UInt64(line.dropFirst("size ".count))
+            }
+        }
+        guard let oid, oid.count == 64, let size else { return nil }
+        return LFSPointer(raw: text, oid: oid, size: size)
     }
 
     private func existingWorktree(

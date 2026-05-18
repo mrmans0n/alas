@@ -124,6 +124,197 @@ extension WorktreeServiceTests {
         let listed = try await svc.list(repoPath: repo, projectId: "p")
         #expect(listed.count == 1) // only main remains
     }
+
+    @Test func removeRetriesWithoutLFSFiltersWhenGitStatusRequiresMissingLFS() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let lfsOverride = [
+            "-c", "filter.lfs.process=",
+            "-c", "filter.lfs.smudge=",
+            "-c", "filter.lfs.clean=",
+            "-c", "filter.lfs.required=false"
+        ]
+        try "*.bin filter=lfs diff=lfs merge=lfs -text\n".write(
+            to: repo.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let pointer = """
+        version https://git-lfs.github.com/spec/v1
+        oid sha256:\(String(repeating: "0", count: 64))
+        size 1
+
+        """
+        try pointer.write(
+            to: repo.appendingPathComponent("data.bin"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
+        _ = try await Process.git(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-missing-lfs-remove")
+        let branch = "feat/missing-lfs-remove"
+        _ = try await Process.git(
+            lfsOverride + ["worktree", "add", "-q", dest.path, "-b", branch],
+            cwd: repo
+        )
+        _ = try await Process.git(["config", "filter.lfs.process", "missing-git-lfs filter-process"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.clean", "missing-git-lfs clean -- %f"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.smudge", "missing-git-lfs smudge -- %f"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: repo)
+
+        let wt = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: "p",
+            name: branch,
+            branch: branch,
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        try await WorktreeService().remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    @Test func removePreservesSmudgedLFSCleanSemanticsWhenGitLFSIsMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let lfsOverride = [
+            "-c", "filter.lfs.process=",
+            "-c", "filter.lfs.smudge=",
+            "-c", "filter.lfs.clean=",
+            "-c", "filter.lfs.required=false"
+        ]
+        try "*.bin filter=lfs diff=lfs merge=lfs -text\n".write(
+            to: repo.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let smudgedContent = "real lfs content"
+        let dataPath = repo.appendingPathComponent("data.bin")
+        try smudgedContent.write(to: dataPath, atomically: true, encoding: .utf8)
+        let sha = try await Process.run("/usr/bin/shasum", args: ["-a", "256", dataPath.path])
+            .stdout
+            .split(separator: " ")
+            .first
+            .map(String.init) ?? ""
+        let pointer = """
+        version https://git-lfs.github.com/spec/v1
+        oid sha256:\(sha)
+        size \(Data(smudgedContent.utf8).count)
+
+        """
+        try pointer.write(to: dataPath, atomically: true, encoding: .utf8)
+        _ = try await Process.git(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
+        _ = try await Process.git(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-smudged-lfs-remove")
+        let branch = "feat/smudged-lfs-remove"
+        _ = try await Process.git(
+            lfsOverride + ["worktree", "add", "-q", dest.path, "-b", branch],
+            cwd: repo
+        )
+        try smudgedContent.write(
+            to: dest.appendingPathComponent("data.bin"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let fakeClean = """
+        /bin/sh -c '/bin/cat >/dev/null; /usr/bin/printf "version https://git-lfs.github.com/spec/v1\\noid sha256:\(sha)\\nsize \(Data(smudgedContent.utf8).count)\\n"'
+        """
+        _ = try await Process.git(["-c", "filter.lfs.clean=\(fakeClean)", "add", "data.bin"], cwd: dest)
+        _ = try await Process.git(["config", "filter.lfs.process", "missing-git-lfs filter-process"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.clean", "missing-git-lfs clean -- %f"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.smudge", "missing-git-lfs smudge -- %f"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: repo)
+
+        let wt = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: "p",
+            name: branch,
+            branch: branch,
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        try await WorktreeService().remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    @Test func removeDoesNotForceDeleteSmudgedLFSFileWithModeChangeWhenGitLFSIsMissing() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let lfsOverride = [
+            "-c", "filter.lfs.process=",
+            "-c", "filter.lfs.smudge=",
+            "-c", "filter.lfs.clean=",
+            "-c", "filter.lfs.required=false"
+        ]
+        try "*.bin filter=lfs diff=lfs merge=lfs -text\n".write(
+            to: repo.appendingPathComponent(".gitattributes"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let smudgedContent = "real lfs content"
+        let dataPath = repo.appendingPathComponent("data.bin")
+        try smudgedContent.write(to: dataPath, atomically: true, encoding: .utf8)
+        let sha = try await Process.run("/usr/bin/shasum", args: ["-a", "256", dataPath.path])
+            .stdout
+            .split(separator: " ")
+            .first
+            .map(String.init) ?? ""
+        let pointer = """
+        version https://git-lfs.github.com/spec/v1
+        oid sha256:\(sha)
+        size \(Data(smudgedContent.utf8).count)
+
+        """
+        try pointer.write(to: dataPath, atomically: true, encoding: .utf8)
+        _ = try await Process.git(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
+        _ = try await Process.git(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+
+        let dest = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-smudged-lfs-mode-change")
+        let branch = "feat/smudged-lfs-mode-change"
+        _ = try await Process.git(
+            lfsOverride + ["worktree", "add", "-q", dest.path, "-b", branch],
+            cwd: repo
+        )
+        let destData = dest.appendingPathComponent("data.bin")
+        try smudgedContent.write(to: destData, atomically: true, encoding: .utf8)
+        let fakeClean = """
+        /bin/sh -c '/bin/cat >/dev/null; /usr/bin/printf "version https://git-lfs.github.com/spec/v1\\noid sha256:\(sha)\\nsize \(Data(smudgedContent.utf8).count)\\n"'
+        """
+        _ = try await Process.git(["-c", "filter.lfs.clean=\(fakeClean)", "add", "data.bin"], cwd: dest)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destData.path)
+        _ = try await Process.git(["config", "filter.lfs.process", "missing-git-lfs filter-process"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.clean", "missing-git-lfs clean -- %f"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.smudge", "missing-git-lfs smudge -- %f"], cwd: repo)
+        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: repo)
+
+        let wt = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: "p",
+            name: branch,
+            branch: branch,
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await WorktreeService().remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: destData.path))
+    }
 }
 
 extension WorktreeServiceTests {
