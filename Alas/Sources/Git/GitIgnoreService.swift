@@ -39,6 +39,7 @@ enum GitIgnoreService {
         repoURL: URL,
         entryPath: String
     ) throws -> URL {
+        let fm = FileManager.default
         switch destination {
         case .repoRoot:
             return repoURL.appendingPathComponent(".gitignore")
@@ -48,8 +49,26 @@ enum GitIgnoreService {
                 .appendingPathComponent("info")
                 .appendingPathComponent("exclude")
         case .nearest:
-            // Implemented in a later task.
-            return repoURL.appendingPathComponent(".gitignore")
+            // Walk up from the entry's parent directory toward the repo root,
+            // using the first existing .gitignore. If none exist, fall back
+            // to creating one at the entry's own parent directory.
+            let entryParent = entryParentRelative(entryPath: entryPath)
+            var current = entryParent
+            while true {
+                let candidate = repoURL
+                    .appending(pathComponentsFromRepoRelative: current)
+                    .appendingPathComponent(".gitignore")
+                if fm.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+                if current.isEmpty { break }
+                current = parentRepoRelative(current)
+            }
+            // No existing .gitignore anywhere — create one at the entry's
+            // own parent directory (most-local scope).
+            return repoURL
+                .appending(pathComponentsFromRepoRelative: entryParent)
+                .appendingPathComponent(".gitignore")
         }
     }
 
@@ -59,14 +78,52 @@ enum GitIgnoreService {
         targetFile: URL,
         repoURL: URL
     ) -> String {
-        // The pattern path is relative to the target file's directory.
-        // For repoRoot and infoExclude that's the repo root, so the entry
-        // path is already relative.
-        var path = entryPath
+        // Path of the entry relative to the target file's directory.
+        let targetDirRepoRelative = repoRelativePath(
+            of: targetFile.deletingLastPathComponent(),
+            repoURL: repoURL
+        )
+        let relative = stripPathPrefix(entryPath, prefix: targetDirRepoRelative)
+        var path = relative
         if isDirectory && !path.hasSuffix("/") {
             path += "/"
         }
         return escapeForGitignore(path)
+    }
+
+    // MARK: - Path helpers (repo-relative, POSIX, '/' separators).
+
+    private static func entryParentRelative(entryPath: String) -> String {
+        if let slash = entryPath.lastIndex(of: "/") {
+            return String(entryPath[..<slash])
+        }
+        return ""
+    }
+
+    private static func parentRepoRelative(_ path: String) -> String {
+        if let slash = path.lastIndex(of: "/") {
+            return String(path[..<slash])
+        }
+        return ""
+    }
+
+    private static func repoRelativePath(of url: URL, repoURL: URL) -> String {
+        let repoPath = repoURL.standardizedFileURL.path
+        let p = url.standardizedFileURL.path
+        if p == repoPath { return "" }
+        if p.hasPrefix(repoPath + "/") {
+            return String(p.dropFirst(repoPath.count + 1))
+        }
+        return ""
+    }
+
+    private static func stripPathPrefix(_ path: String, prefix: String) -> String {
+        if prefix.isEmpty { return path }
+        if path == prefix { return "" }
+        if path.hasPrefix(prefix + "/") {
+            return String(path.dropFirst(prefix.count + 1))
+        }
+        return path
     }
 
     private static func escapeForGitignore(_ pattern: String) -> String {
@@ -103,5 +160,17 @@ enum GitIgnoreService {
         output += pattern + "\n"
 
         try output.write(to: file, atomically: true, encoding: .utf8)
+    }
+}
+
+private extension URL {
+    /// Append a repo-relative POSIX path (e.g. "src/foo") as path components.
+    func appending(pathComponentsFromRepoRelative relative: String) -> URL {
+        guard !relative.isEmpty else { return self }
+        var u = self
+        for part in relative.split(separator: "/") {
+            u = u.appendingPathComponent(String(part))
+        }
+        return u
     }
 }

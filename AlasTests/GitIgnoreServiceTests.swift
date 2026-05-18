@@ -98,4 +98,25 @@ struct GitIgnoreServiceTests {
 
         #expect(try read(gi) == "no-newline-at-end\nnew.log\n")
     }
+
+    @Test func nearestUsesExistingGitignoreInParentChain() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let src = repo.appendingPathComponent("src")
+        let foo = src.appendingPathComponent("foo")
+        try FileManager.default.createDirectory(at: foo, withIntermediateDirectories: true)
+        let srcGi = src.appendingPathComponent(".gitignore")
+        try "other\n".write(to: srcGi, atomically: true, encoding: .utf8)
+
+        let written = try GitIgnoreService.appendIgnore(
+            entryPath: "src/foo/bar.log",
+            isDirectory: false,
+            destination: .nearest,
+            repoURL: repo
+        )
+
+        #expect(written == srcGi)
+        // Pattern is relative to the .gitignore's directory (src/).
+        #expect(try read(srcGi) == "other\nfoo/bar.log\n")
+    }
 }
