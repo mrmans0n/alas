@@ -2,6 +2,7 @@ import Foundation
 
 enum TerminalCLIInjection {
     static let executableName = "alas"
+    private static let fallbackPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
     static func executableScript() -> String {
         return """
@@ -69,10 +70,9 @@ enum TerminalCLIInjection {
     }
 
     static func pathValue(prepending directory: String, to current: String?) -> String {
-        guard let current,
-              !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return directory
-        }
-        return "\(directory):\(current)"
+        let basePath = current?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? current!
+            : fallbackPath
+        return "\(directory):\(basePath)"
     }
 }

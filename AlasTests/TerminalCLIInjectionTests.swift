@@ -25,6 +25,14 @@ struct TerminalCLIInjectionTests {
         #expect(url.lastPathComponent == "alas")
     }
 
+    @Test func pathValueUsesSystemFallbackWhenCurrentPathIsEmpty() {
+        let value = TerminalCLIInjection.pathValue(prepending: "/tmp/alas-bin", to: nil)
+
+        #expect(value.hasPrefix("/tmp/alas-bin:"))
+        #expect(value.contains("/usr/bin"))
+        #expect(value.contains("/bin"))
+    }
+
     @Test func bashExecutableSendsOpenRequestFromLogicalPWD() async throws {
         try await assertExecutableSendsOpenRequestFromLogicalPWD(shell: "/bin/bash")
     }
