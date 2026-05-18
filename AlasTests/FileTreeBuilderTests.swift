@@ -58,6 +58,25 @@ struct FileTreeBuilderTests {
         #expect(sources.childrenState == .loaded)
     }
 
+    @Test func explicitDirectoryMetadataDoesNotCreateDuplicateFileLeafForLoadedChildren() {
+        let tree = FileTreeBuilder.build(
+            paths: ["generated", "generated/keep.txt"],
+            badges: [:],
+            visibility: ["generated": .ignored],
+            directories: ["generated"]
+        )
+
+        let generatedNodes = tree.filter { $0.path == "generated" }
+        #expect(generatedNodes.count == 1)
+        let generated = generatedNodes.first
+        #expect(generated?.id == "dir:generated")
+        #expect(generated?.kind == .dir)
+        #expect(generated?.visibility == .ignored)
+        #expect(generated?.childrenState == .loaded)
+        #expect(generated?.children?.contains { $0.path == "generated/keep.txt" } == true)
+        #expect(!tree.contains { $0.id == "file:generated" })
+    }
+
     @Test func treatsLazyDirectoryPathAsUnloadedDirectory() {
         let tree = FileTreeBuilder.build(
             paths: [".build"],

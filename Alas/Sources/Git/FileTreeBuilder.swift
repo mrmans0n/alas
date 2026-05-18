@@ -75,6 +75,7 @@ enum FileTreeBuilder {
         let explicitDirectory = hasDirectoryMetadata && !hasNestedChildren
         let isDir = !isLeaf || explicitDirectory
         if isLeaf {
+            let badge = badges[fullPath]
             if hasDirectoryMetadata && hasNestedChildren {
                 upsertDirectory(
                     name: head,
@@ -83,10 +84,10 @@ enum FileTreeBuilder {
                     visibility: visibility,
                     lazyDirectories: lazyDirectories
                 )
+                if badge == nil { return }
             }
             let key = nodeKey(name: head, isDir: isDir)
             let existing = map[key]
-            let badge = badges[fullPath]
             if existing == nil {
                 map[key] = TreeBuildNode(
                     name: head,

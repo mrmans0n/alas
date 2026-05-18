@@ -25,6 +25,7 @@ extension Process {
         args: [String],
         cwd: URL? = nil,
         env: [String: String]? = nil,
+        stdin: String? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
         let process = Process()
@@ -33,8 +34,11 @@ extension Process {
         if let cwd { process.currentDirectoryURL = cwd }
         if let env { process.environment = env }
 
+        let stdinWriter = stdin.map(StdinPipeWriter.init)
+        let inputPipe = stdinWriter.map { _ in Pipe() }
         let outPipe = Pipe()
         let errPipe = Pipe()
+        if let inputPipe { process.standardInput = inputPipe }
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -94,12 +98,17 @@ extension Process {
             if Task.isCancelled { return }
             if process.isRunning {
                 timeoutState.markTimedOut()
+                stdinWriter?.close()
                 fputs(
                     "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                     stderr
                 )
                 process.terminate()
             }
+        }
+
+        if let inputPipe {
+            stdinWriter?.start(pipe: inputPipe)
         }
 
         // SIGTERM the child if the awaiting Task is cancelled. The
@@ -110,9 +119,11 @@ extension Process {
         await withTaskCancellationHandler {
             await exit.wait()
         } onCancel: {
+            stdinWriter?.close()
             if process.isRunning { process.terminate() }
         }
         watchdog.cancel()
+        stdinWriter?.close()
 
         // Wait for both pipes to actually report EOF before we drop the
         // readability handlers — a fixed grace period would truncate
@@ -164,6 +175,7 @@ extension Process {
     static func git(
         _ args: [String],
         cwd: URL? = nil,
+        stdin: String? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
         try await run(
@@ -171,6 +183,7 @@ extension Process {
             args: ["git"] + args,
             cwd: cwd,
             env: gitEnv(),
+            stdin: stdin,
             timeout: timeout
         )
     }
@@ -190,6 +203,87 @@ private final class TimeoutState: @unchecked Sendable {
         lock.lock()
         timedOut = true
         lock.unlock()
+    }
+}
+
+private final class StdinPipeWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let data: Data
+    private var offset = 0
+    private var closed = false
+    private weak var handle: FileHandle?
+    private let chunkSize = 16 * 1024
+
+    init(_ stdin: String) {
+        self.data = Data(stdin.utf8)
+    }
+
+    func start(pipe: Pipe) {
+        let writeHandle = pipe.fileHandleForWriting
+        lock.lock()
+        guard !closed else {
+            lock.unlock()
+            try? writeHandle.close()
+            return
+        }
+        handle = writeHandle
+        if data.isEmpty {
+            closed = true
+            handle = nil
+            lock.unlock()
+            try? writeHandle.close()
+            return
+        }
+        lock.unlock()
+
+        writeHandle.writeabilityHandler = { [weak self] handle in
+            self?.writeAvailable(handle)
+        }
+    }
+
+    func close() {
+        lock.lock()
+        guard !closed else {
+            lock.unlock()
+            return
+        }
+        closed = true
+        let writeHandle = handle
+        handle = nil
+        lock.unlock()
+
+        writeHandle?.writeabilityHandler = nil
+        try? writeHandle?.close()
+    }
+
+    private func writeAvailable(_ writeHandle: FileHandle) {
+        let chunk: Data?
+        lock.lock()
+        if closed || offset >= data.count {
+            closed = true
+            handle = nil
+            lock.unlock()
+            writeHandle.writeabilityHandler = nil
+            try? writeHandle.close()
+            return
+        }
+        let end = min(offset + chunkSize, data.count)
+        chunk = data[offset..<end]
+        offset = end
+        let didFinish = offset >= data.count
+        if didFinish {
+            closed = true
+            handle = nil
+        }
+        lock.unlock()
+
+        if let chunk {
+            writeHandle.write(chunk)
+        }
+        if didFinish {
+            writeHandle.writeabilityHandler = nil
+            try? writeHandle.close()
+        }
     }
 }
 
