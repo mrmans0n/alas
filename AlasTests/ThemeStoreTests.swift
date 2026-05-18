@@ -27,4 +27,17 @@ struct ThemeStoreTests {
         store.setMatchSystem(false)
         #expect(store.current.id == "light")
     }
+
+    @Test func failedActivationPreservesUserPick() throws {
+        let store = try ThemeStore()
+        try store.activate(id: "light")
+
+        #expect(throws: Error.self) {
+            try store.activate(id: "nope")
+        }
+
+        store.setMatchSystem(true)
+        store.setMatchSystem(false)
+        #expect(store.current.id == "light")
+    }
 }
