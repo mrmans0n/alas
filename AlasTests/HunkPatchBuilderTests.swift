@@ -44,11 +44,34 @@ struct HunkPatchBuilderTests {
         #expect(patch.hasSuffix("\n"))
     }
 
-    @Test func nonAsciiPathPassesThroughUnescaped() {
+    @Test func nonAsciiPathIsOctalEscapedAndQuoted() {
+        // Matches `git diff` default behavior (core.quotePath=true): non-ASCII
+        // bytes in the header path are wrapped in C-quotes and emitted as
+        // octal escapes. UTF-8 of "é" is C3 A9 → "\303\251".
         let h = hunk("@@ -1,1 +1,1 @@", [add("x")])
-        let patch = HunkPatchBuilder.patch(file: "café/π.swift", hunk: h, tracked: true)
-        #expect(patch.contains("a/café/π.swift"))
-        #expect(patch.contains("b/café/π.swift"))
+        let patch = HunkPatchBuilder.patch(file: "café.swift", hunk: h, tracked: true)
+        #expect(patch.contains("\"a/caf\\303\\251.swift\""))
+        #expect(patch.contains("\"b/caf\\303\\251.swift\""))
+    }
+
+    @Test func tabbedPathIsQuotedAndEscaped() {
+        let h = hunk("@@ -1,1 +1,1 @@", [add("x")])
+        let patch = HunkPatchBuilder.patch(file: "weird\tname.txt", hunk: h, tracked: true)
+        #expect(patch.contains("\"a/weird\\tname.txt\""))
+        #expect(patch.contains("\"b/weird\\tname.txt\""))
+        #expect(patch.contains("--- \"a/weird\\tname.txt\""))
+        #expect(patch.contains("+++ \"b/weird\\tname.txt\""))
+    }
+
+    @Test func plainAsciiPathStaysUnquoted() {
+        // Common case must produce the simpler header form, not gratuitous
+        // quotes — matches `git diff` for plain paths.
+        let h = hunk("@@ -1,1 +1,1 @@", [add("x")])
+        let patch = HunkPatchBuilder.patch(file: "src/foo.swift", hunk: h, tracked: true)
+        #expect(patch.contains("diff --git a/src/foo.swift b/src/foo.swift"))
+        #expect(patch.contains("--- a/src/foo.swift"))
+        #expect(patch.contains("+++ b/src/foo.swift"))
+        #expect(!patch.contains("\""))
     }
 
     @Test func untrackedFilePatchUsesProvidedMode() {
