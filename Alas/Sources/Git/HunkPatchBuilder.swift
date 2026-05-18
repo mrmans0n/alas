@@ -5,11 +5,19 @@ import Foundation
 /// (discard) when paired with the right `tracked` flag.
 enum HunkPatchBuilder {
     static func patch(file: String, hunk: ParsedDiff.Hunk, tracked: Bool) -> String {
-        let bodyLines = hunk.lines.map { line -> String in
+        var bodyLines: [String] = []
+        for line in hunk.lines {
+            let sigil: String
             switch line.kind {
-            case .add:     return "+\(line.text)"
-            case .delete:  return "-\(line.text)"
-            case .context: return " \(line.text)"
+            case .add:     sigil = "+"
+            case .delete:  sigil = "-"
+            case .context: sigil = " "
+            }
+            bodyLines.append("\(sigil)\(line.text)")
+            // EOF without trailing newline: re-emit the sentinel so
+            // `git apply` accepts the patch against the original worktree.
+            if line.noTrailingNewline {
+                bodyLines.append("\\ No newline at end of file")
             }
         }
         let headerLines: [String]

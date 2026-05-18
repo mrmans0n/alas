@@ -50,4 +50,27 @@ struct HunkPatchBuilderTests {
         #expect(patch.contains("a/café/π.swift"))
         #expect(patch.contains("b/café/π.swift"))
     }
+
+    @Test func emitsNoTrailingNewlineSentinelAfterAffectedLines() {
+        // Mark both the delete and add as missing their trailing newline.
+        // The builder must re-emit the `\ No newline at end of file` marker
+        // immediately after each affected line; without it `git apply`
+        // rejects the patch for EOF-without-newline files.
+        let delLine = ParsedDiff.Hunk.Line(
+            kind: .delete, text: "old", oldNumber: 1, newNumber: nil,
+            noTrailingNewline: true
+        )
+        let addLine = ParsedDiff.Hunk.Line(
+            kind: .add, text: "new", oldNumber: nil, newNumber: 1,
+            noTrailingNewline: true
+        )
+        let h = hunk("@@ -1,1 +1,1 @@", [delLine, addLine])
+        let patch = HunkPatchBuilder.patch(file: "a.txt", hunk: h, tracked: true)
+        let lines = patch.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Header (4) + delete + sentinel + add + sentinel + trailing empty.
+        #expect(lines[4] == "-old")
+        #expect(lines[5] == "\\ No newline at end of file")
+        #expect(lines[6] == "+new")
+        #expect(lines[7] == "\\ No newline at end of file")
+    }
 }

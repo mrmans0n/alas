@@ -182,6 +182,31 @@ struct GitServiceDiscardTests {
         #expect(contents == "1\n2\n3\n4\n5\n6\n7\n8\n9\nE\n")
     }
 
+    @Test func applyPatchReverseHandlesEofWithoutTrailingNewline() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Seed a file WITHOUT trailing newline.
+        try writeFile(repo, "a.txt", "old")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        // Modify the EOF-without-newline content.
+        try writeFile(repo, "a.txt", "new")
+
+        let svc = GitService()
+        let parsed = try await svc.diff(worktreePath: repo, file: "a.txt")
+        #expect(parsed.hunks.count == 1)
+        // Both pre- and post-image lines should carry the no-newline flag.
+        let lines = parsed.hunks[0].lines
+        #expect(lines.contains { $0.kind == .delete && $0.noTrailingNewline })
+        #expect(lines.contains { $0.kind == .add && $0.noTrailingNewline })
+
+        let patch = HunkPatchBuilder.patch(file: "a.txt", hunk: parsed.hunks[0], tracked: true)
+        try await svc.applyPatchReverse(worktreePath: repo, patch: patch)
+
+        let contents = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(contents == "old")
+    }
+
     @Test func applyPatchReverseThrowsWhenAlreadyApplied() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

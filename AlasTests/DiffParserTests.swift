@@ -27,4 +27,26 @@ struct DiffParserTests {
         let diff = DiffParser.parse("")
         #expect(diff.hunks.isEmpty)
     }
+
+    @Test func capturesNoTrailingNewlineOnDeleteAndAddSides() {
+        // git diff shape for a one-line modification at EOF where both the
+        // pre- and post-image lack a trailing newline. The `\ No newline...`
+        // sentinel follows each side's content line.
+        let raw = """
+        diff --git a/a.txt b/a.txt
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -1,1 +1,1 @@
+        -old
+        \\ No newline at end of file
+        +new
+        \\ No newline at end of file
+        """
+        let diff = DiffParser.parse(raw)
+        #expect(diff.hunks.count == 1)
+        let lines = diff.hunks[0].lines
+        #expect(lines.count == 2)
+        #expect(lines[0].kind == .delete && lines[0].noTrailingNewline)
+        #expect(lines[1].kind == .add && lines[1].noTrailingNewline)
+    }
 }

@@ -13,6 +13,11 @@ struct ParsedDiff: Equatable {
             let text: String        // without the leading + - or space
             let oldNumber: Int?
             let newNumber: Int?
+            /// True when the source diff carried a `\ No newline at end of file`
+            /// sentinel after this line. Patch builders must re-emit the
+            /// sentinel; otherwise `git apply` rejects the patch because the
+            /// content doesn't match the worktree.
+            var noTrailingNewline: Bool = false
         }
     }
 }
@@ -55,6 +60,14 @@ enum DiffParser {
                 current!.lines.append(.init(kind: .context, text: text, oldNumber: oldCounter, newNumber: newCounter))
                 oldCounter += 1
                 newCounter += 1
+            } else if line.hasPrefix("\\ No newline at end of file") {
+                // The sentinel follows whichever line (`+`, `-`, or ` `) lacks
+                // a trailing newline at EOF. Mark the previously-appended line
+                // so HunkPatchBuilder can re-emit the marker — without it,
+                // `git apply --reverse` rejects the patch.
+                if let lastIdx = current?.lines.indices.last {
+                    current!.lines[lastIdx].noTrailingNewline = true
+                }
             }
         }
         flush()
