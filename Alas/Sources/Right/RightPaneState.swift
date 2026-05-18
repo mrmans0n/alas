@@ -417,22 +417,30 @@ final class RightPaneState {
         let wt = worktree.path
         Task { @MainActor in
             do {
-                let tracked = (try? await Process.git(
+                // A staged deletion is *not* in the index (`ls-files` returns
+                // non-zero) but IS in HEAD — falling back to `--no-index` for
+                // that case yields an empty patch. Probe HEAD via `cat-file`
+                // so staged D entries still route through HEAD-based diff.
+                let inIndex = (try? await Process.git(
                     ["ls-files", "--error-unmatch", "--", path],
                     cwd: wt
                 ))?.exitCode == 0
+                let head = (try? await self.git.hasHead(worktreePath: wt)) ?? true
+                let inHead: Bool
+                if head {
+                    inHead = (try? await Process.git(
+                        ["cat-file", "-e", "HEAD:\(path)"],
+                        cwd: wt
+                    ))?.exitCode == 0
+                } else {
+                    inHead = false
+                }
                 let args: [String]
-                if tracked {
-                    // Unborn HEAD doesn't resolve, so `diff HEAD` errors with
-                    // "bad revision 'HEAD'". A staged-add in that state is still
-                    // ls-files-tracked — fall back to `--cached` (index vs empty
-                    // tree) so initial-commit workflows still produce a patch.
-                    let head = (try? await self.git.hasHead(worktreePath: wt)) ?? true
-                    if head {
-                        args = ["diff", "--no-color", "HEAD", "--", path]
-                    } else {
-                        args = ["diff", "--no-color", "--cached", "--", path]
-                    }
+                if head, inIndex || inHead {
+                    args = ["diff", "--no-color", "HEAD", "--", path]
+                } else if !head, inIndex {
+                    // Unborn HEAD: staged-add — diff index vs empty tree.
+                    args = ["diff", "--no-color", "--cached", "--", path]
                 } else {
                     args = ["diff", "--no-color", "--no-index", "--", "/dev/null", path]
                 }
