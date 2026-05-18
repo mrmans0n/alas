@@ -24,6 +24,9 @@ struct CommitTabView: View {
     private let git = GitService()
 
     private static let minPaneWidth: CGFloat = 140
+    private var diffTaskKey: String {
+        "\(sha):\(selectedPath ?? "")"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,7 +53,7 @@ struct CommitTabView: View {
             }
         }
         .task(id: sha) { await loadDetails() }
-        .task(id: selectedPath) { await loadDiffIfNeeded() }
+        .task(id: diffTaskKey) { await loadDiffIfNeeded() }
     }
 
     @ViewBuilder
@@ -97,6 +100,11 @@ struct CommitTabView: View {
         activeDetailsKey = requestedKey
         loadingDetails = true
         detailsError = nil
+        activeDiffKey = nil
+        selectedPath = nil
+        diff = ParsedDiff(hunks: [])
+        loadingDiff = false
+        diffError = nil
         defer {
             if activeDetailsKey == requestedKey { loadingDetails = false }
         }
