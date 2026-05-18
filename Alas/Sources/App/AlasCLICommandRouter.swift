@@ -46,23 +46,43 @@ struct AlasCLICommandRouter {
     }
 
     private func containingWorktree(for url: URL) -> (worktree: Worktree, relativePath: String)? {
-        let targetComponents = url.standardizedFileURL.pathComponents
         var bestMatch: (worktree: Worktree, relativePath: String, rootComponentCount: Int)?
         for worktree in visibleWorktrees() {
             let rootURL = worktree.path.standardizedFileURL
-            let rootComponents = rootURL.pathComponents
-            guard targetComponents.count > rootComponents.count,
-                  Array(targetComponents.prefix(rootComponents.count)) == rootComponents else { continue }
-            let relative = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
-            guard !relative.isEmpty else { continue }
+            guard let match = relativePathAndDepth(for: url, in: rootURL) else { continue }
             if let currentBest = bestMatch,
-               rootComponents.count <= currentBest.rootComponentCount {
+               match.rootComponentCount <= currentBest.rootComponentCount {
                 continue
             }
-            bestMatch = (worktree, relative, rootComponents.count)
+            bestMatch = (worktree, match.relativePath, match.rootComponentCount)
         }
         guard let bestMatch else { return nil }
         return (bestMatch.worktree, bestMatch.relativePath)
+    }
+
+    private func relativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
+        if let match = relativePathAndDepth(
+            targetComponents: url.standardizedFileURL.pathComponents,
+            rootComponents: rootURL.pathComponents
+        ) {
+            return match
+        }
+
+        return relativePathAndDepth(
+            targetComponents: url.resolvingSymlinksInPath().standardizedFileURL.pathComponents,
+            rootComponents: rootURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        )
+    }
+
+    private func relativePathAndDepth(
+        targetComponents: [String],
+        rootComponents: [String]
+    ) -> (relativePath: String, rootComponentCount: Int)? {
+        guard targetComponents.count > rootComponents.count,
+              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else { return nil }
+        let relative = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
+        guard !relative.isEmpty else { return nil }
+        return (relative, rootComponents.count)
     }
 
     private func fileExists(at url: URL) -> Bool {

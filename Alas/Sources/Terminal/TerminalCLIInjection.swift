@@ -12,7 +12,7 @@ enum TerminalCLIInjection {
           fi
           case "${1:-}" in
             open)
-              local response status
+              local response alas_status
               shift
               if [ "$#" -eq 0 ]; then
                 printf '%s\n' 'usage: alas open <path> [path...]' >&2
@@ -30,10 +30,10 @@ enum TerminalCLIInjection {
         print(json.dumps({"v": 1, "kind": "cli", "command": "open", "session_id": session_id, "paths": paths}))
         PY
         )
-              status=$?
-              if [ "$status" -ne 0 ]; then
+              alas_status=$?
+              if [ "$alas_status" -ne 0 ]; then
                 printf '%s\n' 'alas: could not reach Alas' >&2
-                return "$status"
+                return "$alas_status"
               fi
               /usr/bin/python3 - "$response" <<'PY'
         import json, sys

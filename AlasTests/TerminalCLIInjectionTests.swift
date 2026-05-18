@@ -46,6 +46,14 @@ struct TerminalCLIInjectionTests {
     }
 
     @Test func bashFunctionSendsOpenRequestFromLogicalPWD() async throws {
+        try await assertFunctionSendsOpenRequestFromLogicalPWD(shell: "/bin/bash")
+    }
+
+    @Test func zshFunctionSendsOpenRequestFromLogicalPWD() async throws {
+        try await assertFunctionSendsOpenRequestFromLogicalPWD(shell: "/bin/zsh")
+    }
+
+    private func assertFunctionSendsOpenRequestFromLogicalPWD(shell: String) async throws {
         let root = "/tmp/alas-cli-injection-\(UUID().uuidString)"
         let realDir = "\(root)/real"
         let logicalDir = "\(root)/logical"
@@ -54,7 +62,7 @@ struct TerminalCLIInjectionTests {
         let socketPath = "\(root)/test.sock"
         try FileManager.default.createDirectory(atPath: nestedDir, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: logicalDir, withDestinationPath: realDir)
-        try TerminalCLIInjection.script(forShell: "/bin/bash")!.write(
+        try TerminalCLIInjection.script(forShell: shell)!.write(
             toFile: scriptPath,
             atomically: true,
             encoding: .utf8
@@ -76,7 +84,7 @@ struct TerminalCLIInjectionTests {
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.executableURL = URL(fileURLWithPath: shell)
         process.arguments = ["-c", #"source "$0"; cd "$ALAS_LOGICAL_DIR"; alas open "dir with spaces/file.txt""#, scriptPath]
         process.currentDirectoryURL = URL(fileURLWithPath: root, isDirectory: true)
         var env = ProcessInfo.processInfo.environment

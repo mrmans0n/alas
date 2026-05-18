@@ -71,6 +71,36 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "file.txt")
     }
 
+    @Test func opensSymlinkedLogicalWorktreePathByRelativePath() throws {
+        let realRoot = try makeFile("repo/Sources/App.swift")
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let logicalRoot = realRoot.deletingLastPathComponent().appendingPathComponent("logical-repo")
+        try FileManager.default.createSymbolicLink(at: logicalRoot, withDestinationURL: realRoot)
+        let logicalFile = logicalRoot.appendingPathComponent("Sources/App.swift")
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: realRoot, status: .clean, lastActivity: Date()
+        )
+        var opened: [(worktreeId: String, relativePath: String)] = []
+
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in "wt1" },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
+            openExternalFile: { _, _ in Issue.record("expected relative open") },
+            activateApp: {}
+        )
+
+        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [logicalFile.path]))
+
+        #expect(response == .ok)
+        #expect(opened.count == 1)
+        #expect(opened[0].worktreeId == "wt1")
+        #expect(opened[0].relativePath == "Sources/App.swift")
+    }
+
     @Test func opensExternalFileOwnedByOriginatingWorktree() throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let external = try makeFile("external/note.txt")
