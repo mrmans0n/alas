@@ -102,4 +102,24 @@ struct AgentHookSocketServerCLITests {
 
         #expect(event == nil)
     }
+
+    @Test func malformedCLIRequestDoesNotDispatchHarnessEvent() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/test.sock"
+        let server = AgentHookSocketServer(socketPath: path)
+        defer { server.shutdown() }
+
+        let holder = EventHolder()
+        server.onEvent = { event in holder.deliver(event) }
+        server.onCLIRequest = { _ in .ok }
+
+        let json = #"{"v":1,"kind":"cli","event":"busy","agent":"claude","session_id":"s1","paths":["/tmp/a"]}"#
+        let response = try sendToSocket(path: path, payload: json)
+        let object = try responseObject(response)
+        let event = await holder.wait(timeoutMs: 300)
+
+        #expect(object["ok"] as? Bool == false)
+        #expect(event == nil)
+    }
 }

@@ -98,7 +98,11 @@ final class AgentHookSocketServer {
             return
         }
 
-        if let request = try? AlasCLIRequest.decode(from: data) {
+        if Self.payloadKind(data) == "cli" {
+            guard let request = try? AlasCLIRequest.decode(from: data) else {
+                Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
+                return
+            }
             let response: AlasCLIResponse
             if let handler = onCLIRequest {
                 response = await handler(request)
@@ -119,6 +123,11 @@ final class AgentHookSocketServer {
         } catch {
             Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
         }
+    }
+
+    private static func payloadKind(_ data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["kind"] as? String
     }
 
     static func readPayload(from clientFD: Int32) -> Data? {
