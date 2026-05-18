@@ -52,5 +52,31 @@ struct RightPaneView: View {
         .task(id: worktree.id) {
             await rps.refresh()
         }
+        // Host the discard confirmation here (not on ChangesTabView) so
+        // diff-tab Discard actions still present the alert when the right
+        // pane is on the Files tab — `requestDiscardFile` sets pending state
+        // regardless of which child view is mounted.
+        .alert(
+            PendingDiscard.alertTitle(for: rps.pendingDiscard ?? .placeholder),
+            isPresented: Binding(
+                get: { rps.pendingDiscard != nil },
+                set: { if !$0 { rps.cancelDiscard() } }
+            ),
+            presenting: rps.pendingDiscard,
+            actions: { _ in
+                Button("Discard", role: .destructive) {
+                    if let pending = rps.pendingDiscard {
+                        rps.pendingDiscard = nil
+                        Task { @MainActor in await rps.confirmDiscard(pending) }
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    rps.cancelDiscard()
+                }
+            },
+            message: { p in
+                Text(PendingDiscard.alertMessage(for: p))
+            }
+        )
     }
 }

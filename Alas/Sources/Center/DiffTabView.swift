@@ -155,16 +155,22 @@ struct DiffTabView: View {
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
             defer { try? FileManager.default.removeItem(at: tmp) }
+            var didFail = false
             do {
                 try patch.write(to: tmp, atomically: true, encoding: .utf8)
                 let result = try await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)
                 if result.exitCode != 0 {
                     self.error = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    didFail = true
                 }
             } catch {
                 self.error = (error as NSError).localizedDescription
+                didFail = true
             }
-            await load()
+            // Only reload on success — load() resets `error` at its start, so
+            // calling it after a failure would erase the error we just set
+            // and make the action look like a silent no-op.
+            if !didFail { await load() }
         }
     }
 
@@ -183,12 +189,15 @@ struct DiffTabView: View {
     private func performDiscardHunk(_ hunk: ParsedDiff.Hunk) {
         Task {
             let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: true)
+            var didFail = false
             do {
                 try await git.applyPatchReverse(worktreePath: worktreePath, patch: patch)
             } catch {
                 self.error = (error as NSError).localizedDescription
+                didFail = true
             }
-            await load()
+            // See stageHunk: load() clears `error`, so only reload on success.
+            if !didFail { await load() }
         }
     }
 }
