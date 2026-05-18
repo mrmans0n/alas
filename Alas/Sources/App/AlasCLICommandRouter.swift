@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 @MainActor
@@ -48,6 +47,7 @@ struct AlasCLICommandRouter {
 
     private func containingWorktree(for url: URL) -> (worktree: Worktree, relativePath: String)? {
         let targetComponents = url.standardizedFileURL.pathComponents
+        var bestMatch: (worktree: Worktree, relativePath: String, rootComponentCount: Int)?
         for worktree in visibleWorktrees() {
             let rootURL = worktree.path.standardizedFileURL
             let rootComponents = rootURL.pathComponents
@@ -55,9 +55,14 @@ struct AlasCLICommandRouter {
                   Array(targetComponents.prefix(rootComponents.count)) == rootComponents else { continue }
             let relative = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
             guard !relative.isEmpty else { continue }
-            return (worktree, relative)
+            if let currentBest = bestMatch,
+               rootComponents.count <= currentBest.rootComponentCount {
+                continue
+            }
+            bestMatch = (worktree, relative, rootComponents.count)
         }
-        return nil
+        guard let bestMatch else { return nil }
+        return (bestMatch.worktree, bestMatch.relativePath)
     }
 
     private func fileExists(at url: URL) -> Bool {
