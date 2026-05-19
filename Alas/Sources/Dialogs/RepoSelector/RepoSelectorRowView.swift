@@ -90,13 +90,6 @@ struct RepoSelectorRowView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 16)
 
-        case .emptyHint(.noVisibleWorktrees):
-            Text("No open worktrees. Press ⇥ to create one.")
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg-dim"))
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 16)
-
         case .divider(let label):
             HStack(spacing: 6) {
                 Text(label.uppercased())

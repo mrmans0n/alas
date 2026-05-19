@@ -155,7 +155,7 @@ struct RepoSelectorDialog: View {
         switch result {
         case .focused, .openedNewWorktree, .openedNewProject:
             appState.isRepoSelectorOpen = false
-        case .pushed, .showEmptyHint:
+        case .pushed:
             inputFocused = true
         case .noop:
             break

@@ -187,6 +187,21 @@ struct RepoSelectorModelTests {
         #expect(model.selectedIndex == 2)
     }
 
+    @Test func changingQueryResetsSelectionToZero() {
+        // Without this reset, a user could move selection down then type a
+        // filter that shrinks the list and inadvertently activate the
+        // trailing "+ New worktree…" action.
+        let model = RepoSelectorModel()
+        let rows: [RepoSelectorRow] = [
+            .repo(project("a"), indices: []),
+            .repo(project("b"), indices: []),
+        ]
+        model.setSelectedIndex(1, in: rows)
+        #expect(model.selectedIndex == 1)
+        model.query = "a"
+        #expect(model.selectedIndex == 0)
+    }
+
     // MARK: - Push / pop
 
     @Test func pushRepoSwitchesStepAndResetsQuery() {
@@ -305,20 +320,24 @@ struct RepoSelectorModelTests {
         #expect(writtenRecents?.worktreeIdsByProject["p1"] == ["w1"])
     }
 
-    @Test func activateProjectWithZeroWorktreesEmitsEmptyHintWithoutFocus() {
+    @Test func activateProjectWithZeroWorktreesOpensNewWorktreeFlow() {
         let model = RepoSelectorModel()
+        model.isOpen = true
         var focused: String? = nil
         var writtenRecents: RepoSelectorRecents? = nil
+        var openedFor: String? = nil
         var e = env(projects: [project("p1")], worktrees: ["p1": []])
         e.focusWorktree = { focused = $0 }
         e.writeRecents = { writtenRecents = $0 }
+        e.openNewWorktree = { openedFor = $0 }
 
         let rows = model.rows(environment: e)
         model.setSelectedIndex(0, in: rows)
         let result = model.activate(rows: rows, environment: e)
 
-        #expect(result == .showEmptyHint(projectId: "p1"))
-        #expect(model.step == .repos)
+        #expect(result == .openedNewWorktree(projectId: "p1"))
+        #expect(openedFor == "p1")
+        #expect(model.isOpen == false)
         #expect(focused == nil)
         #expect(writtenRecents == nil)
     }

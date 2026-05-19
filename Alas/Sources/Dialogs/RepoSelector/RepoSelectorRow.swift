@@ -16,8 +16,6 @@ enum RepoSelectorRow: Equatable {
     }
 
     enum EmptyHint: Equatable {
-        /// Step 1 hit Return on a project that has no visible worktrees.
-        case noVisibleWorktrees(projectId: String)
         /// Step 1 with zero configured projects at all.
         case noProjects
     }

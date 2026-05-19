@@ -14,7 +14,13 @@ final class RepoSelectorModel {
 
     var isOpen: Bool = false
     private(set) var step: Step = .repos
-    var query: String = ""
+    var query: String = "" {
+        didSet {
+            // Reset selection so a shrinking filter never strands the cursor
+            // on a stale row (especially the trailing `+ New worktree…`).
+            if query != oldValue { selectedIndex = 0 }
+        }
+    }
     private(set) var selectedIndex: Int = 0
 
     // Snapshot of step-1 state preserved across a push so popToRepos can
@@ -179,7 +185,6 @@ final class RepoSelectorModel {
     enum Activation: Equatable {
         case pushed(projectId: String)
         case focused(worktreeId: String)
-        case showEmptyHint(projectId: String)
         case openedNewWorktree(projectId: String)
         case openedNewProject
         case noop
@@ -213,11 +218,6 @@ final class RepoSelectorModel {
             close()
             return .openedNewProject
 
-        case .emptyHint(.noVisibleWorktrees(let projectId)):
-            env.openNewWorktree(projectId)
-            close()
-            return .openedNewWorktree(projectId: projectId)
-
         case .divider:
             return .noop
         }
@@ -230,7 +230,11 @@ final class RepoSelectorModel {
         let wts = env.visibleWorktrees(project.id)
         switch wts.count {
         case 0:
-            return .showEmptyHint(projectId: project.id)
+            // Activation on a repo with no open worktrees has nowhere to
+            // navigate, so jump straight to creating one.
+            env.openNewWorktree(project.id)
+            close()
+            return .openedNewWorktree(projectId: project.id)
         case 1:
             return focus(worktree: wts[0], environment: env)
         default:
