@@ -267,7 +267,10 @@ final class RepoSelectorModel {
     /// Set selection directly, snapping forward (then backward) to the
     /// nearest selectable row if the target is a divider. Used on hover.
     func setSelectedIndex(_ index: Int, in rows: [RepoSelectorRow]) {
-        guard !rows.isEmpty else { selectedIndex = 0; return }
+        guard !rows.isEmpty else {
+            selectedIndex = 0
+            return
+        }
         let clamped = max(0, min(rows.count - 1, index))
         if rows[clamped].isSelectable {
             selectedIndex = clamped
