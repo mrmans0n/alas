@@ -374,6 +374,7 @@
 		EA0EE2D3301F5D79E0C1A280 /* LanguageServerAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 949B319CFA57A23CE36F2AAE /* LanguageServerAvailability.swift */; };
 		EA9B2D81920F620209AB2C34 /* MasonSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97FBCF0F61C80FD8020B1ADD /* MasonSnapshotTests.swift */; };
 		ECF9400D49926064C4AE4F29 /* AppConfigMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987FAB1E4DB4B81D5D0902B1 /* AppConfigMarkdownTests.swift */; };
+		5688008C3D7140A78F0E3BF3 /* AppConfigSidebarChromeOverridesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E852248C11C04318B9148B2D /* AppConfigSidebarChromeOverridesTests.swift */; };
 		EDC5F3C0F2964AC78C832F87 /* StatusParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */; };
 		EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */; };
 		EEB6534271EB7EA475A703DE /* HunkPatchBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A06D96DE3FEBF63E7A157DD /* HunkPatchBuilder.swift */; };
@@ -639,6 +640,7 @@
 		976B145EAC17A395380DFB47 /* AgentHookSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookSocketServer.swift; sourceTree = "<group>"; };
 		97FBCF0F61C80FD8020B1ADD /* MasonSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MasonSnapshotTests.swift; sourceTree = "<group>"; };
 		987FAB1E4DB4B81D5D0902B1 /* AppConfigMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigMarkdownTests.swift; sourceTree = "<group>"; };
+		E852248C11C04318B9148B2D /* AppConfigSidebarChromeOverridesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigSidebarChromeOverridesTests.swift; sourceTree = "<group>"; };
 		9A06D96DE3FEBF63E7A157DD /* HunkPatchBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HunkPatchBuilder.swift; sourceTree = "<group>"; };
 		9B15F58AFF7BC19419935C05 /* PendingDiscard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingDiscard.swift; sourceTree = "<group>"; };
 		9C45A26ADB0D1CCFBB5BEAE8 /* TerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSession.swift; sourceTree = "<group>"; };
@@ -858,6 +860,7 @@
 				D8ACFACD788DF2035534F62E /* AppConfigCodeInstallTests.swift */,
 				EBCC34174A7CEFA72099DDFD /* AppConfigFilesTests.swift */,
 				987FAB1E4DB4B81D5D0902B1 /* AppConfigMarkdownTests.swift */,
+				E852248C11C04318B9148B2D /* AppConfigSidebarChromeOverridesTests.swift */,
 				B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */,
 				620C4A708CD1013DE2736A00 /* AppIconTests.swift */,
 				447D95D444F6AE08FCFA27A3 /* AppStateCleanupTests.swift */,
@@ -2007,6 +2010,7 @@
 				D1FF11465D1309A56FCFFAF0 /* AppConfigCodeInstallTests.swift in Sources */,
 				CCB0C90ABC15D987D0EEB230 /* AppConfigFilesTests.swift in Sources */,
 				ECF9400D49926064C4AE4F29 /* AppConfigMarkdownTests.swift in Sources */,
+				5688008C3D7140A78F0E3BF3 /* AppConfigSidebarChromeOverridesTests.swift in Sources */,
 				6C800C9827E75F9F07C67DB9 /* AppConfigTests.swift in Sources */,
 				C179C5202C4BB8D73E7EB701 /* AppIconTests.swift in Sources */,
 				A39D44E69D8BEF98C8934DF7 /* AppStateCLIRoutingTests.swift in Sources */,
