@@ -145,12 +145,9 @@ struct ShortcutsPane: View {
         liveModifiers = []
         recorder?.stop()
         let session = ShortcutRecorderSession(
-            onCapture: { binding in
-                handleCapture(binding, for: action)
-            },
-            onCancel: {
-                cancelRecording()
-            }
+            onCapture: { binding in handleCapture(binding, for: action) },
+            onCancel: { cancelRecording() },
+            onFlagsChanged: { mods in liveModifiers = mods }
         )
         session.start()
         recorder = session

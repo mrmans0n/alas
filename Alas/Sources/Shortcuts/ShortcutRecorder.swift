@@ -31,23 +31,32 @@ enum ShortcutRecorder {
 final class ShortcutRecorderSession {
     typealias Callback = (ShortcutBinding) -> Void
     typealias CancelCallback = () -> Void
+    typealias FlagsCallback = ([ShortcutBinding.Modifier]) -> Void
 
-    // `monitor` holds an opaque token from `NSEvent.addLocalMonitorForEvents`.
-    // Marked `nonisolated(unsafe)` so the (nonisolated) `deinit` can call
-    // `NSEvent.removeMonitor` on it; all live accesses go through MainActor-
-    // isolated methods, so concurrent reads/writes are not possible in practice.
-    nonisolated(unsafe) private var monitor: Any?
+    // `keyMonitor` and `flagsMonitor` hold opaque tokens from
+    // `NSEvent.addLocalMonitorForEvents`. Marked `nonisolated(unsafe)` so the
+    // (nonisolated) `deinit` can call `NSEvent.removeMonitor` on them; all live
+    // accesses go through MainActor-isolated methods, so concurrent reads/writes
+    // are not possible in practice.
+    nonisolated(unsafe) private var keyMonitor: Any?
+    nonisolated(unsafe) private var flagsMonitor: Any?
     private let onCapture: Callback
     private let onCancel: CancelCallback
+    private let onFlagsChanged: FlagsCallback
 
-    init(onCapture: @escaping Callback, onCancel: @escaping CancelCallback) {
+    init(
+        onCapture: @escaping Callback,
+        onCancel: @escaping CancelCallback,
+        onFlagsChanged: @escaping FlagsCallback = { _ in }
+    ) {
         self.onCapture = onCapture
         self.onCancel = onCancel
+        self.onFlagsChanged = onFlagsChanged
     }
 
     func start() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             if event.keyCode == 53 {  // Escape
                 self.onCancel()
@@ -59,19 +68,36 @@ final class ShortcutRecorderSession {
             }
             return event
         }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self else { return event }
+            self.onFlagsChanged(Self.modifiers(from: event.modifierFlags))
+            return event
+        }
     }
 
     func stop() {
-        teardownMonitor()
+        teardownMonitors()
     }
 
     deinit {
-        if let monitor { NSEvent.removeMonitor(monitor) }
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
     }
 
-    private func teardownMonitor() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
+    private func teardownMonitors() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        keyMonitor = nil
+        flagsMonitor = nil
+    }
+
+    static func modifiers(from flags: NSEvent.ModifierFlags) -> [ShortcutBinding.Modifier] {
+        var mods: [ShortcutBinding.Modifier] = []
+        if flags.contains(.control) { mods.append(.control) }
+        if flags.contains(.option)  { mods.append(.option) }
+        if flags.contains(.shift)   { mods.append(.shift) }
+        if flags.contains(.command) { mods.append(.command) }
+        return mods
     }
 
     /// Translate an NSEvent.keyDown into a ShortcutBinding, or nil if the
