@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-05-19
+
+### ✨ Features
+
+- add Alas terminal CLI support for opening files from agent/tooling flows (#189).
+- show ignored files in the Files tab (#192).
+- add Working Tree UI improvements: safe discard, per-hunk actions, and file context menu actions (#191).
+
+### 🐛 Fixes
+
+- fix repo sidebar chevron alignment (#190).
+
 ## [0.3.5] - 2026-05-18
 
 ### 🐛 Fixes
