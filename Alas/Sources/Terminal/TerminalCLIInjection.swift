@@ -2,6 +2,7 @@ import Foundation
 
 enum TerminalCLIInjection {
     static let executableName = "alas"
+    static let aoExecutableName = "ao"
     private static let fallbackPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
     static func executableScript() -> String {
@@ -54,6 +55,18 @@ enum TerminalCLIInjection {
             exit 2
             ;;
         esac
+        """
+    }
+
+    /// One-line wrapper that delegates to `alas open`. Lives next to `alas` in
+    /// the same bin dir that's prepended to the session PATH, so the inner
+    /// `alas` lookup is guaranteed to hit Alas's own script. `exec` replaces
+    /// the wrapper process so exit codes and signals propagate verbatim from
+    /// `alas open`.
+    static func aoExecutableScript() -> String {
+        return """
+        #!/bin/sh
+        exec alas open "$@"
         """
     }
 

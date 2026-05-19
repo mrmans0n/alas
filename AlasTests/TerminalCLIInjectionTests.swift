@@ -15,6 +15,13 @@ struct TerminalCLIInjectionTests {
         #expect(script.contains("/usr/bin/nc -U -w1"))
     }
 
+    @Test func aoExecutableScriptExecsAlasOpen() {
+        let script = TerminalCLIInjection.aoExecutableScript()
+
+        #expect(script.hasPrefix("#!/bin/sh"))
+        #expect(script.contains(#"exec alas open "$@""#))
+    }
+
     @Test func installExecutableWritesAlasCommand() throws {
         let url = try TerminalCLIInjection.installExecutable()
         var isDirectory: ObjCBool = false
