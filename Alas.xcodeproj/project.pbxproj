@@ -55,6 +55,7 @@
 		1EBF9B83C26B9518AF70D2F3 /* EditorTabStateMarkdownCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98FAFF3AE36A17EE6AD029C /* EditorTabStateMarkdownCodableTests.swift */; };
 		1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */; };
 		21332BF444F30835C0C70AD6 /* RightPaneStateDiscardPathsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4973BDD06953B7A1EB9A7A66 /* RightPaneStateDiscardPathsTests.swift */; };
+		214A48509F96D0B6613A1D1D /* AlasSlider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A98D0A96093087BF4C284053 /* AlasSlider.swift */; };
 		21D97FBF7356BC50400E0265 /* CommitContextBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79F544A8DC56D0D4166E0A4F /* CommitContextBuilderTests.swift */; };
 		22FDE2FB05952993DA2D0EB7 /* WorkingTreeSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 866CFEB75B7F754485C6BE77 /* WorkingTreeSectionView.swift */; };
 		23013D3D2538AC2D1BD3403D /* ChangesTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C682FF74C86B77BDCF46CF25 /* ChangesTabView.swift */; };
@@ -668,6 +669,7 @@
 		A78C23951DE157A38A9ED899 /* AgentHookSocketServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookSocketServerTests.swift; sourceTree = "<group>"; };
 		A8CC42BD54479E057902D392 /* LanguageServerAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerAvailabilityTests.swift; sourceTree = "<group>"; };
 		A919B8770029DBE7FCFF0EE2 /* AgentRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunner.swift; sourceTree = "<group>"; };
+		A98D0A96093087BF4C284053 /* AlasSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasSlider.swift; sourceTree = "<group>"; };
 		AAEDACEB27E6AF219054496E /* DialogChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialogChrome.swift; sourceTree = "<group>"; };
 		ACFF914E16884DAC97F11C76 /* SearchEmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchEmptyState.swift; sourceTree = "<group>"; };
 		AE0A6F237480EE72CB8DBE28 /* TitlelessWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitlelessWindowTests.swift; sourceTree = "<group>"; };
@@ -1064,6 +1066,7 @@
 				CA554728676F9D3B5E2C05FA /* .gitkeep */,
 				B4C486F9097A2B145D101E2C /* AlasButton.swift */,
 				D9E6D61B213F3378243B4A26 /* AlasField.swift */,
+				A98D0A96093087BF4C284053 /* AlasSlider.swift */,
 				1841997CCBDB9611576B930C /* AlasToggle.swift */,
 				524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */,
 				16CA8FEE64D73BDEBAF74878 /* Kbd.swift */,
@@ -1792,6 +1795,7 @@
 				6B2B0731DBCD5D1BE353FFCB /* AlasGhostty.SurfaceView.swift in Sources */,
 				2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */,
 				B06544FDB162DD8CDCD9EAF2 /* AlasHookCommand.swift in Sources */,
+				214A48509F96D0B6613A1D1D /* AlasSlider.swift in Sources */,
 				F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */,
 				5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */,
 				8FE765355607C57A9D3D6CEE /* AppState.swift in Sources */,
