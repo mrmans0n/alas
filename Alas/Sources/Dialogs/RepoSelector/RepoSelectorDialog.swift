@@ -97,7 +97,13 @@ struct RepoSelectorDialog: View {
                         row: row,
                         isSelected: idx == appState.repoSelector.selectedIndex,
                         projectsById: projectsById,
-                        onTap: { activate(rows: rows) },
+                        onTap: {
+                            // Snap selection to the clicked row before
+                            // activating so a tap without a preceding hover
+                            // can't fire the stale keyboard selection.
+                            appState.repoSelector.setSelectedIndex(idx, in: rows)
+                            activate(rows: rows)
+                        },
                         onHover: { appState.repoSelector.setSelectedIndex(idx, in: rows) }
                     )
                 }

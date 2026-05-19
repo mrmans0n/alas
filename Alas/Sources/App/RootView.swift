@@ -88,6 +88,7 @@ struct RootView: View {
         .modifier(RootCommandHandlers(
             state: state,
             showNewWorktree: $showNewWorktree,
+            newWorktreePresetProjectId: $newWorktreePresetProjectId,
             showNewProject: $showNewProject,
             selectedWorktree: selectedWorktree,
             openSettings: openSettingsWindow
@@ -267,6 +268,7 @@ struct RootView: View {
 private struct RootCommandHandlers: ViewModifier {
     @Bindable var state: AppState
     @Binding var showNewWorktree: Bool
+    @Binding var newWorktreePresetProjectId: String?
     @Binding var showNewProject: Bool
     let selectedWorktree: () -> Worktree?
     let openSettings: () -> Void
@@ -276,6 +278,7 @@ private struct RootCommandHandlers: ViewModifier {
             .modifier(RootBaseHandlers(
                 state: state,
                 showNewWorktree: $showNewWorktree,
+                newWorktreePresetProjectId: $newWorktreePresetProjectId,
                 showNewProject: $showNewProject,
                 selectedWorktree: selectedWorktree,
                 openSettings: openSettings
@@ -290,6 +293,7 @@ private struct RootCommandHandlers: ViewModifier {
 private struct RootBaseHandlers: ViewModifier {
     @Bindable var state: AppState
     @Binding var showNewWorktree: Bool
+    @Binding var newWorktreePresetProjectId: String?
     @Binding var showNewProject: Bool
     let selectedWorktree: () -> Worktree?
     let openSettings: () -> Void
@@ -305,7 +309,8 @@ private struct RootBaseHandlers: ViewModifier {
                 showNewProject = true
             }
         let c = b
-            .onReceive(NotificationCenter.default.publisher(for: .alasNewWorktree)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .alasNewWorktree)) { notification in
+                newWorktreePresetProjectId = notification.object as? String
                 showNewWorktree = true
             }
         let d = c
