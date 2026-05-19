@@ -400,6 +400,7 @@ final class MarkdownRenderer {
         paragraph.paragraphSpacing = 0
         paragraph.paragraphSpacingBefore = 0
         paragraph.lineBreakMode = .byWordWrapping
+        paragraph.lineHeightMultiple = CenterTypography.lineHeightMultiple
         return paragraph
     }
 
