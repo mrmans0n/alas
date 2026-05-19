@@ -98,13 +98,80 @@ final class RepoSelectorModel {
             .map { .repo($0.project, indices: $0.result.indices) }
     }
 
-    // MARK: - Step 2 rows (stub for Task 7 — keep compiling)
+    // MARK: - Step transitions
+
+    func pushRepo(projectId: String) {
+        savedReposQuery = query
+        savedReposSelectedIndex = selectedIndex
+        step = .worktrees(projectId: projectId)
+        query = ""
+        selectedIndex = 0
+    }
+
+    func popToRepos() {
+        step = .repos
+        query = savedReposQuery
+        selectedIndex = savedReposSelectedIndex
+    }
+
+    // MARK: - Step 2 rows
 
     private func worktreeRows(
         projectId: String,
         environment env: RepoSelectorEnvironment
     ) -> [RepoSelectorRow] {
-        return []
+        let worktrees = env.visibleWorktrees(projectId)
+
+        let listed: [RepoSelectorRow]
+        if query.isEmpty {
+            listed = emptyQueryWorktreeRows(
+                projectId: projectId,
+                worktrees: worktrees,
+                environment: env
+            )
+        } else {
+            listed = filteredWorktreeRows(worktrees: worktrees)
+        }
+
+        var rows = listed
+        rows.append(.divider(label: ""))
+        rows.append(.action(.newWorktreeForRepo(projectId: projectId)))
+        return rows
+    }
+
+    private func emptyQueryWorktreeRows(
+        projectId: String,
+        worktrees: [Worktree],
+        environment env: RepoSelectorEnvironment
+    ) -> [RepoSelectorRow] {
+        let validIds = Set(worktrees.map(\.id))
+        let recentIds = env.readRecents().liveWorktreeIds(in: projectId, validWorktreeIds: validIds)
+        let byId = Dictionary(uniqueKeysWithValues: worktrees.map { ($0.id, $0) })
+        let recentRows: [RepoSelectorRow] = recentIds.compactMap {
+            byId[$0].map { .worktree($0, indices: []) }
+        }
+        let recentSet = Set(recentIds)
+        let rest = worktrees
+            .filter { !recentSet.contains($0.id) }
+            .map { RepoSelectorRow.worktree($0, indices: []) }
+        return recentRows + rest
+    }
+
+    private func filteredWorktreeRows(worktrees: [Worktree]) -> [RepoSelectorRow] {
+        struct Scored {
+            let worktree: Worktree
+            let result: FuzzyMatch.Result
+        }
+        let scored: [Scored] = worktrees.compactMap { w in
+            guard let r = FuzzyMatch.score(query: query, target: w.branch) else { return nil }
+            return Scored(worktree: w, result: r)
+        }
+        return scored
+            .sorted { a, b in
+                if a.result.score != b.result.score { return a.result.score > b.result.score }
+                return a.worktree.branch.localizedCaseInsensitiveCompare(b.worktree.branch) == .orderedAscending
+            }
+            .map { .worktree($0.worktree, indices: $0.result.indices) }
     }
 
     // MARK: - Selection

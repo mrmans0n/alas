@@ -186,4 +186,77 @@ struct RepoSelectorModelTests {
         model.setSelectedIndex(1, in: rows)  // divider; snap to next selectable
         #expect(model.selectedIndex == 2)
     }
+
+    // MARK: - Push / pop
+
+    @Test func pushRepoSwitchesStepAndResetsQuery() {
+        let model = RepoSelectorModel()
+        model.query = "ala"
+        model.pushRepo(projectId: "p1")
+        #expect(model.step == .worktrees(projectId: "p1"))
+        #expect(model.query == "")
+        #expect(model.selectedIndex == 0)
+    }
+
+    @Test func popToReposRestoresQueryAndStep() {
+        let model = RepoSelectorModel()
+        model.query = "ala"
+        let e = env(projects: [project("p1", name: "alas"), project("p2", name: "other")])
+        _ = model.rows(environment: e)
+        model.setSelectedIndex(0, in: model.rows(environment: e))
+        model.pushRepo(projectId: "p1")
+        model.popToRepos()
+        #expect(model.step == .repos)
+        #expect(model.query == "ala")
+        #expect(model.selectedIndex == 0)
+    }
+
+    // MARK: - Step 2 rows
+
+    @Test func step2EmptyQueryListsRecentsThenRestThenAction() {
+        let model = RepoSelectorModel()
+        var r = RepoSelectorRecents()
+        r.bumpWorktree("w3", in: "p1")
+        r.bumpWorktree("w1", in: "p1")  // most recent
+        let wts = [
+            worktree("w1", projectId: "p1"),
+            worktree("w2", projectId: "p1"),
+            worktree("w3", projectId: "p1"),
+        ]
+        let e = env(
+            projects: [project("p1")],
+            worktrees: ["p1": wts],
+            recents: r
+        )
+        model.pushRepo(projectId: "p1")
+        let rows = model.rows(environment: e)
+        #expect(rows == [
+            .worktree(wts[0], indices: []),                                    // w1 (most recent)
+            .worktree(wts[2], indices: []),                                    // w3 (next recent)
+            .worktree(wts[1], indices: []),                                    // w2 (rest, sidebar order)
+            .divider(label: ""),
+            .action(.newWorktreeForRepo(projectId: "p1")),
+        ])
+    }
+
+    @Test func step2NonEmptyQueryFiltersAndKeepsActionRow() {
+        let model = RepoSelectorModel()
+        let wts = [
+            worktree("w1", projectId: "p1", branch: "main"),
+            worktree("w2", projectId: "p1", branch: "feature/login"),
+            worktree("w3", projectId: "p1", branch: "feature/repo-selector"),
+        ]
+        let e = env(projects: [project("p1")], worktrees: ["p1": wts])
+        model.pushRepo(projectId: "p1")
+        model.query = "feat"
+        let rows = model.rows(environment: e)
+        let branches: [String] = rows.compactMap {
+            if case .worktree(let w, _) = $0 { return w.branch } else { return nil }
+        }
+        #expect(branches.contains("feature/login"))
+        #expect(branches.contains("feature/repo-selector"))
+        #expect(!branches.contains("main"))
+        // The action row remains at the bottom regardless of query.
+        #expect(rows.last == .action(.newWorktreeForRepo(projectId: "p1")))
+    }
 }
