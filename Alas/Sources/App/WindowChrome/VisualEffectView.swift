@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 enum SidebarMaterialChoice: String, CaseIterable, Codable, Equatable {
+    case none
     case appKitAppearanceBased
     case appKitLight
     case appKitDark
@@ -29,6 +30,7 @@ enum SidebarMaterialChoice: String, CaseIterable, Codable, Equatable {
 
     var displayName: String {
         switch self {
+        case .none: return "None — solid theme color"
         case .appKitAppearanceBased: return "AppKit: Appearance Based"
         case .appKitLight: return "AppKit: Light"
         case .appKitDark: return "AppKit: Dark"
@@ -77,6 +79,8 @@ enum SidebarMaterialChoice: String, CaseIterable, Codable, Equatable {
         case .appKitContentBackground: return .contentBackground
         case .appKitUnderWindowBackground: return .underWindowBackground
         case .appKitUnderPageBackground: return .underPageBackground
+        case .none:
+            return nil
         case .swiftUIUltraThin, .swiftUIThin, .swiftUIRegular, .swiftUIThick, .swiftUIUltraThick:
             return nil
         }
