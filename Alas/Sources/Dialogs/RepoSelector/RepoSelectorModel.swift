@@ -18,7 +18,13 @@ final class RepoSelectorModel {
         didSet {
             // Reset selection so a shrinking filter never strands the cursor
             // on a stale row (especially the trailing `+ New worktree…`).
-            if query != oldValue { selectedIndex = 0 }
+            // Also bump the scroll tick — the list may have been scrolled
+            // down via keyboard nav before the filter changed, and we need
+            // the view to snap back to the new top.
+            if query != oldValue {
+                selectedIndex = 0
+                scrollToSelectionTick &+= 1
+            }
         }
     }
     private(set) var selectedIndex: Int = 0
