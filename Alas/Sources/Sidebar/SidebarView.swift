@@ -12,7 +12,7 @@ struct SidebarView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        let override = state.config.sidebarChromeOverride(forThemeId: state.config.themeId)
+        let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
             SidebarMaterialBackground(
                 choice: state.config.sidebarMaterial,

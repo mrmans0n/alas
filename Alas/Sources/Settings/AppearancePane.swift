@@ -185,10 +185,10 @@ struct AppearancePane: View {
     private func chromeBinding<T>(_ kp: WritableKeyPath<SidebarChromeOverride, T>) -> Binding<T> {
         Binding(
             get: {
-                state.config.sidebarChromeOverride(forThemeId: state.config.themeId)[keyPath: kp]
+                state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)[keyPath: kp]
             },
             set: { newValue in
-                let themeId = state.config.themeId
+                let themeId = state.themeStore.current.id
                 var current = state.config.sidebarChromeOverride(forThemeId: themeId)
                 current[keyPath: kp] = newValue
                 state.config.sidebarChromeOverrides[themeId] = current

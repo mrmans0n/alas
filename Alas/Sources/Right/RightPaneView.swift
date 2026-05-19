@@ -10,7 +10,7 @@ struct RightPaneView: View {
 
     var body: some View {
         let rps = state.rightPaneStore.state(for: worktree, baseBranch: state.config.worktrees.baseBranch)
-        let override = state.config.sidebarChromeOverride(forThemeId: state.config.themeId)
+        let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
             SidebarMaterialBackground(
                 choice: state.config.sidebarMaterial,
