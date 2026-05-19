@@ -21,7 +21,10 @@ struct RightPaneView: View {
                     changesCount: rps.changes.count,
                     totalAdd: rps.changes.reduce(0) { $0 + $1.add },
                     totalDel: rps.changes.reduce(0) { $0 + $1.del },
-                    onOpenFileSearch: { state.isSearchOpen = true }
+                    onHidePane: {
+                        state.config.rightPaneVisible = false
+                        state.saveConfig()
+                    }
                 )
 
                 switch rps.activeTab {

@@ -61,14 +61,6 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
-            .preference(key: RightPaneVisiblePreferenceKey.self, value: sizing.rightVisible)
         }
-    }
-}
-
-struct RightPaneVisiblePreferenceKey: PreferenceKey {
-    static var defaultValue: Bool = false
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = nextValue()
     }
 }
