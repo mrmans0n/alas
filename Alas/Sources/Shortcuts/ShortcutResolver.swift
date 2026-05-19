@@ -18,7 +18,12 @@ extension AppState {
         binding(for: action)?.asKeyboardShortcut()
     }
 
-    /// Assign a binding (nil = explicit unbind, removes default too).
+    /// Assign or unbind a shortcut.
+    ///
+    /// - Pass a non-nil binding to override the default.
+    /// - Pass `nil` to *explicitly unbind* the action (suppresses the default —
+    ///   the action will have no shortcut).
+    /// - Use `resetShortcut(for:)` instead if you want the default restored.
     func setShortcut(_ binding: ShortcutBinding?, for action: ShortcutAction) {
         config.shortcutOverrides[action.rawValue] = .some(binding)
         _ = saveConfig()
