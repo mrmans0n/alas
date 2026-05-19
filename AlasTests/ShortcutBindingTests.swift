@@ -19,24 +19,25 @@ struct ShortcutBindingTests {
     }
 
     @Test func displayStringForCommandP() {
-        #expect(ShortcutBinding(key: "p", modifiers: [.command]).displayString == "⌘P")
+        #expect(ShortcutBinding(key: "p", modifiers: [.command]).displayString == "⌘ P")
     }
 
     @Test func displayStringForCommandShiftL() {
         // Apple HIG order: control, option, shift, command — command is last.
-        #expect(ShortcutBinding(key: "l", modifiers: [.command, .shift]).displayString == "⇧⌘L")
+        // Symbols are space-separated so chips read clearly.
+        #expect(ShortcutBinding(key: "l", modifiers: [.command, .shift]).displayString == "⇧ ⌘ L")
     }
 
     @Test func displayStringSpecialKeys() {
-        #expect(ShortcutBinding(key: "return", modifiers: [.command]).displayString == "⌘↩")
-        #expect(ShortcutBinding(key: "leftArrow", modifiers: [.command, .option]).displayString == "⌥⌘←")
-        #expect(ShortcutBinding(key: "=", modifiers: [.command]).displayString == "⌘=")
+        #expect(ShortcutBinding(key: "return", modifiers: [.command]).displayString == "⌘ ↩")
+        #expect(ShortcutBinding(key: "leftArrow", modifiers: [.command, .option]).displayString == "⌥ ⌘ ←")
+        #expect(ShortcutBinding(key: "=", modifiers: [.command]).displayString == "⌘ =")
     }
 
     @Test func displayStringModifierOrderIsStable() {
         // Order: control, option, shift, command (matches Apple HIG).
         let b = ShortcutBinding(key: "k", modifiers: [.shift, .command, .control])
-        #expect(b.displayString == "⌃⇧⌘K")
+        #expect(b.displayString == "⌃ ⇧ ⌘ K")
     }
 
     @Test func asKeyboardShortcutLetter() {

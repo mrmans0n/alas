@@ -12,9 +12,9 @@ struct ShortcutChip: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
             Text(label)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(.custom("JetBrainsMonoNF-Regular", size: 12))
                 .foregroundColor(textColor)
             if showClear {
                 Button(action: onClear) {
@@ -26,7 +26,7 @@ struct ShortcutChip: View {
                 .padding(.leading, 2)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 3)
+        .padding(.horizontal, 10).padding(.vertical, 5)
         .background(background)
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .overlay(border)
@@ -40,7 +40,7 @@ struct ShortcutChip: View {
             if liveModifiers.isEmpty { return "Press keys…" }
             let order: [ShortcutBinding.Modifier] = [.control, .option, .shift, .command]
             return order.filter { liveModifiers.contains($0) }
-                .map { symbol(for: $0) }.joined()
+                .map { symbol(for: $0) }.joined(separator: " ")
         }
         if let binding { return binding.displayString }
         return "Not set"

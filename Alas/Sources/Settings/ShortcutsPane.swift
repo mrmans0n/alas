@@ -128,11 +128,18 @@ struct ShortcutsPane: View {
         let inGroup = ShortcutAction.allCases.filter { $0.group == group }
         guard !searchText.isEmpty else { return inGroup }
         let q = searchText.lowercased()
+        // Normalize spaces so typing "⌘P" matches the displayed "⌘ P".
+        let qStripped = q.replacingOccurrences(of: " ", with: "")
         return inGroup.filter { action in
             if action.label.lowercased().contains(q) { return true }
             if group.label.lowercased().contains(q) { return true }
-            if let b = state.binding(for: action),
-               b.displayString.lowercased().contains(q) { return true }
+            if let b = state.binding(for: action) {
+                let display = b.displayString.lowercased()
+                if display.contains(q) { return true }
+                if display.replacingOccurrences(of: " ", with: "").contains(qStripped) {
+                    return true
+                }
+            }
             return false
         }
     }

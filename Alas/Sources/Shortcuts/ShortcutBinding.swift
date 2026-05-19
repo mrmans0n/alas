@@ -11,9 +11,10 @@ struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
 
     var displayString: String {
         // Order: control, option, shift, command — Apple HIG.
+        // Symbols are space-separated so chips read clearly: "⌘ P", "⇧ ⌘ L".
         let order: [Modifier] = [.control, .option, .shift, .command]
-        let mods = order.filter { modifiers.contains($0) }.map(symbol(for:)).joined()
-        return mods + keySymbol
+        let symbols = order.filter { modifiers.contains($0) }.map(symbol(for:))
+        return (symbols + [keySymbol]).joined(separator: " ")
     }
 
     private func symbol(for m: Modifier) -> String {
