@@ -72,4 +72,15 @@ struct CommitHeaderViewTests {
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
     }
+
+    @Test func headerRowHasButtonAccessibilityTrait() {
+        let details = makeDetails(body: "Body")
+        var expanded = false
+        let binding = Binding(get: { expanded }, set: { expanded = $0 })
+        let view = CommitHeaderView(details: details, expanded: binding)
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(controller.view != nil)
+    }
 }
