@@ -23,6 +23,7 @@ struct ChangesTabView: View {
                 if stagedCount > 0 {
                     CommitComposerView(
                         state: rps.composer,
+                        appState: appState,
                         stagedCount: stagedCount,
                         stagedAdd: stagedAdd,
                         stagedDel: stagedDel,
