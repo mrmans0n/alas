@@ -6,6 +6,8 @@ struct RightPaneTabBar: View {
     let totalAdd: Int
     let totalDel: Int
     let onHidePane: () -> Void
+    let showIgnored: Bool
+    let onToggleShowIgnored: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -13,6 +15,12 @@ struct RightPaneTabBar: View {
         HStack(spacing: 6) {
             segment(.changes, icon: "diff", label: "Changes", count: changesCount)
             segment(.files,   icon: "folder", label: "Files",  count: nil)
+                .contextMenu {
+                    Toggle("Show ignored or excluded files", isOn: Binding(
+                        get: { showIgnored },
+                        set: { _ in onToggleShowIgnored() }
+                    ))
+                }
             Spacer(minLength: 8)
             trailing
             ToolbarBtn(icon: "sidebar.right", action: onHidePane)

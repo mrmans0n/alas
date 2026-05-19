@@ -7,13 +7,14 @@ struct FilesTabView: View {
     let onSelectFile: (FileTreeNode) -> Void
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
     let onLoadChildren: (String) -> Void
+    let showIgnored: Bool
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(nodes) { node in
+                ForEach(Self.filteredNodes(nodes, showIgnored: showIgnored)) { node in
                     renderNode(node, depth: 0)
                 }
             }
@@ -127,7 +128,9 @@ struct FilesTabView: View {
     private func renderChildren(of node: FileTreeNode, depth: Int) -> some View {
         Group {
             if let kids = node.children {
-                ForEach(kids) { renderNode($0, depth: depth) }
+                ForEach(Self.filteredNodes(kids, showIgnored: showIgnored)) {
+                    renderNode($0, depth: depth)
+                }
             }
         }
     }
