@@ -12,8 +12,12 @@ struct SidebarView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
+        let override = state.config.sidebarChromeOverride(forThemeId: state.config.themeId)
         ZStack {
-            SidebarMaterialBackground(choice: state.config.sidebarMaterial)
+            SidebarMaterialBackground(
+                choice: state.config.sidebarMaterial,
+                backgroundOpacity: override.backgroundOpacity
+            )
             VStack(spacing: 0) {
                 SidebarHeaderView(
                     onSettings: onSettings,
@@ -126,6 +130,7 @@ struct SidebarView: View {
                     .padding(.top, 8)
                 }
             }
+            .sidebarChromeTheme(textContrast: override.textContrast)
         }
     }
 }
