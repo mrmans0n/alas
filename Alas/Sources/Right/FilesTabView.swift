@@ -132,6 +132,23 @@ struct FilesTabView: View {
         }
     }
 
+    nonisolated static func filteredNodes(
+        _ nodes: [FileTreeNode],
+        showIgnored: Bool
+    ) -> [FileTreeNode] {
+        guard !showIgnored else { return nodes }
+        return nodes.compactMap { node in
+            if node.visibility == .ignored || node.visibility == .excluded {
+                return nil
+            }
+            var copy = node
+            if let kids = node.children {
+                copy.children = filteredNodes(kids, showIgnored: false)
+            }
+            return copy
+        }
+    }
+
     private func isOffGit(_ node: FileTreeNode) -> Bool {
         node.visibility == .ignored || node.visibility == .excluded
     }
