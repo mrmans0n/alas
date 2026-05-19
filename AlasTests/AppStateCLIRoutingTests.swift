@@ -189,6 +189,35 @@ struct AppStateCLIRoutingTests {
         #expect(handled == false)
     }
 
+    @Test func routeTerminalOpenURLReturnsFalseForInWorktreeSymlinkPointingOutside() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-symlink-out")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let externalDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ghostty-symlink-target-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: externalDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: externalDir) }
+        let externalFile = externalDir.appendingPathComponent("escaped.txt")
+        try "x\n".write(to: externalFile, atomically: true, encoding: .utf8)
+        let linkURL = worktree.path.appendingPathComponent("escape.txt")
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: externalFile)
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        surface.setCurrentWorkingDirectory(worktree.path)
+        let session = TerminalSession(
+            id: "s1", worktreeId: worktree.id, projectId: project.id,
+            surface: surface, executable: "/bin/zsh", args: []
+        )
+        state.terminal.registry.register(session)
+
+        let handled = state.routeTerminalOpenURL(rawURL: "escape.txt", sessionId: "s1")
+
+        #expect(handled == false)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).allSatisfy { tab in
+            if case .editor = tab { return false }
+            return true
+        })
+    }
+
     @Test func routeTerminalOpenURLReturnsFalseForUnknownSession() async throws {
         let state = AppState()
         let handled = state.routeTerminalOpenURL(rawURL: "anything", sessionId: "missing")

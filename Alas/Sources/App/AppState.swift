@@ -1350,8 +1350,13 @@ final class AppState {
         guard FileManager.default.fileExists(atPath: absoluteURL.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return false }
 
-        let rootComponents = worktree.path.standardizedFileURL.pathComponents
-        let targetComponents = absoluteURL.pathComponents
+        // Resolve symlinks on both sides before the containment check so that
+        // an in-tree symlink pointing outside the worktree (e.g.
+        // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
+        let resolvedTarget = absoluteURL.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
+        let rootComponents = resolvedRoot.pathComponents
+        let targetComponents = resolvedTarget.pathComponents
         guard targetComponents.count > rootComponents.count,
               Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
             return false
