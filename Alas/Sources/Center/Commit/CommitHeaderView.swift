@@ -60,6 +60,10 @@ struct CommitHeaderView: View {
             }
             .buttonStyle(.plain)
         }
+        .contentShape(Rectangle())
+        .onTapGesture { expanded.toggle() }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Toggle commit details")
     }
 
     private var expandedBlock: some View {
