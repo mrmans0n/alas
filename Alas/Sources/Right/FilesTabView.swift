@@ -146,7 +146,7 @@ struct FilesTabView: View {
             }
             var copy = node
             if let kids = node.children {
-                copy.children = filteredNodes(kids, showIgnored: false)
+                copy.children = filteredNodes(kids, showIgnored: showIgnored)
             }
             return copy
         }

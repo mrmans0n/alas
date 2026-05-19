@@ -106,14 +106,6 @@ struct AppConfig: Codable, Equatable {
         }
     }
 
-    struct Files: Codable, Equatable {
-        var showIgnored: Bool
-
-        enum CodingKeys: String, CodingKey {
-            case showIgnored
-        }
-    }
-
     struct Agents: Codable, Equatable {
         var builtinState: [String: BuiltinAgentState]
         var custom: [AgentDefinition]
@@ -121,6 +113,14 @@ struct AppConfig: Codable, Equatable {
 
         enum CodingKeys: String, CodingKey {
             case builtinState, custom, worktreeAutoLaunch
+        }
+    }
+
+    struct Files: Codable, Equatable {
+        var showIgnored: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case showIgnored
         }
     }
 
