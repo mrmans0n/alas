@@ -210,3 +210,12 @@ Run from a real worktree with at least one Swift file and one CRLF text file.
 - **Permissions preservation.** `chmod 755` a script file, open it, edit, ⌘S. `ls -l` still shows `-rwxr-xr-x`.
 - **Big file responsiveness.** Open a 5 k-line file, type rapidly. No visible flicker. Diagnostics catch up within ~1 s of pause.
 - **Save failure.** `chmod 555` the parent directory, edit, ⌘S. The conflict-banner area shows "Couldn't save: …". Restore perms, ⌘S succeeds.
+
+## `ao` alias
+
+Inside an Alas-spawned terminal:
+
+- `type ao` reports the script path under Alas's per-user bin dir (same directory as `alas`).
+- `ao README.md` opens the file in the editor (identical behavior to `alas open README.md`).
+- `ao` with no arguments prints `usage: alas open <path> [path...]` and exits with a non-zero status.
+- Launching a terminal **outside** Alas, `type ao` reports `ao: not found` (or the shell's equivalent).
