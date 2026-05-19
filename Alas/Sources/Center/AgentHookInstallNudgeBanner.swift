@@ -14,7 +14,7 @@ struct AgentHookInstallNudgeBanner: View {
         // Avoid re-evaluating installState() continuously during animation
         // by memoizing around `terminalTab` identity changes.
         let sessionIds = terminalTab.root.leaves().map(\.sessionId)
-        let detected = sessionIds.compactMap { appState.harness.harnessBySession[$0] }
+        let detected = sessionIds.compactMap { appState.harness.activeHarnessBySession[$0] }
         var seen = Set<HarnessKind>()
         let uniqueDetected = detected.filter { seen.insert($0).inserted }
         guard !uniqueDetected.isEmpty else { return nil }
