@@ -124,14 +124,31 @@ struct VisualEffectView: NSViewRepresentable {
 
 struct SidebarMaterialBackground: View {
     let choice: SidebarMaterialChoice
+    /// 0…1 alpha for a theme-colored overlay painted on top of the
+    /// material. Ignored when `choice == .none` (the rectangle below is
+    /// already opaque). 0 = pure material (today's look).
+    var backgroundOpacity: Double = 0
+    @Environment(\.theme) var theme
 
     var body: some View {
-        if let material = choice.appKitMaterial {
-            VisualEffectView(material: material, blendingMode: .behindWindow)
-        } else if let material = choice.swiftUIMaterial {
-            Rectangle()
-                .fill(.clear)
-                .background(material)
+        ZStack {
+            if choice == .none {
+                Rectangle().fill(theme.color("bg-0"))
+            } else if let material = choice.appKitMaterial {
+                VisualEffectView(material: material, blendingMode: .behindWindow)
+                Rectangle()
+                    .fill(theme.color("bg-0"))
+                    .opacity(clamp01(backgroundOpacity))
+                    .allowsHitTesting(false)
+            } else if let material = choice.swiftUIMaterial {
+                Rectangle().fill(.clear).background(material)
+                Rectangle()
+                    .fill(theme.color("bg-0"))
+                    .opacity(clamp01(backgroundOpacity))
+                    .allowsHitTesting(false)
+            }
         }
     }
+
+    private func clamp01(_ x: Double) -> Double { max(0, min(1, x)) }
 }
