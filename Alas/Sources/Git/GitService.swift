@@ -299,6 +299,31 @@ extension GitService {
                 }
                 paths.insert(rel)
             }
+
+            // Non-lazy ignored/excluded directories still have tracked
+            // descendants in `paths`.  The tree builder only knows a
+            // node's visibility from the dict, so intermediate sub-
+            // directory segments (e.g. ".build/nested") that aren't in
+            // the dict default to .tracked, causing a brief visual
+            // flicker when the tree refreshes.  Propagate the root
+            // visibility to those intermediate directory segments.
+            for candidate in candidateRootEntries where candidate.isDirectory {
+                let rel = candidate.path
+                guard let kind = rootVisibility[rel],
+                      !lazyDirectories.contains(rel) else { continue }
+                let prefix = rel + "/"
+                for p in paths where p.hasPrefix(prefix) {
+                    let parts = p.dropFirst(prefix.count).split(separator: "/")
+                    guard parts.count > 1 else { continue }
+                    var current = rel
+                    for part in parts.dropLast() {
+                        current += "/" + String(part)
+                        if visibility[current] == nil {
+                            visibility[current] = kind
+                        }
+                    }
+                }
+            }
         } catch {
             // Git-visible paths are still useful if the best-effort all-files
             // root scan or ignore classification fails.

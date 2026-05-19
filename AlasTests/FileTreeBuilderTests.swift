@@ -104,11 +104,30 @@ struct FileTreeBuilderTests {
         #expect(file.childrenState == .loaded)
     }
 
-    @Test func nestedPathsInheritAncestorVisibility() {
+    @Test func nestedDirectoriesKeepExcludedVisibilityWhenPropagated() {
+        // Simulates the visibility dict as built by GitService.fileTree()
+        // after propagating excluded root visibility to intermediate dirs.
         let tree = FileTreeBuilder.build(
             paths: [".build", ".build/nested/keep.txt", "Sources/App.swift"],
             badges: [:],
-            visibility: [".build": .excluded],
+            visibility: [".build": .excluded, ".build/nested": .excluded],
+            directories: [".build"]
+        )
+
+        let buildDir = tree.first { $0.path == ".build" }!
+        #expect(buildDir.visibility == .excluded)
+
+        let nestedDir = buildDir.children!.first { $0.path == ".build/nested" }!
+        #expect(nestedDir.visibility == .excluded)
+    }
+
+    @Test func trackedFilesInsideExcludedDirectoryStayTracked() {
+        // When an excluded directory has tracked descendants, the tracked
+        // files should keep .tracked visibility (defaulting from the dict).
+        let tree = FileTreeBuilder.build(
+            paths: [".build", ".build/nested/tracked.swift"],
+            badges: [:],
+            visibility: [".build": .excluded, ".build/nested": .excluded],
             directories: [".build"]
         )
 
@@ -118,22 +137,9 @@ struct FileTreeBuilderTests {
         let nestedDir = buildDir.children!.first { $0.path == ".build/nested" }!
         #expect(nestedDir.visibility == .excluded)
 
-        let keepFile = nestedDir.children!.first { $0.path == ".build/nested/keep.txt" }!
-        #expect(keepFile.visibility == .excluded)
-    }
-
-    @Test func nestedPathsDoNotInheritTrackedAncestor() {
-        let tree = FileTreeBuilder.build(
-            paths: ["src/lib/file.swift"],
-            badges: [:],
-            visibility: ["src": .tracked]
-        )
-
-        let srcDir = tree.first { $0.path == "src" }!
-        #expect(srcDir.visibility == .tracked)
-
-        let libDir = srcDir.children!.first { $0.path == "src/lib" }!
-        #expect(libDir.visibility == .tracked)
+        // Tracked file has no visibility entry → defaults to .tracked
+        let trackedFile = nestedDir.children!.first { $0.path == ".build/nested/tracked.swift" }!
+        #expect(trackedFile.visibility == .tracked)
     }
 
     private func assertPreservesFileAndDirectoryPathCollisions(

@@ -172,18 +172,7 @@ enum FileTreeBuilder {
     }
 
     private static func nodeVisibility(_ path: String, visibility: [String: FileVisibility]) -> FileVisibility {
-        if let v = visibility[path] { return v }
-        // Inherit non-tracked visibility from the nearest ancestor so that
-        // nested paths inside an ignored/excluded folder keep the parent's
-        // status even when the visibility dict only contains root entries.
-        var current = path
-        while let slash = current.lastIndex(of: "/") {
-            current = String(current[current.startIndex..<slash])
-            if let v = visibility[current], v != .tracked {
-                return v
-            }
-        }
-        return .tracked
+        visibility[path] ?? .tracked
     }
 
     private static func childrenState(
