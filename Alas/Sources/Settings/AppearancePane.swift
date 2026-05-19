@@ -129,6 +129,20 @@ struct AppearancePane: View {
                             .help("Next material")
                         }
                     }
+                    SettingsRow(name: "Background opacity",
+                                desc: "How much theme color to layer over the material.") {
+                        AlasSlider(value: chromeBinding(\.backgroundOpacity), range: 0...1, step: 0.05)
+                    }
+                    .opacity(state.config.sidebarMaterial == .none ? 0.5 : 1.0)
+                    .disabled(state.config.sidebarMaterial == .none)
+                    .help(state.config.sidebarMaterial == .none
+                          ? "Applies only when a material is selected."
+                          : "")
+
+                    SettingsRow(name: "Text contrast",
+                                desc: "Pulls sidebar text toward maximum contrast.") {
+                        AlasSlider(value: chromeBinding(\.textContrast), range: 0...1, step: 0.05)
+                    }
                 }
                 SettingsGroup(title: "Layout") {
                     SettingsRow(name: "Density") {
@@ -165,6 +179,21 @@ struct AppearancePane: View {
             get: { state.config[keyPath: kp] },
             set: { state.config[keyPath: kp] = $0
             state.saveConfig() }
+        )
+    }
+
+    private func chromeBinding<T>(_ kp: WritableKeyPath<SidebarChromeOverride, T>) -> Binding<T> {
+        Binding(
+            get: {
+                state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)[keyPath: kp]
+            },
+            set: { newValue in
+                let themeId = state.themeStore.current.id
+                var current = state.config.sidebarChromeOverride(forThemeId: themeId)
+                current[keyPath: kp] = newValue
+                state.config.sidebarChromeOverrides[themeId] = current
+                state.saveConfig()
+            }
         )
     }
 

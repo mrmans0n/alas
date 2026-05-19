@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -11,6 +12,13 @@ struct Theme: Codable, Equatable {
     /// SwiftUI Color via the Color(hex:) extension so we can also derive a
     /// muted variant if needed in future.
     var accentOverrideHex: String? = nil
+
+    /// Token-name → precomputed `Color` overrides that win over the raw
+    /// OKLCH lookup. Populated by `applyingSidebarTextContrast(_:)` when
+    /// a non-zero contrast is requested. Excluded from `Codable` (see
+    /// `CodingKeys`) because `Color` is not directly Codable and these
+    /// are purely runtime-derived.
+    var resolvedColorOverrides: [String: Color] = [:]
 
     enum CodingKeys: String, CodingKey { case id, name, tokens }
 
@@ -42,8 +50,9 @@ struct Theme: Codable, Equatable {
     }
 
     func color(_ token: String) -> Color {
-        // Accent override wins over the theme JSON when set (so the
-        // settings-pane picker actually changes the chrome).
+        if let override = resolvedColorOverrides[token] {
+            return override
+        }
         if let hex = accentOverrideHex {
             if token == "accent" {
                 return Color(hex: hex)
@@ -57,5 +66,44 @@ struct Theme: Codable, Equatable {
             return .pink   // sentinel, easy to spot
         }
         return parsed.toColor()
+    }
+}
+
+extension Theme {
+    static let sidebarTextContrastTokens: [String] = [
+        "fg", "fg-muted", "fg-dim", "fg-faint",
+    ]
+
+    /// Returns a copy of this theme where the sidebar fg tokens have been
+    /// blended `value` (clamped to 0…1) of the way toward maximum contrast.
+    /// Maximum contrast = white for dark themes, black for light themes.
+    /// `value == 0` returns the receiver unchanged.
+    func applyingSidebarTextContrast(_ value: Double) -> Theme {
+        let t = max(0, min(1, value))
+        if t == 0 { return self }
+        let target: Color = darkMode ? .white : .black
+        var copy = self
+        var overrides = resolvedColorOverrides
+        for token in Theme.sidebarTextContrastTokens {
+            let base = self.color(token)
+            overrides[token] = Color.blend(base, target, t: t)
+        }
+        copy.resolvedColorOverrides = overrides
+        return copy
+    }
+}
+
+extension Color {
+    /// Linear blend in sRGB. `t == 0` → `a`, `t == 1` → `b`.
+    static func blend(_ a: Color, _ b: Color, t: Double) -> Color {
+        if t <= 0 { return a }
+        if t >= 1 { return b }
+        let aN = NSColor(a).usingColorSpace(.sRGB) ?? NSColor(a)
+        let bN = NSColor(b).usingColorSpace(.sRGB) ?? NSColor(b)
+        let r  = aN.redComponent   + (bN.redComponent   - aN.redComponent)   * CGFloat(t)
+        let g  = aN.greenComponent + (bN.greenComponent - aN.greenComponent) * CGFloat(t)
+        let bl = aN.blueComponent  + (bN.blueComponent  - aN.blueComponent)  * CGFloat(t)
+        let al = aN.alphaComponent + (bN.alphaComponent - aN.alphaComponent) * CGFloat(t)
+        return Color(.sRGB, red: r, green: g, blue: bl, opacity: al)
     }
 }

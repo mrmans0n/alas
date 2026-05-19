@@ -1,5 +1,17 @@
 import Foundation
 
+struct SidebarChromeOverride: Codable, Equatable {
+    var backgroundOpacity: Double  // 0...1
+    var textContrast: Double       // 0...1
+
+    static let bundledDefaults: [String: SidebarChromeOverride] = [
+        "cool-slate": SidebarChromeOverride(backgroundOpacity: 0.25, textContrast: 0.15),
+        "light":      SidebarChromeOverride(backgroundOpacity: 0.25, textContrast: 0.15),
+    ]
+
+    static let zero = SidebarChromeOverride(backgroundOpacity: 0, textContrast: 0)
+}
+
 struct AppConfig: Codable, Equatable {
     var themeId: String
     var accent: String
@@ -21,6 +33,7 @@ struct AppConfig: Codable, Equatable {
     var files: Files
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
+    var sidebarChromeOverrides: [String: SidebarChromeOverride] = [:]
     var shortcutOverrides: [String: ShortcutBinding?] = [:]
 
     struct General: Codable, Equatable {
@@ -197,6 +210,7 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true),
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
+        sidebarChromeOverrides: SidebarChromeOverride.bundledDefaults,
         shortcutOverrides: [:]
     )
 }
@@ -232,6 +246,7 @@ extension AppConfig {
              agents,
              files,
              recentProjectIds, recentWorktreeIdsByProject,
+             sidebarChromeOverrides,
              shortcutOverrides
     }
 
@@ -333,7 +348,16 @@ extension AppConfig {
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
+        sidebarChromeOverrides =
+            (try? c.decode([String: SidebarChromeOverride].self, forKey: .sidebarChromeOverrides)) ?? [:]
         shortcutOverrides =
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
+    }
+}
+
+extension AppConfig {
+    func sidebarChromeOverride(forThemeId themeId: String) -> SidebarChromeOverride {
+        if let saved = sidebarChromeOverrides[themeId] { return saved }
+        return SidebarChromeOverride.bundledDefaults[themeId] ?? .zero
     }
 }

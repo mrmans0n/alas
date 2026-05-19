@@ -10,8 +10,12 @@ struct RightPaneView: View {
 
     var body: some View {
         let rps = state.rightPaneStore.state(for: worktree, baseBranch: state.config.worktrees.baseBranch)
+        let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
-            SidebarMaterialBackground(choice: state.config.sidebarMaterial)
+            SidebarMaterialBackground(
+                choice: state.config.sidebarMaterial,
+                backgroundOpacity: override.backgroundOpacity
+            )
             VStack(spacing: 0) {
                 RightPaneTabBar(
                     activeTab: Binding(
@@ -52,6 +56,7 @@ struct RightPaneView: View {
                     )
                 }
             }
+            .sidebarChromeTheme(textContrast: override.textContrast)
         }
         // Force a refresh whenever the user (re-)selects this worktree. The
         // FSEvent watcher is the primary update path, but if it ever misses
