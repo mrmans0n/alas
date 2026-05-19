@@ -23,6 +23,28 @@ struct ShortcutReservationsTests {
         #expect(reserved.contains(ShortcutBinding(key: "9", modifiers: [.command])))
     }
 
+    @Test func defaultsExcludeCodeEditorAndComposerScopedActions() {
+        // These actions have no responder when the terminal is focused, so
+        // reserving them would swallow the keystroke. Pass through to the
+        // shell instead.
+        let reserved = ShortcutReservations.defaultReserved
+        #expect(!reserved.contains(ShortcutAction.splitSelectionIntoLines.defaultBinding))
+        #expect(!reserved.contains(ShortcutAction.toggleMarkdownPreview.defaultBinding))
+        #expect(!reserved.contains(ShortcutAction.commitInComposer.defaultBinding))
+        #expect(!reserved.contains(ShortcutAction.findAndReplace.defaultBinding))
+    }
+
+    @Test func snapshotKeepsScopedActionsOutEvenWhenOverridden() {
+        // Rebinding a code-editor-scoped action to a new combo must NOT add
+        // that combo to the reserved set — the terminal still wants it.
+        var config = AppConfig.defaults
+        config.shortcutOverrides[ShortcutAction.toggleMarkdownPreview.rawValue] =
+            .some(ShortcutBinding(key: "j", modifiers: [.command, .shift]))
+
+        let reserved = ShortcutReservations.snapshot(from: config)
+        #expect(!reserved.contains(ShortcutBinding(key: "j", modifiers: [.command, .shift])))
+    }
+
     @Test func snapshotMovesReservationWhenOverridden() {
         // Rebind Search Files: ⌘P → ⌘O. The terminal should reserve ⌘O and
         // free ⌘P.

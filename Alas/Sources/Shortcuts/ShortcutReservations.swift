@@ -19,10 +19,12 @@ enum ShortcutReservations {
     }
 
     /// Reservations derived from the action defaults — used as the seed
-    /// before any AppState publishes its effective state.
+    /// before any AppState publishes its effective state. Code-editor and
+    /// composer-scoped actions are skipped: they have no responder when the
+    /// terminal is focused, so reserving them would just swallow the key.
     static let defaultReserved: Set<ShortcutBinding> = {
         var set = Set<ShortcutBinding>(ShortcutAction.reservedBindings)
-        for action in ShortcutAction.allCases {
+        for action in ShortcutAction.allCases where action.appliesInTerminal {
             set.insert(action.defaultBinding)
         }
         return set
@@ -30,10 +32,11 @@ enum ShortcutReservations {
 
     /// Pure: compute the effective reserved set for a given config snapshot.
     /// An explicit `nil` override drops the action from the set so the
-    /// terminal can receive that combo.
+    /// terminal can receive that combo. Code-editor- and composer-scoped
+    /// actions are never reserved regardless of override.
     static func snapshot(from config: AppConfig) -> Set<ShortcutBinding> {
         var set = Set<ShortcutBinding>(ShortcutAction.reservedBindings)
-        for action in ShortcutAction.allCases {
+        for action in ShortcutAction.allCases where action.appliesInTerminal {
             if let override = config.shortcutOverrides[action.rawValue] {
                 if let binding = override { set.insert(binding) }
             } else {

@@ -75,6 +75,20 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    /// Whether the action should be reserved away from a focused terminal
+    /// surface. `false` for code-editor- or composer-scoped actions: those
+    /// have no responder when the terminal is focused, so reserving them
+    /// would swallow the keystroke instead of letting the shell receive it.
+    var appliesInTerminal: Bool {
+        switch self {
+        case .splitSelectionIntoLines, .toggleMarkdownPreview,
+             .commitInComposer, .findAndReplace:
+            return false
+        default:
+            return true
+        }
+    }
+
     var defaultBinding: ShortcutBinding {
         switch self {
         case .searchFiles:              return .init(key: "p",          modifiers: [.command])
