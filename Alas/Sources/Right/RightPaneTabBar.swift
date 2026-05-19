@@ -5,16 +5,17 @@ struct RightPaneTabBar: View {
     let changesCount: Int
     let totalAdd: Int
     let totalDel: Int
-    let onOpenFileSearch: () -> Void
+    let onHidePane: () -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 6) {
             segment(.changes, icon: "diff", label: "Changes", count: changesCount)
             segment(.files,   icon: "folder", label: "Files",  count: nil)
             Spacer(minLength: 8)
             trailing
+            ToolbarBtn(icon: "sidebar.right", action: onHidePane)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .overlay(Divider().opacity(0.5), alignment: .bottom)
@@ -60,12 +61,7 @@ struct RightPaneTabBar: View {
                 .padding(.trailing, 4)
             }
         case .files:
-            Button(action: onOpenFileSearch) {
-                Icon(name: "search", size: 11)
-            }
-            .buttonStyle(.plain)
-            .opacity(0.7)
-            .padding(.trailing, 4)
+            EmptyView()
         }
     }
 }

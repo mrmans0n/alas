@@ -9,7 +9,6 @@ struct RootView: View {
     @State private var showNewWorktree = false
     @State private var newWorktreePresetProjectId: String?
     @State private var collapsedProjects: Set<String> = []
-    @State private var rightPaneShown = false
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -48,8 +47,7 @@ struct RootView: View {
                                 onNewWorktree: { projectId in
                                     newWorktreePresetProjectId = projectId
                                     showNewWorktree = true
-                                },
-                                rightSidebarHidden: !rightPaneShown
+                                }
                             )
                         },
                         center: {
@@ -75,9 +73,6 @@ struct RootView: View {
                             }
                         }
                     )
-                    .onPreferenceChange(RightPaneVisiblePreferenceKey.self) { isVisible in
-                        rightPaneShown = isVisible
-                    }
                 }
             }
             FileSearchDialog(appState: state)
