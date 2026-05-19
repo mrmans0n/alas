@@ -69,7 +69,7 @@ struct MarkdownTabView: View {
             // scoped to markdown tabs without explicit isEnabled gating.
             Button(action: cycleMode) { Color.clear }
                 .frame(width: 0, height: 0)
-                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .keyboardShortcut(appState.shortcut(for: .toggleMarkdownPreview))
                 .opacity(0)
                 .accessibilityHidden(true)
         }
