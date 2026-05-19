@@ -82,6 +82,7 @@ struct TabBarView: View {
             Button(action: onNewTerminal) {
                 Icon(name: "plus", size: 13)
                     .frame(width: 26, height: 22)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("New terminal")
@@ -167,8 +168,11 @@ private struct TabButton: View {
                         }
                     }
                     .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
                 .onHover { hoveringClose = $0 }
                 .help(dirty ? "Unsaved changes — click to close" : "Close")
             }
@@ -206,6 +210,7 @@ private struct ToolbarIconButton: View {
             Icon(name: iconName, size: 13,
                  color: hovering ? theme.color("fg") : theme.color("fg-faint"))
                 .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }

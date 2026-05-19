@@ -18,6 +18,8 @@ struct StageChip: View {
                     .frame(width: 14, height: 14)
                 Icon(name: glyph, size: 9, color: glyphColor)
             }
+            .frame(width: 20, height: 20)
+            .contentShape(Rectangle())
             .opacity(staged || hovering ? 1.0 : 0.55)
         }
         .buttonStyle(.plain)

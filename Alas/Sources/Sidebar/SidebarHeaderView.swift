@@ -34,6 +34,7 @@ struct ToolbarBtn: View {
         Button(action: action) {
             Icon(name: icon, size: 13, color: hovering ? theme.color("fg") : theme.color("fg-muted"))
                 .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
                 .background(hovering ? theme.color("bg-3") : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
