@@ -129,4 +129,61 @@ struct RepoSelectorModelTests {
         }
         #expect(indices == [0, 1])
     }
+
+    // MARK: - Selection movement
+
+    @Test func moveSelectionDownSkipsDivider() {
+        let model = RepoSelectorModel()
+        let rows: [RepoSelectorRow] = [
+            .repo(project("a"), indices: []),
+            .divider(label: "All repositories"),
+            .repo(project("b"), indices: []),
+        ]
+        model.moveSelectionDown(in: rows)  // 0 -> 2 (skip divider at 1)
+        #expect(model.selectedIndex == 2)
+    }
+
+    @Test func moveSelectionUpSkipsDivider() {
+        let model = RepoSelectorModel()
+        let rows: [RepoSelectorRow] = [
+            .repo(project("a"), indices: []),
+            .divider(label: "All repositories"),
+            .repo(project("b"), indices: []),
+        ]
+        model.setSelectedIndex(2, in: rows)
+        model.moveSelectionUp(in: rows)
+        #expect(model.selectedIndex == 0)
+    }
+
+    @Test func moveSelectionDownClampsAtBottom() {
+        let model = RepoSelectorModel()
+        let rows: [RepoSelectorRow] = [
+            .repo(project("a"), indices: []),
+            .repo(project("b"), indices: []),
+        ]
+        model.setSelectedIndex(1, in: rows)
+        model.moveSelectionDown(in: rows)
+        #expect(model.selectedIndex == 1)
+    }
+
+    @Test func moveSelectionUpClampsAtTop() {
+        let model = RepoSelectorModel()
+        let rows: [RepoSelectorRow] = [
+            .repo(project("a"), indices: []),
+            .repo(project("b"), indices: []),
+        ]
+        model.moveSelectionUp(in: rows)
+        #expect(model.selectedIndex == 0)
+    }
+
+    @Test func setSelectedIndexSnapsAwayFromDivider() {
+        let model = RepoSelectorModel()
+        let rows: [RepoSelectorRow] = [
+            .repo(project("a"), indices: []),
+            .divider(label: "All repositories"),
+            .repo(project("b"), indices: []),
+        ]
+        model.setSelectedIndex(1, in: rows)  // divider; snap to next selectable
+        #expect(model.selectedIndex == 2)
+    }
 }

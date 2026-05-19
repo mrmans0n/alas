@@ -106,4 +106,61 @@ final class RepoSelectorModel {
     ) -> [RepoSelectorRow] {
         return []
     }
+
+    // MARK: - Selection
+
+    func moveSelectionDown(in rows: [RepoSelectorRow]) {
+        let next = nextSelectable(from: selectedIndex, step: 1, in: rows)
+        if let next { selectedIndex = next }
+    }
+
+    func moveSelectionUp(in rows: [RepoSelectorRow]) {
+        let prev = nextSelectable(from: selectedIndex, step: -1, in: rows)
+        if let prev { selectedIndex = prev }
+    }
+
+    /// Set selection directly, snapping forward (then backward) to the
+    /// nearest selectable row if the target is a divider. Used on hover.
+    func setSelectedIndex(_ index: Int, in rows: [RepoSelectorRow]) {
+        guard !rows.isEmpty else { selectedIndex = 0; return }
+        let clamped = max(0, min(rows.count - 1, index))
+        if rows[clamped].isSelectable {
+            selectedIndex = clamped
+            return
+        }
+        // Try forward first, then backward.
+        if let fwd = scan(from: clamped, step: 1, in: rows) {
+            selectedIndex = fwd
+        } else if let back = scan(from: clamped, step: -1, in: rows) {
+            selectedIndex = back
+        } else {
+            selectedIndex = clamped
+        }
+    }
+
+    /// Resets selection to the first selectable row. Called after recomputes.
+    func resetSelectionToFirstSelectable(in rows: [RepoSelectorRow]) {
+        if let idx = scan(from: -1, step: 1, in: rows) {
+            selectedIndex = idx
+        } else {
+            selectedIndex = 0
+        }
+    }
+
+    private func nextSelectable(
+        from index: Int,
+        step: Int,
+        in rows: [RepoSelectorRow]
+    ) -> Int? {
+        scan(from: index, step: step, in: rows)
+    }
+
+    private func scan(from index: Int, step: Int, in rows: [RepoSelectorRow]) -> Int? {
+        var i = index + step
+        while i >= 0 && i < rows.count {
+            if rows[i].isSelectable { return i }
+            i += step
+        }
+        return nil
+    }
 }
