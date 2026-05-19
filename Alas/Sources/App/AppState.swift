@@ -262,12 +262,17 @@ final class AppState {
             projects: { [weak self] in self?.projects ?? [] },
             visibleWorktrees: { [weak self] projectId in
                 guard let self else { return [] }
-                // Hide worktrees that are mid-create/delete or in a failed
-                // operation state — the main pane refuses to render them
-                // and the sidebar deliberately ignores taps on those rows,
-                // so the selector must not focus them either.
+                // Match `RootView.selectedWorktree()`: hide creating /
+                // deleting / createFailed rows (the main pane returns nil
+                // for them) but keep deleteFailed selectable so the user
+                // can recover via keyboard nav, mirroring the sidebar.
                 return self.projectsManager.visibleWorktrees(projectId: projectId).filter {
-                    self.projectsManager.operationState(for: $0.id) == nil
+                    switch self.projectsManager.operationState(for: $0.id) {
+                    case .creating, .deleting, .createFailed:
+                        return false
+                    case nil, .deleteFailed:
+                        return true
+                    }
                 }
             },
             readRecents: { [weak self] in
