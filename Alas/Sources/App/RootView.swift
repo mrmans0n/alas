@@ -193,6 +193,7 @@ struct RootView: View {
                 worktree: wt,
                 message: message,
                 onRetry: { state.deleteWorktree(wt) },
+                onArchive: { state.archiveWorktree(wt) },
                 onCopyError: {
                     let pb = NSPasteboard.general
                     pb.clearContents()
