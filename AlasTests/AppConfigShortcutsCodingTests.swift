@@ -1,0 +1,40 @@
+import Testing
+import Foundation
+@testable import Alas
+
+struct AppConfigShortcutsCodingTests {
+    @Test func defaultsHaveEmptyOverrides() {
+        #expect(AppConfig.defaults.shortcutOverrides.isEmpty)
+    }
+
+    @Test func oldConfigWithoutOverridesDecodesToEmpty() throws {
+        let original = AppConfig.defaults
+        var dict = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(original)
+        ) as! [String: Any]
+        dict.removeValue(forKey: "shortcutOverrides")
+        let data = try JSONSerialization.data(withJSONObject: dict)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.shortcutOverrides.isEmpty)
+    }
+
+    @Test func roundTripWithOverrides() throws {
+        var cfg = AppConfig.defaults
+        cfg.shortcutOverrides = [
+            ShortcutAction.searchFiles.rawValue: ShortcutBinding(key: "o", modifiers: [.command]),
+            ShortcutAction.switchRepository.rawValue: nil,
+        ]
+        let data = try JSONEncoder().encode(cfg)
+        // Verify the explicit-nil reaches JSON as `null` (not stripped).
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let overrides = json["shortcutOverrides"] as! [String: Any]
+        #expect(overrides["switchRepository"] is NSNull,
+                "explicit-nil override must serialize as JSON null, not be dropped")
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.shortcutOverrides[ShortcutAction.searchFiles.rawValue] ==
+                .some(ShortcutBinding(key: "o", modifiers: [.command])))
+        // explicit-nil round-trips as Optional<Binding>.none stored under the key
+        #expect(decoded.shortcutOverrides.keys.contains(ShortcutAction.switchRepository.rawValue))
+        #expect(decoded.shortcutOverrides[ShortcutAction.switchRepository.rawValue] == .some(nil))
+    }
+}

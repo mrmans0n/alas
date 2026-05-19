@@ -21,6 +21,7 @@ struct AppConfig: Codable, Equatable {
     var files: Files
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
+    var shortcutOverrides: [String: ShortcutBinding?] = [:]
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -195,7 +196,8 @@ struct AppConfig: Codable, Equatable {
         ),
         files: Files(showIgnored: true),
         recentProjectIds: [],
-        recentWorktreeIdsByProject: [:]
+        recentWorktreeIdsByProject: [:],
+        shortcutOverrides: [:]
     )
 }
 
@@ -229,7 +231,8 @@ extension AppConfig {
              general, worktrees, terminal, harness, code, markdown, changes,
              agents,
              files,
-             recentProjectIds, recentWorktreeIdsByProject
+             recentProjectIds, recentWorktreeIdsByProject,
+             shortcutOverrides
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -330,5 +333,7 @@ extension AppConfig {
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
+        shortcutOverrides =
+            (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
     }
 }
