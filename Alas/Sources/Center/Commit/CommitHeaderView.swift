@@ -60,6 +60,10 @@ struct CommitHeaderView: View {
             }
             .buttonStyle(.plain)
         }
+        .contentShape(Rectangle())
+        .onTapGesture { expanded.toggle() }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Toggle commit details")
     }
 
     private var expandedBlock: some View {
@@ -67,6 +71,7 @@ struct CommitHeaderView: View {
             if !details.body.isEmpty {
                 Text(details.body)
                     .font(.system(size: 12))
+                    .lineSpacing(CenterTypography.textLineSpacing(forFontSize: 12))
                     .foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
             }

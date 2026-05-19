@@ -87,6 +87,11 @@ extension AlasGhostty {
         /// Fired on the main queue when the shell reports a new working directory.
         var cwdHandler: ((URL) -> Void)?
 
+        /// Invoked on the main queue when Ghostty emits a cmd-click URL.
+        /// Return `true` to swallow the event; `false` lets the caller fall
+        /// back to `NSWorkspace.shared.open` for default macOS handling.
+        var openURLHandler: ((String) -> Bool)?
+
         func setCurrentWorkingDirectory(_ url: URL) {
             currentWorkingDirectory = url
             cwdHandler?(url)
@@ -488,32 +493,18 @@ extension AlasGhostty {
         }
 
         static func isReservedAppKeyEquivalent(_ event: NSEvent) -> Bool {
+            isReservedAppKeyEquivalent(event, in: ShortcutReservations.current)
+        }
+
+        /// Test seam: same logic against an explicit reservation set so unit
+        /// tests don't depend on the global registry state.
+        static func isReservedAppKeyEquivalent(
+            _ event: NSEvent,
+            in reservations: Set<ShortcutBinding>
+        ) -> Bool {
             guard event.type == .keyDown else { return false }
-
-            let flags = event.modifierFlags
-                .intersection(.deviceIndependentFlagsMask)
-                .subtracting(.capsLock)
-            let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
-
-            // ⌘T — reserved for the app's New Terminal Tab.
-            if flags == .command && chars == "t" { return true }
-            // ⌘P — Search Files. ⌘K — Switch Repository. Without these the
-            // terminal swallows the keystroke before the menu fires.
-            if flags == .command && (chars == "p" || chars == "k") { return true }
-            // ⌘1..⌘9 — reserved for app tab switching.
-            if flags == .command && ("1"..."9").contains(chars) { return true }
-            // ⌘D / ⇧⌘D — Split Right / Split Down.
-            if flags == .command && chars == "d" { return true }
-            if flags == [.command, .shift] && chars == "d" { return true }
-            // ⌘W — Close Pane / Close Tab (AppState decides).
-            if flags == .command && chars == "w" { return true }
-            // Arrow shortcuts: focus (⌥⌘) and resize (⌃⌘).
-            let arrows: Set<UInt16> = [123, 124, 125, 126]  // left, right, down, up
-            if (flags == [.command, .option] || flags == [.command, .control])
-                && arrows.contains(event.keyCode) {
-                return true
-            }
-            return false
+            guard let binding = ShortcutRecorderSession.binding(from: event) else { return false }
+            return reservations.contains(binding)
         }
 
         // MARK: - NSTextInputClient doCommand

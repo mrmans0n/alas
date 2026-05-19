@@ -238,8 +238,11 @@ private func alasGhosttyAction(
         guard let ptr = v.url, v.len > 0 else { return false }
         let data = Data(bytes: ptr, count: Int(v.len))
         let s = String(data: data, encoding: .utf8) ?? ""
-        guard let url = URL(string: s) else { return false }
-        DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+        DispatchQueue.main.async {
+            if let handler = surfaceView?.openURLHandler, handler(s) { return }
+            guard let url = URL(string: s) else { return }
+            NSWorkspace.shared.open(url)
+        }
         return true
 
     case GHOSTTY_ACTION_SHOW_CHILD_EXITED:

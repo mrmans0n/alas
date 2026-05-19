@@ -34,6 +34,7 @@ struct AppConfig: Codable, Equatable {
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var sidebarChromeOverrides: [String: SidebarChromeOverride] = [:]
+    var shortcutOverrides: [String: ShortcutBinding?] = [:]
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -209,7 +210,8 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true),
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
-        sidebarChromeOverrides: SidebarChromeOverride.bundledDefaults
+        sidebarChromeOverrides: SidebarChromeOverride.bundledDefaults,
+        shortcutOverrides: [:]
     )
 }
 
@@ -244,7 +246,8 @@ extension AppConfig {
              agents,
              files,
              recentProjectIds, recentWorktreeIdsByProject,
-             sidebarChromeOverrides
+             sidebarChromeOverrides,
+             shortcutOverrides
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -347,6 +350,8 @@ extension AppConfig {
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
         sidebarChromeOverrides =
             (try? c.decode([String: SidebarChromeOverride].self, forKey: .sidebarChromeOverrides)) ?? [:]
+        shortcutOverrides =
+            (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
     }
 }
 

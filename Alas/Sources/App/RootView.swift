@@ -79,7 +79,12 @@ struct RootView: View {
             RepoSelectorDialog(appState: state)
         }
         .environment(\.theme, state.themeStore.current)
-        .onChange(of: state.themeStore.current.id) { _, _ in
+        .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
+            // `initial: true` is load-bearing: AppState.init() calls
+            // WindowAppearance.apply too, but that runs before the SwiftUI
+            // Window's NSWindow exists, so the per-window appearance never
+            // gets set. Without firing on first appearance, light-mode
+            // launches render half-dark until the user toggles the theme.
             WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
         }
         .background(WindowConfigurator())
@@ -188,6 +193,7 @@ struct RootView: View {
                 worktree: wt,
                 message: message,
                 onRetry: { state.deleteWorktree(wt) },
+                onArchive: { state.archiveWorktree(wt) },
                 onCopyError: {
                     let pb = NSPasteboard.general
                     pb.clearContents()

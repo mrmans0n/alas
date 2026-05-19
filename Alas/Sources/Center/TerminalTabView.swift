@@ -87,7 +87,10 @@ private struct PaneLeafView: View {
         Group {
             if let session = state.terminal.registry.session(for: leaf.sessionId) {
                 GhosttyHost(session: session, isFocused: isFocused)
-                    .onAppear { wireCwdHandler(session: session) }
+                    .onAppear {
+                        wireCwdHandler(session: session)
+                        wireOpenURLHandler(session: session)
+                    }
             } else {
                 Color.clear
             }
@@ -118,6 +121,13 @@ private struct PaneLeafView: View {
             _ = state.tabs.setLeafCwd(
                 worktreeId: worktreeId, tabId: tabId, leafId: leafId, cwd: url.path
             )
+        }
+    }
+
+    private func wireOpenURLHandler(session: TerminalSession) {
+        session.surface.openURLHandler = { [weak state, sessionId = session.id] rawURL in
+            guard let state else { return false }
+            return state.routeTerminalOpenURL(rawURL: rawURL, sessionId: sessionId)
         }
     }
 }

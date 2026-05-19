@@ -59,29 +59,29 @@ struct AlasApp: App {
                 Button("Search Files…") {
                     NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
                 }
-                .keyboardShortcut("p", modifiers: .command)
+                .keyboardShortcut(state.shortcut(for: .searchFiles))
                 Divider()
                 Button("Split Selection into Lines") {
                     NSApp.sendAction(#selector(CodeTextView.splitSelectionIntoLines(_:)), to: nil, from: nil)
                 }
-                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .keyboardShortcut(state.shortcut(for: .splitSelectionIntoLines))
                 .disabled(!state.hasActiveCodeEditorTab)
                 Divider()
                 Button("Find and Replace") {
                     NotificationCenter.default.post(name: .alasShowFindReplace, object: nil)
                 }
-                .keyboardShortcut("f", modifiers: [.command, .option])
+                .keyboardShortcut(state.shortcut(for: .findAndReplace))
                 .disabled(!state.hasActiveCodeEditorTab)
             }
             CommandGroup(after: .toolbar) {
                 Button("Toggle Right Pane") {
                     NotificationCenter.default.post(name: .alasToggleRightPane, object: nil)
                 }
-                .keyboardShortcut(.return, modifiers: [.command, .option])
+                .keyboardShortcut(state.shortcut(for: .toggleRightPane))
                 Button("New Terminal Tab") {
                     NotificationCenter.default.post(name: .alasNewTerminalTab, object: nil)
                 }
-                .keyboardShortcut("t", modifiers: .command)
+                .keyboardShortcut(state.shortcut(for: .newTerminalTab))
                 Button("Close Tab") {
                     NotificationCenter.default.post(name: .alasCloseTab, object: nil)
                 }
@@ -128,16 +128,16 @@ struct AlasApp: App {
                 Button("Create Project…") {
                     NotificationCenter.default.post(name: .alasCreateProject, object: nil)
                 }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .keyboardShortcut(state.shortcut(for: .createProject))
                 Button("New Worktree…") {
                     NotificationCenter.default.post(name: .alasNewWorktree, object: nil)
                 }
-                .keyboardShortcut("n", modifiers: [.command, .option])
+                .keyboardShortcut(state.shortcut(for: .newWorktree))
                 .disabled(state.projects.isEmpty)
                 Button("Switch Repository…") {
                     NotificationCenter.default.post(name: .alasOpenRepoSelector, object: nil)
                 }
-                .keyboardShortcut("k", modifiers: .command)
+                .keyboardShortcut(state.shortcut(for: .switchRepository))
                 Divider()
                 Button("Refresh Worktrees") {
                     NotificationCenter.default.post(name: .alasRefreshWorktrees, object: nil)
@@ -148,11 +148,11 @@ struct AlasApp: App {
                 Button("Split Right") {
                     NotificationCenter.default.post(name: .alasSplitRight, object: nil)
                 }
-                .keyboardShortcut("d", modifiers: .command)
+                .keyboardShortcut(state.shortcut(for: .splitTerminalRight))
                 Button("Split Down") {
                     NotificationCenter.default.post(name: .alasSplitDown, object: nil)
                 }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .keyboardShortcut(state.shortcut(for: .splitTerminalDown))
                 Button("Close Pane") {
                     NotificationCenter.default.post(name: .alasCloseTab, object: nil)
                 }
@@ -160,51 +160,51 @@ struct AlasApp: App {
                 Button("Focus Pane Left") {
                     NotificationCenter.default.post(name: .alasFocusPaneLeft, object: nil)
                 }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .keyboardShortcut(state.shortcut(for: .focusPaneLeft))
                 Button("Focus Pane Right") {
                     NotificationCenter.default.post(name: .alasFocusPaneRight, object: nil)
                 }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .keyboardShortcut(state.shortcut(for: .focusPaneRight))
                 Button("Focus Pane Up") {
                     NotificationCenter.default.post(name: .alasFocusPaneUp, object: nil)
                 }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .keyboardShortcut(state.shortcut(for: .focusPaneUp))
                 Button("Focus Pane Down") {
                     NotificationCenter.default.post(name: .alasFocusPaneDown, object: nil)
                 }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .keyboardShortcut(state.shortcut(for: .focusPaneDown))
                 Divider()
                 Button("Resize Pane Left") {
                     NotificationCenter.default.post(name: .alasResizePaneLeft, object: nil)
                 }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                .keyboardShortcut(state.shortcut(for: .resizePaneLeft))
                 Button("Resize Pane Right") {
                     NotificationCenter.default.post(name: .alasResizePaneRight, object: nil)
                 }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                .keyboardShortcut(state.shortcut(for: .resizePaneRight))
                 Button("Resize Pane Up") {
                     NotificationCenter.default.post(name: .alasResizePaneUp, object: nil)
                 }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+                .keyboardShortcut(state.shortcut(for: .resizePaneUp))
                 Button("Resize Pane Down") {
                     NotificationCenter.default.post(name: .alasResizePaneDown, object: nil)
                 }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+                .keyboardShortcut(state.shortcut(for: .resizePaneDown))
             }
             CommandGroup(after: .toolbar) {
                 Divider()
                 Button("Increase Font Size") {
                     NSApp.sendAction(#selector(FontSizeResponder.increaseFontSize(_:)), to: nil, from: nil)
                 }
-                .keyboardShortcut("=", modifiers: .command)
+                .keyboardShortcut(state.shortcut(for: .increaseFontSize))
                 Button("Decrease Font Size") {
                     NSApp.sendAction(#selector(FontSizeResponder.decreaseFontSize(_:)), to: nil, from: nil)
                 }
-                .keyboardShortcut("-", modifiers: .command)
+                .keyboardShortcut(state.shortcut(for: .decreaseFontSize))
                 Button("Reset Font Size") {
                     NSApp.sendAction(#selector(FontSizeResponder.resetFontSize(_:)), to: nil, from: nil)
                 }
-                .keyboardShortcut("0", modifiers: .command)
+                .keyboardShortcut(state.shortcut(for: .resetFontSize))
             }
         }
 

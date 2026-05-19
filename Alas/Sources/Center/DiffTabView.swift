@@ -277,6 +277,7 @@ struct HunkView: View {
                 }
                 .font(.system(size: 12.5, design: .monospaced))
                 .padding(.horizontal, 14)
+                .centerPanelRowSpacing()
                 .background(rowBg(line))
             }
         }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CommitComposerView: View {
     @Bindable var state: CommitComposerState
+    let appState: AppState
     let stagedCount: Int
     let stagedAdd: Int
     let stagedDel: Int
@@ -153,7 +154,7 @@ struct CommitComposerView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!state.canCommit(stagedCount: stagedCount))
-                .keyboardShortcut(.return, modifiers: .command)
+                .keyboardShortcut(appState.shortcut(for: .commitInComposer))
             }
             .padding(.horizontal, 12)
 

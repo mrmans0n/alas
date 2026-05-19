@@ -203,4 +203,263 @@ struct CodeTextViewMultiCursorTests {
 
         #expect(textView.selectedRanges.count == 1)
     }
+
+    // MARK: - Add next occurrence
+
+    @Test func cmdDSelectsWordAtCursorWhenSelectionIsEmpty() {
+        let textView = makeTextView("foo bar foo")
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        let handled = textView.performKeyEquivalent(with: commandD())
+
+        #expect(handled == true)
+        #expect(selectedRanges(in: textView) == [NSRange(location: 0, length: 3)])
+    }
+
+    @Test func repeatedCmdDAddsNextOccurrence() {
+        let textView = makeTextView("foo bar foo")
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        _ = textView.performKeyEquivalent(with: commandD())
+        _ = textView.performKeyEquivalent(with: commandD())
+
+        #expect(selectedRanges(in: textView) == [
+            NSRange(location: 0, length: 3),
+            NSRange(location: 8, length: 3)
+        ])
+    }
+
+    @Test func cmdDWrapsAroundFromLastOccurrence() {
+        let textView = makeTextView("foo bar foo")
+        textView.setSelectedRange(NSRange(location: 8, length: 3))
+
+        _ = textView.performKeyEquivalent(with: commandD())
+
+        #expect(selectedRanges(in: textView) == [
+            NSRange(location: 0, length: 3),
+            NSRange(location: 8, length: 3)
+        ])
+    }
+
+    @Test func cmdDSkipsAlreadySelectedOccurrences() {
+        let textView = makeTextView("foo foo foo")
+        textView.setSelectedRanges([
+            NSValue(range: NSRange(location: 0, length: 3)),
+            NSValue(range: NSRange(location: 4, length: 3))
+        ], affinity: .downstream, stillSelecting: false)
+
+        _ = textView.performKeyEquivalent(with: commandD())
+
+        #expect(selectedRanges(in: textView) == [
+            NSRange(location: 0, length: 3),
+            NSRange(location: 4, length: 3),
+            NSRange(location: 8, length: 3)
+        ])
+    }
+
+    @Test func cmdDDoesNotDuplicateWhenAllOccurrencesAreSelected() {
+        let textView = makeTextView("foo foo")
+        textView.setSelectedRanges([
+            NSValue(range: NSRange(location: 0, length: 3)),
+            NSValue(range: NSRange(location: 4, length: 3))
+        ], affinity: .downstream, stillSelecting: false)
+
+        _ = textView.performKeyEquivalent(with: commandD())
+
+        #expect(selectedRanges(in: textView) == [
+            NSRange(location: 0, length: 3),
+            NSRange(location: 4, length: 3)
+        ])
+    }
+
+    @Test func cmdDIsCaseSensitive() {
+        let textView = makeTextView("Foo foo Foo")
+        textView.setSelectedRange(NSRange(location: 0, length: 3))
+
+        _ = textView.performKeyEquivalent(with: commandD())
+
+        #expect(selectedRanges(in: textView) == [
+            NSRange(location: 0, length: 3),
+            NSRange(location: 8, length: 3)
+        ])
+    }
+
+    @Test func nonCommandDIsNotHandledAsKeyEquivalent() {
+        let textView = makeTextView("foo")
+
+        let handled = textView.performKeyEquivalent(with: keyDWithoutCommand())
+
+        #expect(handled == false)
+    }
+
+    // MARK: - Column selection
+
+    @Test func columnSelectionCreatesRangeForEachVisualLine() throws {
+        let textView = makeGeometryTextView("abcde\nfghij\nklmno")
+        let start = try pointForCharacter(at: 1, in: textView)
+        let end = try pointForCharacter(at: 15, in: textView)
+
+        performColumnDrag(in: textView, from: start, to: end)
+
+        #expect(selectedRanges(in: textView) == [
+            NSRange(location: 1, length: 2),
+            NSRange(location: 7, length: 2),
+            NSRange(location: 13, length: 2)
+        ])
+    }
+
+    @Test func columnSelectionReverseDragProducesSameRanges() throws {
+        let textView = makeGeometryTextView("abcde\nfghij\nklmno")
+        let start = try pointForCharacter(at: 15, in: textView)
+        let end = try pointForCharacter(at: 1, in: textView)
+
+        performColumnDrag(in: textView, from: start, to: end)
+
+        #expect(selectedRanges(in: textView) == [
+            NSRange(location: 1, length: 2),
+            NSRange(location: 7, length: 2),
+            NSRange(location: 13, length: 2)
+        ])
+    }
+
+    @Test func columnSelectionUsesWrappedVisualLines() throws {
+        let textView = makeGeometryTextView("abcdef ghijkl", width: 48)
+        guard let container = textView.textContainer, let layoutManager = textView.layoutManager else {
+            Issue.record("Missing TextKit components")
+            return
+        }
+        layoutManager.ensureLayout(for: container)
+
+        let glyphRange = layoutManager.glyphRange(for: container)
+        var lineCount = 0
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, _, _ in
+            lineCount += 1
+        }
+        #expect(lineCount > 1)
+
+        let start = try pointForCharacter(at: 1, in: textView)
+        let end = try pointForCharacter(at: 9, in: textView)
+        performColumnDrag(in: textView, from: start, to: end)
+
+        #expect(selectedRanges(in: textView).count > 1)
+    }
+
+    @Test func optionShiftDragBelowThresholdPreservesClickExtension() throws {
+        let textView = makeGeometryTextView("abcde")
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        let start = try pointForCharacter(at: 4, in: textView)
+
+        let end = NSPoint(x: start.x + 2, y: start.y + 1)
+        textView.mouseDown(with: mouseEvent(.leftMouseDown, in: textView, at: start, modifiers: [.option, .shift]))
+        textView.mouseDragged(with: mouseEvent(.leftMouseDragged, in: textView, at: end, modifiers: [.option, .shift]))
+        textView.mouseUp(with: mouseEvent(.leftMouseUp, in: textView, at: end, modifiers: [.option, .shift]))
+
+        #expect(selectedRanges(in: textView) == [NSRange(location: 1, length: 3)])
+    }
+
+    private func makeGeometryTextView(_ text: String, width: CGFloat = 800) -> CodeTextView {
+        let storage = NSTextStorage(string: text)
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: 600))
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: width, height: 600), textContainer: container)
+        textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.textContainerInset = .zero
+        textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        layoutManager.ensureLayout(for: container)
+        return textView
+    }
+
+    private func selectedRanges(in textView: CodeTextView) -> [NSRange] {
+        textView.selectedRanges.map(\.rangeValue)
+    }
+
+    private func commandD() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            isARepeat: false,
+            keyCode: 2
+        )!
+    }
+
+    private func keyDWithoutCommand() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            isARepeat: false,
+            keyCode: 2
+        )!
+    }
+
+    private func mouseEvent(_ type: NSEvent.EventType, in textView: CodeTextView, at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> NSEvent {
+        NSEvent.mouseEvent(
+            with: type,
+            location: textView.convert(point, to: nil),
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+    }
+
+    private func performColumnDrag(in textView: CodeTextView, from start: NSPoint, to end: NSPoint) {
+        textView.mouseDown(with: mouseEvent(.leftMouseDown, in: textView, at: start, modifiers: [.option, .shift]))
+        textView.mouseDragged(with: mouseEvent(.leftMouseDragged, in: textView, at: end, modifiers: [.option, .shift]))
+        textView.mouseUp(with: mouseEvent(.leftMouseUp, in: textView, at: end, modifiers: [.option, .shift]))
+    }
+
+    private func pointForCharacter(at location: Int, in textView: CodeTextView) throws -> NSPoint {
+        guard let layoutManager = textView.layoutManager, let container = textView.textContainer else {
+            Issue.record("Missing TextKit components")
+            return .zero
+        }
+
+        layoutManager.ensureLayout(for: container)
+        let nsLength = (textView.string as NSString).length
+        let clamped = min(max(location, 0), nsLength)
+        let glyphRange = layoutManager.glyphRange(for: container)
+        var point: NSPoint?
+
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, stop in
+            let charRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            guard clamped >= charRange.location, clamped <= NSMaxRange(charRange) else { return }
+
+            let x: CGFloat
+            if clamped == NSMaxRange(charRange) {
+                x = usedRect.maxX
+            } else {
+                let glyphIndex = layoutManager.glyphIndexForCharacter(at: clamped)
+                x = layoutManager.location(forGlyphAt: glyphIndex).x
+            }
+            point = NSPoint(
+                x: textView.textContainerOrigin.x + x,
+                y: textView.textContainerOrigin.y + usedRect.midY
+            )
+            stop.pointee = true
+        }
+
+        guard let point else {
+            Issue.record("Could not resolve point for character \(location)")
+            return .zero
+        }
+        return point
+    }
 }
