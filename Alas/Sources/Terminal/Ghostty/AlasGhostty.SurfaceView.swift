@@ -497,6 +497,9 @@ extension AlasGhostty {
 
             // ⌘T — reserved for the app's New Terminal Tab.
             if flags == .command && chars == "t" { return true }
+            // ⌘P — Search Files. ⌘K — Switch Repository. Without these the
+            // terminal swallows the keystroke before the menu fires.
+            if flags == .command && (chars == "p" || chars == "k") { return true }
             // ⌘1..⌘9 — reserved for app tab switching.
             if flags == .command && ("1"..."9").contains(chars) { return true }
             // ⌘D / ⇧⌘D — Split Right / Split Down.
