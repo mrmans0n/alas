@@ -174,6 +174,84 @@ final class RepoSelectorModel {
             .map { .worktree($0.worktree, indices: $0.result.indices) }
     }
 
+    // MARK: - Activation
+
+    enum Activation: Equatable {
+        case pushed(projectId: String)
+        case focused(worktreeId: String)
+        case showEmptyHint(projectId: String)
+        case openedNewWorktree(projectId: String)
+        case openedNewProject
+        case noop
+    }
+
+    @discardableResult
+    func activate(rows: [RepoSelectorRow], environment env: RepoSelectorEnvironment) -> Activation {
+        guard !rows.isEmpty else { return .noop }
+        let safeIndex = max(0, min(rows.count - 1, selectedIndex))
+        let row = rows[safeIndex]
+
+        switch row {
+        case .repo(let project, _):
+            return activateRepo(project, environment: env)
+
+        case .worktree(let worktree, _):
+            return focus(worktree: worktree, environment: env)
+
+        case .action(.newWorktreeForRepo(let projectId)):
+            env.openNewWorktree(projectId)
+            close()
+            return .openedNewWorktree(projectId: projectId)
+
+        case .action(.newProject):
+            env.openNewProject()
+            close()
+            return .openedNewProject
+
+        case .emptyHint(.noProjects):
+            env.openNewProject()
+            close()
+            return .openedNewProject
+
+        case .emptyHint(.noVisibleWorktrees(let projectId)):
+            env.openNewWorktree(projectId)
+            close()
+            return .openedNewWorktree(projectId: projectId)
+
+        case .divider:
+            return .noop
+        }
+    }
+
+    private func activateRepo(
+        _ project: ProjectConfig,
+        environment env: RepoSelectorEnvironment
+    ) -> Activation {
+        let wts = env.visibleWorktrees(project.id)
+        switch wts.count {
+        case 0:
+            return .showEmptyHint(projectId: project.id)
+        case 1:
+            return focus(worktree: wts[0], environment: env)
+        default:
+            pushRepo(projectId: project.id)
+            return .pushed(projectId: project.id)
+        }
+    }
+
+    private func focus(
+        worktree: Worktree,
+        environment env: RepoSelectorEnvironment
+    ) -> Activation {
+        env.focusWorktree(worktree.id)
+        var r = env.readRecents()
+        r.bumpProject(worktree.projectId)
+        r.bumpWorktree(worktree.id, in: worktree.projectId)
+        env.writeRecents(r)
+        close()
+        return .focused(worktreeId: worktree.id)
+    }
+
     // MARK: - Selection
 
     func moveSelectionDown(in rows: [RepoSelectorRow]) {

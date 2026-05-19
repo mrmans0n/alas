@@ -259,4 +259,124 @@ struct RepoSelectorModelTests {
         // The action row remains at the bottom regardless of query.
         #expect(rows.last == .action(.newWorktreeForRepo(projectId: "p1")))
     }
+
+    // MARK: - Activation
+
+    @Test func activateProjectWithMultipleWorktreesPushesNoFocusNoRecents() {
+        let model = RepoSelectorModel()
+        var focused: String? = nil
+        var writtenRecents: RepoSelectorRecents? = nil
+        let wts = [
+            worktree("w1", projectId: "p1"),
+            worktree("w2", projectId: "p1"),
+        ]
+        var e = env(projects: [project("p1")], worktrees: ["p1": wts])
+        e.focusWorktree = { focused = $0 }
+        e.writeRecents = { writtenRecents = $0 }
+
+        let rows = model.rows(environment: e)
+        model.setSelectedIndex(0, in: rows)
+        let result = model.activate(rows: rows, environment: e)
+
+        #expect(result == .pushed(projectId: "p1"))
+        #expect(model.step == .worktrees(projectId: "p1"))
+        #expect(focused == nil)
+        #expect(writtenRecents == nil)
+    }
+
+    @Test func activateProjectWithOneWorktreeFocusesClosesAndBumpsRecents() {
+        let model = RepoSelectorModel()
+        model.isOpen = true
+        var focused: String? = nil
+        var writtenRecents: RepoSelectorRecents? = nil
+        let wts = [worktree("w1", projectId: "p1")]
+        var e = env(projects: [project("p1")], worktrees: ["p1": wts])
+        e.focusWorktree = { focused = $0 }
+        e.writeRecents = { writtenRecents = $0 }
+
+        let rows = model.rows(environment: e)
+        model.setSelectedIndex(0, in: rows)
+        let result = model.activate(rows: rows, environment: e)
+
+        #expect(result == .focused(worktreeId: "w1"))
+        #expect(focused == "w1")
+        #expect(model.isOpen == false)
+        #expect(writtenRecents?.projectIds == ["p1"])
+        #expect(writtenRecents?.worktreeIdsByProject["p1"] == ["w1"])
+    }
+
+    @Test func activateProjectWithZeroWorktreesEmitsEmptyHintWithoutFocus() {
+        let model = RepoSelectorModel()
+        var focused: String? = nil
+        var writtenRecents: RepoSelectorRecents? = nil
+        var e = env(projects: [project("p1")], worktrees: ["p1": []])
+        e.focusWorktree = { focused = $0 }
+        e.writeRecents = { writtenRecents = $0 }
+
+        let rows = model.rows(environment: e)
+        model.setSelectedIndex(0, in: rows)
+        let result = model.activate(rows: rows, environment: e)
+
+        #expect(result == .showEmptyHint(projectId: "p1"))
+        #expect(model.step == .repos)
+        #expect(focused == nil)
+        #expect(writtenRecents == nil)
+    }
+
+    @Test func activateWorktreeRowFocusesAndBumpsBothRecents() {
+        let model = RepoSelectorModel()
+        model.isOpen = true
+        var focused: String? = nil
+        var writtenRecents: RepoSelectorRecents? = nil
+        let wts = [worktree("w1", projectId: "p1"), worktree("w2", projectId: "p1")]
+        var e = env(projects: [project("p1")], worktrees: ["p1": wts])
+        e.focusWorktree = { focused = $0 }
+        e.writeRecents = { writtenRecents = $0 }
+
+        model.pushRepo(projectId: "p1")
+        let rows = model.rows(environment: e)
+        // index 1 is w2 in this list (w1 first since no recents)
+        model.setSelectedIndex(1, in: rows)
+        let result = model.activate(rows: rows, environment: e)
+
+        #expect(result == .focused(worktreeId: "w2"))
+        #expect(focused == "w2")
+        #expect(model.isOpen == false)
+        #expect(writtenRecents?.projectIds == ["p1"])
+        #expect(writtenRecents?.worktreeIdsByProject["p1"] == ["w2"])
+    }
+
+    @Test func activateNewWorktreeActionDelegatesAndCloses() {
+        let model = RepoSelectorModel()
+        model.isOpen = true
+        var openedFor: String? = nil
+        var e = env(projects: [project("p1")], worktrees: ["p1": [worktree("w1", projectId: "p1"), worktree("w2", projectId: "p1")]])
+        e.openNewWorktree = { openedFor = $0 }
+
+        model.pushRepo(projectId: "p1")
+        let rows = model.rows(environment: e)
+        // last row is the action
+        model.setSelectedIndex(rows.count - 1, in: rows)
+        let result = model.activate(rows: rows, environment: e)
+
+        #expect(result == .openedNewWorktree(projectId: "p1"))
+        #expect(openedFor == "p1")
+        #expect(model.isOpen == false)
+    }
+
+    @Test func activateNoProjectsHintDelegatesToNewProject() {
+        let model = RepoSelectorModel()
+        model.isOpen = true
+        var openedNewProject = false
+        var e = env(projects: [])
+        e.openNewProject = { openedNewProject = true }
+
+        let rows = model.rows(environment: e)
+        model.setSelectedIndex(0, in: rows)
+        let result = model.activate(rows: rows, environment: e)
+
+        #expect(result == .openedNewProject)
+        #expect(openedNewProject)
+        #expect(model.isOpen == false)
+    }
 }
