@@ -199,6 +199,9 @@ final class AppState {
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         self.config = config
+        // Publish the effective shortcut reservations so the terminal pane
+        // can honor user overrides from the very first keystroke.
+        ShortcutReservations.update(from: config)
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
         let themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
         // Apply the persisted accent override so the picker's selection

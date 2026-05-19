@@ -4,6 +4,10 @@ import Testing
 
 @MainActor
 struct SurfaceViewShortcutTests {
+    // Tests pass `ShortcutReservations.defaultReserved` explicitly so they
+    // don't depend on the global registry (other suites mutate it under
+    // parallel test execution).
+
     @Test func commandTIsReservedForAppCommand() throws {
         let event = try keyEvent(
             characters: "t",
@@ -12,7 +16,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 17
         )
 
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandTAllowsCapsLock() throws {
@@ -23,7 +27,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 17
         )
 
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func modifiedCommandTIsNotReserved() throws {
@@ -34,7 +38,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 17
         )
 
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandDigitOneIsReservedForAppCommand() throws {
@@ -45,7 +49,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 18
         )
 
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandDigitNineIsReservedForAppCommand() throws {
@@ -56,7 +60,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 25
         )
 
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandDigitAllowsCapsLock() throws {
@@ -67,7 +71,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 18
         )
 
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func modifiedCommandDigitIsNotReserved() throws {
@@ -78,10 +82,13 @@ struct SurfaceViewShortcutTests {
             keyCode: 18
         )
 
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
-    @Test func commandZeroIsNotReserved() throws {
+    @Test func commandZeroIsReservedForFontReset() throws {
+        // ⌘0 is the default binding for Reset Font Size — when the terminal
+        // pane is focused, the menu's action handler routes through the
+        // FontSizeResponder chain and resets the surface's font size.
         let event = try keyEvent(
             characters: "0",
             ignoringModifiers: "0",
@@ -89,7 +96,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 29
         )
 
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func otherCommandKeysAreNotReserved() throws {
@@ -101,7 +108,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 14
         )
 
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func controlTIsNotReserved() throws {
@@ -112,7 +119,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 17
         )
 
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func keyUpIsNotReserved() throws {
@@ -124,7 +131,7 @@ struct SurfaceViewShortcutTests {
             keyCode: 17
         )
 
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandDIsReserved() throws {
@@ -132,7 +139,7 @@ struct SurfaceViewShortcutTests {
             characters: "d", ignoringModifiers: "d",
             modifiers: .command, keyCode: 2
         )
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandShiftDIsReserved() throws {
@@ -140,7 +147,7 @@ struct SurfaceViewShortcutTests {
             characters: "D", ignoringModifiers: "d",
             modifiers: [.command, .shift], keyCode: 2
         )
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandWIsReserved() throws {
@@ -148,7 +155,7 @@ struct SurfaceViewShortcutTests {
             characters: "w", ignoringModifiers: "w",
             modifiers: .command, keyCode: 13
         )
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandOptionLeftArrowIsReserved() throws {
@@ -156,7 +163,7 @@ struct SurfaceViewShortcutTests {
             characters: "\u{F702}", ignoringModifiers: "\u{F702}",
             modifiers: [.command, .option], keyCode: 123
         )
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func commandCtrlRightArrowIsReserved() throws {
@@ -164,7 +171,7 @@ struct SurfaceViewShortcutTests {
             characters: "\u{F703}", ignoringModifiers: "\u{F703}",
             modifiers: [.command, .control], keyCode: 124
         )
-        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     @Test func plainArrowIsNotReserved() throws {
@@ -172,7 +179,7 @@ struct SurfaceViewShortcutTests {
             characters: "\u{F702}", ignoringModifiers: "\u{F702}",
             modifiers: [], keyCode: 123
         )
-        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event))
+        #expect(!AlasGhostty.SurfaceView.isReservedAppKeyEquivalent(event, in: ShortcutReservations.defaultReserved))
     }
 
     private func keyEvent(

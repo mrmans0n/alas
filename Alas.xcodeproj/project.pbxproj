@@ -109,6 +109,7 @@
 		3E0A4613EB8F41DA8C182C36 /* FormatOnSaveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BEBDB5A6617C62D0F1C0D1 /* FormatOnSaveTests.swift */; };
 		3E0AA46F17D152BFDA52A79D /* NotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AEA30B7C74A39A46448AF5 /* NotificationServiceTests.swift */; };
 		3E46667F7AA794E24B04BC7F /* TerminalCLIInjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013AF8211B98BD98B65DF632 /* TerminalCLIInjection.swift */; };
+		3E4C896D74C96DE0BFCAE2A5 /* ShortcutReservationsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4A5200C6EBB6434DD6B8BD /* ShortcutReservationsTests.swift */; };
 		3E9B50F3BA9D7273EBA50445 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */; };
 		3E9F2C02A264024FC020172D /* EditorFindBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 679E62B501E0490F48CCA830 /* EditorFindBarView.swift */; };
 		3EA6388E72FDD02E5242002C /* HeadReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F8A28C3DBC50749BB1D2BEA /* HeadReaderTests.swift */; };
@@ -219,6 +220,7 @@
 		82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2F41880B917155F7ADE622 /* MonospaceFontCatalog.swift */; };
 		835AFE4A9EA0889E0AF316BD /* ChangeSummaryVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E465A2468376AA840ADFBC /* ChangeSummaryVisibilityTests.swift */; };
 		86718F7E55531B8E4356D7D1 /* PaneTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2943FBB1D6371EFAC9BBE68 /* PaneTree.swift */; };
+		873535DE3342024BD7AA057E /* ShortcutReservations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8942D0F47DBCFFB3549EE775 /* ShortcutReservations.swift */; };
 		8744A1DB40A1EC0D01D4C895 /* AlasGhostty.Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F696636690652C48CE87D9 /* AlasGhostty.Config.swift */; };
 		8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8DD66F449B380BC74B373647 /* Carbon.framework */; };
 		87ECE63567C08B2847844EDE /* ClaudeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */; };
@@ -467,6 +469,7 @@
 		19C327BB65463E878DDCDA5E /* MarkdownFileTypeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileTypeTests.swift; sourceTree = "<group>"; };
 		1A17A797374500E1FDD2382C /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		1AFC62A30044F71F0F16C3FB /* TerminalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalService.swift; sourceTree = "<group>"; };
+		1D4A5200C6EBB6434DD6B8BD /* ShortcutReservationsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutReservationsTests.swift; sourceTree = "<group>"; };
 		1DACC2D855F4316038CB40C7 /* CommitComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitComposerView.swift; sourceTree = "<group>"; };
 		1FDD958CF56AA9AD319F6C6C /* AlasCLICommandRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLICommandRouterTests.swift; sourceTree = "<group>"; };
 		20556618656218B845371F37 /* TreeSitterHighlighterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeSitterHighlighterTests.swift; sourceTree = "<group>"; };
@@ -636,6 +639,7 @@
 		866CFEB75B7F754485C6BE77 /* WorkingTreeSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkingTreeSectionView.swift; sourceTree = "<group>"; };
 		8673293AD419AA36F7DF02A9 /* CommitsOlderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsOlderTests.swift; sourceTree = "<group>"; };
 		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
+		8942D0F47DBCFFB3549EE775 /* ShortcutReservations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutReservations.swift; sourceTree = "<group>"; };
 		8C11E3449E4A7B4E69E83C1C /* AppStatePersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStatePersistenceTests.swift; sourceTree = "<group>"; };
 		8DD66F449B380BC74B373647 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
 		8DEB85132B767DB3B253620C /* cool-slate.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cool-slate.json"; sourceTree = "<group>"; };
@@ -979,6 +983,7 @@
 				00057A43DD2D53F8F79FAC43 /* ShortcutActionTests.swift */,
 				2440A9DE95B4F783AA69A355 /* ShortcutBindingTests.swift */,
 				60F628A45666E477DD695AD7 /* ShortcutRecorderValidationTests.swift */,
+				1D4A5200C6EBB6434DD6B8BD /* ShortcutReservationsTests.swift */,
 				6E8FA892877AE2FDBCD4C747 /* ShortcutResolverTests.swift */,
 				25DBE942154BD154F2D10B9D /* SidebarHeaderViewTests.swift */,
 				43DF691FC778F3A71CE20FBB /* StartupScriptInstallerTests.swift */,
@@ -1520,6 +1525,7 @@
 				9546B1E19C972D3BF80FA050 /* ShortcutAction.swift */,
 				2B9E3F080F847EF069137844 /* ShortcutBinding.swift */,
 				05B122F66B2DEA7853804624 /* ShortcutRecorder.swift */,
+				8942D0F47DBCFFB3549EE775 /* ShortcutReservations.swift */,
 				4069925EE709DD18AEA810B3 /* ShortcutResolver.swift */,
 			);
 			path = Shortcuts;
@@ -1991,6 +1997,7 @@
 				2ABA47D0AEE8C286572B2490 /* ShortcutBinding.swift in Sources */,
 				724F35133677956CC64E7466 /* ShortcutChip.swift in Sources */,
 				98CCFEFD7D0E8C27C6B373F6 /* ShortcutRecorder.swift in Sources */,
+				873535DE3342024BD7AA057E /* ShortcutReservations.swift in Sources */,
 				5B415F5F89EAE4B2EEA07046 /* ShortcutResolver.swift in Sources */,
 				F4B9A51A40365909B7644561 /* ShortcutsPane.swift in Sources */,
 				190FA1E53291D6D94CC0086C /* SidebarHeaderView.swift in Sources */,
@@ -2166,6 +2173,7 @@
 				01F51F05BA5DD24D4FBC4B4B /* ShortcutActionTests.swift in Sources */,
 				B884D1257E321D543B5BC670 /* ShortcutBindingTests.swift in Sources */,
 				64402D666DBDAA9B98D641F6 /* ShortcutRecorderValidationTests.swift in Sources */,
+				3E4C896D74C96DE0BFCAE2A5 /* ShortcutReservationsTests.swift in Sources */,
 				CF2AD9C6F30BC02C040902A8 /* ShortcutResolverTests.swift in Sources */,
 				08DBBE562CC62A888617AC09 /* SidebarHeaderViewTests.swift in Sources */,
 				DC0989E32F4B7BF023F784D6 /* StartupScriptInstallerTests.swift in Sources */,

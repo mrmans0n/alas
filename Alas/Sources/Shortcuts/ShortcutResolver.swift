@@ -27,18 +27,21 @@ extension AppState {
     func setShortcut(_ binding: ShortcutBinding?, for action: ShortcutAction) {
         config.shortcutOverrides[action.rawValue] = .some(binding)
         _ = saveConfig()
+        ShortcutReservations.update(from: config)
     }
 
     /// Remove the override entirely, returning the action to its default.
     func resetShortcut(for action: ShortcutAction) {
         config.shortcutOverrides.removeValue(forKey: action.rawValue)
         _ = saveConfig()
+        ShortcutReservations.update(from: config)
     }
 
     /// Drop every override.
     func resetAllShortcuts() {
         config.shortcutOverrides.removeAll()
         _ = saveConfig()
+        ShortcutReservations.update(from: config)
     }
 
     /// Find the first other action that currently has `candidate` as its
