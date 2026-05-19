@@ -41,6 +41,7 @@ final class MarkdownPreviewController: NSObject {
 
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600),
                                   textContainer: textContainer)
+        textView.defaultParagraphStyle = CenterTypography.paragraphStyle()
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = true

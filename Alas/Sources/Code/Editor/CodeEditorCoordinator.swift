@@ -103,6 +103,9 @@ final class CodeEditorCoordinator {
         self.currentFontFamily = family
         self.currentFontSize = size
         textView.font = Self.resolveFont(family: family, size: size)
+        let codeParagraphStyle = CenterTypography.paragraphStyle()
+        textView.defaultParagraphStyle = codeParagraphStyle
+        textView.typingAttributes[.paragraphStyle] = codeParagraphStyle
         textView.increaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: 1) }
         textView.decreaseFontSizeHandler = { [weak self] in self?.adjustFontSize(by: -1) }
         textView.resetFontSizeHandler = { [weak self] in self?.resetFontSize() }
@@ -507,7 +510,8 @@ final class CodeEditorCoordinator {
         textView.font = font
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: editorTheme.defaultFG
+            .foregroundColor: editorTheme.defaultFG,
+            .paragraphStyle: CenterTypography.paragraphStyle()
         ]
         let storage = buffer.storage
         storage.beginEditing()

@@ -47,6 +47,7 @@ struct CommitFilesListView: View {
             }
             .font(.system(size: 10.5, design: .monospaced))
             .padding(.horizontal, 12).padding(.vertical, 4)
+            .centerPanelRowSpacing()
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? theme.color("accent").opacity(0.2) : Color.clear)
             .contentShape(Rectangle())
