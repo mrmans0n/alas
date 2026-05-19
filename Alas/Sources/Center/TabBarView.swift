@@ -156,23 +156,24 @@ private struct TabButton: View {
             if showClose {
                 Button(action: onClose) {
                     ZStack {
-                        if dirty && !hoveringClose {
-                            Circle()
-                                .fill(theme.color("fg"))
-                                .frame(width: 7, height: 7)
-                        } else {
-                            Icon(name: "x", size: 9,
-                                 color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
-                                .background(hoveringClose ? theme.color("bg-4") : .clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        ZStack {
+                            if dirty && !hoveringClose {
+                                Circle()
+                                    .fill(theme.color("fg"))
+                                    .frame(width: 7, height: 7)
+                            } else {
+                                Icon(name: "x", size: 9,
+                                     color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
+                                    .background(hoveringClose ? theme.color("bg-4") : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                            }
                         }
+                        .frame(width: 14, height: 14)
                     }
-                    .frame(width: 14, height: 14)
+                    .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .frame(width: 20, height: 20)
-                .contentShape(Rectangle())
                 .onHover { hoveringClose = $0 }
                 .help(dirty ? "Unsaved changes — click to close" : "Close")
             }
