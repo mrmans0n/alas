@@ -369,6 +369,10 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let n = m
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenSearch)) { _ in
+                // Close the repo selector so the two overlays never overlap;
+                // RepoSelectorDialog is mounted after FileSearchDialog and
+                // would otherwise keep capturing keys.
+                state.isRepoSelectorOpen = false
                 state.search.open()
                 state.isSearchOpen = true
             }

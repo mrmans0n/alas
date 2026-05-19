@@ -202,6 +202,15 @@ struct RepoSelectorDialog: View {
         case .return:
             activate(rows: rows)
             return .handled
+        case .tab:
+            // The no-projects empty hint advertises "Press ⇥ to add one".
+            // Honor that here; everywhere else Tab is left alone.
+            let safeIndex = max(0, min(rows.count - 1, model.selectedIndex))
+            if rows.indices.contains(safeIndex), case .emptyHint = rows[safeIndex] {
+                activate(rows: rows)
+                return .handled
+            }
+            return .ignored
         default:
             return .ignored
         }
