@@ -1326,6 +1326,53 @@ final class AppState {
         openFile(relativePath: relativePath, worktreeId: worktreeId)
     }
 
+    /// Route a cmd-clicked URL from a Ghostty terminal surface. Mirrors `alas
+    /// open` for files inside the session's worktree (resolving relatives
+    /// against the shell cwd), and returns false for anything else so the
+    /// caller can fall back to `NSWorkspace.shared.open`.
+    func routeTerminalOpenURL(rawURL: String, sessionId: String) -> Bool {
+        guard let session = terminal.registry.session(for: sessionId),
+              let worktree = worktree(withId: session.worktreeId) else { return false }
+
+        let path: String
+        if let parsed = URL(string: rawURL), parsed.isFileURL {
+            path = parsed.path
+        } else {
+            path = rawURL
+        }
+        guard !path.isEmpty else { return false }
+
+        let absoluteURL: URL
+        if (path as NSString).isAbsolutePath {
+            absoluteURL = URL(fileURLWithPath: path).standardizedFileURL
+        } else {
+            let base = session.surface.currentWorkingDirectory ?? worktree.path
+            absoluteURL = base.appendingPathComponent(path).standardizedFileURL
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: absoluteURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return false }
+
+        // Resolve symlinks on both sides before the containment check so that
+        // an in-tree symlink pointing outside the worktree (e.g.
+        // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
+        let resolvedTarget = absoluteURL.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
+        let rootComponents = resolvedRoot.pathComponents
+        let targetComponents = resolvedTarget.pathComponents
+        guard targetComponents.count > rootComponents.count,
+              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
+            return false
+        }
+        let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
+        guard !relativePath.isEmpty else { return false }
+
+        openFile(relativePath: relativePath, worktreeId: worktree.id)
+        NSApp.activate(ignoringOtherApps: true)
+        return true
+    }
+
     private func relativePath(for url: URL, in worktreeRoot: URL) throws -> String {
         let root = worktreeRoot.standardizedFileURL.path
         let target = url.standardizedFileURL.path
