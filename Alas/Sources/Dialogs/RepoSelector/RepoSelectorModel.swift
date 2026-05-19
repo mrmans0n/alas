@@ -22,6 +22,10 @@ final class RepoSelectorModel {
         }
     }
     private(set) var selectedIndex: Int = 0
+    /// Bumped by keyboard navigation (Up/Down). The view scrolls the
+    /// selected row into view on changes to this — not on `selectedIndex`
+    /// itself — so hover-driven selection doesn't fight the user's scroll.
+    private(set) var scrollToSelectionTick: Int = 0
 
     // Snapshot of step-1 state preserved across a push so popToRepos can
     // restore both the query and (where possible) the selection.
@@ -265,12 +269,18 @@ final class RepoSelectorModel {
 
     func moveSelectionDown(in rows: [RepoSelectorRow]) {
         let next = nextSelectable(from: selectedIndex, step: 1, in: rows)
-        if let next { selectedIndex = next }
+        if let next {
+            selectedIndex = next
+            scrollToSelectionTick &+= 1
+        }
     }
 
     func moveSelectionUp(in rows: [RepoSelectorRow]) {
         let prev = nextSelectable(from: selectedIndex, step: -1, in: rows)
-        if let prev { selectedIndex = prev }
+        if let prev {
+            selectedIndex = prev
+            scrollToSelectionTick &+= 1
+        }
     }
 
     /// Set selection directly, snapping forward (then backward) to the

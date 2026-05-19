@@ -90,27 +90,37 @@ struct RepoSelectorDialog: View {
         let env = environment()
         let rows = appState.repoSelector.rows(environment: env)
         let projectsById = Dictionary(uniqueKeysWithValues: appState.projects.map { ($0.id, $0) })
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
-                    RepoSelectorRowView(
-                        row: row,
-                        isSelected: idx == appState.repoSelector.selectedIndex,
-                        projectsById: projectsById,
-                        onTap: {
-                            // Snap selection to the clicked row before
-                            // activating so a tap without a preceding hover
-                            // can't fire the stale keyboard selection.
-                            appState.repoSelector.setSelectedIndex(idx, in: rows)
-                            activate(rows: rows)
-                        },
-                        onHover: { appState.repoSelector.setSelectedIndex(idx, in: rows) }
-                    )
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+                        RepoSelectorRowView(
+                            row: row,
+                            isSelected: idx == appState.repoSelector.selectedIndex,
+                            projectsById: projectsById,
+                            onTap: {
+                                // Snap selection to the clicked row before
+                                // activating so a tap without a preceding hover
+                                // can't fire the stale keyboard selection.
+                                appState.repoSelector.setSelectedIndex(idx, in: rows)
+                                activate(rows: rows)
+                            },
+                            onHover: { appState.repoSelector.setSelectedIndex(idx, in: rows) }
+                        )
+                        .id(idx)
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+            .frame(minHeight: 200, maxHeight: 420)
+            // Scroll to the selected row when the keyboard moves selection.
+            // We watch `scrollToSelectionTick` (bumped by ↑/↓) instead of
+            // `selectedIndex` itself so hover-driven selection doesn't fight
+            // the user's scroll input.
+            .onChange(of: appState.repoSelector.scrollToSelectionTick) { _, _ in
+                proxy.scrollTo(appState.repoSelector.selectedIndex, anchor: .center)
+            }
         }
-        .frame(minHeight: 200, maxHeight: 420)
     }
 
     private var footer: some View {

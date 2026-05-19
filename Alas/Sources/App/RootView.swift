@@ -372,6 +372,7 @@ private struct RootBaseHandlers: ViewModifier {
                 // Close the repo selector so the two overlays never overlap;
                 // RepoSelectorDialog is mounted after FileSearchDialog and
                 // would otherwise keep capturing keys.
+                state.repoSelector.close()
                 state.isRepoSelectorOpen = false
                 state.search.open()
                 state.isSearchOpen = true
@@ -379,10 +380,14 @@ private struct RootBaseHandlers: ViewModifier {
         let o = n
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenRepoSelector)) { _ in
                 // Toggle: closing if already open, opening (and closing the
-                // file searcher) if not.
+                // file searcher) if not. We also call `search.close()` so an
+                // in-flight content search task is cancelled rather than
+                // continuing in the background under the new overlay.
                 if state.isRepoSelectorOpen {
+                    state.repoSelector.close()
                     state.isRepoSelectorOpen = false
                 } else {
+                    state.search.close()
                     state.isSearchOpen = false
                     state.isRepoSelectorOpen = true
                 }
