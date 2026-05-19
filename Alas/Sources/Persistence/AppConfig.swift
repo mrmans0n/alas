@@ -75,20 +75,23 @@ struct AppConfig: Codable, Equatable {
     struct Harness: Codable, Equatable {
         var notifyOnFinish: Bool
         var notifyOnAwaiting: Bool
+        var dismissedHookInstallNudges: [String]
 
         enum CodingKeys: String, CodingKey {
-            case notifyOnFinish, notifyOnAwaiting
+            case notifyOnFinish, notifyOnAwaiting, dismissedHookInstallNudges
         }
 
-        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool) {
+        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool, dismissedHookInstallNudges: [String] = []) {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
+            self.dismissedHookInstallNudges = dismissedHookInstallNudges
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             notifyOnFinish = (try? c.decode(Bool.self, forKey: .notifyOnFinish)) ?? true
             notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
+            dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
         }
     }
 

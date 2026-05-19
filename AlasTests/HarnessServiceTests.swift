@@ -133,6 +133,7 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["s1"]?.state == .busy)
         #expect(service.activityBySession["s1"]?.agent == .claude)
         #expect(service.harnessBySession["s1"] == .claudeCode)
+        #expect(service.activeHarnessBySession["s1"] == .claudeCode)
     }
 
     @Test func recordHarnessDetection_doesNotClobberSocketDrivenState() {
@@ -144,13 +145,17 @@ struct HarnessServiceTests {
 
     @Test func recordHarnessDetection_nil_dropsBusyButKeepsAwaiting() {
         let (service, _) = makeService()
-        service.setStateForTesting(sessionId: "s1", agent: .claude, state: .busy)
+        service.recordHarnessDetection(sessionId: "s1", kind: .claudeCode)
         service.recordHarnessDetection(sessionId: "s1", kind: nil)
         #expect(service.activityBySession["s1"] == nil)
+        #expect(service.activeHarnessBySession["s1"] == nil)
+        #expect(service.harnessBySession["s1"] == .claudeCode)
 
         service.setStateForTesting(sessionId: "s2", agent: .claude, state: .awaitingInput)
+        service.recordHarnessDetection(sessionId: "s2", kind: .claudeCode)
         service.recordHarnessDetection(sessionId: "s2", kind: nil)
         #expect(service.activityBySession["s2"]?.state == .awaitingInput)
+        #expect(service.activeHarnessBySession["s2"] == nil)
     }
 
     // MARK: - Cursor idle debounce
