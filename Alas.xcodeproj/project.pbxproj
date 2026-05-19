@@ -77,6 +77,7 @@
 		2D313A7E99C93242DD35AA8E /* CursorInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7948BA9EC461BA2E3617FBF0 /* CursorInstaller.swift */; };
 		2D6004EEFF10BA1E2B1357B9 /* SettingsSectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92F018C967A8D1421D83A06 /* SettingsSectionTests.swift */; };
 		2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */; };
+		2DE20AB5DAEF233BE008E5AA /* RepoSelectorRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */; };
 		2E1D743806714BE4CD88A240 /* ContentSearcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */; };
 		2F110275F3EC46505EF4DA48 /* SettingsSaveNormalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346272D3AF9A7D78067C96F /* SettingsSaveNormalizationTests.swift */; };
 		2FAA421AF3C23D27A864FDCA /* AgentBuiltins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F451C90EC9036CA8A7A04C /* AgentBuiltins.swift */; };
@@ -729,6 +730,7 @@
 		D921D1C8A44F1937769CDB60 /* EditorBufferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferStore.swift; sourceTree = "<group>"; };
 		D97EF761C70A3AF83C00879A /* VisualEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectView.swift; sourceTree = "<group>"; };
 		D9E6D61B213F3378243B4A26 /* AlasField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasField.swift; sourceTree = "<group>"; };
+		DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorRow.swift; sourceTree = "<group>"; };
 		DB5A2BDAA7ABD74C42BC51F8 /* CommitDetailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDetailsTests.swift; sourceTree = "<group>"; };
 		DBA6A9F78C8E8CDF6D170BDD /* StatusParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusParserTests.swift; sourceTree = "<group>"; };
 		DC3328C0EF905A8AC6F6F34D /* MarkdownViewModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownViewModeTests.swift; sourceTree = "<group>"; };
@@ -1430,6 +1432,7 @@
 			isa = PBXGroup;
 			children = (
 				9CA420C011D4235E47A3FB1B /* RepoSelectorRecents.swift */,
+				DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */,
 			);
 			path = RepoSelector;
 			sourceTree = "<group>";
@@ -1901,6 +1904,7 @@
 				A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */,
 				2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */,
 				E3158A4D8FBD36D06D421D28 /* RepoSelectorRecents.swift in Sources */,
+				2DE20AB5DAEF233BE008E5AA /* RepoSelectorRow.swift in Sources */,
 				3C57603EA801D8994B0B5525 /* RightPaneState.swift in Sources */,
 				6D5DF06E64DA191F1EE4B057 /* RightPaneStore.swift in Sources */,
 				BFB452EE7A29CF81F7A4BD8A /* RightPaneTabBar.swift in Sources */,
