@@ -104,6 +104,38 @@ struct FileTreeBuilderTests {
         #expect(file.childrenState == .loaded)
     }
 
+    @Test func nestedPathsInheritAncestorVisibility() {
+        let tree = FileTreeBuilder.build(
+            paths: [".build", ".build/nested/keep.txt", "Sources/App.swift"],
+            badges: [:],
+            visibility: [".build": .excluded],
+            directories: [".build"]
+        )
+
+        let buildDir = tree.first { $0.path == ".build" }!
+        #expect(buildDir.visibility == .excluded)
+
+        let nestedDir = buildDir.children!.first { $0.path == ".build/nested" }!
+        #expect(nestedDir.visibility == .excluded)
+
+        let keepFile = nestedDir.children!.first { $0.path == ".build/nested/keep.txt" }!
+        #expect(keepFile.visibility == .excluded)
+    }
+
+    @Test func nestedPathsDoNotInheritTrackedAncestor() {
+        let tree = FileTreeBuilder.build(
+            paths: ["src/lib/file.swift"],
+            badges: [:],
+            visibility: ["src": .tracked]
+        )
+
+        let srcDir = tree.first { $0.path == "src" }!
+        #expect(srcDir.visibility == .tracked)
+
+        let libDir = srcDir.children!.first { $0.path == "src/lib" }!
+        #expect(libDir.visibility == .tracked)
+    }
+
     private func assertPreservesFileAndDirectoryPathCollisions(
         _ paths: [String],
         directories: Set<String> = [],
