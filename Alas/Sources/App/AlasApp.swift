@@ -134,6 +134,10 @@ struct AlasApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .option])
                 .disabled(state.projects.isEmpty)
+                Button("Switch Repository…") {
+                    NotificationCenter.default.post(name: .alasOpenRepoSelector, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: .command)
                 Divider()
                 Button("Refresh Worktrees") {
                     NotificationCenter.default.post(name: .alasRefreshWorktrees, object: nil)

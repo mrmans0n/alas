@@ -367,6 +367,17 @@ private struct RootBaseHandlers: ViewModifier {
                 state.isSearchOpen = true
             }
         let o = n
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenRepoSelector)) { _ in
+                // Toggle: closing if already open, opening (and closing the
+                // file searcher) if not.
+                if state.isRepoSelectorOpen {
+                    state.isRepoSelectorOpen = false
+                } else {
+                    state.isSearchOpen = false
+                    state.isRepoSelectorOpen = true
+                }
+            }
+        let p = o
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 let beforeIds = state.allWorktreeIds()
                 Task {
@@ -377,7 +388,7 @@ private struct RootBaseHandlers: ViewModifier {
                     state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
-        return o
+        return p
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
@@ -434,6 +445,7 @@ extension Notification.Name {
     static let alasActivateTabByNumber = Notification.Name("AlasActivateTabByNumber")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")
     static let alasOpenSearch      = Notification.Name("AlasOpenSearch")
+    static let alasOpenRepoSelector = Notification.Name("AlasOpenRepoSelector")
     static let alasSaveActiveTab   = Notification.Name("AlasSaveActiveTab")
     static let alasSaveActiveTabAs = Notification.Name("AlasSaveActiveTabAs")
     static let alasSaveAllTabs     = Notification.Name("AlasSaveAllTabs")
