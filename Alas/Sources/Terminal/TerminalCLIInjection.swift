@@ -70,16 +70,25 @@ enum TerminalCLIInjection {
         """
     }
 
-    static func installExecutable() throws -> URL {
+    /// Writes the `alas` and `ao` scripts into Alas's per-user bin dir and
+    /// returns that directory. Callers prepend the returned path to the
+    /// session PATH so both commands are visible to the spawned shell.
+    /// Both scripts are written atomically, with `0o700` permissions, and
+    /// only rewritten when their content differs from the desired script.
+    static func installExecutables() throws -> URL {
         let dir = Paths.appSupportRoot.appendingPathComponent("bin", isDirectory: true)
         try Paths.ensureDirectoryExists(dir)
-        let url = dir.appendingPathComponent(executableName, isDirectory: false)
-        let script = executableScript()
+        try writeScript(executableScript(), named: executableName, into: dir)
+        try writeScript(aoExecutableScript(), named: aoExecutableName, into: dir)
+        return dir
+    }
+
+    private static func writeScript(_ script: String, named name: String, into dir: URL) throws {
+        let url = dir.appendingPathComponent(name, isDirectory: false)
         if (try? String(contentsOf: url, encoding: .utf8)) != script {
             try script.write(to: url, atomically: true, encoding: .utf8)
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
-        return url
     }
 
     static func pathValue(prepending directory: String, to current: String?) -> String {

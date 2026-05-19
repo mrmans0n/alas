@@ -22,14 +22,38 @@ struct TerminalCLIInjectionTests {
         #expect(script.contains(#"exec alas open "$@""#))
     }
 
-    @Test func installExecutableWritesAlasCommand() throws {
-        let url = try TerminalCLIInjection.installExecutable()
+    @Test func installExecutablesWritesAlasAndAoCommands() throws {
+        let dir = try TerminalCLIInjection.installExecutables()
         var isDirectory: ObjCBool = false
 
-        #expect(FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory))
-        #expect(!isDirectory.boolValue)
-        #expect(FileManager.default.isExecutableFile(atPath: url.path))
-        #expect(url.lastPathComponent == "alas")
+        #expect(FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+
+        let alasURL = dir.appendingPathComponent("alas")
+        var alasIsDir: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: alasURL.path, isDirectory: &alasIsDir))
+        #expect(!alasIsDir.boolValue)
+        #expect(FileManager.default.isExecutableFile(atPath: alasURL.path))
+
+        let aoURL = dir.appendingPathComponent("ao")
+        var aoIsDir: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: aoURL.path, isDirectory: &aoIsDir))
+        #expect(!aoIsDir.boolValue)
+        #expect(FileManager.default.isExecutableFile(atPath: aoURL.path))
+    }
+
+    @Test func installExecutablesIsIdempotent() throws {
+        let dir1 = try TerminalCLIInjection.installExecutables()
+        let alasBefore = try String(contentsOf: dir1.appendingPathComponent("alas"), encoding: .utf8)
+        let aoBefore = try String(contentsOf: dir1.appendingPathComponent("ao"), encoding: .utf8)
+
+        let dir2 = try TerminalCLIInjection.installExecutables()
+
+        #expect(dir1.path == dir2.path)
+        let alasAfter = try String(contentsOf: dir2.appendingPathComponent("alas"), encoding: .utf8)
+        let aoAfter = try String(contentsOf: dir2.appendingPathComponent("ao"), encoding: .utf8)
+        #expect(alasAfter == alasBefore)
+        #expect(aoAfter == aoBefore)
     }
 
     @Test func pathValueUsesSystemFallbackWhenCurrentPathIsEmpty() {
@@ -56,7 +80,7 @@ struct TerminalCLIInjectionTests {
         let socketPath = "\(root)/test.sock"
         try FileManager.default.createDirectory(atPath: nestedDir, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: logicalDir, withDestinationPath: realDir)
-        let cliURL = try TerminalCLIInjection.installExecutable()
+        let binDir = try TerminalCLIInjection.installExecutables()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
         let server = AgentHookSocketServer(socketPath: socketPath)
@@ -78,7 +102,7 @@ struct TerminalCLIInjectionTests {
         process.arguments = ["-c", #"cd "$ALAS_LOGICAL_DIR"; alas open "dir with spaces/file.txt""#]
         process.currentDirectoryURL = URL(fileURLWithPath: root, isDirectory: true)
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "\(cliURL.deletingLastPathComponent().path):\(env["PATH"] ?? "")"
+        env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
         env["ALAS_SOCKET_PATH"] = socketPath
         env["ALAS_SESSION_ID"] = "test-session"
         env["ALAS_LOGICAL_DIR"] = logicalDir

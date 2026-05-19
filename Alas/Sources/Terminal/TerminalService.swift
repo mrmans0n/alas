@@ -55,9 +55,9 @@ final class TerminalService {
             socketPath: socketPath, inheritParent: cfg.inheritParentEnv
         )
         if socketPath != nil {
-            let cliURL = try TerminalCLIInjection.installExecutable()
+            let binDir = try TerminalCLIInjection.installExecutables()
             env["PATH"] = TerminalCLIInjection.pathValue(
-                prepending: cliURL.deletingLastPathComponent().path,
+                prepending: binDir.path,
                 to: env["PATH"]
             )
         }
