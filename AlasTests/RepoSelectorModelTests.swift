@@ -275,6 +275,20 @@ struct RepoSelectorModelTests {
         #expect(rows.last == .action(.newWorktreeForRepo(projectId: "p1")))
     }
 
+    @Test func step2NoMatchesOmitsDividerSoActionRowIsTheDefault() {
+        // When the filter excludes every worktree, the divider would otherwise
+        // land at row 0 (because the leading list is empty) and swallow the
+        // default selection. The action row must remain the only thing in the
+        // list so Return on selectedIndex == 0 still creates a new worktree.
+        let model = RepoSelectorModel()
+        let wts = [worktree("w1", projectId: "p1", branch: "main")]
+        let e = env(projects: [project("p1")], worktrees: ["p1": wts])
+        model.pushRepo(projectId: "p1")
+        model.query = "nope"
+        let rows = model.rows(environment: e)
+        #expect(rows == [.action(.newWorktreeForRepo(projectId: "p1"))])
+    }
+
     // MARK: - Activation
 
     @Test func activateProjectWithMultipleWorktreesPushesNoFocusNoRecents() {

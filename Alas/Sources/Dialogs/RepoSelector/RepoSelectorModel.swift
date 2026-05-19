@@ -140,7 +140,12 @@ final class RepoSelectorModel {
         }
 
         var rows = listed
-        rows.append(.divider(label: ""))
+        // Only separate the worktree list from the action with a divider
+        // when there's something above it. Otherwise the divider would land
+        // at row 0 and swallow the default selection.
+        if !listed.isEmpty {
+            rows.append(.divider(label: ""))
+        }
         rows.append(.action(.newWorktreeForRepo(projectId: projectId)))
         return rows
     }
