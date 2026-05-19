@@ -32,6 +32,14 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var resetFontSizeHandler: (() -> Void)?
 
     private var multiCursorSelectedRanges: [NSValue]?
+    private var possibleColumnSelectionDrag: ColumnSelectionDrag?
+
+    private struct ColumnSelectionDrag {
+        let startPoint: NSPoint
+        var hasExceededThreshold: Bool
+    }
+
+    private static let columnSelectionDragThreshold: CGFloat = 4
 
     @objc func increaseFontSize(_ sender: Any?) { increaseFontSizeHandler?() }
     @objc func decreaseFontSize(_ sender: Any?) { decreaseFontSizeHandler?() }
@@ -314,9 +322,15 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
         let ranges = normalizedSelectedRanges()
 
-        // If any range has non-zero length, let AppKit handle it natively
         if ranges.contains(where: { $0.length > 0 }) {
-            super.insertNewline(sender)
+            let edits = ranges.map {
+                MultiCursorEdit(
+                    originalRange: $0,
+                    replacement: "\n",
+                    resultingSelection: NSRange(location: $0.location + 1, length: 0)
+                )
+            }
+            applyMultiCursorEdits(edits)
             return
         }
 
@@ -410,6 +424,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
         if isOption, isShift {
             let p = convert(event.locationInWindow, from: nil)
+            possibleColumnSelectionDrag = ColumnSelectionDrag(startPoint: p, hasExceededThreshold: false)
             let charIndex = indexAtPoint(p)
             if charIndex != NSNotFound {
                 let current = normalizedSelectedRanges()
@@ -447,6 +462,32 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         super.mouseDown(with: event)
     }
 
+    override func mouseDragged(with event: NSEvent) {
+        guard var drag = possibleColumnSelectionDrag else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let p = convert(event.locationInWindow, from: nil)
+        if !drag.hasExceededThreshold {
+            let distance = hypot(p.x - drag.startPoint.x, p.y - drag.startPoint.y)
+            guard distance >= Self.columnSelectionDragThreshold else { return }
+            drag.hasExceededThreshold = true
+            possibleColumnSelectionDrag = drag
+        }
+
+        let ranges = columnSelectionRanges(from: drag.startPoint, to: p)
+        guard !ranges.isEmpty else { return }
+        setNormalizedSelectedRanges(ranges)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let handledColumnDrag = possibleColumnSelectionDrag?.hasExceededThreshold == true
+        possibleColumnSelectionDrag = nil
+        if handledColumnDrag { return }
+        super.mouseUp(with: event)
+    }
+
     override func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
         flagsChangedHandler?(event)
@@ -455,6 +496,20 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         mouseExitedHandler?()
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isCommandOnly = modifiers.contains(.command)
+            && !modifiers.contains(.shift)
+            && !modifiers.contains(.option)
+            && !modifiers.contains(.control)
+        let isD = event.charactersIgnoringModifiers?.lowercased() == "d"
+        if isCommandOnly, isD {
+            addNextOccurrence()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func updateTrackingAreas() {
@@ -466,6 +521,158 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             owner: self, userInfo: nil
         )
         addTrackingArea(area)
+    }
+
+    // MARK: - Selection helpers
+
+    private func addNextOccurrence() {
+        let ranges = normalizedSelectedRanges()
+        guard !string.isEmpty else { return }
+
+        let ns = string as NSString
+        let activeRange: NSRange
+        if let last = ranges.last, last.length > 0 {
+            activeRange = last
+        } else {
+            let cursor = ranges.last?.location ?? selectedRange().location
+            guard let word = wordRange(at: cursor) else { return }
+            var updated = ranges
+            if updated.isEmpty {
+                updated = [word]
+            } else {
+                updated[updated.count - 1] = word
+            }
+            setNormalizedSelectedRanges(updated)
+            scrollRangeToVisible(word)
+            return
+        }
+
+        let needle = ns.substring(with: activeRange)
+        guard !needle.isEmpty else { return }
+        let searchStart = NSMaxRange(activeRange)
+        guard let next = nextUnselectedOccurrence(of: needle, after: searchStart, selected: ranges) else { return }
+        appendSelection(next)
+        scrollRangeToVisible(next)
+    }
+
+    private func nextUnselectedOccurrence(of needle: String, after location: Int, selected: [NSRange]) -> NSRange? {
+        let ns = string as NSString
+        let length = ns.length
+        guard location <= length else { return nil }
+
+        var searchLocation = location
+        var hasWrapped = false
+        while true {
+            let range = NSRange(location: searchLocation, length: length - searchLocation)
+            let found = ns.range(of: needle, options: [], range: range)
+            if found.location == NSNotFound {
+                if !hasWrapped, location > 0 {
+                    searchLocation = 0
+                    hasWrapped = true
+                    continue
+                }
+                return nil
+            }
+            if hasWrapped, found.location >= location { return nil }
+            if !selected.contains(where: { NSEqualRanges($0, found) }) {
+                return found
+            }
+            searchLocation = found.location + found.length
+            if searchLocation > length { return nil }
+        }
+    }
+
+    private func columnSelectionRanges(from startPoint: NSPoint, to endPoint: NSPoint) -> [NSRange] {
+        guard let layoutManager, let textContainer else { return [] }
+        let nsLength = (string as NSString).length
+        guard nsLength > 0 else { return [] }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        let origin = textContainerOrigin
+        let start = NSPoint(x: startPoint.x - origin.x, y: startPoint.y - origin.y)
+        let end = NSPoint(x: endPoint.x - origin.x, y: endPoint.y - origin.y)
+        let minX = min(start.x, end.x)
+        let maxX = max(start.x, end.x)
+        let minY = min(start.y, end.y)
+        let maxY = max(start.y, end.y)
+        let selectionRect = NSRect(x: minX, y: minY, width: max(maxX - minX, 1), height: max(maxY - minY, 1))
+
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var ranges: [NSRange] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, _, _, lineGlyphRange, _ in
+            guard lineRect.intersects(selectionRect) || selectionRect.contains(NSPoint(x: minX, y: lineRect.midY)) else { return }
+
+            let glyphCharRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            let lineCharRange = self.textContentRange(forLineCharacterRange: glyphCharRange)
+            guard lineCharRange.location != NSNotFound, lineCharRange.location <= nsLength else { return }
+
+            let y = lineRect.midY
+            let startLocation = self.characterIndex(atContainerPoint: NSPoint(x: minX, y: y), constrainedTo: lineCharRange)
+            let endLocation = self.characterIndex(atContainerPoint: NSPoint(x: maxX, y: y), constrainedTo: lineCharRange)
+            let lower = min(startLocation, endLocation)
+            let upper = max(startLocation, endLocation)
+            ranges.append(NSRange(location: lower, length: upper - lower))
+        }
+
+        return ranges
+    }
+
+    private func characterIndex(atContainerPoint point: NSPoint, constrainedTo lineCharRange: NSRange) -> Int {
+        guard let layoutManager, let textContainer else { return lineCharRange.location }
+        let nsLength = (string as NSString).length
+        let lineStart = min(max(lineCharRange.location, 0), nsLength)
+        let lineEnd = min(max(NSMaxRange(lineCharRange), lineStart), nsLength)
+        var fraction: CGFloat = 0
+        let index = layoutManager.characterIndex(
+            for: point,
+            in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: &fraction
+        )
+        return min(max(index, lineStart), lineEnd)
+    }
+
+    private func textContentRange(forLineCharacterRange lineCharRange: NSRange) -> NSRange {
+        let nsString = string as NSString
+        let nsLength = nsString.length
+        let lineStart = min(max(lineCharRange.location, 0), nsLength)
+        var lineEnd = min(max(NSMaxRange(lineCharRange), lineStart), nsLength)
+        while lineEnd > lineStart {
+            let trailing = nsString.substring(with: NSRange(location: lineEnd - 1, length: 1))
+            guard trailing == "\n" || trailing == "\r" else { break }
+            lineEnd -= 1
+        }
+        return NSRange(location: lineStart, length: lineEnd - lineStart)
+    }
+
+    private func wordRange(at location: Int) -> NSRange? {
+        let ns = string as NSString
+        guard location >= 0, location <= ns.length else { return nil }
+        if ns.length == 0 { return nil }
+        let clamped = min(location, ns.length - 1)
+        let char = ns.substring(with: NSRange(location: clamped, length: 1))
+        guard char.rangeOfCharacter(from: .alphanumerics) != nil || char == "_" else { return nil }
+        var start = clamped
+        while start > 0 {
+            let prev = ns.substring(with: NSRange(location: start - 1, length: 1))
+            if prev.rangeOfCharacter(from: .alphanumerics) != nil || prev == "_" {
+                start -= 1
+            } else {
+                break
+            }
+        }
+        var end = clamped
+        while end < ns.length - 1 {
+            let next = ns.substring(with: NSRange(location: end + 1, length: 1))
+            if next.rangeOfCharacter(from: .alphanumerics) != nil || next == "_" {
+                end += 1
+            } else {
+                break
+            }
+        }
+        let length = end - start + 1
+        guard length > 0 else { return nil }
+        return NSRange(location: start, length: length)
     }
 
     // MARK: - Private helpers
