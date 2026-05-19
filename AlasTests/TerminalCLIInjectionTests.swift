@@ -34,12 +34,14 @@ struct TerminalCLIInjectionTests {
         #expect(FileManager.default.fileExists(atPath: alasURL.path, isDirectory: &alasIsDir))
         #expect(!alasIsDir.boolValue)
         #expect(FileManager.default.isExecutableFile(atPath: alasURL.path))
+        #expect(try String(contentsOf: alasURL, encoding: .utf8) == TerminalCLIInjection.executableScript())
 
         let aoURL = dir.appendingPathComponent("ao")
         var aoIsDir: ObjCBool = false
         #expect(FileManager.default.fileExists(atPath: aoURL.path, isDirectory: &aoIsDir))
         #expect(!aoIsDir.boolValue)
         #expect(FileManager.default.isExecutableFile(atPath: aoURL.path))
+        #expect(try String(contentsOf: aoURL, encoding: .utf8) == TerminalCLIInjection.aoExecutableScript())
     }
 
     @Test func installExecutablesIsIdempotent() throws {
