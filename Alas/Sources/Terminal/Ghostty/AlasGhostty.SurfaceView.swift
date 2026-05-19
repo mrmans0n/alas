@@ -87,6 +87,11 @@ extension AlasGhostty {
         /// Fired on the main queue when the shell reports a new working directory.
         var cwdHandler: ((URL) -> Void)?
 
+        /// Invoked on the main queue when Ghostty emits a cmd-click URL.
+        /// Return `true` to swallow the event; `false` lets the caller fall
+        /// back to `NSWorkspace.shared.open` for default macOS handling.
+        var openURLHandler: ((String) -> Bool)?
+
         func setCurrentWorkingDirectory(_ url: URL) {
             currentWorkingDirectory = url
             cwdHandler?(url)
