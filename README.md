@@ -43,30 +43,6 @@ Open the project in Xcode for normal development; rerun `xcodegen` after any cha
 
 Swift 5.9+ / SwiftUI on macOS 14+. Terminal embedded via the official Ghostty Swift package. Tree-sitter for syntax. Swift-markdown for rendering. Single Xcode app target generated from `project.yml` via [xcodegen](https://github.com/yonaskolb/XcodeGen).
 
-## Language Server Prerequisites
-
-Alas bundles built-in language server presets, but the actual servers must be installed separately. The app discovers them via `PATH`, `/usr/local/bin`, `/opt/homebrew/bin`, and common tool directories.
-
-- **Swift** – bundled with Xcode (`sourcekit-lsp`)
-- **Python** – [Pyright](https://github.com/microsoft/pyright)
-  ```bash
-  brew install pyright
-  # or: npm install -g pyright
-  ```
-- **Shell scripts** – [bash-language-server](https://github.com/bash-lsp/bash-language-server)
-  ```bash
-  npm install -g bash-language-server
-  ```
-  Also install [ShellCheck](https://github.com/koalaman/shellcheck) for diagnostics:
-  ```bash
-  brew install shellcheck
-  ```
-- **Rust** – `rust-analyzer`
-- **TypeScript / JavaScript / JSON** – `typescript-language-server`, `vscode-json-languageserver`
-- **Markdown** – `marksman`
-
-If a server is missing, Alas opens the file as a plain text buffer and shows **Not installed** in Settings → Code. You can also override commands and environment variables per language in the same settings pane.
-
 ## License
 
 [MIT](LICENSE).
