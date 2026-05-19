@@ -9,8 +9,9 @@ struct TerminalTabView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if let tab = currentTab() {
+                AgentHookInstallNudgeBanner(appState: state, terminalTab: tab)
                 PaneNodeView(
                     state: state,
                     worktreeId: worktreeId,
