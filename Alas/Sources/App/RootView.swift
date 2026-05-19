@@ -76,6 +76,7 @@ struct RootView: View {
                 }
             }
             FileSearchDialog(appState: state)
+            RepoSelectorDialog(appState: state)
         }
         .environment(\.theme, state.themeStore.current)
         .onChange(of: state.themeStore.current.id) { _, _ in
