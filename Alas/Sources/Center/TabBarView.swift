@@ -82,6 +82,7 @@ struct TabBarView: View {
             Button(action: onNewTerminal) {
                 Icon(name: "plus", size: 13)
                     .frame(width: 26, height: 22)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("New terminal")
@@ -155,18 +156,22 @@ private struct TabButton: View {
             if showClose {
                 Button(action: onClose) {
                     ZStack {
-                        if dirty && !hoveringClose {
-                            Circle()
-                                .fill(theme.color("fg"))
-                                .frame(width: 7, height: 7)
-                        } else {
-                            Icon(name: "x", size: 9,
-                                 color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
-                                .background(hoveringClose ? theme.color("bg-4") : .clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        ZStack {
+                            if dirty && !hoveringClose {
+                                Circle()
+                                    .fill(theme.color("fg"))
+                                    .frame(width: 7, height: 7)
+                            } else {
+                                Icon(name: "x", size: 9,
+                                     color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
+                                    .background(hoveringClose ? theme.color("bg-4") : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                            }
                         }
+                        .frame(width: 14, height: 14)
                     }
-                    .frame(width: 14, height: 14)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .onHover { hoveringClose = $0 }
@@ -206,6 +211,7 @@ private struct ToolbarIconButton: View {
             Icon(name: iconName, size: 13,
                  color: hovering ? theme.color("fg") : theme.color("fg-faint"))
                 .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
