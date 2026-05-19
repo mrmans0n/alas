@@ -141,12 +141,20 @@ struct FilesTabView: View {
     ) -> [FileTreeNode] {
         guard !showIgnored else { return nodes }
         return nodes.compactMap { node in
-            if node.visibility == .ignored || node.visibility == .excluded {
-                return nil
+            let offGit = node.visibility == .ignored || node.visibility == .excluded
+            // Files: drop if ignored/excluded.
+            if node.kind == .file {
+                return offGit ? nil : node
             }
+            // Directories: filter children first. An ignored directory may
+            // still contain tracked descendants (gitignore rules don't
+            // un-track a path that's already in the index), so we only drop
+            // the directory if it has no visible children left.
             var copy = node
-            if let kids = node.children {
-                copy.children = filteredNodes(kids, showIgnored: showIgnored)
+            let visibleChildren = filteredNodes(node.children ?? [], showIgnored: showIgnored)
+            copy.children = visibleChildren
+            if offGit && visibleChildren.isEmpty {
+                return nil
             }
             return copy
         }

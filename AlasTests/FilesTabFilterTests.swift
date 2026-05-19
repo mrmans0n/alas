@@ -58,6 +58,47 @@ struct FilesTabFilterTests {
         #expect(sources?.children?.map(\.path) == ["Sources/App.swift"])
     }
 
+    @Test func showIgnoredFalsePreservesIgnoredDirectoryWithTrackedDescendant() {
+        // GitService can build a tree where a top-level directory is marked
+        // ignored but still contains tracked descendants (e.g., a file inside
+        // an ignored dir that was committed before the gitignore rule). The
+        // filter must not drop such a directory or the tracked descendant
+        // becomes unreachable.
+        let tree = [
+            node(name: ".build", path: ".build", kind: .dir, visibility: .ignored, children: [
+                node(name: "out.swift", path: ".build/out.swift", kind: .file, visibility: .tracked),
+                node(name: "cache.log", path: ".build/cache.log", kind: .file, visibility: .ignored)
+            ])
+        ]
+        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        #expect(result.map(\.path) == [".build"])
+        #expect(result.first?.children?.map(\.path) == [".build/out.swift"])
+    }
+
+    @Test func showIgnoredFalseDropsIgnoredDirectoryWithOnlyIgnoredChildren() {
+        let tree = [
+            node(name: ".build", path: ".build", kind: .dir, visibility: .ignored, children: [
+                node(name: "cache.log", path: ".build/cache.log", kind: .file, visibility: .ignored)
+            ])
+        ]
+        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        #expect(result.isEmpty)
+    }
+
+    @Test func showIgnoredFalsePreservesIgnoredDirectoryWithTrackedNestedDescendant() {
+        let tree = [
+            node(name: ".build", path: ".build", kind: .dir, visibility: .ignored, children: [
+                node(name: "gen", path: ".build/gen", kind: .dir, visibility: .ignored, children: [
+                    node(name: "kept.swift", path: ".build/gen/kept.swift", kind: .file, visibility: .tracked)
+                ])
+            ])
+        ]
+        let result = FilesTabView.filteredNodes(tree, showIgnored: false)
+        #expect(result.map(\.path) == [".build"])
+        #expect(result.first?.children?.map(\.path) == [".build/gen"])
+        #expect(result.first?.children?.first?.children?.map(\.path) == [".build/gen/kept.swift"])
+    }
+
     @Test func showIgnoredFalsePreservesTrackedDirectoryWithOnlyIgnoredChildren() {
         let tree = [
             node(name: "Sources", path: "Sources", kind: .dir, visibility: .tracked, children: [
