@@ -261,7 +261,14 @@ final class AppState {
         RepoSelectorEnvironment(
             projects: { [weak self] in self?.projects ?? [] },
             visibleWorktrees: { [weak self] projectId in
-                self?.projectsManager.visibleWorktrees(projectId: projectId) ?? []
+                guard let self else { return [] }
+                // Hide worktrees that are mid-create/delete or in a failed
+                // operation state — the main pane refuses to render them
+                // and the sidebar deliberately ignores taps on those rows,
+                // so the selector must not focus them either.
+                return self.projectsManager.visibleWorktrees(projectId: projectId).filter {
+                    self.projectsManager.operationState(for: $0.id) == nil
+                }
             },
             readRecents: { [weak self] in
                 guard let self else { return RepoSelectorRecents() }
