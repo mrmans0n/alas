@@ -122,12 +122,16 @@ final class RepoSelectorModel {
         step = .worktrees(projectId: projectId)
         query = ""
         selectedIndex = 0
+        // Reset the scroll position too — without this, the freshly-pushed
+        // worktree list could remain scrolled to wherever the repo list was.
+        scrollToSelectionTick &+= 1
     }
 
     func popToRepos() {
         step = .repos
         query = savedReposQuery
         selectedIndex = savedReposSelectedIndex
+        scrollToSelectionTick &+= 1
     }
 
     // MARK: - Step 2 rows
