@@ -663,6 +663,7 @@ final class AppState {
         let wasSelected = selectedWorktreeId == worktree.id
 
         cleanupWorktreeState(worktreeId: worktree.id)
+        projectsManager.setOperationState(id: worktree.id, state: nil)
         projectsManager.setWorktreeHidden(
             projectId: worktree.projectId,
             path: worktree.path,
