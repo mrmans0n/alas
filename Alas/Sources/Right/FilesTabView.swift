@@ -7,13 +7,14 @@ struct FilesTabView: View {
     let onSelectFile: (FileTreeNode) -> Void
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
     let onLoadChildren: (String) -> Void
+    let showIgnored: Bool
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(nodes) { node in
+                ForEach(Self.filteredNodes(nodes, showIgnored: showIgnored)) { node in
                     renderNode(node, depth: 0)
                 }
             }
@@ -127,8 +128,35 @@ struct FilesTabView: View {
     private func renderChildren(of node: FileTreeNode, depth: Int) -> some View {
         Group {
             if let kids = node.children {
-                ForEach(kids) { renderNode($0, depth: depth) }
+                ForEach(Self.filteredNodes(kids, showIgnored: showIgnored)) {
+                    renderNode($0, depth: depth)
+                }
             }
+        }
+    }
+
+    nonisolated static func filteredNodes(
+        _ nodes: [FileTreeNode],
+        showIgnored: Bool
+    ) -> [FileTreeNode] {
+        guard !showIgnored else { return nodes }
+        return nodes.compactMap { node in
+            let offGit = node.visibility == .ignored || node.visibility == .excluded
+            // Files: drop if ignored/excluded.
+            if node.kind == .file {
+                return offGit ? nil : node
+            }
+            // Directories: filter children first. An ignored directory may
+            // still contain tracked descendants (gitignore rules don't
+            // un-track a path that's already in the index), so we only drop
+            // the directory if it has no visible children left.
+            var copy = node
+            let visibleChildren = filteredNodes(node.children ?? [], showIgnored: showIgnored)
+            copy.children = visibleChildren
+            if offGit && visibleChildren.isEmpty {
+                return nil
+            }
+            return copy
         }
     }
 

@@ -24,6 +24,11 @@ struct RightPaneView: View {
                     onHidePane: {
                         state.config.rightPaneVisible = false
                         state.saveConfig()
+                    },
+                    showIgnored: state.config.files.showIgnored,
+                    onToggleShowIgnored: {
+                        state.config.files.showIgnored.toggle()
+                        state.saveConfig()
                     }
                 )
 
@@ -42,7 +47,8 @@ struct RightPaneView: View {
                         shouldAutoLoadChildren: { path, childrenState in
                             rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
                         },
-                        onLoadChildren: { rps.loadFileTreeChildren(path: $0) }
+                        onLoadChildren: { rps.loadFileTreeChildren(path: $0) },
+                        showIgnored: state.config.files.showIgnored
                     )
                 }
             }

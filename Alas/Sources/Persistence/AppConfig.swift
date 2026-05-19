@@ -18,6 +18,7 @@ struct AppConfig: Codable, Equatable {
     var markdown: Markdown
     var changes: Changes
     var agents: Agents
+    var files: Files
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -115,6 +116,14 @@ struct AppConfig: Codable, Equatable {
         }
     }
 
+    struct Files: Codable, Equatable {
+        var showIgnored: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case showIgnored
+        }
+    }
+
     struct WorktreeAutoLaunch: Codable, Equatable {
         var agentId: String?
         var useBypassPermissions: Bool
@@ -181,7 +190,8 @@ struct AppConfig: Codable, Equatable {
                 agentId: nil,
                 useBypassPermissions: false
             )
-        )
+        ),
+        files: Files(showIgnored: true)
     )
 }
 
@@ -213,7 +223,8 @@ extension AppConfig {
              sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible,
              commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown, changes,
-             agents
+             agents,
+             files
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -302,6 +313,14 @@ extension AppConfig {
                     agentId: nil, useBypassPermissions: false
                 )
             )
+        }
+        if let filesContainer = try? c.nestedContainer(
+            keyedBy: AppConfig.Files.CodingKeys.self, forKey: .files
+        ) {
+            let showIgnored = (try? filesContainer.decode(Bool.self, forKey: .showIgnored)) ?? true
+            files = Files(showIgnored: showIgnored)
+        } else {
+            files = Files(showIgnored: true)
         }
     }
 }

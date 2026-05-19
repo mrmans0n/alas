@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- add a Files tab context menu (right-click the Files segment) to toggle showing ignored and excluded entries, default on, persisted globally.
+
 ## [0.3.6] - 2026-05-19
 
 ### ✨ Features
