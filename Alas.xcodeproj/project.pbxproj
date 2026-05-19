@@ -361,6 +361,7 @@
 		E4EAC28F55CBE987E0AB1F85 /* WorktreeWatcherFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 670C7B064EA079D045F0D0DE /* WorktreeWatcherFilterTests.swift */; };
 		E540B305B2426590C219622C /* CommitDetailsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB5A2BDAA7ABD74C42BC51F8 /* CommitDetailsTests.swift */; };
 		E681EB5B83BAC199B1ED5E24 /* WorktreeWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AD81E0DFE33CE4DACF0ADF /* WorktreeWatcher.swift */; };
+		E6A429E3423A9A40A9B36C97 /* RepoSelectorEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C7F4710313BA1671A3AED0 /* RepoSelectorEnvironment.swift */; };
 		E6CB573877637461E11CACAF /* InstallRecipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F80EA8C6EFF2C0A8F02C62D /* InstallRecipe.swift */; };
 		E822ADCC0B35087C38FB01A3 /* TabsManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A9977C979705A40595FD5E /* TabsManagerTests.swift */; };
 		E83BA776F26C011D034CAE18 /* HoverHighlightFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 019A03B92542169A6595D432 /* HoverHighlightFeature.swift */; };
@@ -496,6 +497,7 @@
 		3711FACCAD4DE3E29AB13DD2 /* ProjectsManagerWorktreeOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerWorktreeOrderingTests.swift; sourceTree = "<group>"; };
 		373D587E3153D902EB10208B /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
 		37987D5884297401F95478D3 /* AgentPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPathTests.swift; sourceTree = "<group>"; };
+		37C7F4710313BA1671A3AED0 /* RepoSelectorEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorEnvironment.swift; sourceTree = "<group>"; };
 		38499AFE31188908546EE222 /* LSPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPTransport.swift; sourceTree = "<group>"; };
 		3855FBA3E4444960418639E9 /* FileIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIndexTests.swift; sourceTree = "<group>"; };
 		38F5019E0550FA05436EFC74 /* GitServiceHeadMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceHeadMessageTests.swift; sourceTree = "<group>"; };
@@ -1431,6 +1433,7 @@
 		C2E05FF3EC7EAB497BA0FFE0 /* RepoSelector */ = {
 			isa = PBXGroup;
 			children = (
+				37C7F4710313BA1671A3AED0 /* RepoSelectorEnvironment.swift */,
 				9CA420C011D4235E47A3FB1B /* RepoSelectorRecents.swift */,
 				DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */,
 			);
@@ -1903,6 +1906,7 @@
 				0D8046E333B0DA2B45EE78D4 /* RelativeTime.swift in Sources */,
 				A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */,
 				2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */,
+				E6A429E3423A9A40A9B36C97 /* RepoSelectorEnvironment.swift in Sources */,
 				E3158A4D8FBD36D06D421D28 /* RepoSelectorRecents.swift in Sources */,
 				2DE20AB5DAEF233BE008E5AA /* RepoSelectorRow.swift in Sources */,
 				3C57603EA801D8994B0B5525 /* RightPaneState.swift in Sources */,
