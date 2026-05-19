@@ -67,6 +67,7 @@ struct CommitHeaderView: View {
             if !details.body.isEmpty {
                 Text(details.body)
                     .font(.system(size: 12))
+                    .lineSpacing(CenterTypography.textLineSpacing(forFontSize: 12))
                     .foregroundColor(theme.color("fg-dim"))
                     .fixedSize(horizontal: false, vertical: true)
             }
