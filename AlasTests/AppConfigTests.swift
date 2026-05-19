@@ -196,4 +196,53 @@ struct AppConfigTests {
         let decoded2 = try JSONDecoder().decode(AppConfig.self, from: data2)
         #expect(decoded2.themeId == "cool-slate")
     }
+
+    @Test func decodeOldConfigDefaultsRepoSelectorRecentsEmpty() throws {
+        // A config blob that predates the repo-selector recents fields must
+        // still decode, with both recents collections defaulting to empty.
+        let json = """
+        {
+          "themeId": "cool-slate",
+          "accent": "teal",
+          "density": "comfortable",
+          "matchSystemTheme": false,
+          "sidebarWidth": 244,
+          "rightPaneWidth": 320,
+          "rightPaneVisible": true,
+          "general": {
+            "launchAtLogin": false, "closeToTray": true, "confirmQuit": true,
+            "autoUpdate": true, "updateChannel": "Stable",
+            "crashReports": false, "usageAnalytics": false
+          },
+          "worktrees": {
+            "rootPath": "~/code/.worktrees",
+            "pathTemplate": "{worktreeRoot}/{repo}/{branch}",
+            "branchPrefix": "feature/", "baseBranch": "main",
+            "trackUpstream": true, "deleteBranchOnRemove": true,
+            "autoFetch": true, "fetchIntervalMinutes": 5, "pruneStale": false
+          },
+          "terminal": {
+            "shell": "/bin/zsh", "workingDirectory": "worktreeRoot",
+            "startupScript": "", "worktreeCreateScript": "",
+            "inheritParentEnv": true, "fontFamily": "JetBrains Mono",
+            "fontSize": 13, "cursorStyle": "beam", "cursorBlink": true,
+            "scrollbackLines": 10000, "bell": "visual"
+          },
+          "harness": {"notifyOnFinish": true}
+        }
+        """
+        let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(cfg.recentProjectIds == [])
+        #expect(cfg.recentWorktreeIdsByProject == [:])
+    }
+
+    @Test func repoSelectorRecentsRoundTrip() throws {
+        var cfg = AppConfig.defaults
+        cfg.recentProjectIds = ["proj-a", "proj-b"]
+        cfg.recentWorktreeIdsByProject = ["proj-a": ["wt-1", "wt-2"]]
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.recentProjectIds == ["proj-a", "proj-b"])
+        #expect(decoded.recentWorktreeIdsByProject == ["proj-a": ["wt-1", "wt-2"]])
+    }
 }

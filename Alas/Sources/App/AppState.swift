@@ -24,6 +24,8 @@ final class AppState {
     private var lspManager: WorkspaceLSPManager?
 
     var isSearchOpen: Bool = false
+    var isRepoSelectorOpen: Bool = false
+    let repoSelector = RepoSelectorModel()
 
     /// Computed each time `config.agents` changes or detection re-runs.
     /// `RootView.task` calls `rescanAgents()` once at launch; the Settings
@@ -249,6 +251,50 @@ final class AppState {
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
+
+    /// Build a `RepoSelectorEnvironment` that captures `self`. Used by
+    /// `RepoSelectorDialog` to bind the model to the live app state.
+    func repoSelectorEnvironment(
+        openNewProject: @escaping () -> Void,
+        openNewWorktree: @escaping (String) -> Void
+    ) -> RepoSelectorEnvironment {
+        RepoSelectorEnvironment(
+            projects: { [weak self] in self?.projects ?? [] },
+            visibleWorktrees: { [weak self] projectId in
+                guard let self else { return [] }
+                // Match `RootView.selectedWorktree()`: hide creating /
+                // deleting / createFailed rows (the main pane returns nil
+                // for them) but keep deleteFailed selectable so the user
+                // can recover via keyboard nav, mirroring the sidebar.
+                return self.projectsManager.visibleWorktrees(projectId: projectId).filter {
+                    switch self.projectsManager.operationState(for: $0.id) {
+                    case .creating, .deleting, .createFailed:
+                        return false
+                    case nil, .deleteFailed:
+                        return true
+                    }
+                }
+            },
+            readRecents: { [weak self] in
+                guard let self else { return RepoSelectorRecents() }
+                return RepoSelectorRecents(
+                    projectIds: self.config.recentProjectIds,
+                    worktreeIdsByProject: self.config.recentWorktreeIdsByProject
+                )
+            },
+            writeRecents: { [weak self] r in
+                guard let self else { return }
+                self.config.recentProjectIds = r.projectIds
+                self.config.recentWorktreeIdsByProject = r.worktreeIdsByProject
+                _ = self.saveConfig()
+            },
+            focusWorktree: { [weak self] id in
+                self?.selectedWorktreeId = id
+            },
+            openNewProject: openNewProject,
+            openNewWorktree: openNewWorktree
+        )
+    }
 
     @discardableResult
     func saveConfig() -> Bool {

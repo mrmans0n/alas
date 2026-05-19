@@ -19,6 +19,8 @@ struct AppConfig: Codable, Equatable {
     var changes: Changes
     var agents: Agents
     var files: Files
+    var recentProjectIds: [String] = []
+    var recentWorktreeIdsByProject: [String: [String]] = [:]
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -191,7 +193,9 @@ struct AppConfig: Codable, Equatable {
                 useBypassPermissions: false
             )
         ),
-        files: Files(showIgnored: true)
+        files: Files(showIgnored: true),
+        recentProjectIds: [],
+        recentWorktreeIdsByProject: [:]
     )
 }
 
@@ -224,7 +228,8 @@ extension AppConfig {
              commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown, changes,
              agents,
-             files
+             files,
+             recentProjectIds, recentWorktreeIdsByProject
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -322,5 +327,8 @@ extension AppConfig {
         } else {
             files = Files(showIgnored: true)
         }
+        recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
+        recentWorktreeIdsByProject =
+            (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
     }
 }
