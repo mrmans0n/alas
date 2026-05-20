@@ -156,6 +156,26 @@ populate_worktree_from_cache() {
   printf '%s\n' "${fp}" > "${ghostty_fingerprint_path}"
 }
 
+# Atomic publish: stage in <fp>.tmp.<pid>, write fingerprint last, then mv.
+# Returns 0 on success, non-zero on any failure (caller treats as non-fatal).
+publish_to_cache() {
+  local entry="$1" fp="$2"
+  local arch_dir staging
+  arch_dir="$(dirname "${entry}")"
+  mkdir -p "${arch_dir}" || return 1
+  staging="${arch_dir}/${fp}.tmp.$$"
+  rm -rf "${staging}"
+  mkdir "${staging}" || return 1
+  cp -c -R "${xcframework_path}" "${staging}/" || { rm -rf "${staging}"; return 1; }
+  cp -c -R "${ghostty_build_root}/share" "${staging}/" || { rm -rf "${staging}"; return 1; }
+  printf '%s\n' "${fp}" > "${staging}/fingerprint" || { rm -rf "${staging}"; return 1; }
+  # Atomic rename. If `entry` already exists (race we don't lock yet), tolerate it.
+  if ! mv "${staging}" "${entry}" 2>/dev/null; then
+    rm -rf "${staging}"
+    [ -d "${entry}" ] && return 0 || return 1
+  fi
+}
+
 ensure_ghostty_checkout
 
 if [ "${1:-}" = "--print-fingerprint" ]; then
@@ -184,3 +204,6 @@ if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
 fi
 
 build_and_install_local
+if ! publish_to_cache "${shared_entry}" "${fingerprint}"; then
+  warn "failed to publish to shared cache (${shared_entry})"
+fi
