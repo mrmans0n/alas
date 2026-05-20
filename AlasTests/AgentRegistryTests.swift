@@ -2,6 +2,14 @@ import Testing
 @testable import Alas
 
 struct AgentRegistryTests {
+    private struct StubInstaller: AgentInstaller {
+        let agent: AgentKind
+
+        func installState() -> InstallState { .notInstalled }
+        func install() async throws {}
+        func uninstall() throws {}
+    }
+
     @Test func defaultRegistryEnumeratesBuiltinsInCatalogOrder() {
         let r = AgentRegistry(
             builtinState: [:],
@@ -48,7 +56,7 @@ struct AgentRegistryTests {
         let r = AgentRegistry(builtinState: [:], customs: [custom], installedIds: [])
         let ids = r.agents.map(\.id)
         #expect(ids.last == "custom-uuid")
-        #expect(ids.count == 7)
+        #expect(ids.count == 8)
     }
 
     @Test func installedFiltersToDetectedAgentsAcrossBuiltinsAndCustoms() {
@@ -153,5 +161,20 @@ struct AgentRegistryTests {
         )
         #expect(r.agents.first(where: { $0.id == "c-installed" })!.isEnabled == true)
         #expect(r.agents.first(where: { $0.id == "c-missing"   })!.isEnabled == false)
+    }
+
+    @Test func defaultInstallerRegistryExposesOnlyAgentsWithInstallers() {
+        let registry = AgentInstallerRegistry()
+
+        #expect(registry.supportedAgents == [.claude, .codex, .cursor])
+    }
+
+    @Test func supportedInstallerAgentsFollowsRegisteredInstallers() {
+        let registry = AgentInstallerRegistry(installers: [
+            StubInstaller(agent: .gemini),
+            StubInstaller(agent: .opencode),
+        ])
+
+        #expect(registry.supportedAgents == [.gemini, .opencode])
     }
 }

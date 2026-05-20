@@ -176,6 +176,20 @@ struct HarnessServiceTests {
         #expect(AgentKind.claude.asHarnessKind == .claudeCode)
         #expect(AgentKind.codex.asHarnessKind == .codex)
         #expect(AgentKind.cursor.asHarnessKind == .cursor)
+        #expect(AgentKind.gemini.asHarnessKind == .gemini)
+        #expect(AgentKind.opencode.asHarnessKind == .opencode)
+        #expect(AgentKind.pi.asHarnessKind == .pi)
+        #expect(AgentKind.copilot.asHarnessKind == .copilot)
+    }
+
+    @Test func harnessKindMapsToAgentKind() {
+        #expect(HarnessKind.claudeCode.asAgentKind == .claude)
+        #expect(HarnessKind.codex.asAgentKind == .codex)
+        #expect(HarnessKind.cursor.asAgentKind == .cursor)
+        #expect(HarnessKind.gemini.asAgentKind == .gemini)
+        #expect(HarnessKind.opencode.asAgentKind == .opencode)
+        #expect(HarnessKind.pi.asAgentKind == .pi)
+        #expect(HarnessKind.copilot.asAgentKind == .copilot)
     }
 
     @Test func summary_returnsNil_whenIdsEmpty() {

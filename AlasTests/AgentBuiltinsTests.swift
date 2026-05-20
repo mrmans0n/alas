@@ -2,9 +2,9 @@ import Testing
 @testable import Alas
 
 struct AgentBuiltinsTests {
-    @Test func catalogHasExactlySixEntriesInDeterministicOrder() {
+    @Test func catalogHasExactlySevenEntriesInDeterministicOrder() {
         let ids = AgentBuiltins.catalog.map(\.id)
-        #expect(ids == ["claude", "codex", "cursor-agent", "pi", "opencode", "gemini"])
+        #expect(ids == ["claude", "codex", "cursor-agent", "pi", "opencode", "gemini", "copilot"])
     }
 
     @Test func everyEntryIsMarkedBuiltin() {
@@ -39,6 +39,18 @@ struct AgentBuiltinsTests {
     @Test func entryLookupReturnsCorrectEntryForKnownId() {
         let e = AgentBuiltins.entry(id: "gemini")
         #expect(e?.displayName == "Gemini CLI")
+    }
+
+    @Test func copilotBuiltinMatchesRequiredDefinition() {
+        let e = AgentBuiltins.entry(id: "copilot")
+        #expect(e?.displayName == "Copilot")
+        #expect(e?.binary == "copilot")
+        #expect(e?.binaryOverride == nil)
+        #expect(e?.promptModeArgs == ["-i"])
+        #expect(e?.bypassPermissionsFlag == "--allow-tool=write")
+        #expect(e?.isBuiltin == true)
+        #expect(e?.isEnabled == true)
+        #expect(e?.builtinLogoAssetName == "agent-copilot")
     }
 
     @Test func entryLookupReturnsNilForUnknownId() {

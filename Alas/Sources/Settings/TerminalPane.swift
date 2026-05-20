@@ -113,7 +113,7 @@ struct TerminalPane: View {
                                 desc: "Show a clickable notification when a detected harness is waiting for input.") {
                         AlasToggle(on: state.bind(\.harness.notifyOnAwaiting))
                     }
-                    ForEach(AgentKind.allCases) { agent in
+                    ForEach(installerRegistry.supportedAgents) { agent in
                         SettingsRow(name: agent.displayName) {
                             HStack {
                                 let state = installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
