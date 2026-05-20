@@ -27,10 +27,29 @@ struct AgentLauncherModelTests {
         #expect(rows.map(\.id) == ["claude"])
     }
 
+    @Test func rowsFilterById() {
+        let model = AgentLauncherModel()
+        model.query = "gpt"
+        let rows = model.rows(agents: [
+            agent("claude", "Claude Code"),
+            agent("gpt-cli", "OpenAI CLI"),
+        ])
+        #expect(rows.map(\.id) == ["gpt-cli"])
+    }
+
+    @Test func rowsDoesNotMutateSelection() {
+        let model = AgentLauncherModel()
+        model.selectedIndex = 3
+        let rows = model.rows(agents: [agent("codex", "Codex")])
+        #expect(rows.map(\.id) == ["codex"])
+        #expect(model.selectedIndex == 3)
+    }
+
     @Test func selectionClampsWhenRowsShrink() {
         let model = AgentLauncherModel()
         model.selectedIndex = 3
         let rows = model.rows(agents: [agent("codex", "Codex")])
+        model.clampSelection(in: rows)
         #expect(rows.map(\.id) == ["codex"])
         #expect(model.selectedIndex == 0)
     }
@@ -66,5 +85,18 @@ struct AgentLauncherModelTests {
     @Test func selectedAgentReturnsNilForEmptyRows() {
         let model = AgentLauncherModel()
         #expect(model.selectedAgent(in: []) == nil)
+    }
+
+    @Test func resetClearsLauncherState() {
+        let model = AgentLauncherModel()
+        model.query = "cod"
+        model.selectedIndex = 2
+        model.scrollToSelectionTick = 4
+
+        model.reset()
+
+        #expect(model.query == "")
+        #expect(model.selectedIndex == 0)
+        #expect(model.scrollToSelectionTick == 0)
     }
 }

@@ -12,21 +12,18 @@ final class AgentLauncherModel {
 
     func rows(agents: [AgentDefinition]) -> [AgentDefinition] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered: [AgentDefinition]
         if trimmed.isEmpty {
-            filtered = agents
-        } else {
-            filtered = agents.filter {
-                $0.displayName.localizedCaseInsensitiveContains(trimmed)
-                    || $0.id.localizedCaseInsensitiveContains(trimmed)
-            }
+            return agents
         }
-        if filtered.isEmpty {
-            selectedIndex = 0
-        } else {
-            selectedIndex = min(max(0, selectedIndex), filtered.count - 1)
+
+        return agents.filter {
+            $0.displayName.localizedCaseInsensitiveContains(trimmed)
+                || $0.id.localizedCaseInsensitiveContains(trimmed)
         }
-        return filtered
+    }
+
+    func clampSelection(in rows: [AgentDefinition]) {
+        selectedIndex = clampedIndex(in: rows)
     }
 
     func moveSelectionUp(in rows: [AgentDefinition]) {
@@ -34,9 +31,8 @@ final class AgentLauncherModel {
             selectedIndex = 0
             return
         }
-        let clampedIndex = min(max(0, selectedIndex), rows.count - 1)
-        selectedIndex = max(0, clampedIndex - 1)
-        scrollToSelectionTick += 1
+        selectedIndex = max(0, clampedIndex(in: rows) - 1)
+        scrollToSelectionTick &+= 1
     }
 
     func moveSelectionDown(in rows: [AgentDefinition]) {
@@ -44,9 +40,8 @@ final class AgentLauncherModel {
             selectedIndex = 0
             return
         }
-        let clampedIndex = min(max(0, selectedIndex), rows.count - 1)
-        selectedIndex = min(rows.count - 1, clampedIndex + 1)
-        scrollToSelectionTick += 1
+        selectedIndex = min(rows.count - 1, clampedIndex(in: rows) + 1)
+        scrollToSelectionTick &+= 1
     }
 
     func selectedAgent(in rows: [AgentDefinition]) -> AgentDefinition? {
@@ -57,5 +52,10 @@ final class AgentLauncherModel {
         query = ""
         selectedIndex = 0
         scrollToSelectionTick = 0
+    }
+
+    private func clampedIndex(in rows: [AgentDefinition]) -> Int {
+        guard !rows.isEmpty else { return 0 }
+        return min(max(0, selectedIndex), rows.count - 1)
     }
 }
