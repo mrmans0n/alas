@@ -106,4 +106,84 @@ struct AgentAutoLaunchTests {
         )!
         #expect(resolved.argv == ["codex"])
     }
+
+    @Test func resolveExplicitReturnsNilForUnknownAgent() {
+        let r = registry([], installed: [])
+        let resolved = AgentAutoLaunch.resolveExplicit(
+            agentId: "missing",
+            registry: r,
+            useBypass: true
+        )
+        #expect(resolved == nil)
+    }
+
+    @Test func resolveExplicitAppendsBypassFlagWhenSupported() {
+        let agent = mkAgent(id: "test-claude", binary: "claude", bypass: "--dangerously-skip-permissions")
+        let r = registry([agent], installed: ["test-claude"])
+        let resolved = AgentAutoLaunch.resolveExplicit(
+            agentId: "test-claude",
+            registry: r,
+            useBypass: true
+        )!
+        #expect(resolved.argv == ["claude", "--dangerously-skip-permissions"])
+    }
+
+    @Test func resolveExplicitOmitsBypassFlagWhenNotSupported() {
+        let agent = mkAgent(id: "test-pi", binary: "pi", bypass: nil)
+        let r = registry([agent], installed: ["test-pi"])
+        let resolved = AgentAutoLaunch.resolveExplicit(
+            agentId: "test-pi",
+            registry: r,
+            useBypass: true
+        )!
+        #expect(resolved.argv == ["pi"])
+    }
+
+    @Test func resolvedGlobalReturnsNilWhenNoAgentIdButBypassEnabled() {
+        // Bypass permissions is stored independently of the default agent.
+        // When no default agent is set, auto-launch should return nil
+        // regardless of the bypass toggle.
+        let r = registry([], installed: [])
+        let resolved = AgentAutoLaunch.resolve(
+            registry: r,
+            globalAgentId: nil,
+            globalUseBypass: true,
+            projectMode: .useGlobal,
+            projectAgentId: nil,
+            projectUseBypass: false
+        )
+        #expect(resolved == nil)
+    }
+
+    @Test func resolveExplicitOmitsBypassWhenUseBypassIsFalse() {
+        let agent = mkAgent(id: "test-claude", binary: "claude", bypass: "--dangerously-skip-permissions")
+        let r = registry([agent], installed: ["test-claude"])
+        let resolved = AgentAutoLaunch.resolveExplicit(
+            agentId: "test-claude",
+            registry: r,
+            useBypass: false
+        )!
+        #expect(resolved.argv == ["claude"])
+    }
+
+    @Test func explicitSelectionUsesBypassWithoutDefaultAgent() {
+        let agent = mkAgent(id: "test-claude", binary: "claude", bypass: "--dangerously-skip-permissions")
+        let r = registry([agent], installed: ["test-claude"])
+        let defaultResolved = AgentAutoLaunch.resolve(
+            registry: r,
+            globalAgentId: nil,
+            globalUseBypass: true,
+            projectMode: .useGlobal,
+            projectAgentId: nil,
+            projectUseBypass: false
+        )
+        let explicitResolved = AgentAutoLaunch.resolveExplicit(
+            agentId: "test-claude",
+            registry: r,
+            useBypass: true
+        )
+
+        #expect(defaultResolved == nil)
+        #expect(explicitResolved?.argv == ["claude", "--dangerously-skip-permissions"])
+    }
 }
