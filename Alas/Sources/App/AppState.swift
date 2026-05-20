@@ -18,6 +18,22 @@ final class AppState {
         return manager
     }
     let terminal = TerminalService()
+    struct OpenedTerminalSession {
+        let id: String
+        let foregroundPid: () -> pid_t?
+    }
+
+    typealias TerminalSessionOpener = (
+        Worktree,
+        ProjectConfig,
+        AppConfig.Terminal,
+        Theme,
+        URL?,
+        String?
+    ) throws -> OpenedTerminalSession
+
+    @ObservationIgnored
+    private let terminalSessionOpener: TerminalSessionOpener?
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     @ObservationIgnored
@@ -25,7 +41,47 @@ final class AppState {
 
     var isSearchOpen: Bool = false
     var isRepoSelectorOpen: Bool = false
+    var isAgentLauncherOpen: Bool = false
     let repoSelector = RepoSelectorModel()
+    let agentLauncher = AgentLauncherModel()
+
+    func openSearchOverlay() {
+        repoSelector.close()
+        isRepoSelectorOpen = false
+        agentLauncher.reset()
+        isAgentLauncherOpen = false
+        search.open()
+        isSearchOpen = true
+    }
+
+    func toggleRepoSelectorOverlay() {
+        agentLauncher.reset()
+        isAgentLauncherOpen = false
+
+        if isRepoSelectorOpen {
+            repoSelector.close()
+            isRepoSelectorOpen = false
+        } else {
+            search.close()
+            isSearchOpen = false
+            isRepoSelectorOpen = true
+        }
+    }
+
+    func toggleAgentLauncherOverlay(canOpen: Bool) {
+        guard canOpen else { return }
+        if isAgentLauncherOpen {
+            agentLauncher.reset()
+            isAgentLauncherOpen = false
+        } else {
+            search.close()
+            isSearchOpen = false
+            repoSelector.close()
+            isRepoSelectorOpen = false
+            agentLauncher.reset()
+            isAgentLauncherOpen = true
+        }
+    }
 
     /// Computed each time `config.agents` changes or detection re-runs.
     /// `RootView.task` calls `rescanAgents()` once at launch; the Settings
@@ -190,12 +246,14 @@ final class AppState {
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
-        persistenceErrorHandler: ((String, String) -> Void)? = nil
+        persistenceErrorHandler: ((String, String) -> Void)? = nil,
+        terminalSessionOpener: TerminalSessionOpener? = nil
     ) {
         self.store = store
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
+        self.terminalSessionOpener = terminalSessionOpener
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         self.config = config
@@ -397,22 +455,10 @@ final class AppState {
                 // interactive CLI (claude, codex, gemini) would just exit
                 // immediately on the EOF from its missing stdin.
                 let launchAgentCommand: String? = {
-                    guard let id = launchAgentId else { return nil }
-                    let useBypass: Bool = {
-                        switch project.startupScripts.worktreeAgentMode {
-                        case .disabled: return false
-                        case .useGlobal:
-                            return self.config.agents.worktreeAutoLaunch.useBypassPermissions
-                        case .overrideGlobal, .appendToGlobal:
-                            return project.startupScripts.worktreeAgentUseBypassPermissions
-                        }
-                    }()
-                    guard let resolved = AgentAutoLaunch.resolveExplicit(
-                        agentId: id,
-                        registry: self.agentRegistry,
-                        useBypass: useBypass
-                    ) else { return nil }
-                    return resolved.argv.map { Self.shellQuote($0) }.joined(separator: " ")
+                    guard let id = launchAgentId,
+                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
+                    else { return nil }
+                    return self.agentStartupCommand(for: agent, project: project)
                 }()
 
                 do {
@@ -454,6 +500,59 @@ final class AppState {
             }
         }
         return optimistic.id
+    }
+
+    func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
+        var argv = [agent.resolvedBinary]
+        if agentBypassPermissionsEnabled(for: project),
+           let flag = agent.bypassPermissionsFlag {
+            argv.append(flag)
+        }
+        return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+    }
+
+    enum AgentTerminalLaunchError: LocalizedError, Equatable {
+        case projectUnavailable
+        case agentUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .projectUnavailable:
+                return "The selected worktree's project is no longer available."
+            case .agentUnavailable:
+                return "The selected agent is no longer enabled."
+            }
+        }
+    }
+
+    @discardableResult
+    func openAgentTerminalTab(for worktree: Worktree, agentId: String) throws -> Tab {
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            throw AgentTerminalLaunchError.projectUnavailable
+        }
+        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+            throw AgentTerminalLaunchError.agentUnavailable
+        }
+        do {
+            return try openTerminalTab(
+                for: worktree,
+                startupScriptSuffix: agentStartupCommand(for: agent, project: project)
+            )
+        } catch {
+            showFileActionError(title: "Launch Agent Failed", message: error.localizedDescription)
+            throw error
+        }
+    }
+
+    private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
+        switch project.startupScripts.worktreeAgentMode {
+        case .disabled:
+            return false
+        case .useGlobal:
+            return config.agents.worktreeAutoLaunch.useBypassPermissions
+        case .overrideGlobal, .appendToGlobal:
+            return project.startupScripts.worktreeAgentUseBypassPermissions
+        }
     }
 
     nonisolated private static func shellQuote(_ s: String) -> String {
@@ -787,19 +886,32 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
-        let session = try terminal.openSession(
-            worktree: worktree, project: project,
-            cfg: config.terminal, theme: themeStore.current,
-            startupScriptSuffix: startupScriptSuffix
-        )
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
+        let opened: OpenedTerminalSession
+        if let terminalSessionOpener {
+            opened = try terminalSessionOpener(
+                worktree,
+                project,
+                config.terminal,
+                themeStore.current,
+                nil,
+                startupScriptSuffix
+            )
+        } else {
+            let session = try terminal.openSession(
+                worktree: worktree, project: project,
+                cfg: config.terminal, theme: themeStore.current,
+                startupScriptSuffix: startupScriptSuffix
+            )
+            opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in
+                session?.surface.foregroundPid
+            })
         }
+        harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
         let title = tabs.nextTerminalTitle(
             worktreeId: worktree.id,
             baseTitle: defaultTerminalTitle(for: worktree)
         )
-        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: session.id)
+        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
     }
 
     // MARK: - Pane splits

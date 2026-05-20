@@ -57,6 +57,8 @@ struct TouchTargetSmokeTests {
             onCopyRelativePath: { _ in },
             onRenameTerminal: { _ in },
             onNewTerminal: { },
+            enabledAgents: [],
+            onLaunchAgent: { _ in },
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())
@@ -82,6 +84,8 @@ struct TouchTargetSmokeTests {
             onCopyRelativePath: { _ in },
             onRenameTerminal: { _ in },
             onNewTerminal: { },
+            enabledAgents: [],
+            onLaunchAgent: { _ in },
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())

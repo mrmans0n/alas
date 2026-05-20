@@ -77,6 +77,7 @@ struct RootView: View {
             }
             FileSearchDialog(appState: state)
             RepoSelectorDialog(appState: state)
+            AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
         }
         .environment(\.theme, state.themeStore.current)
         .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
@@ -378,10 +379,7 @@ private struct RootBaseHandlers: ViewModifier {
                 // Close the repo selector so the two overlays never overlap;
                 // RepoSelectorDialog is mounted after FileSearchDialog and
                 // would otherwise keep capturing keys.
-                state.repoSelector.close()
-                state.isRepoSelectorOpen = false
-                state.search.open()
-                state.isSearchOpen = true
+                state.openSearchOverlay()
             }
         let o = n
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenRepoSelector)) { _ in
@@ -389,16 +387,13 @@ private struct RootBaseHandlers: ViewModifier {
                 // file searcher) if not. We also call `search.close()` so an
                 // in-flight content search task is cancelled rather than
                 // continuing in the background under the new overlay.
-                if state.isRepoSelectorOpen {
-                    state.repoSelector.close()
-                    state.isRepoSelectorOpen = false
-                } else {
-                    state.search.close()
-                    state.isSearchOpen = false
-                    state.isRepoSelectorOpen = true
-                }
+                state.toggleRepoSelectorOverlay()
             }
         let p = o
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { _ in
+                state.toggleAgentLauncherOverlay(canOpen: selectedWorktree() != nil)
+            }
+        let q = p
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 let beforeIds = state.allWorktreeIds()
                 Task {
@@ -409,7 +404,7 @@ private struct RootBaseHandlers: ViewModifier {
                     state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
-        return p
+        return q
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
@@ -469,6 +464,7 @@ extension Notification.Name {
     static let alasNewWorktree       = Notification.Name("AlasNewWorktree")
     static let alasRefreshWorktrees  = Notification.Name("AlasRefreshWorktrees")
     static let alasNewTerminalTab  = Notification.Name("AlasNewTerminalTab")
+    static let alasOpenAgentLauncher = Notification.Name("AlasOpenAgentLauncher")
     static let alasCloseTab        = Notification.Name("AlasCloseTab")
     static let alasActivateTabByNumber = Notification.Name("AlasActivateTabByNumber")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")

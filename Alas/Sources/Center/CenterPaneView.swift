@@ -53,6 +53,10 @@ struct CenterPaneView: View {
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
                 },
                 onNewTerminal: openTerminal,
+                enabledAgents: state.agentRegistry.enabled(),
+                onLaunchAgent: { agentId in
+                    _ = try? state.openAgentTerminalTab(for: worktree, agentId: agentId)
+                },
                 onMove: { draggedId, destinationId in
                     state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
                 }

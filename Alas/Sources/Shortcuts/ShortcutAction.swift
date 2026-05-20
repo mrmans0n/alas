@@ -14,7 +14,7 @@ enum ShortcutGroup: String, CaseIterable, Sendable {
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
     case searchFiles, switchRepository, findAndReplace, toggleRightPane,
-         createProject, newWorktree, newTerminalTab,
+         createProject, newWorktree, newTerminalTab, launchAgentTerminal,
          increaseFontSize, decreaseFontSize, resetFontSize
     // Code editor
     case splitSelectionIntoLines, toggleMarkdownPreview, commitInComposer
@@ -26,7 +26,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     var group: ShortcutGroup {
         switch self {
         case .searchFiles, .switchRepository, .findAndReplace, .toggleRightPane,
-             .createProject, .newWorktree, .newTerminalTab,
+             .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
         case .splitSelectionIntoLines, .toggleMarkdownPreview, .commitInComposer:
@@ -47,6 +47,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .createProject:            return "Create Project"
         case .newWorktree:              return "New Worktree"
         case .newTerminalTab:           return "New Terminal Tab"
+        case .launchAgentTerminal:      return "Launch Agent Terminal"
         case .increaseFontSize:         return "Increase Font Size"
         case .decreaseFontSize:         return "Decrease Font Size"
         case .resetFontSize:            return "Reset Font Size"
@@ -70,6 +71,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         switch self {
         case .searchFiles:        return "Open the file search"
         case .switchRepository:   return "Open the repository picker"
+        case .launchAgentTerminal: return "Open the agent launcher"
         case .commitInComposer:   return "In the commit composer"
         default:                  return nil
         }
@@ -98,6 +100,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .createProject:            return .init(key: "n",          modifiers: [.command, .shift])
         case .newWorktree:              return .init(key: "n",          modifiers: [.command, .option])
         case .newTerminalTab:           return .init(key: "t",          modifiers: [.command])
+        case .launchAgentTerminal:      return .init(key: "t",          modifiers: [.command, .option])
         case .increaseFontSize:         return .init(key: "=",          modifiers: [.command])
         case .decreaseFontSize:         return .init(key: "-",          modifiers: [.command])
         case .resetFontSize:            return .init(key: "0",          modifiers: [.command])

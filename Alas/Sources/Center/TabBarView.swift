@@ -15,6 +15,8 @@ struct TabBarView: View {
     let onCopyRelativePath: (TabID) -> Void
     let onRenameTerminal: (TabID) -> Void
     let onNewTerminal: () -> Void
+    let enabledAgents: [AgentDefinition]
+    let onLaunchAgent: (String) -> Void
     let onMove: (TabID, TabID) -> Void
     @Environment(\.theme) var theme
     @State private var draggedTabId: TabID?
@@ -86,7 +88,13 @@ struct TabBarView: View {
             }
             .buttonStyle(.plain)
             .help("New terminal")
-            .padding(.horizontal, 8)
+            .padding(.leading, 8)
+            .padding(.trailing, 2)
+            AgentSparkleMenu(
+                agents: enabledAgents,
+                onLaunchAgent: onLaunchAgent
+            )
+            .padding(.trailing, 8)
         }
         .coordinateSpace(name: Self.dragCoordinateSpace)
         .frame(height: 34)
@@ -216,5 +224,35 @@ private struct ToolbarIconButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(tooltip)
+    }
+}
+
+private struct AgentSparkleMenu: View {
+    let agents: [AgentDefinition]
+    let onLaunchAgent: (String) -> Void
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        Menu {
+            if agents.isEmpty {
+                Text("No enabled agents")
+            } else {
+                ForEach(agents) { agent in
+                    Button {
+                        onLaunchAgent(agent.id)
+                    } label: {
+                        Text(agent.displayName)
+                    }
+                }
+            }
+        } label: {
+            Icon(name: "sparkle", size: 13, color: theme.color("fg-faint"))
+                .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(agents.isEmpty ? "No enabled agents" : "Launch agent")
     }
 }
