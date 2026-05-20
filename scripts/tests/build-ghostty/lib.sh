@@ -10,6 +10,7 @@ STUB_ZIG="${LIB_DIR}/fixtures/stub-zig.sh"
 
 # Fail-fast assertion helpers. Each prints to stderr and exits 1 on failure.
 fail() { echo "FAIL: $*" >&2; exit 1; }
+# assert_eq <actual> <expected> <message>
 assert_eq() { [ "$1" = "$2" ] || fail "expected '$2', got '$1' ($3)"; }
 assert_file_exists() { [ -f "$1" ] || fail "missing file: $1"; }
 assert_dir_exists() { [ -d "$1" ] || fail "missing dir: $1"; }

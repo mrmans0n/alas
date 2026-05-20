@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Log this invocation so tests can count zig calls.
 if [ -n "${STUB_ZIG_INVOCATION_LOG:-}" ]; then
-  echo "$(date +%s.%N) $*" >> "${STUB_ZIG_INVOCATION_LOG}"
+  echo "$(date +%s) $*" >> "${STUB_ZIG_INVOCATION_LOG}"
 fi
 
 # Parse --prefix; everything else ignored.
