@@ -37,7 +37,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func globalBypassAddsAgentFlag() {
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(),
@@ -47,7 +47,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func disabledProjectModeOmitsBypassFlag() {
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(),
@@ -57,7 +57,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func projectOverrideBypassWinsOverGlobal() {
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = false
         let command = state.agentStartupCommand(
             for: agent(),
@@ -67,7 +67,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func missingBypassFlagCannotBeAppended() {
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(flag: nil),
@@ -79,7 +79,7 @@ struct AgentTerminalLaunchTests {
     @Test func binaryPathIsShellQuoted() {
         var custom = agent()
         custom.binaryOverride = "/Applications/Test Agent/bin/agent"
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         let command = state.agentStartupCommand(
             for: custom,
             project: project(mode: .disabled, useBypass: false)
@@ -87,8 +87,8 @@ struct AgentTerminalLaunchTests {
         #expect(command == "'/Applications/Test Agent/bin/agent'")
     }
 
-    @Test func disabledAgentIdDoesNotLaunch() {
-        let state = AppState()
+    @Test func missingAgentIdDoesNotLaunch() {
+        let state = AppState(store: MemoryStore())
         let project = project(mode: .useGlobal, useBypass: false)
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         let worktree = Worktree(
@@ -107,7 +107,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func missingProjectDoesNotLaunch() {
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         state.agentRegistry = AgentRegistry(
             builtinState: [:],
             customs: [agent()],
