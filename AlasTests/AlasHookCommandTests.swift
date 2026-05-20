@@ -40,6 +40,27 @@ struct AlasHookCommandTests {
         return obj
     }
 
+    private func runShellCommandWithoutAlasEnv(_ command: String) throws -> (status: Int32, stdout: String, stderr: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = ["-c", command]
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "ALAS_SOCKET_PATH")
+        env.removeValue(forKey: "ALAS_SESSION_ID")
+        proc.environment = env
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        try proc.run()
+        proc.waitUntilExit()
+
+        let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (proc.terminationStatus, stdout, stderr)
+    }
+
     @Test func busyWithoutBody_producesSimpleCommand() {
         let cmd = AlasHookCommand.compositeCommand(
             events: [.busy], agent: .codex, forwardStdinAsBody: false
@@ -69,9 +90,24 @@ struct AlasHookCommandTests {
         let responseStep = #"printf '%s\n' '{"continue":true}'"#
         let deliveryStep = #"printf '{"v":1,"event":"busy""#
 
-        #expect(cmd.contains("{ \(responseStep);"))
+        #expect(cmd.hasPrefix("{ \(responseStep);"))
         #expect(cmd.contains(deliveryStep))
         #expect(cmd.range(of: responseStep)!.lowerBound < cmd.range(of: deliveryStep)!.lowerBound)
+    }
+
+    @Test func stdoutResponse_printsWithoutAlasEnvironment() throws {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.permissionRequest],
+            agent: .cursor,
+            forwardStdinAsBody: false,
+            stdoutResponse: #"{"continue":true}"#
+        )
+
+        let result = try runShellCommandWithoutAlasEnv(cmd)
+
+        #expect(result.status == 0)
+        #expect(result.stdout == #"{"continue":true}"# + "\n")
+        #expect(result.stderr == "")
     }
 
     @Test func stdoutResponse_escapesSingleQuotes() {

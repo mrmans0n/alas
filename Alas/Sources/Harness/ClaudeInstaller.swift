@@ -88,12 +88,12 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
             "Notification": [hookGroup(command: Self.awaitingInputAndNotify, matcher: "permission_prompt|idle_prompt|elicitation_dialog")],
             // Stop fires when Claude finishes responding — the moment we want
             // to surface the "Claude finished" notification. Intentionally
-            // omit SessionEnd: it fires on /clear, /resume, logout, and
-            // session close (per Claude's hook docs), so sending idle there
-            // produces a false "finished" notification (and a duplicate
-            // after the last real Stop) for events that aren't actually
-            // response-completion. Process-exit teardown still happens
-            // naturally via HarnessService's detector clear.
+            // keep idle notification off SessionEnd: it fires on /clear,
+            // /resume, logout, and session close (per Claude's hook docs), so
+            // sending idle there produces a false "finished" notification
+            // (and a duplicate after the last real Stop) for events that
+            // aren't actually response-completion. The SessionEnd detached
+            // hook above still records lifecycle teardown.
             "Stop": [hookGroup(command: Self.idleAndNotify)],
         ]
     }

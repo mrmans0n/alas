@@ -48,7 +48,7 @@ enum AlasHookCommand {
             return "\(envCheck) && \(pipeline) >/dev/null 2>&1 || true \(ownershipSentinel)"
         }
         let responseStep = #"printf '%s\n' \#(singleQuoted(stdoutResponse))"#
-        return "\(envCheck) && { \(responseStep); \(pipeline) >/dev/null 2>&1; } || true \(ownershipSentinel)"
+        return "{ \(responseStep); \(envCheck) && \(pipeline) >/dev/null 2>&1 || true; } \(ownershipSentinel)"
     }
 
     private static func singleQuoted(_ value: String) -> String {
