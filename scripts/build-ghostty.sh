@@ -222,6 +222,15 @@ acquire_cache_lock() {
       return 0
     fi
 
+    # If mkdir failed for a reason other than "directory already exists" (e.g.
+    # EACCES because the parent is unwritable), the lock dir won't be present.
+    # Treating that as contention would stall for the full timeout; instead
+    # short-circuit to a local-only build.
+    if [ ! -d "${lock_dir}" ]; then
+      warn "cannot create lock dir (${lock_dir}); building locally without publishing"
+      return 1
+    fi
+
     # Did the winner finish?
     if cache_entry_valid "${entry}" "${fp}"; then
       return 2
