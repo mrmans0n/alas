@@ -135,6 +135,27 @@ ensure_ghostty_checkout() {
   fi
 }
 
+# True iff <entry-dir> contains a complete, fingerprint-matching cache entry.
+cache_entry_valid() {
+  local dir="$1" fp="$2"
+  [ -f "${dir}/fingerprint" ] || return 1
+  [ -d "${dir}/GhosttyKit.xcframework" ] || return 1
+  [ -d "${dir}/share/ghostty" ] || return 1
+  [ -d "${dir}/share/terminfo" ] || return 1
+  [ "$(cat "${dir}/fingerprint")" = "${fp}" ] || return 1
+}
+
+# Populate the worktree from a known-valid cache entry. Uses APFS clonefile
+# (`cp -c`) for near-zero disk cost. Writes the local fingerprint LAST so a
+# crash mid-copy leaves the worktree visibly incomplete and triggers a rebuild.
+populate_worktree_from_cache() {
+  local entry="$1" fp="$2"
+  rm -rf "${xcframework_path}" "${ghostty_build_root}/share"
+  cp -c -R "${entry}/GhosttyKit.xcframework" "${ghostty_build_root}/"
+  cp -c -R "${entry}/share" "${ghostty_build_root}/"
+  printf '%s\n' "${fp}" > "${ghostty_fingerprint_path}"
+}
+
 ensure_ghostty_checkout
 
 if [ "${1:-}" = "--print-fingerprint" ]; then
@@ -153,6 +174,12 @@ if [ -f "${ghostty_fingerprint_path}" ] &&
   [ -d "${ghostty_resources_path}" ] &&
   [ -d "${ghostty_terminfo_path}" ] &&
   [ "$(cat "${ghostty_fingerprint_path}")" = "${fingerprint}" ]; then
+  exit 0
+fi
+
+shared_entry="${ghostty_cache_root}/${fingerprint}"
+if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
+  populate_worktree_from_cache "${shared_entry}" "${fingerprint}"
   exit 0
 fi
 
