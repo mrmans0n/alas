@@ -92,6 +92,13 @@ EOF
 build_and_install_local() {
   (
     cd "${ghostty_dir}"
+    # Use Homebrew's patched zig@0.15 — vanilla Zig 0.15.2 has a known linking
+    # issue with Xcode 26.4 (https://codeberg.org/ziglang/zig/issues/31658) that
+    # silently strips the embedded apprt symbols (ghostty_app_new etc.) from
+    # libghostty.a. Brew's bottle ships with the workaround patch.
+    # See ThirdParty/ghostty/HACKING.md. The brew prefix is resolved dynamically
+    # because Apple Silicon installs under /opt/homebrew while Intel uses
+    # /usr/local. ALAS_ZIG_BIN overrides for tests and custom toolchains.
     if [ -n "${ALAS_ZIG_BIN:-}" ]; then
       zig_bin="${ALAS_ZIG_BIN}"
     else
