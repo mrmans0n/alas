@@ -125,9 +125,13 @@ cd "${ghostty_dir}"
 # Resolve the brew prefix dynamically — Apple Silicon installs under
 # /opt/homebrew while Intel uses /usr/local. Hard-coding either path
 # breaks the other.
-zig_bin="$(brew --prefix zig@0.15 2>/dev/null)/bin/zig"
+if [ -n "${ALAS_ZIG_BIN:-}" ]; then
+  zig_bin="${ALAS_ZIG_BIN}"
+else
+  zig_bin="$(brew --prefix zig@0.15 2>/dev/null)/bin/zig"
+fi
 if [ ! -x "${zig_bin}" ]; then
-  echo "error: zig@0.15 not found via brew (looked at ${zig_bin}). Install with: brew install zig@0.15" >&2
+  echo "error: zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN" >&2
   exit 1
 fi
 "${zig_bin}" build \
