@@ -329,6 +329,7 @@
 		C54DD220F01DC5BB858BB407 /* AgentInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53B597B64DC2E72758FBE2A /* AgentInstaller.swift */; };
 		C55B79DC0AAE96CFA14BE76F /* CommitFilesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E7E4823B42BBA6EA7610DB /* CommitFilesListView.swift */; };
 		C618DE3EE2A7CA06876D6C68 /* Process+Git.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79DDEA496740F5B0B5EE808B /* Process+Git.swift */; };
+		C653712419D5B5A78AA53E84 /* AgentsPaneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB5E3661944CDA65ABCCB826 /* AgentsPaneTests.swift */; };
 		C893CA3167A5CC6637FCD8C8 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 1688AB1B49758FAB5BF0AF2F /* light.json */; };
 		C91AE8901B9D4B16A1EE67FB /* EditorBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6E896FEA37B4691BD16E2DD /* EditorBufferTests.swift */; };
 		C9BC01285F80FB20F665A765 /* CodeTextViewMultiCursorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52FE6A88564AD523AC577CC /* CodeTextViewMultiCursorTests.swift */; };
@@ -764,6 +765,7 @@
 		CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentResultGroup.swift; sourceTree = "<group>"; };
 		CB020862232495EC1C5ECBEA /* WindowAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowAppearance.swift; sourceTree = "<group>"; };
 		CB2EB554CB6AF797545DB95D /* HeadReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadReader.swift; sourceTree = "<group>"; };
+		CB5E3661944CDA65ABCCB826 /* AgentsPaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsPaneTests.swift; sourceTree = "<group>"; };
 		CB68E9C3C8853AF7E8AB5DB4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		CC83C13F9F6391F9CE8BF2CA /* MarkdownViewMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownViewMode.swift; sourceTree = "<group>"; };
 		CD9289893FA7DC9DB8565353 /* MarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParser.swift; sourceTree = "<group>"; };
@@ -897,6 +899,7 @@
 				2C2381497E73D74C8C314928 /* AgentRegistryTests.swift */,
 				9D209865BE187943BF14B830 /* AgentRunnerInvocationTests.swift */,
 				E267334F2224961856D20BD8 /* AgentRunnerParseTests.swift */,
+				CB5E3661944CDA65ABCCB826 /* AgentsPaneTests.swift */,
 				1FDD958CF56AA9AD319F6C6C /* AlasCLICommandRouterTests.swift */,
 				FA730D3A9214ED3ECD15C0ED /* AlasCLIRequestTests.swift */,
 				69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */,
@@ -2090,6 +2093,7 @@
 				659B9DBE590DCF6C395C64B3 /* AgentRegistryTests.swift in Sources */,
 				D51AC3D5B34A566A90C923BB /* AgentRunnerInvocationTests.swift in Sources */,
 				0E2D69C181ECD5233770BC01 /* AgentRunnerParseTests.swift in Sources */,
+				C653712419D5B5A78AA53E84 /* AgentsPaneTests.swift in Sources */,
 				026C8FB815E41D31C8E9421B /* AlasCLICommandRouterTests.swift in Sources */,
 				8F4B6B83968BE4C1E6D0D912 /* AlasCLIRequestTests.swift in Sources */,
 				B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */,
