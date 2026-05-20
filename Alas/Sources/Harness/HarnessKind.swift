@@ -34,3 +34,13 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable {
         }
     }
 }
+
+extension AgentKind {
+    var asHarnessKind: HarnessKind {
+        switch self {
+        case .claude: return .claudeCode
+        case .codex:  return .codex
+        case .cursor: return .cursor
+        }
+    }
+}

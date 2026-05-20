@@ -136,7 +136,7 @@ final class HarnessService {
             )
             if previousState != .permissionRequest, shouldNotifyOnAwaiting(),
                let lookup = stateLookup(event.sessionId) {
-                notifications.notifyHarnessAwaiting(
+                notifications.notifyHarnessPermission(
                     agent: event.agent, body: event.body,
                     projectId: lookup.projectId, worktreeId: lookup.worktreeId,
                     sessionId: event.sessionId
