@@ -52,6 +52,48 @@ struct AlasHookCommandTests {
         #expect(!cmd.contains("payload=$(cat"))
     }
 
+    @Test func stdoutResponse_isAbsentByDefault() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy], agent: .codex, forwardStdinAsBody: false
+        )
+        #expect(!cmd.contains("printf '%s\\n'"))
+    }
+
+    @Test func stdoutResponse_printsBeforeHookDelivery() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy],
+            agent: .codex,
+            forwardStdinAsBody: false,
+            stdoutResponse: #"{"continue":true}"#
+        )
+        let responseStep = #"printf '%s\n' '{"continue":true}'"#
+        let deliveryStep = #"printf '{"v":1,"event":"busy""#
+
+        #expect(cmd.contains("{ \(responseStep);"))
+        #expect(cmd.contains(deliveryStep))
+        #expect(cmd.range(of: responseStep)!.lowerBound < cmd.range(of: deliveryStep)!.lowerBound)
+    }
+
+    @Test func stdoutResponse_escapesSingleQuotes() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy],
+            agent: .codex,
+            forwardStdinAsBody: false,
+            stdoutResponse: "can't"
+        )
+        #expect(cmd.contains(#"printf '%s\n' 'can'\''t'"#))
+    }
+
+    @Test func stdoutResponse_preservesSentinelSuffix() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy],
+            agent: .codex,
+            forwardStdinAsBody: false,
+            stdoutResponse: "{}"
+        )
+        #expect(cmd.hasSuffix(Self.sentinel))
+    }
+
     @Test func idleWithBody_includesPayloadExtraction() {
         let cmd = AlasHookCommand.compositeCommand(
             events: [.idle], agent: .claude, forwardStdinAsBody: true
