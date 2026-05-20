@@ -45,6 +45,44 @@ final class AppState {
     let repoSelector = RepoSelectorModel()
     let agentLauncher = AgentLauncherModel()
 
+    func openSearchOverlay() {
+        repoSelector.close()
+        isRepoSelectorOpen = false
+        agentLauncher.reset()
+        isAgentLauncherOpen = false
+        search.open()
+        isSearchOpen = true
+    }
+
+    func toggleRepoSelectorOverlay() {
+        agentLauncher.reset()
+        isAgentLauncherOpen = false
+
+        if isRepoSelectorOpen {
+            repoSelector.close()
+            isRepoSelectorOpen = false
+        } else {
+            search.close()
+            isSearchOpen = false
+            isRepoSelectorOpen = true
+        }
+    }
+
+    func toggleAgentLauncherOverlay(canOpen: Bool) {
+        guard canOpen else { return }
+        if isAgentLauncherOpen {
+            agentLauncher.reset()
+            isAgentLauncherOpen = false
+        } else {
+            search.close()
+            isSearchOpen = false
+            repoSelector.close()
+            isRepoSelectorOpen = false
+            agentLauncher.reset()
+            isAgentLauncherOpen = true
+        }
+    }
+
     /// Computed each time `config.agents` changes or detection re-runs.
     /// `RootView.task` calls `rescanAgents()` once at launch; the Settings
     /// window calls it again on appear.
