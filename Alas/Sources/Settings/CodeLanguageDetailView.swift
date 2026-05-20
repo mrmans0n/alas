@@ -32,8 +32,13 @@ struct CodeLanguageDetailView: View {
                     .foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 6)
 
-                AlasField(text: $prefillQuery, monospaced: false)
-                    .padding(.bottom, 6)
+                AlasField(
+                    text: $prefillQuery,
+                    placeholder: "Search LSP packages…",
+                    monospaced: false,
+                    leadingIcon: "magnifyingglass"
+                )
+                .padding(.bottom, 6)
 
                 let results = MasonSnapshot.shared.search(prefillQuery)
                 if !results.isEmpty {
