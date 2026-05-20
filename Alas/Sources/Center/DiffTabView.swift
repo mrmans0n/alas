@@ -281,6 +281,7 @@ struct HunkView: View {
                 .background(rowBg(line))
             }
         }
+        .textSelection(.enabled)
     }
 
     /// Compose a single `AttributedString` for `line` with per-token
