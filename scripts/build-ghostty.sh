@@ -11,7 +11,16 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 # has arm64-macos targets, while the actual Ghostty xcframework is built for the
 # native architecture via zig's own cross-compilation infrastructure.
 _fake_xcrun_dir="$(mktemp -d)"
-trap 'rm -rf "${_fake_xcrun_dir}"' EXIT
+_held_lock=""
+_held_staging=""
+_script_cleanup() {
+  rm -rf "${_fake_xcrun_dir}" 2>/dev/null || true
+  [ -n "${_held_staging}" ] && rm -rf "${_held_staging}" 2>/dev/null || true
+  if [ -n "${_held_lock}" ] && [ -d "${_held_lock}" ]; then
+    rm -rf "${_held_lock}" 2>/dev/null || true
+  fi
+}
+trap _script_cleanup EXIT
 
 # Find the macOS 15 SDK from Command Line Tools (always available alongside Xcode)
 _macos15_sdk=""
@@ -158,25 +167,63 @@ populate_worktree_from_cache() {
 
 # Atomic publish: stage in <fp>.tmp.<pid>, write fingerprint last, then mv.
 # Returns 0 on success, non-zero on any failure (caller treats as non-fatal).
+# Sets _held_staging so _script_cleanup can remove the staging dir on interrupt.
 publish_to_cache() {
   local entry="$1" fp="$2"
-  local arch_dir staging
+  local arch_dir
   arch_dir="$(dirname "${entry}")"
   mkdir -p "${arch_dir}" || return 1
-  staging="${arch_dir}/${fp}.tmp.$$"
-  rm -rf "${staging}"
-  mkdir "${staging}" || return 1
-  cp -c -R "${xcframework_path}" "${staging}/" || { rm -rf "${staging}"; return 1; }
-  cp -c -R "${ghostty_build_root}/share" "${staging}/" || { rm -rf "${staging}"; return 1; }
-  printf '%s\n' "${fp}" > "${staging}/fingerprint" || { rm -rf "${staging}"; return 1; }
+  _held_staging="${arch_dir}/${fp}.tmp.$$"
+  rm -rf "${_held_staging}"
+  mkdir "${_held_staging}" || { _held_staging=""; return 1; }
+  cp -c -R "${xcframework_path}" "${_held_staging}/" || { rm -rf "${_held_staging}"; _held_staging=""; return 1; }
+  cp -c -R "${ghostty_build_root}/share" "${_held_staging}/" || { rm -rf "${_held_staging}"; _held_staging=""; return 1; }
+  printf '%s\n' "${fp}" > "${_held_staging}/fingerprint" || { rm -rf "${_held_staging}"; _held_staging=""; return 1; }
   # Remove any stale entry before renaming so `mv` replaces it rather than
   # nesting the staging dir inside it (macOS mv semantics when target exists).
   rm -rf "${entry}"
   # Atomic rename. If another process has just published the same entry
   # (unlikely without locking, but tolerate it), treat as success.
-  if ! mv "${staging}" "${entry}" 2>/dev/null; then
-    rm -rf "${staging}"
+  if ! mv "${_held_staging}" "${entry}" 2>/dev/null; then
+    rm -rf "${_held_staging}"
+    _held_staging=""
     [ -d "${entry}" ] && return 0 || return 1
+  fi
+  _held_staging=""
+}
+
+# Try to mkdir-atomic-acquire the per-fingerprint lock. Loser polls (1s) until
+# the fingerprint is published, at which point the lock is released. Returns:
+#   0 — lock acquired (caller must build + publish)
+#   2 — winner already published while we waited (cache now valid; no build needed)
+#   1 — couldn't acquire (e.g., cache root unwritable); caller should build locally
+#       WITHOUT publishing.
+acquire_cache_lock() {
+  local entry="$1" fp="$2"
+  local lock_dir="${entry}.lock"
+  local arch_dir
+  arch_dir="$(dirname "${entry}")"
+  if ! mkdir -p "${arch_dir}" 2>/dev/null; then
+    return 1
+  fi
+  while true; do
+    if mkdir "${lock_dir}" 2>/dev/null; then
+      _held_lock="${lock_dir}"
+      echo $$ > "${lock_dir}/pid" 2>/dev/null || true
+      return 0
+    fi
+    # Lock held by someone else. Wait for them; recheck cache.
+    if cache_entry_valid "${entry}" "${fp}"; then
+      return 2
+    fi
+    sleep 1
+  done
+}
+
+release_cache_lock() {
+  if [ -n "${_held_lock}" ]; then
+    rm -rf "${_held_lock}" 2>/dev/null || true
+    _held_lock=""
   fi
 }
 
@@ -207,7 +254,29 @@ if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
   exit 0
 fi
 
-build_and_install_local
-if ! publish_to_cache "${shared_entry}" "${fingerprint}"; then
-  warn "failed to publish to shared cache (${shared_entry})"
-fi
+lock_rc=0
+acquire_cache_lock "${shared_entry}" "${fingerprint}" || lock_rc=$?
+case "${lock_rc}" in
+  0)
+    # We hold the lock. Re-check after acquisition (another process may have
+    # published just before we mkdir'd).
+    if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
+      populate_worktree_from_cache "${shared_entry}" "${fingerprint}"
+      release_cache_lock
+      exit 0
+    fi
+    build_and_install_local
+    if ! publish_to_cache "${shared_entry}" "${fingerprint}"; then
+      warn "failed to publish to shared cache (${shared_entry})"
+    fi
+    release_cache_lock
+    ;;
+  2)
+    # Winner published while we waited.
+    populate_worktree_from_cache "${shared_entry}" "${fingerprint}"
+    ;;
+  *)
+    warn "could not acquire shared cache lock; building locally without publishing"
+    build_and_install_local
+    ;;
+esac
