@@ -41,7 +41,9 @@ final class AppState {
 
     var isSearchOpen: Bool = false
     var isRepoSelectorOpen: Bool = false
+    var isAgentLauncherOpen: Bool = false
     let repoSelector = RepoSelectorModel()
+    let agentLauncher = AgentLauncherModel()
 
     /// Computed each time `config.agents` changes or detection re-runs.
     /// `RootView.task` calls `rescanAgents()` once at launch; the Settings

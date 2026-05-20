@@ -77,6 +77,7 @@ struct RootView: View {
             }
             FileSearchDialog(appState: state)
             RepoSelectorDialog(appState: state)
+            AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
         }
         .environment(\.theme, state.themeStore.current)
         .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
@@ -399,6 +400,21 @@ private struct RootBaseHandlers: ViewModifier {
                 }
             }
         let p = o
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { _ in
+                guard selectedWorktree() != nil else { return }
+                if state.isAgentLauncherOpen {
+                    state.agentLauncher.reset()
+                    state.isAgentLauncherOpen = false
+                } else {
+                    state.search.close()
+                    state.isSearchOpen = false
+                    state.repoSelector.close()
+                    state.isRepoSelectorOpen = false
+                    state.agentLauncher.reset()
+                    state.isAgentLauncherOpen = true
+                }
+            }
+        let q = p
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 let beforeIds = state.allWorktreeIds()
                 Task {
@@ -409,7 +425,7 @@ private struct RootBaseHandlers: ViewModifier {
                     state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
-        return p
+        return q
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
