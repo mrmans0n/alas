@@ -20,16 +20,20 @@ struct CommitRowTests {
         let pasteboard = NSPasteboard(name: .init("io.nlopez.alas.test-commit-copy"))
         pasteboard.clearContents()
 
-        func copySHA(_ commit: CommitInfo) {
-            let pb = NSPasteboard(name: .init("io.nlopez.alas.test-commit-copy"))
-            pb.clearContents()
-            pb.setString(commit.sha, forType: .string)
-        }
-
-        copySHA(commit)
+        Clipboard.copy(commit.sha, to: pasteboard)
 
         let copied = pasteboard.string(forType: .string)
         #expect(copied == "deadbeef1234567890abcdef1234567890abcdef")
+    }
+
+    @Test func copiesCommitDiffTitle() {
+        let pasteboard = NSPasteboard(name: .init("io.nlopez.alas.test-commit-diff-title-copy"))
+        pasteboard.clearContents()
+
+        Clipboard.copy("Sources/Center/Commit/CommitDiffView.swift", to: pasteboard)
+
+        let copied = pasteboard.string(forType: .string)
+        #expect(copied == "Sources/Center/Commit/CommitDiffView.swift")
     }
 
     @Test func commitInfoIdUsesSHA() {
@@ -47,5 +51,30 @@ struct CommitRowTests {
         )
 
         #expect(commit.id == "aabbccdd11223344556677889900aabbccdd1122")
+    }
+
+    @MainActor
+    @Test func copyFeedbackShowsThenDismisses() async throws {
+        let feedback = CopyFeedbackState(displayNanoseconds: 10_000_000)
+
+        feedback.show("Copied SHA")
+
+        #expect(feedback.message == "Copied SHA")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(feedback.message == nil)
+    }
+
+    @MainActor
+    @Test func copyFeedbackRefreshKeepsLatestMessageVisible() async throws {
+        let feedback = CopyFeedbackState(displayNanoseconds: 50_000_000)
+
+        feedback.show("Copied SHA")
+        try await Task.sleep(nanoseconds: 20_000_000)
+        feedback.show("Copied title")
+        try await Task.sleep(nanoseconds: 35_000_000)
+
+        #expect(feedback.message == "Copied title")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(feedback.message == nil)
     }
 }

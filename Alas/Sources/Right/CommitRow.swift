@@ -8,6 +8,8 @@ struct CommitRow: View {
     let onCopySHA: () -> Void
 
     @Environment(\.theme) private var theme
+    @StateObject private var copyFeedback = CopyFeedbackState()
+    @State private var shaHovering = false
 
     var body: some View {
         Button(action: onSelect) {
@@ -25,8 +27,9 @@ struct CommitRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .copyFeedbackOverlay(message: copyFeedback.message)
         .contextMenu {
-            Button("Copy Commit SHA") { onCopySHA() }
+            Button("Copy Commit SHA") { copySHA() }
         }
     }
 
@@ -71,7 +74,13 @@ struct CommitRow: View {
         HStack(spacing: 6) {
             Text(commit.shortSha)
                 .font(.system(size: 10.5, design: .monospaced))
-                .foregroundColor(theme.color("fg-faint"))
+                .foregroundColor(shaHovering ? theme.color("accent") : theme.color("fg-faint"))
+                .onTapGesture { copySHA() }
+                .onHover { hovering in
+                    shaHovering = hovering
+                }
+                .pointingHandCursor()
+                .help("Click to copy SHA")
             avatar
             Text(relativeTime(commit.date))
                 .font(.system(size: 10.5))
@@ -120,5 +129,10 @@ struct CommitRow: View {
             hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)
         }
         return Color(hex: palette[Int(hash % UInt64(palette.count))])
+    }
+
+    private func copySHA() {
+        onCopySHA()
+        copyFeedback.show("Copied SHA")
     }
 }

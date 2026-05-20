@@ -8,6 +8,8 @@ struct CommitDiffView: View {
     let onOpenFile: (() -> Void)?
 
     @Environment(\.theme) private var theme
+    @StateObject private var copyFeedback = CopyFeedbackState()
+    @State private var titleHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,13 +21,22 @@ struct CommitDiffView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Text((path as NSString).lastPathComponent)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(theme.color("fg"))
-            Text("·").foregroundColor(theme.color("fg-faint"))
-            Text((path as NSString).deletingLastPathComponent)
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-dim"))
+            HStack(spacing: 6) {
+                Text((path as NSString).lastPathComponent)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(titleHovering ? theme.color("accent") : theme.color("fg"))
+                Text("·").foregroundColor(theme.color("fg-faint"))
+                Text((path as NSString).deletingLastPathComponent)
+                    .font(.system(size: 11))
+                    .foregroundColor(titleHovering ? theme.color("accent") : theme.color("fg-dim"))
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { copyTitle() }
+            .onHover { hovering in
+                titleHovering = hovering
+            }
+            .pointingHandCursor()
+            .help("Click to copy diff title")
             Spacer()
             if let onOpenFile {
                 AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
@@ -34,6 +45,7 @@ struct CommitDiffView: View {
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.4), alignment: .bottom)
+        .copyFeedbackOverlay(message: copyFeedback.message)
     }
 
     @ViewBuilder
@@ -59,5 +71,10 @@ struct CommitDiffView: View {
                 .padding(.vertical, 8)
             }
         }
+    }
+
+    private func copyTitle() {
+        Clipboard.copy(path)
+        copyFeedback.show("Copied title")
     }
 }
