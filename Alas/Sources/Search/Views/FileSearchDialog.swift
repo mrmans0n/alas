@@ -42,7 +42,10 @@ struct FileSearchDialog: View {
                 .onKeyPress { press in handleKey(press) }
             }
             .transition(.opacity.combined(with: .offset(y: -6)))
-            .onAppear { inputFocused = true }
+            .onAppear { requestInputFocus() }
+            .onChange(of: appState.isSearchOpen) { _, isOpen in
+                if isOpen { requestInputFocus() }
+            }
         }
     }
 
@@ -169,6 +172,16 @@ struct FileSearchDialog: View {
     private func close() {
         appState.search.close()
         appState.isSearchOpen = false
+    }
+
+    private func requestInputFocus() {
+        inputFocused = false
+        DispatchQueue.main.async {
+            inputFocused = true
+            DispatchQueue.main.async {
+                inputFocused = true
+            }
+        }
     }
 }
 
