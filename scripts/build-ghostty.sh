@@ -211,7 +211,11 @@ publish_to_cache() {
 proc_start_token() {
   local pid="$1"
   [ -n "${pid}" ] || { echo ""; return; }
-  ps -o lstart= -p "${pid}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+  # Pin LC_ALL=C so the lstart format does not vary between holder and waiter
+  # when they run under different LC_TIME settings; any locale difference
+  # would otherwise produce different tokens for the same live process and
+  # false-reclaim the lock.
+  LC_ALL=C ps -o lstart= -p "${pid}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
 }
 
 # Compare the (pid, token) pair from a lock's metadata against the current
