@@ -186,7 +186,11 @@ struct RootView: View {
         )
         switch resolver.resolve() {
         case .worktree(let wt):
-            CenterPaneView(state: state, worktree: wt)
+            CenterPaneView(
+                state: state,
+                worktree: wt,
+                allowsPaneFocus: !state.isKeyboardOverlayOpen
+            )
         case .deleting(let wt):
             DeletingWorktreeView(worktree: wt)
         case .deleteFailed(let wt, let message):

@@ -4,6 +4,7 @@ import SwiftUI
 struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
+    var allowsPaneFocus: Bool = true
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -70,7 +71,8 @@ struct CenterPaneView: View {
                     case .terminal:
                         TerminalTabView(state: state,
                                         worktreeId: worktree.id,
-                                        tabId: tab.id)
+                                        tabId: tab.id,
+                                        allowsPaneFocus: allowsPaneFocus)
                     case .editor(let s):
                         if MarkdownFileType.isMarkdown(relativePath: s.isExternal
                                                         ? (s.externalAbsolutePath ?? "")

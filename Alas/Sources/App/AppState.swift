@@ -42,6 +42,9 @@ final class AppState {
     var isSearchOpen: Bool = false
     var isRepoSelectorOpen: Bool = false
     var isAgentLauncherOpen: Bool = false
+    var isKeyboardOverlayOpen: Bool {
+        isSearchOpen || isRepoSelectorOpen || isAgentLauncherOpen
+    }
     let repoSelector = RepoSelectorModel()
     let agentLauncher = AgentLauncherModel()
 

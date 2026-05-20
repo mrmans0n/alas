@@ -36,7 +36,10 @@ struct AgentLauncherDialog: View {
             .transition(.opacity.combined(with: .offset(y: -6)))
             .onAppear {
                 appState.agentLauncher.reset()
-                inputFocused = true
+                requestInputFocus()
+            }
+            .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in
+                if isOpen { requestInputFocus() }
             }
         }
     }
@@ -149,6 +152,16 @@ struct AgentLauncherDialog: View {
     private func close() {
         appState.agentLauncher.reset()
         appState.isAgentLauncherOpen = false
+    }
+
+    private func requestInputFocus() {
+        inputFocused = false
+        DispatchQueue.main.async {
+            inputFocused = true
+            DispatchQueue.main.async {
+                inputFocused = true
+            }
+        }
     }
 }
 

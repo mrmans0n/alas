@@ -38,7 +38,10 @@ struct RepoSelectorDialog: View {
             .transition(.opacity.combined(with: .offset(y: -6)))
             .onAppear {
                 appState.repoSelector.open()
-                inputFocused = true
+                requestInputFocus()
+            }
+            .onChange(of: appState.isRepoSelectorOpen) { _, isOpen in
+                if isOpen { requestInputFocus() }
             }
         }
     }
@@ -172,7 +175,7 @@ struct RepoSelectorDialog: View {
         case .focused, .openedNewWorktree, .openedNewProject:
             appState.isRepoSelectorOpen = false
         case .pushed:
-            inputFocused = true
+            requestInputFocus()
         case .noop:
             break
         }
@@ -180,12 +183,22 @@ struct RepoSelectorDialog: View {
 
     private func popToRepos() {
         appState.repoSelector.popToRepos()
-        inputFocused = true
+        requestInputFocus()
     }
 
     private func close() {
         appState.repoSelector.close()
         appState.isRepoSelectorOpen = false
+    }
+
+    private func requestInputFocus() {
+        inputFocused = false
+        DispatchQueue.main.async {
+            inputFocused = true
+            DispatchQueue.main.async {
+                inputFocused = true
+            }
+        }
     }
 
     // MARK: - Keys
