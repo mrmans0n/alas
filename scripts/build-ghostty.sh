@@ -300,7 +300,9 @@ gc_cache() {
       | while IFS= read -r -d '' p; do
           base="$(basename "${p}")"
           # Best-effort cleanup of an abandoned sibling lock so a publisher
-          # that died between mv and rmdir doesn't pin this entry forever.
+          # killed between mv and rmdir does not pin this entry forever.
+          # (bash 3.2 parses apostrophes inside comments-in-$() as quote
+          # openers, so this comment intentionally avoids contractions.)
           maybe_reclaim_stale_lock "${arch_dir}/${base}.lock"
           [ -d "${arch_dir}/${base}.lock" ] && continue
           if mt="$(stat -f %m "${p}" 2>/dev/null)" || mt="$(stat -c %Y "${p}" 2>/dev/null)"; then
