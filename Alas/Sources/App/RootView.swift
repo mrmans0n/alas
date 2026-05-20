@@ -88,7 +88,7 @@ struct RootView: View {
             // launches render half-dark until the user toggles the theme.
             WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
         }
-        .background(WindowConfigurator())
+        .background(WindowConfigurator(disablesSystemDrag: true))
         .frame(minWidth: 700, minHeight: 600)
         .ignoresSafeArea()
         .modifier(RootCommandHandlers(

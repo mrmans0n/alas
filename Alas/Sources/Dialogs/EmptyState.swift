@@ -52,5 +52,6 @@ struct EmptyState: View {
                 .padding(.leading, 12)
                 .padding(.top, 10)
         }
+        .windowDragHandle()
     }
 }
