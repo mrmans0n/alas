@@ -157,11 +157,16 @@ cache_entry_valid() {
 # Populate the worktree from a known-valid cache entry. Uses APFS clonefile
 # (`cp -c`) for near-zero disk cost. Writes the local fingerprint LAST so a
 # crash mid-copy leaves the worktree visibly incomplete and triggers a rebuild.
+# Returns non-zero if any copy fails (e.g. the entry was concurrently GC'd or
+# replaced between cache_entry_valid and this call). Caller falls back to a
+# local build — the shared cache must never break the build.
 populate_worktree_from_cache() {
   local entry="$1" fp="$2"
   rm -rf "${xcframework_path}" "${ghostty_build_root}/share"
-  cp -c -R "${entry}/GhosttyKit.xcframework" "${ghostty_build_root}/"
-  cp -c -R "${entry}/share" "${ghostty_build_root}/"
+  cp -c -R "${entry}/GhosttyKit.xcframework" "${ghostty_build_root}/" 2>/dev/null \
+    || return 1
+  cp -c -R "${entry}/share" "${ghostty_build_root}/" 2>/dev/null \
+    || return 1
   printf '%s\n' "${fp}" > "${ghostty_fingerprint_path}"
 }
 
@@ -317,8 +322,10 @@ fi
 
 shared_entry="${ghostty_cache_root}/${fingerprint}"
 if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
-  populate_worktree_from_cache "${shared_entry}" "${fingerprint}"
-  exit 0
+  if populate_worktree_from_cache "${shared_entry}" "${fingerprint}"; then
+    exit 0
+  fi
+  warn "cache entry vanished mid-copy; falling back to local build"
 fi
 
 lock_rc=0
@@ -327,8 +334,8 @@ case "${lock_rc}" in
   0)
     # We hold the lock. Re-check after acquisition (another process may have
     # published just before we mkdir'd).
-    if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
-      populate_worktree_from_cache "${shared_entry}" "${fingerprint}"
+    if cache_entry_valid "${shared_entry}" "${fingerprint}" \
+       && populate_worktree_from_cache "${shared_entry}" "${fingerprint}"; then
       release_cache_lock
       exit 0
     fi
@@ -345,7 +352,10 @@ case "${lock_rc}" in
     ;;
   2)
     # Winner published while we waited.
-    populate_worktree_from_cache "${shared_entry}" "${fingerprint}"
+    if ! populate_worktree_from_cache "${shared_entry}" "${fingerprint}"; then
+      warn "cache entry vanished after winner published; falling back to local build"
+      build_and_install_local
+    fi
     ;;
   *)
     warn "could not acquire shared cache lock; building locally without publishing"
