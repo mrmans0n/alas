@@ -397,9 +397,7 @@ final class AppState {
                 // interactive CLI (claude, codex, gemini) would just exit
                 // immediately on the EOF from its missing stdin.
                 let launchAgentCommand: String? = {
-                    guard let id = launchAgentId,
-                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
-                    else { return nil }
+                    guard let id = launchAgentId else { return nil }
                     let useBypass: Bool = {
                         switch project.startupScripts.worktreeAgentMode {
                         case .disabled: return false
@@ -409,11 +407,12 @@ final class AppState {
                             return project.startupScripts.worktreeAgentUseBypassPermissions
                         }
                     }()
-                    var argv = [agent.resolvedBinary]
-                    if useBypass, let flag = agent.bypassPermissionsFlag {
-                        argv.append(flag)
-                    }
-                    return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+                    guard let resolved = AgentAutoLaunch.resolveExplicit(
+                        agentId: id,
+                        registry: self.agentRegistry,
+                        useBypass: useBypass
+                    ) else { return nil }
+                    return resolved.argv.map { Self.shellQuote($0) }.joined(separator: " ")
                 }()
 
                 do {

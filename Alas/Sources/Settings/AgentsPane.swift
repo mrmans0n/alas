@@ -37,11 +37,9 @@ struct AgentsPane: View {
                     }
                     SettingsRow(
                         name: "Bypass permissions",
-                        desc: "Append the agent's --bypass-permissions flag when auto-launching."
+                        desc: "Append the agent's --bypass-permissions flag when auto-launching. Only applied when the selected agent supports it."
                     ) {
                         AlasToggle(on: state.bind(\.agents.worktreeAutoLaunch.useBypassPermissions))
-                            .disabled(!autoLaunchSupportsBypass)
-                            .opacity(autoLaunchSupportsBypass ? 1 : 0.4)
                     }
                 }
 
@@ -112,12 +110,6 @@ struct AgentsPane: View {
         }
         .pickerStyle(.menu)
         .frame(width: 240)
-    }
-
-    private var autoLaunchSupportsBypass: Bool {
-        guard let id = state.config.agents.worktreeAutoLaunch.agentId,
-              let agent = state.agent(id: id) else { return false }
-        return agent.bypassPermissionsFlag != nil
     }
 
     private var cardGrid: some View {

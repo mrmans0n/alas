@@ -31,14 +31,41 @@ enum AgentAutoLaunch {
             agentId = projectAgentId
             useBypass = projectUseBypass
         }
-        guard let id = agentId,
-              let agent = registry.enabled().first(where: { $0.id == id }) else {
+        guard let id = agentId else {
             return nil
         }
+        guard let resolved = resolveExplicit(
+            agentId: id,
+            registry: registry,
+            useBypass: useBypass
+        ) else {
+            return nil
+        }
+        return resolved
+    }
+
+    /// Resolve an explicit per-creation agent launch (e.g. chosen in the
+    /// NewWorktreeDialog). Unlike `resolve`, this does not require a default
+    /// agent to be configured.
+    static func resolveExplicit(
+        agentId: String,
+        registry: AgentRegistry,
+        useBypass: Bool
+    ) -> Resolved? {
+        guard let agent = registry.enabled().first(where: { $0.id == agentId }) else {
+            return nil
+        }
+        return Resolved(
+            argv: buildCommand(agent: agent, useBypass: useBypass),
+            agentId: agent.id
+        )
+    }
+
+    static func buildCommand(agent: AgentDefinition, useBypass: Bool) -> [String] {
         var argv: [String] = [agent.resolvedBinary]
         if useBypass, let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
         }
-        return Resolved(argv: argv, agentId: agent.id)
+        return argv
     }
 }
