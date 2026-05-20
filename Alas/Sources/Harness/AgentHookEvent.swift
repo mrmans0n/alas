@@ -4,12 +4,16 @@ import Foundation
 enum ActivityEvent: String, Sendable {
     case busy
     case awaitingInput = "awaiting_input"
+    case permissionRequest = "permission_request"
     case idle
+    case attached
+    case detached
 }
 
 enum ActivityState: String, Sendable, Equatable {
     case busy
     case awaitingInput = "awaiting_input"
+    case permissionRequest = "permission_request"
     case idle
 }
 
@@ -35,7 +39,7 @@ extension AgentHookEvent {
         guard let eventStr = json["event"] as? String else {
             throw AgentHookEventError.malformed("Missing 'event'")
         }
-        guard let event = ActivityEvent(rawValue: eventStr) else {
+        guard let event = AgentLifecycleEventMapper.map(eventStr) else {
             throw AgentHookEventError.unknownEvent(eventStr)
         }
         guard let agentStr = json["agent"] as? String else {

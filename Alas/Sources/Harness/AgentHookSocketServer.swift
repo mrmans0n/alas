@@ -258,7 +258,7 @@ extension AgentHookEvent {
     static func isUnknownEvent(_ data: Data) throws -> Bool {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let eventStr = json["event"] as? String,
-              ActivityEvent(rawValue: eventStr) == nil else { return false }
+              AgentLifecycleEventMapper.map(eventStr) == nil else { return false }
         return true
     }
 }

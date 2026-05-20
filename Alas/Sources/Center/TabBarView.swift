@@ -164,6 +164,7 @@ private struct TabButton: View {
         switch s {
         case .busy:          return theme.color("add")
         case .awaitingInput: return theme.color("mod")
+        case .permissionRequest: return theme.color("mod")
         case .idle:          return theme.color("fg-faint")
         }
     }

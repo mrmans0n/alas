@@ -94,7 +94,7 @@ final class HarnessService {
         let previousState = activityBySession[event.sessionId]?.state
 
         switch event.event {
-        case .busy:
+        case .attached, .busy:
             // Cancel any pending cursor-idle debounce — work is actually ongoing.
             if event.agent == .cursor {
                 cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
@@ -116,6 +116,25 @@ final class HarnessService {
                 lastBody: event.body, updatedAt: Date()
             )
             if previousState != .awaitingInput, shouldNotifyOnAwaiting(),
+               let lookup = stateLookup(event.sessionId) {
+                notifications.notifyHarnessAwaiting(
+                    agent: event.agent, body: event.body,
+                    projectId: lookup.projectId, worktreeId: lookup.worktreeId,
+                    sessionId: event.sessionId
+                )
+            }
+
+        case .permissionRequest:
+            // Cancel pending cursor-idle debounce; permission requests are a real state change.
+            if event.agent == .cursor {
+                cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
+                pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
+            }
+            activityBySession[event.sessionId] = HarnessActivityState(
+                agent: event.agent, state: .permissionRequest, pid: event.pid,
+                lastBody: event.body, updatedAt: Date()
+            )
+            if previousState != .permissionRequest, shouldNotifyOnAwaiting(),
                let lookup = stateLookup(event.sessionId) {
                 notifications.notifyHarnessAwaiting(
                     agent: event.agent, body: event.body,
@@ -150,6 +169,11 @@ final class HarnessService {
             } else {
                 commitIdle(event: event, stateLookup: stateLookup)
             }
+
+        case .detached:
+            cursorIdleDebouncers.removeValue(forKey: event.sessionId)?.cancel()
+            pendingCursorIdleEvents.removeValue(forKey: event.sessionId)
+            activityBySession.removeValue(forKey: event.sessionId)
         }
     }
 
@@ -204,7 +228,7 @@ final class HarnessService {
         for id in ids {
             guard let activity = activityBySession[id] else { continue }
             switch activity.state {
-            case .awaitingInput: awaitingIds.append(id)
+            case .awaitingInput, .permissionRequest: awaitingIds.append(id)
             case .busy:          runningIds.append(id)
             case .idle:          break
             }
