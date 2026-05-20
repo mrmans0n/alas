@@ -49,6 +49,13 @@ struct AgentLauncherModelTests {
         #expect(model.selectedIndex == 0)
     }
 
+    @Test func moveSelectionUpClampsOutOfRangeSelection() {
+        let model = AgentLauncherModel()
+        model.selectedIndex = 3
+        model.moveSelectionUp(in: [agent("codex", "Codex")])
+        #expect(model.selectedIndex == 0)
+    }
+
     @Test func selectedAgentReturnsNilForEmptyRows() {
         let model = AgentLauncherModel()
         #expect(model.selectedAgent(in: []) == nil)
