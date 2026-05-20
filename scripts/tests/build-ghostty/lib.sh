@@ -49,6 +49,13 @@ setup_sandbox() {
 
 teardown_sandbox() {
   if [ -n "${SANDBOX:-}" ] && [ -d "${SANDBOX}" ]; then
+    # Restore permissions on any subdirectories that may have been made
+    # unwritable/unreadable by a test (e.g. chmod 000) before the recursive
+    # chmod. On macOS, chmod -R cannot descend into mode-000 directories even
+    # when the caller owns them, so we must chmod each entry individually first.
+    # Use the system find directly to avoid any PATH-wrapper interference.
+    /usr/bin/find "${SANDBOX}" -mindepth 1 -maxdepth 2 -type d \
+      -exec chmod u+rwx {} + 2>/dev/null || true
     chmod -R u+w "${SANDBOX}" 2>/dev/null || true
     rm -rf "${SANDBOX}"
   fi

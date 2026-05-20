@@ -310,6 +310,11 @@ if [ -f "${ghostty_fingerprint_path}" ] &&
   exit 0
 fi
 
+if [ "${ALAS_GHOSTTY_CACHE_DISABLE:-}" = "1" ]; then
+  build_and_install_local
+  exit 0
+fi
+
 shared_entry="${ghostty_cache_root}/${fingerprint}"
 if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
   populate_worktree_from_cache "${shared_entry}" "${fingerprint}"
