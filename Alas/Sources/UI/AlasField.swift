@@ -7,6 +7,7 @@ struct AlasField: View {
     var monospaced: Bool = false
     var focusOnAppear: Bool = false
     var onSubmit: (() -> Void)? = nil
+    var leadingIcon: String? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -20,19 +21,38 @@ struct AlasField: View {
             )
             .frame(height: 28)
         } else {
-            TextField(placeholder, text: $text)
+            let field = TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: monospaced ? .monospaced : .default))
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(theme.color("bg-1"))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                )
                 .foregroundColor(theme.color("fg"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            if let leadingIcon = leadingIcon {
+                HStack(spacing: 6) {
+                    Image(systemName: leadingIcon)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .accessibilityHidden(true)
+                    field
+                }
+                .fieldChrome(theme: theme)
+            } else {
+                field
+                    .fieldChrome(theme: theme)
+            }
         }
+    }
+}
+
+private extension View {
+    func fieldChrome(theme: Theme) -> some View {
+        padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(theme.color("bg-1"))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 
