@@ -17,6 +17,7 @@
 		02B055E21896C1C14D2D980D /* SectionHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 934BCC470703CF2DF2303357 /* SectionHeader.swift */; };
 		02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6599EB47850D1E13ACF0EB /* NewProjectDialog.swift */; };
 		0407824F9DA8EEFC5B5EEA8A /* InstallerHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C506EF972D34E2F937D4FEEC /* InstallerHost.swift */; };
+		04EC051D5AEE99A4841B29C7 /* PiInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4749A35B3BEF89C8E7B92CD7 /* PiInstallerTests.swift */; };
 		0563F6A02BFFE6B5013D2190 /* TabsManagerBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70377E10CD6D08B225BDFABE /* TabsManagerBufferTests.swift */; };
 		065F1A7FCF81FF29BAEF5A86 /* ScopeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D131C3F1E4BE68A850097A4 /* ScopeRow.swift */; };
 		06AD46194E45984A1297D928 /* CommitHeaderViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43F9F04AF6A6FF0A4D328F4 /* CommitHeaderViewTests.swift */; };
@@ -175,6 +176,7 @@
 		5D2A45DB652AD797E2276A7A /* AgentRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7544FD20BC61E587CAFAC099 /* AgentRegistry.swift */; };
 		5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C486F9097A2B145D101E2C /* AlasButton.swift */; };
 		5D8DF496FC722EE24F69A60A /* AgentHookSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 976B145EAC17A395380DFB47 /* AgentHookSocketServer.swift */; };
+		5E687CE659E83EF3B71CA86F /* PiInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 932EA49288A0444FB8BB9CE3 /* PiInstaller.swift */; };
 		5EA1AA5C8D9DE003BACE8291 /* AlasGhostty.Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */; };
 		5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE58EF9CF8EC461667D9430 /* AppConfig.swift */; };
 		5FF61283B11E2696A72727D1 /* TreeSitterHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */; };
@@ -595,6 +597,7 @@
 		45513A6B9EAA4E9744502597 /* AppConfigShortcutsCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigShortcutsCodingTests.swift; sourceTree = "<group>"; };
 		4575017544CD7603B3AB9069 /* GitEventFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitEventFilter.swift; sourceTree = "<group>"; };
 		45D8B88C4D4837376C123D45 /* AgentLauncherModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLauncherModelTests.swift; sourceTree = "<group>"; };
+		4749A35B3BEF89C8E7B92CD7 /* PiInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiInstallerTests.swift; sourceTree = "<group>"; };
 		4865995B2D4B92166321201F /* CommitContextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitContextBuilder.swift; sourceTree = "<group>"; };
 		489C9B383554D7DAB170C2F8 /* Seg.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Seg.swift; sourceTree = "<group>"; };
 		4973BDD06953B7A1EB9A7A66 /* RightPaneStateDiscardPathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneStateDiscardPathsTests.swift; sourceTree = "<group>"; };
@@ -708,6 +711,7 @@
 		9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMonoNerdFont-Regular.ttf"; sourceTree = "<group>"; };
 		91C1705E68E97111E85D83F3 /* RightPaneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneState.swift; sourceTree = "<group>"; };
 		91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusParser.swift; sourceTree = "<group>"; };
+		932EA49288A0444FB8BB9CE3 /* PiInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiInstaller.swift; sourceTree = "<group>"; };
 		932F0FEE5330D5B4470C1874 /* DiagnosticsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsFeature.swift; sourceTree = "<group>"; };
 		9346272D3AF9A7D78067C96F /* SettingsSaveNormalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSaveNormalizationTests.swift; sourceTree = "<group>"; };
 		934BCC470703CF2DF2303357 /* SectionHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionHeader.swift; sourceTree = "<group>"; };
@@ -1044,6 +1048,7 @@
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
 				856607304A9F2409EF40BD5F /* PendingDiscardTests.swift */,
 				7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */,
+				4749A35B3BEF89C8E7B92CD7 /* PiInstallerTests.swift */,
 				5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */,
 				E1FD24B10ED0B3D4280F15E8 /* ProjectConfigAgentOverrideTests.swift */,
 				5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */,
@@ -1511,6 +1516,7 @@
 				C19E98A53E2B793436D2F10D /* NotificationDelegate.swift */,
 				2975A1465CA308E9766521F2 /* NotificationService.swift */,
 				CEC2AE8D8A358AC0F83252CD /* OpenCodeInstaller.swift */,
+				932EA49288A0444FB8BB9CE3 /* PiInstaller.swift */,
 			);
 			path = Harness;
 			sourceTree = "<group>";
@@ -2071,6 +2077,7 @@
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
 				449C7E4A63455D01633B791A /* PendingDiscard.swift in Sources */,
 				671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */,
+				5E687CE659E83EF3B71CA86F /* PiInstaller.swift in Sources */,
 				1B1A33B610D29116A1D08A74 /* PointingHandCursor.swift in Sources */,
 				C618DE3EE2A7CA06876D6C68 /* Process+Git.swift in Sources */,
 				1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */,
@@ -2283,6 +2290,7 @@
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
 				11B4AA1D032F054C666DD7F4 /* PendingDiscardTests.swift in Sources */,
 				EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */,
+				04EC051D5AEE99A4841B29C7 /* PiInstallerTests.swift in Sources */,
 				7FC2A96DE87638A594DD8B61 /* ProcessGitTests.swift in Sources */,
 				636ED129478744F9169AD774 /* ProjectConfigAgentOverrideTests.swift in Sources */,
 				D13AFC98364971915782491C /* ProjectConfigTests.swift in Sources */,

@@ -23,6 +23,7 @@ struct AgentInstallerRegistry: Sendable {
             CursorInstaller(),
             GeminiInstaller(),
             OpenCodeInstaller(),
+            PiInstaller(),
         ]
     }
 
