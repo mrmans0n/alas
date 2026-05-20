@@ -158,6 +158,7 @@
 		523568D4D67F61ACA677EE44 /* SubHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE8B45ECF898B83A616586D /* SubHeader.swift */; };
 		524B70F03B9A934CEEA5FA61 /* LSPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8F6FBCE1218EAB74B608A /* LSPClientTests.swift */; };
 		5426DC977050AACBCBDA37E9 /* AgentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DAAC7481503A68EA0888682 /* AgentDetectorTests.swift */; };
+		55A6D67E063518A3A757EE18 /* GeminiInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0EBA9DC694E3F11300FC6C /* GeminiInstaller.swift */; };
 		55C7881F382ACCEBCDB7D157 /* AgentsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BB6172AE118D2F9A40FD534 /* AgentsPane.swift */; };
 		5632CE3BB7220370D87A987B /* AgentLauncherModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D8B88C4D4837376C123D45 /* AgentLauncherModelTests.swift */; };
 		5685074AFE30889AAC69EB8D /* ThreePaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5377288BFD5A1B410E141C54 /* ThreePaneLayout.swift */; };
@@ -240,6 +241,7 @@
 		8775C1FD6CE74B0555D778A3 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8DD66F449B380BC74B373647 /* Carbon.framework */; };
 		87ECE63567C08B2847844EDE /* ClaudeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */; };
 		884F7EB87029E537B923191E /* DefinitionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 781B8F6F0A3085FEBFC615C2 /* DefinitionPicker.swift */; };
+		8915EF49F1031BD55C419625 /* GeminiInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */; };
 		8950201500394191D7D981D2 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF52FE71B7FB41328859734 /* MarkdownRenderer.swift */; };
 		899E7B2794DD3F2114B38AFC /* StartupScriptResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 743E347E3DE3EEAD3942CD78 /* StartupScriptResolver.swift */; };
 		89A5E5AD13431B6C9E16669B /* ImageFileTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300F7033D91C4A0D283F75E /* ImageFileTypeTests.swift */; };
@@ -538,6 +540,7 @@
 		2CBAD18141C1A9B654F56982 /* FileTypeIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypeIconTests.swift; sourceTree = "<group>"; };
 		2CDC00065CA8839DA1AD0E0F /* TrafficLights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrafficLights.swift; sourceTree = "<group>"; };
 		2EF18448EDA0DCC8B171F11D /* CommitDiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDiffView.swift; sourceTree = "<group>"; };
+		2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiInstallerTests.swift; sourceTree = "<group>"; };
 		2F59C2CF9199EC099B1814AC /* CodexInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexInstallerTests.swift; sourceTree = "<group>"; };
 		2F8A28C3DBC50749BB1D2BEA /* HeadReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadReaderTests.swift; sourceTree = "<group>"; };
 		30CBB25BA2F2C558713FB0E4 /* CodeEditorCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeEditorCoordinator.swift; sourceTree = "<group>"; };
@@ -880,6 +883,7 @@
 		FBFB85AF60C0E4520ED0DA8E /* AgentLauncherDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLauncherDialog.swift; sourceTree = "<group>"; };
 		FC4A215AF2876091E31F6F8A /* LineEnding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineEnding.swift; sourceTree = "<group>"; };
 		FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeEditorView.swift; sourceTree = "<group>"; };
+		FD0EBA9DC694E3F11300FC6C /* GeminiInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiInstaller.swift; sourceTree = "<group>"; };
 		FDB4C80D9DD6DA28DE182955 /* InstallRecipeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallRecipeTests.swift; sourceTree = "<group>"; };
 		FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceUpstreamTests.swift; sourceTree = "<group>"; };
 		FE66950F2226F1182DCDD39A /* RightPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneView.swift; sourceTree = "<group>"; };
@@ -999,6 +1003,7 @@
 				A42BB90D7C9A270876F470EB /* FocusDirectionTests.swift */,
 				B5BEBDB5A6617C62D0F1C0D1 /* FormatOnSaveTests.swift */,
 				E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */,
+				2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */,
 				3BE23A4881B60D7F16A4ACA5 /* GhosttyConfigBuilderTests.swift */,
 				D3DC5DBEC068EB1BFDBB7F59 /* GitEventFilterTests.swift */,
 				6EB58175A9A39073E9D73F85 /* GitIgnoreServiceTests.swift */,
@@ -1491,6 +1496,7 @@
 				65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */,
 				01F0314E357190EF2A1F861B /* CodexInstaller.swift */,
 				7948BA9EC461BA2E3617FBF0 /* CursorInstaller.swift */,
+				FD0EBA9DC694E3F11300FC6C /* GeminiInstaller.swift */,
 				F9F85B92952C963DCF136315 /* HarnessDetector.swift */,
 				76F2498E56CBAF84CB67166C /* HarnessKind.swift */,
 				155B35EBCCE7F2CA1A0E5DE5 /* HarnessService.swift */,
@@ -1991,6 +1997,7 @@
 				AA8FEF94B861001AB643E005 /* FontFamilyPicker.swift in Sources */,
 				93B1DC70731B7F661D3AE26F /* FontSizeCommands.swift in Sources */,
 				B064B59D40A47026CDDEB189 /* FuzzyMatch.swift in Sources */,
+				55A6D67E063518A3A757EE18 /* GeminiInstaller.swift in Sources */,
 				41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */,
 				41C7E41360B2A443AE2A18B8 /* GhosttyHost.swift in Sources */,
 				7D75AEB67376431930CB37E3 /* GitEventFilter.swift in Sources */,
@@ -2221,6 +2228,7 @@
 				F6442CEA8D80C6845ABF0A63 /* FocusDirectionTests.swift in Sources */,
 				3E0A4613EB8F41DA8C182C36 /* FormatOnSaveTests.swift in Sources */,
 				E3B38707284D08326C3183E4 /* FuzzyMatchTests.swift in Sources */,
+				8915EF49F1031BD55C419625 /* GeminiInstallerTests.swift in Sources */,
 				01D2A32A3366C5CF6A225004 /* GhosttyConfigBuilderTests.swift in Sources */,
 				D4934B70887DE314FD73B0D1 /* GitEventFilterTests.swift in Sources */,
 				D27A1F6D7592D6A4BDD9FC4F /* GitIgnoreServiceTests.swift in Sources */,

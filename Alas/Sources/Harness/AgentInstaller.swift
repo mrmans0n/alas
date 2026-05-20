@@ -21,6 +21,7 @@ struct AgentInstallerRegistry: Sendable {
             ClaudeInstaller(),
             CodexInstaller(),
             CursorInstaller(),
+            GeminiInstaller(),
         ]
     }
 
