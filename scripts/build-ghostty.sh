@@ -169,7 +169,11 @@ publish_to_cache() {
   cp -c -R "${xcframework_path}" "${staging}/" || { rm -rf "${staging}"; return 1; }
   cp -c -R "${ghostty_build_root}/share" "${staging}/" || { rm -rf "${staging}"; return 1; }
   printf '%s\n' "${fp}" > "${staging}/fingerprint" || { rm -rf "${staging}"; return 1; }
-  # Atomic rename. If `entry` already exists (race we don't lock yet), tolerate it.
+  # Remove any stale entry before renaming so `mv` replaces it rather than
+  # nesting the staging dir inside it (macOS mv semantics when target exists).
+  rm -rf "${entry}"
+  # Atomic rename. If another process has just published the same entry
+  # (unlikely without locking, but tolerate it), treat as success.
   if ! mv "${staging}" "${entry}" 2>/dev/null; then
     rm -rf "${staging}"
     [ -d "${entry}" ] && return 0 || return 1
