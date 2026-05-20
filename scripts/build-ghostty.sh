@@ -263,6 +263,29 @@ release_cache_lock() {
   fi
 }
 
+# Best-effort: remove a sibling lock dir if it's clearly abandoned (dead PID
+# and old enough). Mirrors the stale-lock logic from acquire_cache_lock so a
+# publisher killed between mv and rmdir (e.g. SIGKILL) doesn't permanently
+# exclude its entry from gc_cache via the sibling-.lock check.
+maybe_reclaim_stale_lock() {
+  local lock_dir="$1"
+  [ -d "${lock_dir}" ] || return 0
+  local now stale_after lock_mtime lock_pid
+  now="$(date +%s)"
+  stale_after="${ALAS_GHOSTTY_LOCK_STALE_SECS:-60}"
+  if ! lock_mtime="$(stat -f %m "${lock_dir}" 2>/dev/null)" \
+     && ! lock_mtime="$(stat -c %Y "${lock_dir}" 2>/dev/null)"; then
+    return 0
+  fi
+  [ $(( now - lock_mtime )) -ge "${stale_after}" ] || return 0
+  lock_pid=""
+  [ -f "${lock_dir}/pid" ] && lock_pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
+  if [ -z "${lock_pid}" ] || ! kill -0 "${lock_pid}" 2>/dev/null; then
+    warn "removing stale lock at ${lock_dir} (pid=${lock_pid:-unknown})"
+    rm -rf "${lock_dir}" 2>/dev/null || true
+  fi
+}
+
 # Drop all but the newest N entries (by mtime) under "$1". Entries with a
 # matching sibling .lock dir are skipped. .tmp.* staging dirs are not eligible.
 gc_cache() {
@@ -322,6 +345,10 @@ fi
 
 shared_entry="${ghostty_cache_root}/${fingerprint}"
 if cache_entry_valid "${shared_entry}" "${fingerprint}"; then
+  # A publisher that crashed between `mv` and `rmdir` may have left a lock dir
+  # next to a valid entry. GC skips entries with a sibling .lock, so without
+  # this sweep the entry would become non-evictable.
+  maybe_reclaim_stale_lock "${shared_entry}.lock"
   if populate_worktree_from_cache "${shared_entry}" "${fingerprint}"; then
     exit 0
   fi
