@@ -55,6 +55,14 @@ xcframework_path="${ghostty_build_root}/GhosttyKit.xcframework"
 ghostty_resources_path="${ghostty_build_root}/share/ghostty"
 ghostty_terminfo_path="${ghostty_build_root}/share/terminfo"
 
+arch="$(uname -m)"
+ghostty_cache_root_default="${HOME}/Library/Caches/Alas/GhosttyKit"
+ghostty_cache_root="${ALAS_GHOSTTY_CACHE_DIR:-${ghostty_cache_root_default}}/${arch}"
+ghostty_cache_keep="${ALAS_GHOSTTY_CACHE_KEEP:-5}"
+
+# Emit a one-line warning to stderr. Does not exit.
+warn() { echo "build-ghostty.sh: warning: $*" >&2; }
+
 print_fingerprint() {
   (
     cd "${ghostty_dir}"
@@ -78,6 +86,32 @@ module GhosttyKit {
 }
 EOF
   done
+}
+
+# Run zig + rsync xcframework + write local fingerprint. Idempotent.
+build_and_install_local() {
+  (
+    cd "${ghostty_dir}"
+    if [ -n "${ALAS_ZIG_BIN:-}" ]; then
+      zig_bin="${ALAS_ZIG_BIN}"
+    else
+      zig_bin="$(brew --prefix zig@0.15 2>/dev/null)/bin/zig"
+    fi
+    if [ ! -x "${zig_bin}" ]; then
+      echo "error: zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN" >&2
+      exit 1
+    fi
+    "${zig_bin}" build \
+      -Doptimize=ReleaseFast \
+      -Demit-xcframework=true \
+      -Dsentry=false \
+      --prefix "${ghostty_build_root}" \
+      --cache-dir "${ghostty_local_cache_dir}" \
+      --global-cache-dir "${ghostty_global_cache_dir}"
+  )
+  rsync -a --delete "${ghostty_dir}/macos/GhosttyKit.xcframework/" "${xcframework_path}/"
+  prepare_xcframework
+  printf '%s\n' "${fingerprint}" > "${ghostty_fingerprint_path}"
 }
 
 ensure_ghostty_checkout() {
@@ -115,32 +149,4 @@ if [ -f "${ghostty_fingerprint_path}" ] &&
   exit 0
 fi
 
-cd "${ghostty_dir}"
-# Use Homebrew's patched zig@0.15 — vanilla Zig 0.15.2 has a known linking
-# issue with Xcode 26.4 (https://codeberg.org/ziglang/zig/issues/31658) that
-# silently strips the embedded apprt symbols (ghostty_app_new etc.) from
-# libghostty.a. Brew's bottle ships with the workaround patch.
-# See ThirdParty/ghostty/HACKING.md.
-#
-# Resolve the brew prefix dynamically — Apple Silicon installs under
-# /opt/homebrew while Intel uses /usr/local. Hard-coding either path
-# breaks the other.
-if [ -n "${ALAS_ZIG_BIN:-}" ]; then
-  zig_bin="${ALAS_ZIG_BIN}"
-else
-  zig_bin="$(brew --prefix zig@0.15 2>/dev/null)/bin/zig"
-fi
-if [ ! -x "${zig_bin}" ]; then
-  echo "error: zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN" >&2
-  exit 1
-fi
-"${zig_bin}" build \
-  -Doptimize=ReleaseFast \
-  -Demit-xcframework=true \
-  -Dsentry=false \
-  --prefix "${ghostty_build_root}" \
-  --cache-dir "${ghostty_local_cache_dir}" \
-  --global-cache-dir "${ghostty_global_cache_dir}"
-rsync -a --delete "${ghostty_dir}/macos/GhosttyKit.xcframework/" "${xcframework_path}/"
-prepare_xcframework
-printf '%s\n' "${fingerprint}" > "${ghostty_fingerprint_path}"
+build_and_install_local
