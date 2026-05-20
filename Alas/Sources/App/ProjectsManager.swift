@@ -59,6 +59,25 @@ final class ProjectsManager {
         projects[idx].startupScripts = update.startupScripts
     }
 
+    func reorderProject(fromIndex: Int, toIndex: Int) {
+        guard projects.indices.contains(fromIndex),
+              projects.indices.contains(toIndex),
+              fromIndex != toIndex
+        else { return }
+
+        let moving = projects.remove(at: fromIndex)
+        let clampedDestination = min(toIndex, projects.count)
+        projects.insert(moving, at: clampedDestination)
+    }
+
+    func reorderProject(movingId: String, destinationId: String) {
+        guard let fromIndex = projects.firstIndex(where: { $0.id == movingId }),
+              let toIndex = projects.firstIndex(where: { $0.id == destinationId }),
+              fromIndex != toIndex
+        else { return }
+        reorderProject(fromIndex: fromIndex, toIndex: toIndex)
+    }
+
     func worktrees(projectId: String) -> [Worktree] {
         worktreesByProject[projectId] ?? []
     }
