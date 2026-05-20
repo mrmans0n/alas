@@ -201,21 +201,52 @@ publish_to_cache() {
 acquire_cache_lock() {
   local entry="$1" fp="$2"
   local lock_dir="${entry}.lock"
-  local arch_dir
+  local arch_dir deadline now stale_after pid_file lock_pid
   arch_dir="$(dirname "${entry}")"
   if ! mkdir -p "${arch_dir}" 2>/dev/null; then
     return 1
   fi
+
+  stale_after="${ALAS_GHOSTTY_LOCK_STALE_SECS:-60}"
+  deadline=$(( $(date +%s) + ${ALAS_GHOSTTY_LOCK_TIMEOUT_SECS:-1800} ))
+
   while true; do
     if mkdir "${lock_dir}" 2>/dev/null; then
       _held_lock="${lock_dir}"
       echo $$ > "${lock_dir}/pid" 2>/dev/null || true
       return 0
     fi
-    # Lock held by someone else. Wait for them; recheck cache.
+
+    # Did the winner finish?
     if cache_entry_valid "${entry}" "${fp}"; then
       return 2
     fi
+
+    now="$(date +%s)"
+    if [ "${now}" -ge "${deadline}" ]; then
+      warn "shared cache lock wait exceeded deadline; building locally"
+      return 1
+    fi
+
+    # Stale lock: dir older than stale_after AND its PID file references a
+    # process that isn't running. `stat -f %m` is BSD/macOS; coreutils is
+    # `stat -c %Y`.
+    local lock_mtime
+    if lock_mtime="$(stat -f %m "${lock_dir}" 2>/dev/null)" \
+       || lock_mtime="$(stat -c %Y "${lock_dir}" 2>/dev/null)"; then
+      if [ $(( now - lock_mtime )) -ge "${stale_after}" ]; then
+        pid_file="${lock_dir}/pid"
+        lock_pid=""
+        [ -f "${pid_file}" ] && lock_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+        if [ -z "${lock_pid}" ] || ! kill -0 "${lock_pid}" 2>/dev/null; then
+          warn "removing stale lock at ${lock_dir} (pid=${lock_pid:-unknown})"
+          rm -rf "${lock_dir}" 2>/dev/null || true
+          # Loop and retry mkdir.
+          continue
+        fi
+      fi
+    fi
+
     sleep 1
   done
 }
