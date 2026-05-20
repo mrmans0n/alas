@@ -258,6 +258,37 @@ release_cache_lock() {
   fi
 }
 
+# Drop all but the newest N entries (by mtime) under "$1". Entries with a
+# matching sibling .lock dir are skipped. .tmp.* staging dirs are not eligible.
+gc_cache() {
+  local arch_dir="$1" keep="$2"
+  [ -d "${arch_dir}" ] || return 0
+  # Build a list of (mtime, path) for entries that are NOT .lock / .tmp.* /
+  # currently locked. BSD stat first, then GNU stat.
+  local entries
+  entries="$(
+    find "${arch_dir}" -maxdepth 1 -mindepth 1 -type d \
+      ! -name '*.lock' ! -name '*.tmp.*' -print0 \
+      | while IFS= read -r -d '' p; do
+          base="$(basename "${p}")"
+          [ -d "${arch_dir}/${base}.lock" ] && continue
+          if mt="$(stat -f %m "${p}" 2>/dev/null)" || mt="$(stat -c %Y "${p}" 2>/dev/null)"; then
+            printf '%s\t%s\n' "${mt}" "${p}"
+          fi
+        done \
+      | sort -rn
+  )"
+  local count=0
+  local IFS=$'\n'
+  for line in ${entries}; do
+    count=$((count + 1))
+    if [ "${count}" -gt "${keep}" ]; then
+      local path="${line#*$'\t'}"
+      rm -rf "${path}"
+    fi
+  done
+}
+
 ensure_ghostty_checkout
 
 if [ "${1:-}" = "--print-fingerprint" ]; then
@@ -297,10 +328,15 @@ case "${lock_rc}" in
       exit 0
     fi
     build_and_install_local
-    if ! publish_to_cache "${shared_entry}" "${fingerprint}"; then
+    _gc_arch_dir="$(dirname "${shared_entry}")"
+    if publish_to_cache "${shared_entry}" "${fingerprint}"; then
+      release_cache_lock
+      gc_cache "${_gc_arch_dir}" "${ghostty_cache_keep}" \
+        || warn "cache GC failed"
+    else
       warn "failed to publish to shared cache (${shared_entry})"
+      release_cache_lock
     fi
-    release_cache_lock
     ;;
   2)
     # Winner published while we waited.
