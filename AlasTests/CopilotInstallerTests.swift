@@ -32,11 +32,13 @@ struct CopilotInstallerTests {
 
         let hooks = installed["hooks"] as! [String: Any]
         let expectedEvents = [
+            "agentStop": "idle",
+            "permissionRequest": "permission_request",
             "sessionStart": "attached",
             "sessionEnd": "detached",
             "userPromptSubmitted": "busy",
+            "preToolUse": "busy",
             "postToolUse": "busy",
-            "preToolUse": "permission_request",
         ]
         #expect(Set(hooks.keys) == Set(expectedEvents.keys))
         for (event, activity) in expectedEvents {
@@ -99,6 +101,26 @@ struct CopilotInstallerTests {
         let exclude = try String(contentsOf: excludeURL, encoding: .utf8)
         #expect(exclude.contains("existing-pattern\n"))
         #expect(exclude.contains(".github/hooks/alas-notify.json\n"))
+    }
+
+    @Test func installAddsHookPathToLinkedWorktreeInfoExclude() throws {
+        let (dir, cleanup) = tmpDir()
+        defer { cleanup() }
+        let gitDir = dir.appendingPathComponent("actual-git-dir", isDirectory: true)
+        let infoURL = gitDir.appendingPathComponent("info", isDirectory: true)
+        try FileManager.default.createDirectory(at: infoURL, withIntermediateDirectories: true)
+        try "gitdir: actual-git-dir\n".write(
+            to: dir.appendingPathComponent(".git", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try CopilotInstaller(projectRootURL: dir).install()
+
+        let excludeURL = infoURL.appendingPathComponent("exclude", isDirectory: false)
+        let exclude = try String(contentsOf: excludeURL, encoding: .utf8)
+        #expect(exclude.contains(".github/hooks/alas-notify.json\n"))
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(".git/info/exclude").path))
     }
 
     @Test func installPreservesExcludeWhenExistingExcludeCannotBeDecoded() throws {

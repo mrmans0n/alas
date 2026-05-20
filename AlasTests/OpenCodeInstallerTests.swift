@@ -49,6 +49,7 @@ struct OpenCodeInstallerTests {
             #"type === "permission.asked""#,
             #"notify("permission_request""#,
             "session.status",
+            "session.idle",
             "ALAS_SOCKET_PATH",
             "node:child_process",
             "childProcess.spawn",
@@ -76,7 +77,7 @@ struct OpenCodeInstallerTests {
         try await installer.install()
 
         let content = try String(contentsOf: url, encoding: .utf8)
-        for type in ["session.created", "session.deleted", "session.status", "session.error"] {
+        for type in ["session.created", "session.deleted", "session.status", "session.idle", "session.error"] {
             #expect(content.contains(#"type === "\#(type)" && !isChildSession(event)"#))
         }
     }

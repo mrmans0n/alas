@@ -124,6 +124,10 @@ struct OpenCodeInstaller: AgentInstaller, Sendable {
               if (status === "idle") notify("idle", sessionIdFrom(event));
               return;
             }
+            if (type === "session.idle" && !isChildSession(event)) {
+              notify("idle", sessionIdFrom(event));
+              return;
+            }
             if (type === "session.error" && !isChildSession(event)) {
               notify("idle", sessionIdFrom(event));
               return;

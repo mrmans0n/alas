@@ -61,6 +61,8 @@ struct PiInstallerTests {
         ] {
             #expect(content.contains(required))
         }
+        #expect(content.contains(#"session_shutdown: "detached""#))
+        #expect(!content.contains(#"session_shutdown: "idle""#))
         #expect(!content.contains("export default {"))
         #expect(!content.contains(#"session_start: handle("session_start")"#))
     }

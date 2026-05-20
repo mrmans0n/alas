@@ -30,6 +30,8 @@ enum AgentLifecycleEventMapper {
         case "Stop",
              "stop",
              "AfterAgent",
+             "agentStop",
+             "AgentStop",
              "task_complete",
              "agent-turn-complete":
             return .idle

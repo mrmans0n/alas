@@ -59,7 +59,7 @@ struct PiInstaller: AgentInstaller, Sendable {
       before_agent_start: "busy",
       tool_execution_end: "busy",
       agent_end: "idle",
-      session_shutdown: "idle"
+      session_shutdown: "detached"
     };
 
     function envValue(name: string): string | undefined {

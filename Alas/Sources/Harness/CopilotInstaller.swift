@@ -50,11 +50,13 @@ struct CopilotInstaller: Sendable {
                 "version": 1,
                 "alas_marker": managedMarker,
                 "hooks": [
+                    "agentStop": [entry(command: idle)],
+                    "permissionRequest": [entry(command: permissionCommand)],
                     "sessionStart": [entry(command: attached)],
                     "sessionEnd": [entry(command: detached)],
                     "userPromptSubmitted": [entry(command: busy)],
+                    "preToolUse": [entry(command: busy)],
                     "postToolUse": [entry(command: busy)],
-                    "preToolUse": [entry(command: permissionCommand)],
                 ],
             ],
             options: [.prettyPrinted, .sortedKeys]
@@ -70,17 +72,7 @@ struct CopilotInstaller: Sendable {
     }
 
     private func updateGitInfoExcludeIfPresent() throws {
-        let gitInfoURL = projectRootURL
-            .appendingPathComponent(".git", isDirectory: true)
-            .appendingPathComponent("info", isDirectory: true)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: gitInfoURL.path, isDirectory: &isDirectory),
-              isDirectory.boolValue
-        else {
-            return
-        }
-
-        let excludeURL = gitInfoURL.appendingPathComponent("exclude", isDirectory: false)
+        guard let excludeURL = try resolveGitInfoExcludeURLIfPresent() else { return }
         let existing: String
         if FileManager.default.fileExists(atPath: excludeURL.path) {
             do {
@@ -100,7 +92,55 @@ struct CopilotInstaller: Sendable {
         }
         updated.append(Self.excludedHookPath)
         updated.append("\n")
+        try FileManager.default.createDirectory(
+            at: excludeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         try updated.write(to: excludeURL, atomically: true, encoding: .utf8)
+    }
+
+    private func resolveGitInfoExcludeURLIfPresent() throws -> URL? {
+        let dotGitURL = projectRootURL.appendingPathComponent(".git", isDirectory: false)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dotGitURL.path, isDirectory: &isDirectory) else {
+            return nil
+        }
+        if isDirectory.boolValue {
+            let infoURL = dotGitURL.appendingPathComponent("info", isDirectory: true)
+            guard FileManager.default.fileExists(atPath: infoURL.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else {
+                return nil
+            }
+            return infoURL.appendingPathComponent("exclude", isDirectory: false)
+        }
+
+        let gitFile = try String(contentsOf: dotGitURL, encoding: .utf8)
+        guard let firstLine = gitFile.split(separator: "\n").first else { return nil }
+        let prefix = "gitdir:"
+        guard firstLine.lowercased().hasPrefix(prefix) else { return nil }
+        let rawGitDir = firstLine.dropFirst(prefix.count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawGitDir.isEmpty else { return nil }
+
+        let gitDirURL: URL
+        if rawGitDir.hasPrefix("/") {
+            gitDirURL = URL(fileURLWithPath: rawGitDir, isDirectory: true)
+        } else {
+            gitDirURL = URL(
+                fileURLWithPath: (projectRootURL.path as NSString)
+                    .appendingPathComponent(rawGitDir),
+                isDirectory: true
+            ).standardizedFileURL
+        }
+        guard FileManager.default.fileExists(atPath: gitDirURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            return nil
+        }
+        return gitDirURL
+            .appendingPathComponent("info", isDirectory: true)
+            .appendingPathComponent("exclude", isDirectory: false)
     }
 
     private static let attached = AlasHookCommand.compositeCommand(
@@ -119,6 +159,13 @@ struct CopilotInstaller: Sendable {
 
     private static let busy = AlasHookCommand.compositeCommand(
         events: [.busy],
+        agent: .copilot,
+        forwardStdinAsBody: false,
+        stdoutResponse: "{}"
+    )
+
+    private static let idle = AlasHookCommand.compositeCommand(
+        events: [.idle],
         agent: .copilot,
         forwardStdinAsBody: false,
         stdoutResponse: "{}"
