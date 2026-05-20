@@ -18,6 +18,22 @@ final class AppState {
         return manager
     }
     let terminal = TerminalService()
+    struct OpenedTerminalSession {
+        let id: String
+        let foregroundPid: () -> pid_t?
+    }
+
+    typealias TerminalSessionOpener = (
+        Worktree,
+        ProjectConfig,
+        AppConfig.Terminal,
+        Theme,
+        URL?,
+        String?
+    ) throws -> OpenedTerminalSession
+
+    @ObservationIgnored
+    private let terminalSessionOpener: TerminalSessionOpener?
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     @ObservationIgnored
@@ -190,12 +206,14 @@ final class AppState {
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
-        persistenceErrorHandler: ((String, String) -> Void)? = nil
+        persistenceErrorHandler: ((String, String) -> Void)? = nil,
+        terminalSessionOpener: TerminalSessionOpener? = nil
     ) {
         self.store = store
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
+        self.terminalSessionOpener = terminalSessionOpener
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         self.config = config
@@ -451,6 +469,39 @@ final class AppState {
             argv.append(flag)
         }
         return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+    }
+
+    enum AgentTerminalLaunchError: LocalizedError, Equatable {
+        case projectUnavailable
+        case agentUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .projectUnavailable:
+                return "The selected worktree's project is no longer available."
+            case .agentUnavailable:
+                return "The selected agent is no longer enabled."
+            }
+        }
+    }
+
+    @discardableResult
+    func openAgentTerminalTab(for worktree: Worktree, agentId: String) throws -> Tab {
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            throw AgentTerminalLaunchError.projectUnavailable
+        }
+        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+            throw AgentTerminalLaunchError.agentUnavailable
+        }
+        do {
+            return try openTerminalTab(
+                for: worktree,
+                startupScriptSuffix: agentStartupCommand(for: agent, project: project)
+            )
+        } catch {
+            showFileActionError(title: "Launch Agent Failed", message: error.localizedDescription)
+            throw error
+        }
     }
 
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
@@ -795,19 +846,32 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
-        let session = try terminal.openSession(
-            worktree: worktree, project: project,
-            cfg: config.terminal, theme: themeStore.current,
-            startupScriptSuffix: startupScriptSuffix
-        )
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
+        let opened: OpenedTerminalSession
+        if let terminalSessionOpener {
+            opened = try terminalSessionOpener(
+                worktree,
+                project,
+                config.terminal,
+                themeStore.current,
+                nil,
+                startupScriptSuffix
+            )
+        } else {
+            let session = try terminal.openSession(
+                worktree: worktree, project: project,
+                cfg: config.terminal, theme: themeStore.current,
+                startupScriptSuffix: startupScriptSuffix
+            )
+            opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in
+                session?.surface.foregroundPid
+            })
         }
+        harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
         let title = tabs.nextTerminalTitle(
             worktreeId: worktree.id,
             baseTitle: defaultTerminalTitle(for: worktree)
         )
-        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: session.id)
+        return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
     }
 
     // MARK: - Pane splits
