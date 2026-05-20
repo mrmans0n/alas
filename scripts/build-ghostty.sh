@@ -299,6 +299,9 @@ gc_cache() {
       ! -name '*.lock' ! -name '*.tmp.*' -print0 \
       | while IFS= read -r -d '' p; do
           base="$(basename "${p}")"
+          # Best-effort cleanup of an abandoned sibling lock so a publisher
+          # that died between mv and rmdir doesn't pin this entry forever.
+          maybe_reclaim_stale_lock "${arch_dir}/${base}.lock"
           [ -d "${arch_dir}/${base}.lock" ] && continue
           if mt="$(stat -f %m "${p}" 2>/dev/null)" || mt="$(stat -c %Y "${p}" 2>/dev/null)"; then
             printf '%s\t%s\n' "${mt}" "${p}"
