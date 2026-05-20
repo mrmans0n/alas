@@ -212,6 +212,13 @@ struct LanguageServerRegistry {
 
     func allEntries() -> [LanguageServerConfig] { mergedEntries }
 
+    func disabledUserDefinedEntryClaims(fileExtension ext: String) -> Bool {
+        let lower = ext.lowercased()
+        return userDefined.contains { entry in
+            !entry.enabled && entry.extensions.contains(lower)
+        }
+    }
+
     private var mergedEntries: [LanguageServerConfig] {
         var byLang: [String: LanguageServerConfig] = [:]
         for b in Self.builtIns { byLang[b.language] = b }

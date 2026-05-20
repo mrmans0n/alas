@@ -9,6 +9,8 @@ struct InstallNudgeBanner: View {
 
     @Environment(\.theme) var theme
     @State private var installSheetVisible = false
+    @State private var selectedMasonPackageId: String?
+    @State private var pendingMasonPackage: MasonPackage?
 
     var body: some View {
         // The sheet modifier is attached to the OUTER container (always
@@ -27,6 +29,7 @@ struct InstallNudgeBanner: View {
         .sheet(isPresented: $installSheetVisible, onDismiss: {
             // Interactive dismiss bypasses the sheet's own buttons; reset
             // the installer so the next install starts from .idle.
+            pendingMasonPackage = nil
             appState.lspInstaller.reset()
         }) {
             LSPInstallProgressSheet(installer: appState.lspInstaller) { completedLanguage in
@@ -36,21 +39,37 @@ struct InstallNudgeBanner: View {
                 // installed language so hover/diagnostics/definitions
                 // wake up without a manual close-and-reopen.
                 if let completedLanguage {
-                    appState.tabs.reopenLSPDocuments(forLanguage: completedLanguage)
+                    if let package = pendingMasonPackage {
+                        let config = LanguageServerConfig.prefilled(from: package)
+                        appState.config.code.saveLanguageServerConfig(
+                            originalLanguage: nil,
+                            config,
+                            recipes: package.recipes
+                        )
+                        appState.saveConfig()
+                        appState.tabs.reopenLSPDocuments(
+                            forFileExtensions: package.extensions,
+                            language: completedLanguage
+                        )
+                    } else {
+                        appState.tabs.reopenLSPDocuments(forLanguage: completedLanguage)
+                    }
                 }
+                pendingMasonPackage = nil
             }
         }
     }
 
-    private func bannerRow(nudge: NudgeData) -> some View {
+    private func bannerRow(nudge: InstallNudgeData) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle")
                 .foregroundColor(theme.color("fg-dim"))
             Text("Install \(nudge.command) for \(nudge.displayName) support")
                 .font(.system(size: 12.5))
             Spacer()
+            masonPicker(for: nudge)
             installButton(for: nudge)
-            Button(action: { dismiss(language: nudge.language) }) {
+            Button(action: { dismiss(key: nudge.dismissalKey) }) {
                 Image(systemName: "xmark")
                     .foregroundColor(theme.color("fg-dim"))
             }
@@ -65,45 +84,17 @@ struct InstallNudgeBanner: View {
             alignment: .bottom)
     }
 
-    private struct NudgeData {
-        let language: String
-        let displayName: String
-        let command: String
-        let available: [(installer: DetectedInstaller, recipe: InstallRecipe)]
-    }
-
-    private var nudgeData: NudgeData? {
-        // 1. Resolve language from extension.
-        let ext = (absolutePath as NSString).pathExtension.lowercased()
-        guard !ext.isEmpty else { return nil }
+    private var nudgeData: InstallNudgeData? {
         let registry = LanguageServerRegistry(userDefined: appState.config.code.languageServers)
-        guard let language = registry.language(forFileExtension: ext) else { return nil }
-        // 2. Skip when LSP is available or disabled.
-        guard let entry = registry.allEntries().first(where: { $0.language == language }) else { return nil }
-        let availability = LanguageServerAvailability()
-        guard availability.status(for: entry) == .notInstalled else { return nil }
-        // 3. Catalog entry required (curated or user-defined recipes).
-        //    userDefinedRecipes wins when present so a user-overridden
-        //    language (e.g. Ruff Mason-prefilled under "python") shows
-        //    its own install action instead of the curated Pyright one.
-        let recipes: [InstallRecipe] = {
-            if let user = appState.config.code.userDefinedRecipes[language], !user.isEmpty {
-                return user
-            }
-            if let curated = RecommendedLanguageCatalog.entry(forLanguage: language) {
-                return curated.resolvedRecipes
-            }
-            return []
-        }()
-        guard !recipes.isEmpty else { return nil }
-        // 4. Installer must be detected.
-        let available = appState.installerHost.allAvailable(in: recipes)
-        guard !available.isEmpty else { return nil }
-        // 5. Not dismissed.
-        guard !appState.config.code.dismissedInstallNudges.contains(language) else { return nil }
-
-        let displayName = RecommendedLanguageCatalog.entry(forLanguage: language)?.displayName ?? language
-        return NudgeData(language: language, displayName: displayName, command: entry.command, available: available)
+        let resolver = InstallNudgeResolver(
+            registry: registry,
+            userDefinedRecipes: appState.config.code.userDefinedRecipes,
+            dismissedInstallNudges: appState.config.code.dismissedInstallNudges,
+            installerHost: appState.installerHost
+        )
+        return resolver
+            .nudgeData(forAbsolutePath: absolutePath)?
+            .selectingMasonOption(id: selectedMasonPackageId)
     }
 
     private var installBusy: Bool {
@@ -111,28 +102,52 @@ struct InstallNudgeBanner: View {
     }
 
     @ViewBuilder
-    private func installButton(for nudge: NudgeData) -> some View {
+    private func masonPicker(for nudge: InstallNudgeData) -> some View {
+        if nudge.masonOptions.count > 1 {
+            Picker("", selection: Binding(
+                get: {
+                    if let selectedMasonPackageId,
+                       nudge.masonOptions.contains(where: { $0.id == selectedMasonPackageId }) {
+                        return selectedMasonPackageId
+                    }
+                    return nudge.masonPackage?.masonId ?? ""
+                },
+                set: { selectedMasonPackageId = $0 }
+            )) {
+                ForEach(nudge.masonOptions) { option in
+                    Text(option.displayName).tag(option.package.masonId)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: 180)
+        }
+    }
+
+    @ViewBuilder
+    private func installButton(for nudge: InstallNudgeData) -> some View {
         InstallSplitButton(
             recipes: nudge.available.map(\.recipe),
             available: nudge.available,
             busy: installBusy,
             onInstall: { installer, recipe in
-                runInstall(installer, recipe: recipe, language: nudge.language)
+                runInstall(installer, recipe: recipe, language: nudge.language, masonPackage: nudge.masonPackage)
             }
         )
     }
 
-    private func runInstall(_ installer: DetectedInstaller, recipe: InstallRecipe, language: String) {
+    private func runInstall(_ installer: DetectedInstaller, recipe: InstallRecipe, language: String, masonPackage: MasonPackage?) {
+        pendingMasonPackage = masonPackage
         installSheetVisible = true
         Task {
             try? await appState.lspInstaller.install(recipe: recipe, using: installer, language: language)
         }
     }
 
-    private func dismiss(language: String) {
+    private func dismiss(key: String) {
         var dismissed = appState.config.code.dismissedInstallNudges
-        if !dismissed.contains(language) {
-            dismissed.append(language)
+        if !dismissed.contains(key) {
+            dismissed.append(key)
             appState.config.code.dismissedInstallNudges = dismissed
             appState.saveConfig()
         }

@@ -58,4 +58,39 @@ struct MasonSnapshot {
         }
         return out
     }
+
+    /// Exact extension lookup for editor install nudges. Accepts either
+    /// `toml` or `.toml`, normalizes case, and keeps results deterministic.
+    func packages(forFileExtension ext: String) -> [MasonPackage] {
+        let normalized = ext
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingPrefix(".")
+            .lowercased()
+        guard !normalized.isEmpty else { return [] }
+
+        return packages
+            .filter { pkg in
+                pkg.extensions.contains { $0.lowercased() == normalized }
+            }
+            .sorted { lhs, rhs in
+                packageRank(lhs, for: normalized) < packageRank(rhs, for: normalized)
+            }
+    }
+
+    private func packageRank(_ pkg: MasonPackage, for ext: String) -> (Int, String) {
+        if pkg.languageId.lowercased() == ext {
+            return (0, pkg.masonId)
+        }
+        if !pkg.languageId.isEmpty {
+            return (1, pkg.masonId)
+        }
+        return (2, pkg.masonId)
+    }
+}
+
+private extension String {
+    func trimmingPrefix(_ prefix: String) -> String {
+        guard hasPrefix(prefix) else { return self }
+        return String(dropFirst(prefix.count))
+    }
 }

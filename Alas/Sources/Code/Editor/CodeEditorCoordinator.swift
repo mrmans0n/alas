@@ -262,6 +262,7 @@ final class CodeEditorCoordinator {
                 || currentTabId != tabId
                 || currentExternalAbsolutePath != externalAbsolutePath
                 || currentOriginatingRelativePath != originatingRelativePath
+                || currentLanguage != nextLanguage
         } else {
             pathChanged = currentWorktreeId != worktreeId
                 || currentTabId != tabId
