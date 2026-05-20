@@ -34,9 +34,8 @@ struct CommitDiffView: View {
             .onTapGesture { copyTitle() }
             .onHover { hovering in
                 titleHovering = hovering
-                if hovering { NSCursor.pointingHand.push() }
-                else { NSCursor.pop() }
             }
+            .pointingHandCursor()
             .help("Click to copy diff title")
             Spacer()
             if let onOpenFile {

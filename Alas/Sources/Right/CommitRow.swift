@@ -78,9 +78,8 @@ struct CommitRow: View {
                 .onTapGesture { copySHA() }
                 .onHover { hovering in
                     shaHovering = hovering
-                    if hovering { NSCursor.pointingHand.push() }
-                    else { NSCursor.pop() }
                 }
+                .pointingHandCursor()
                 .help("Click to copy SHA")
             avatar
             Text(relativeTime(commit.date))

@@ -54,6 +54,7 @@
 		1A60F5DDA4E304766FEEC013 /* CodeTextViewAutoPairTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C3A8A65C6EC8182FD23AE97 /* CodeTextViewAutoPairTests.swift */; };
 		1AE5FCAF7D44694876754813 /* HookInstallNudgeResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54F4827435F746DC54616D0 /* HookInstallNudgeResolverTests.swift */; };
 		1B197F39E826079635F843EB /* GitServiceHeadMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38F5019E0550FA05436EFC74 /* GitServiceHeadMessageTests.swift */; };
+		1B1A33B610D29116A1D08A74 /* PointingHandCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4A000B32C3BF0E253BB0B6 /* PointingHandCursor.swift */; };
 		1B387AAB575A42ED1AFB5D46 /* RepoSelectorRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F787781F8DE2077B7B679C07 /* RepoSelectorRowView.swift */; };
 		1B9CC3C13E96290B391E7C26 /* ImagePreviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E1AD3C6506DA5E6BFF4864 /* ImagePreviewTabView.swift */; };
 		1BC03FAEA1E89F3A74A98DE4 /* AppConfigShortcutsCodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45513A6B9EAA4E9744502597 /* AppConfigShortcutsCodingTests.swift */; };
@@ -667,6 +668,7 @@
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7C3A8A65C6EC8182FD23AE97 /* CodeTextViewAutoPairTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextViewAutoPairTests.swift; sourceTree = "<group>"; };
 		7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandle.swift; sourceTree = "<group>"; };
+		7D4A000B32C3BF0E253BB0B6 /* PointingHandCursor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PointingHandCursor.swift; sourceTree = "<group>"; };
 		7D6BC5CC26EC6A242C2FDDDA /* DefinitionSnippetCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefinitionSnippetCacheTests.swift; sourceTree = "<group>"; };
 		7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApp.swift; sourceTree = "<group>"; };
 		7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
@@ -1154,6 +1156,7 @@
 				0E6600436B01C75D85C01FFA /* Clipboard.swift */,
 				5C8BF1EC24E449A302A1E25C /* CopyFeedbackState.swift */,
 				16CA8FEE64D73BDEBAF74878 /* Kbd.swift */,
+				7D4A000B32C3BF0E253BB0B6 /* PointingHandCursor.swift */,
 				EECB91379591DA21D216A894 /* RelativeTime.swift */,
 				489C9B383554D7DAB170C2F8 /* Seg.swift */,
 				2CDC00065CA8839DA1AD0E0F /* TrafficLights.swift */,
@@ -2041,6 +2044,7 @@
 				78D25A04EAE26A0F3021A057 /* Paths.swift in Sources */,
 				449C7E4A63455D01633B791A /* PendingDiscard.swift in Sources */,
 				671F28D6A18DD75EB912596B /* PersistenceStore.swift in Sources */,
+				1B1A33B610D29116A1D08A74 /* PointingHandCursor.swift in Sources */,
 				C618DE3EE2A7CA06876D6C68 /* Process+Git.swift in Sources */,
 				1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */,
 				F88FD8BE546E36A0E3BF2594 /* ProjectGitWatcher.swift in Sources */,

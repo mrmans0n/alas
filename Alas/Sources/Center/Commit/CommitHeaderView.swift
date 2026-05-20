@@ -41,9 +41,8 @@ struct CommitHeaderView: View {
                 }
                 .onHover { hovering in
                     shaHovering = hovering
-                    if hovering { NSCursor.pointingHand.push() }
-                    else { NSCursor.pop() }
                 }
+                .pointingHandCursor()
                 .help("Click to copy SHA")
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text(details.info.author)
@@ -87,10 +86,7 @@ struct CommitHeaderView: View {
                                 .onTapGesture {
                                     copyToPasteboard(parent, feedback: "Copied SHA")
                                 }
-                                .onHover { hovering in
-                                    if hovering { NSCursor.pointingHand.push() }
-                                    else { NSCursor.pop() }
-                                }
+                                .pointingHandCursor()
                                 .help("Click to copy SHA")
                             if index < details.parents.count - 1 {
                                 Text(" ")
