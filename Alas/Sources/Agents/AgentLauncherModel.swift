@@ -44,7 +44,8 @@ final class AgentLauncherModel {
             selectedIndex = 0
             return
         }
-        selectedIndex = min(rows.count - 1, selectedIndex + 1)
+        let clampedIndex = min(max(0, selectedIndex), rows.count - 1)
+        selectedIndex = min(rows.count - 1, clampedIndex + 1)
         scrollToSelectionTick += 1
     }
 

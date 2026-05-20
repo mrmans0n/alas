@@ -56,6 +56,13 @@ struct AgentLauncherModelTests {
         #expect(model.selectedIndex == 0)
     }
 
+    @Test func moveSelectionDownClampsNegativeSelection() {
+        let model = AgentLauncherModel()
+        model.selectedIndex = -3
+        model.moveSelectionDown(in: [agent("codex", "Codex")])
+        #expect(model.selectedIndex == 0)
+    }
+
     @Test func selectedAgentReturnsNilForEmptyRows() {
         let model = AgentLauncherModel()
         #expect(model.selectedAgent(in: []) == nil)
