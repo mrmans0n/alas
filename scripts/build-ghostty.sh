@@ -202,6 +202,44 @@ publish_to_cache() {
   _held_staging=""
 }
 
+# Opaque token identifying a running process beyond just its PID. macOS PIDs
+# wrap (32k by default), so `kill -0 ${old_pid}` can succeed against a brand
+# new unrelated process and falsely report a stale lock as live. Pairing the
+# PID with `ps -o lstart=` (process start time) catches reuse — a different
+# token (or empty output) means the original holder is gone.
+# Echoes the token (may be empty if ps fails or the PID is gone).
+proc_start_token() {
+  local pid="$1"
+  [ -n "${pid}" ] || { echo ""; return; }
+  ps -o lstart= -p "${pid}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
+
+# Compare the (pid, token) pair from a lock's metadata against the current
+# system state. Returns 0 if the original holder is still running, non-zero
+# if the holder is gone (including PID-reuse).
+lock_holder_alive() {
+  local lock_pid="$1" lock_token="$2"
+  [ -n "${lock_pid}" ] || return 1
+  kill -0 "${lock_pid}" 2>/dev/null || return 1
+  # If we recorded a token, the current process with this PID must still
+  # match it. Empty recorded token means a legacy lock (or ps unavailable
+  # at acquire time) — fall back to kill -0 alone.
+  if [ -n "${lock_token}" ]; then
+    [ "$(proc_start_token "${lock_pid}")" = "${lock_token}" ] || return 1
+  fi
+  return 0
+}
+
+# Read pid + start-time token from a lock's metadata file. Echoes a single
+# line "<pid> <token>"; either field may be empty.
+read_lock_metadata() {
+  local pid_file="$1"
+  [ -f "${pid_file}" ] || { echo ""; return; }
+  # First word is PID; everything after the first whitespace is the token.
+  awk 'NR==1 { pid=$1; sub(/^[^ \t]+[ \t]+/, ""); print pid " " $0 }' \
+    "${pid_file}" 2>/dev/null || echo ""
+}
+
 # Try to mkdir-atomic-acquire the per-fingerprint lock. Loser polls (1s) until
 # the fingerprint is published, at which point the lock is released. Returns:
 #   0 — lock acquired (caller must build + publish)
@@ -211,7 +249,7 @@ publish_to_cache() {
 acquire_cache_lock() {
   local entry="$1" fp="$2"
   local lock_dir="${entry}.lock"
-  local arch_dir deadline now stale_after pid_file lock_pid
+  local arch_dir deadline now stale_after pid_file lock_meta lock_pid lock_token
   arch_dir="$(dirname "${entry}")"
   if ! mkdir -p "${arch_dir}" 2>/dev/null; then
     return 1
@@ -223,7 +261,7 @@ acquire_cache_lock() {
   while true; do
     if mkdir "${lock_dir}" 2>/dev/null; then
       _held_lock="${lock_dir}"
-      echo $$ > "${lock_dir}/pid" 2>/dev/null || true
+      printf '%s %s\n' "$$" "$(proc_start_token "$$")" > "${lock_dir}/pid" 2>/dev/null || true
       return 0
     fi
 
@@ -255,9 +293,11 @@ acquire_cache_lock() {
        || lock_mtime="$(stat -c %Y "${lock_dir}" 2>/dev/null)"; then
       if [ $(( now - lock_mtime )) -ge "${stale_after}" ]; then
         pid_file="${lock_dir}/pid"
-        lock_pid=""
-        [ -f "${pid_file}" ] && lock_pid="$(cat "${pid_file}" 2>/dev/null || true)"
-        if [ -z "${lock_pid}" ] || ! kill -0 "${lock_pid}" 2>/dev/null; then
+        lock_meta="$(read_lock_metadata "${pid_file}")"
+        lock_pid="${lock_meta%% *}"
+        lock_token="${lock_meta#* }"
+        [ "${lock_token}" = "${lock_meta}" ] && lock_token=""
+        if ! lock_holder_alive "${lock_pid}" "${lock_token}"; then
           warn "removing stale lock at ${lock_dir} (pid=${lock_pid:-unknown})"
           rm -rf "${lock_dir}" 2>/dev/null || true
           # If the lock dir survived the rm (e.g. EACCES on a sudo-owned
@@ -291,7 +331,7 @@ release_cache_lock() {
 maybe_reclaim_stale_lock() {
   local lock_dir="$1"
   [ -d "${lock_dir}" ] || return 0
-  local now stale_after lock_mtime lock_pid
+  local now stale_after lock_mtime lock_meta lock_pid lock_token
   now="$(date +%s)"
   stale_after="${ALAS_GHOSTTY_LOCK_STALE_SECS:-60}"
   if ! lock_mtime="$(stat -f %m "${lock_dir}" 2>/dev/null)" \
@@ -299,9 +339,11 @@ maybe_reclaim_stale_lock() {
     return 0
   fi
   [ $(( now - lock_mtime )) -ge "${stale_after}" ] || return 0
-  lock_pid=""
-  [ -f "${lock_dir}/pid" ] && lock_pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
-  if [ -z "${lock_pid}" ] || ! kill -0 "${lock_pid}" 2>/dev/null; then
+  lock_meta="$(read_lock_metadata "${lock_dir}/pid")"
+  lock_pid="${lock_meta%% *}"
+  lock_token="${lock_meta#* }"
+  [ "${lock_token}" = "${lock_meta}" ] && lock_token=""
+  if ! lock_holder_alive "${lock_pid}" "${lock_token}"; then
     warn "removing stale lock at ${lock_dir} (pid=${lock_pid:-unknown})"
     rm -rf "${lock_dir}" 2>/dev/null || true
   fi
