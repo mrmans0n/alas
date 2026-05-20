@@ -413,6 +413,13 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
+                // Cancel the hook socket accept loop and any pending cursor
+                // idle debouncers before the process tears down. Otherwise
+                // in-flight hook subprocesses (cursor-agent fires a 1s `nc -U`
+                // per event) keep delivering events to a half-torn-down
+                // HarnessService, which is one of the candidates for the
+                // permission-prompt avalanche reported on quit.
+                state.harness.stop()
             }
     }
 }
