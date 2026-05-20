@@ -262,8 +262,17 @@ acquire_cache_lock() {
 
   while true; do
     if mkdir "${lock_dir}" 2>/dev/null; then
+      # Write metadata BEFORE marking the lock as held, so a write failure
+      # leaves nothing behind that other processes could mistake for a stale
+      # lock owned by us. If we cannot persist (pid, token), the lock is
+      # unsafe and we must release it rather than hold a metadataless lock
+      # that stale-check would later reclaim.
+      if ! printf '%s %s\n' "$$" "$(proc_start_token "$$")" > "${lock_dir}/pid" 2>/dev/null; then
+        warn "could not write lock metadata at ${lock_dir}/pid; releasing"
+        rm -rf "${lock_dir}" 2>/dev/null || true
+        return 1
+      fi
       _held_lock="${lock_dir}"
-      printf '%s %s\n' "$$" "$(proc_start_token "$$")" > "${lock_dir}/pid" 2>/dev/null || true
       return 0
     fi
 
