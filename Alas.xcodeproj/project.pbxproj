@@ -124,6 +124,7 @@
 		3E9B50F3BA9D7273EBA50445 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */; };
 		3E9F2C02A264024FC020172D /* EditorFindBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 679E62B501E0490F48CCA830 /* EditorFindBarView.swift */; };
 		3EA6388E72FDD02E5242002C /* HeadReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F8A28C3DBC50749BB1D2BEA /* HeadReaderTests.swift */; };
+		3FE3D85D5E833DE3A91FD444 /* CopilotInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64C0B7363363C77718B446C /* CopilotInstaller.swift */; };
 		40450134EBF5CCD5CD667327 /* ChangeSummaryVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */; };
 		4153DAD75F27395D2D385BED /* LanguageServerAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8CC42BD54479E057902D392 /* LanguageServerAvailabilityTests.swift */; };
 		41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA505FF2E6CFA8278C95C6E /* GhosttyConfigBuilder.swift */; };
@@ -317,6 +318,7 @@
 		B40925F2FDA34DC0444D8632 /* EditorBufferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D921D1C8A44F1937769CDB60 /* EditorBufferStore.swift */; };
 		B614CD7F894DD6908C903254 /* InstallNudgeBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */; };
 		B66EE6A2445C0DDA607788C2 /* GitIgnoreService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEA5E54A30636928F5D3B3E /* GitIgnoreService.swift */; };
+		B6713CE9BFA38B7F1D089E5A /* CopilotInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */; };
 		B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DEB85132B767DB3B253620C /* cool-slate.json */; };
 		B76AD708A9FD54304F84366A /* ImageFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3F942D660C7ABA8542C77D /* ImageFileType.swift */; };
 		B79D01EECD92181B710D2648 /* CommitInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C01FBF2EE3668E6772CEB1D /* CommitInfo.swift */; };
@@ -750,6 +752,7 @@
 		A8CC42BD54479E057902D392 /* LanguageServerAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerAvailabilityTests.swift; sourceTree = "<group>"; };
 		A919B8770029DBE7FCFF0EE2 /* AgentRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunner.swift; sourceTree = "<group>"; };
 		A98D0A96093087BF4C284053 /* AlasSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasSlider.swift; sourceTree = "<group>"; };
+		AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotInstallerTests.swift; sourceTree = "<group>"; };
 		AAEDACEB27E6AF219054496E /* DialogChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialogChrome.swift; sourceTree = "<group>"; };
 		ACFF914E16884DAC97F11C76 /* SearchEmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchEmptyState.swift; sourceTree = "<group>"; };
 		AE0A6F237480EE72CB8DBE28 /* TitlelessWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitlelessWindowTests.swift; sourceTree = "<group>"; };
@@ -825,6 +828,7 @@
 		D3DC5DBEC068EB1BFDBB7F59 /* GitEventFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitEventFilterTests.swift; sourceTree = "<group>"; };
 		D49B5B544A3432F8D8105268 /* SearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchModel.swift; sourceTree = "<group>"; };
 		D5BAC2BE2CEAFDD462D9116F /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		D64C0B7363363C77718B446C /* CopilotInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotInstaller.swift; sourceTree = "<group>"; };
 		D6A9977C979705A40595FD5E /* TabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManagerTests.swift; sourceTree = "<group>"; };
 		D733701E36E13A7A23748A37 /* CommitComposerState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitComposerState.swift; sourceTree = "<group>"; };
 		D76C02E43360C0BCFEDF5428 /* DiffOpenFileAvailability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffOpenFileAvailability.swift; sourceTree = "<group>"; };
@@ -992,6 +996,7 @@
 				A2FC38CF24F011448A3705F9 /* CommitTabStateTests.swift */,
 				97134381F91B44B46CAFE082 /* ContentResultGroupViewTests.swift */,
 				C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */,
+				AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */,
 				BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */,
 				179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */,
 				2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */,
@@ -1505,6 +1510,7 @@
 				57713D7143CFD53124E0523F /* AlasHookCommand.swift */,
 				65CA995EE43C73449EBF79A7 /* ClaudeInstaller.swift */,
 				01F0314E357190EF2A1F861B /* CodexInstaller.swift */,
+				D64C0B7363363C77718B446C /* CopilotInstaller.swift */,
 				7948BA9EC461BA2E3617FBF0 /* CursorInstaller.swift */,
 				FD0EBA9DC694E3F11300FC6C /* GeminiInstaller.swift */,
 				F9F85B92952C963DCF136315 /* HarnessDetector.swift */,
@@ -1976,6 +1982,7 @@
 				CE24C8CA495726CD294FD223 /* CommitsSectionView.swift in Sources */,
 				A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */,
 				A77E7290FD589BC3227ADE27 /* ContentSearcher.swift in Sources */,
+				3FE3D85D5E833DE3A91FD444 /* CopilotInstaller.swift in Sources */,
 				0D17211026C6790B96CC6578 /* CopyFeedbackState.swift in Sources */,
 				2D313A7E99C93242DD35AA8E /* CursorInstaller.swift in Sources */,
 				49C8C4C8B34444953FBA1809 /* DebounceTimer.swift in Sources */,
@@ -2221,6 +2228,7 @@
 				4781661414034F09EA02E0BC /* CommitsOlderTests.swift in Sources */,
 				5B02C8E213F6EA67BEB7E5BA /* ContentResultGroupViewTests.swift in Sources */,
 				2E1D743806714BE4CD88A240 /* ContentSearcherTests.swift in Sources */,
+				B6713CE9BFA38B7F1D089E5A /* CopilotInstallerTests.swift in Sources */,
 				42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */,
 				25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */,
 				7EB64E55CE27886D660C5D0C /* DefinitionSnippetCacheTests.swift in Sources */,

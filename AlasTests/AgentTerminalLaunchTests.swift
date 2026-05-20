@@ -31,6 +31,19 @@ struct AgentTerminalLaunchTests {
         return project
     }
 
+    private func tmpDir() -> (dir: URL, cleanup: () -> Void) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return (dir, { try? FileManager.default.removeItem(at: dir) })
+    }
+
+    private func copilotHookURL(in root: URL) -> URL {
+        root
+            .appendingPathComponent(".github", isDirectory: true)
+            .appendingPathComponent("hooks", isDirectory: true)
+            .appendingPathComponent("alas-notify.json", isDirectory: false)
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
@@ -164,5 +177,120 @@ struct AgentTerminalLaunchTests {
         } else {
             Issue.record("Expected a terminal tab")
         }
+    }
+
+    @Test func launchingCopilotInstallsHookBeforeOpeningTerminal() throws {
+        let (dir, cleanup) = tmpDir()
+        defer { cleanup() }
+        var project = project(mode: .useGlobal, useBypass: false)
+        project.path = dir.path
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: dir,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let hookURL = copilotHookURL(in: dir)
+        var hookExistedBeforeOpen = false
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _ in
+                hookExistedBeforeOpen = FileManager.default.fileExists(atPath: hookURL.path)
+                return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [],
+            installedIds: ["copilot"]
+        )
+
+        _ = try state.openAgentTerminalTab(for: worktree, agentId: "copilot")
+
+        #expect(hookExistedBeforeOpen)
+        #expect(FileManager.default.fileExists(atPath: hookURL.path))
+    }
+
+    @Test func launchingNonCopilotDoesNotCreateCopilotHook() throws {
+        let (dir, cleanup) = tmpDir()
+        defer { cleanup() }
+        var project = project(mode: .useGlobal, useBypass: false)
+        project.path = dir.path
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: dir,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _ in
+                AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [agent()],
+            installedIds: ["test-agent"]
+        )
+
+        _ = try state.openAgentTerminalTab(for: worktree, agentId: "test-agent")
+
+        #expect(!FileManager.default.fileExists(atPath: copilotHookURL(in: dir).path))
+    }
+
+    @Test func launchingCopilotWithUnmanagedHookDoesNotOpenTerminal() throws {
+        let (dir, cleanup) = tmpDir()
+        defer { cleanup() }
+        var project = project(mode: .useGlobal, useBypass: false)
+        project.path = dir.path
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: dir,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let hookURL = copilotHookURL(in: dir)
+        try FileManager.default.createDirectory(
+            at: hookURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try #"{"version":1,"hooks":{}}"#.write(to: hookURL, atomically: true, encoding: .utf8)
+        var openerCalled = false
+        var launchErrorTitle: String?
+        let state = AppState(
+            store: MemoryStore(),
+            fileActionErrorHandler: { title, _ in
+                launchErrorTitle = title
+            },
+            terminalSessionOpener: { _, _, _, _, _, _ in
+                openerCalled = true
+                return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [],
+            installedIds: ["copilot"]
+        )
+
+        #expect(throws: CopilotInstallerError.self) {
+            _ = try state.openAgentTerminalTab(for: worktree, agentId: "copilot")
+        }
+
+        #expect(!openerCalled)
+        #expect(launchErrorTitle == "Launch Agent Failed")
     }
 }

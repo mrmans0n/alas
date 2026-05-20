@@ -241,6 +241,8 @@ final class AppState {
     private let store: any PersistenceStoreProtocol
     @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
+    @ObservationIgnored
+    private let fileActionErrorHandler: (String, String) -> Void
 
     /// One FSEvents watcher per project, watching `<repo>/.git` to auto-refresh
     /// the sidebar when branches flip or worktrees appear/disappear externally.
@@ -250,10 +252,14 @@ final class AppState {
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
+        fileActionErrorHandler: ((String, String) -> Void)? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil
     ) {
         self.store = store
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
+            AppState.showWarningAlert(title: title, message: message)
+        }
+        self.fileActionErrorHandler = fileActionErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
         self.terminalSessionOpener = terminalSessionOpener
@@ -537,6 +543,9 @@ final class AppState {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
+            if agent.id == AgentKind.copilot.rawValue {
+                try CopilotInstaller(projectRootURL: worktree.path).install()
+            }
             return try openTerminalTab(
                 for: worktree,
                 startupScriptSuffix: agentStartupCommand(for: agent, project: project)
@@ -1510,7 +1519,7 @@ final class AppState {
     }
 
     private func showFileActionError(title: String, message: String) {
-        Self.showWarningAlert(title: title, message: message)
+        fileActionErrorHandler(title, message)
     }
 
     private static func showWarningAlert(title: String, message: String) {
