@@ -29,7 +29,7 @@ struct SettingsWindow: View {
                 SettingsNavView(selection: $section)
                 Group {
                     switch section {
-                    case .agents:     AgentsPane(state: state)
+                    case .agents:     AgentsPane(state: state) { section = $0 }
                     case .appearance: AppearancePane(state: state)
                     case .changes:    ChangesPane(state: state)
                     case .code:       CodePane(state: state)

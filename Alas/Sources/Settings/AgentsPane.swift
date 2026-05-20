@@ -3,6 +3,7 @@ import SwiftUI
 struct AgentsPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
+    var onNavigate: (SettingsSection) -> Void = { _ in }
 
     @State private var editing: EditTarget?
 
@@ -59,6 +60,30 @@ struct AgentsPane: View {
                     cardGrid
                 }
                 .padding(.vertical, 18)
+
+                SettingsGroup(title: "Harness") {
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Terminal / Harness")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundColor(theme.color("fg"))
+                            Text("Configure harness notifications and install hooks.")
+                                .font(.system(size: 11.5))
+                                .foregroundColor(theme.color("fg-dim"))
+                                .lineLimit(2)
+                        }
+                        .frame(width: 240, alignment: .leading)
+                        .padding(.top, 4)
+                        VStack(alignment: .leading, spacing: 6) {
+                            AlasButton(title: "Open Terminal Settings", style: .subtle) {
+                                onNavigate(.terminal)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.vertical, 10)
+                    .overlay(Divider().opacity(0.5), alignment: .top)
+                }
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
