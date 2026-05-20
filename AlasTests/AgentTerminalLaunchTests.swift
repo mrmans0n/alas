@@ -89,9 +89,11 @@ struct AgentTerminalLaunchTests {
 
     @Test func disabledAgentIdDoesNotLaunch() {
         let state = AppState()
+        let project = project(mode: .useGlobal, useBypass: false)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
         let worktree = Worktree(
             id: "wt",
-            projectId: "project",
+            projectId: project.id,
             name: "main",
             branch: "main",
             path: URL(fileURLWithPath: "/tmp/project"),
@@ -99,7 +101,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
 
-        #expect(throws: AppState.AgentTerminalLaunchError.self) {
+        #expect(throws: AppState.AgentTerminalLaunchError.agentUnavailable) {
             _ = try state.openAgentTerminalTab(for: worktree, agentId: "missing")
         }
     }
@@ -121,7 +123,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
 
-        #expect(throws: AppState.AgentTerminalLaunchError.self) {
+        #expect(throws: AppState.AgentTerminalLaunchError.projectUnavailable) {
             _ = try state.openAgentTerminalTab(for: worktree, agentId: "test-agent")
         }
     }
