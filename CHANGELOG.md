@@ -6,9 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-05-20
+
 ### ✨ Features
 
-- add a Files tab context menu (right-click the Files segment) to toggle showing ignored and excluded entries, default on, persisted globally.
+- add an `ao` shortcut for `alas open` (#194).
+- add Cmd-K "Switch Repository" dialog (#195).
+- add Files tab context menu to show or hide ignored files (#196).
+- add customizable keyboard shortcuts in Settings (#197).
+- add Cmd-D add-next-occurrence and Option-Shift-drag column selection (#198).
+- add Archive action to failed worktree delete state (#200).
+- expand commit details when clicking a commit header (#202).
+- add sidebar contrast sliders (#204).
+- show hook install nudge for supported terminal agents (#207).
+
+### 🐛 Fixes
+
+- fix right-pane reveal icon visibility and hide the button on the right pane (#193).
+- fix half-dark first-launch appearance in light mode (#199).
+- route Ghostty Cmd-click on workspace files to the Alas editor (#201).
+- add more inter-line spacing to central-panel text surfaces (#203).
+- fix Files sidebar flicker for nested ignored and excluded folders (#205).
+- enlarge small touch targets (#206).
+
+### 🏗️ Internal
+
+- remove language server prerequisites from the README.
+- forbid agent attributions in commits, PRs, and code.
 
 ## [0.3.6] - 2026-05-19
 
