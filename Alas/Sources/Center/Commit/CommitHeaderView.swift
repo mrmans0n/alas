@@ -5,6 +5,7 @@ struct CommitHeaderView: View {
     @Binding var expanded: Bool
 
     @Environment(\.theme) private var theme
+    @StateObject private var copyFeedback = CopyFeedbackState()
     @State private var shaHovering = false
 
     var body: some View {
@@ -15,6 +16,7 @@ struct CommitHeaderView: View {
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .copyFeedbackOverlay(message: copyFeedback.message)
     }
 
     private var compactRow: some View {
@@ -35,8 +37,7 @@ struct CommitHeaderView: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(shaHovering ? theme.color("accent") : theme.color("fg-faint"))
                 .onTapGesture {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(details.info.sha, forType: .string)
+                    copyToPasteboard(details.info.sha, feedback: "Copied SHA")
                 }
                 .onHover { hovering in
                     shaHovering = hovering
@@ -84,8 +85,7 @@ struct CommitHeaderView: View {
                         ForEach(Array(details.parents.enumerated()), id: \.offset) { index, parent in
                             Text(parent)
                                 .onTapGesture {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(parent, forType: .string)
+                                    copyToPasteboard(parent, feedback: "Copied SHA")
                                 }
                                 .onHover { hovering in
                                     if hovering { NSCursor.pointingHand.push() }
@@ -113,5 +113,10 @@ struct CommitHeaderView: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm"
         return fmt.string(from: date)
+    }
+
+    private func copyToPasteboard(_ text: String, feedback: String) {
+        Clipboard.copy(text)
+        copyFeedback.show(feedback)
     }
 }

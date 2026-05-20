@@ -51,15 +51,11 @@ struct ChangesTabView: View {
                         appState.openFile(relativePath: file.path, worktreeId: rps.worktree.id)
                     },
                     onCopyRelative: { file in
-                        let pb = NSPasteboard.general
-                        pb.clearContents()
-                        pb.setString(file.path, forType: .string)
+                        Clipboard.copy(file.path)
                     },
                     onCopyFull: { file in
                         let absolute = rps.worktree.path.appendingPathComponent(file.path).path
-                        let pb = NSPasteboard.general
-                        pb.clearContents()
-                        pb.setString(absolute, forType: .string)
+                        Clipboard.copy(absolute)
                     },
                     onRevealInFinder: { file in
                         let url = rps.worktree.path.appendingPathComponent(file.path)
@@ -110,8 +106,6 @@ struct ChangesTabView: View {
     }
 
     private func copyCommitSHA(_ commit: CommitInfo) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(commit.sha, forType: .string)
+        Clipboard.copy(commit.sha)
     }
 }
