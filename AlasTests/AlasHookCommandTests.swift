@@ -53,4 +53,16 @@ struct AlasHookCommandTests {
         #expect(AlasHookCommand.isManagedCommand(cmd))
         #expect(!AlasHookCommand.isManagedCommand("echo hello"))
     }
+
+    /// Each cursor hook event fires this command, so the subprocess cost
+    /// matters: a body-bearing event with two python3 invocations doubles
+    /// interpreter startup per event and contributes to the runaway load
+    /// we saw with cursor-agent. Keep the body path to a single python3.
+    @Test func bodyEnvelopePipeline_usesSinglePython3Invocation() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.idle], agent: .cursor, forwardStdinAsBody: true
+        )
+        let count = cmd.components(separatedBy: "/usr/bin/python3").count - 1
+        #expect(count == 1)
+    }
 }
