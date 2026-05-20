@@ -20,10 +20,26 @@ private struct WindowDragHandle: NSViewRepresentable {
 private final class WindowDragHandleView: NSView {
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
-            // Match the system default for double-clicking the titlebar.
-            window?.performZoom(nil)
+            performTitlebarDoubleClickAction()
             return
         }
         window?.performDrag(with: event)
+    }
+
+    // Mirror the system titlebar's response to a double-click, which the user
+    // configures via System Settings > Desktop & Dock > "Double-click a
+    // window's title bar to". Stored in `NSGlobalDomain` as
+    // `AppleActionOnDoubleClick` with values "Maximize" / "Minimize" / "None".
+    private func performTitlebarDoubleClickAction() {
+        let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick")
+        switch action {
+        case "Minimize":
+            window?.performMiniaturize(nil)
+        case "None":
+            break
+        default:
+            // "Maximize" or unset — default to zoom, matching macOS's default.
+            window?.performZoom(nil)
+        }
     }
 }
