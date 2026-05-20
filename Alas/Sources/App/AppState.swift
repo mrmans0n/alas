@@ -397,22 +397,10 @@ final class AppState {
                 // interactive CLI (claude, codex, gemini) would just exit
                 // immediately on the EOF from its missing stdin.
                 let launchAgentCommand: String? = {
-                    guard let id = launchAgentId else { return nil }
-                    let useBypass: Bool = {
-                        switch project.startupScripts.worktreeAgentMode {
-                        case .disabled: return false
-                        case .useGlobal:
-                            return self.config.agents.worktreeAutoLaunch.useBypassPermissions
-                        case .overrideGlobal, .appendToGlobal:
-                            return project.startupScripts.worktreeAgentUseBypassPermissions
-                        }
-                    }()
-                    guard let resolved = AgentAutoLaunch.resolveExplicit(
-                        agentId: id,
-                        registry: self.agentRegistry,
-                        useBypass: useBypass
-                    ) else { return nil }
-                    return resolved.argv.map { Self.shellQuote($0) }.joined(separator: " ")
+                    guard let id = launchAgentId,
+                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
+                    else { return nil }
+                    return self.agentStartupCommand(for: agent, project: project)
                 }()
 
                 do {
@@ -454,6 +442,26 @@ final class AppState {
             }
         }
         return optimistic.id
+    }
+
+    func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
+        var argv = [agent.resolvedBinary]
+        if agentBypassPermissionsEnabled(for: project),
+           let flag = agent.bypassPermissionsFlag {
+            argv.append(flag)
+        }
+        return argv.map { Self.shellQuote($0) }.joined(separator: " ")
+    }
+
+    private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
+        switch project.startupScripts.worktreeAgentMode {
+        case .disabled:
+            return false
+        case .useGlobal:
+            return config.agents.worktreeAutoLaunch.useBypassPermissions
+        case .overrideGlobal, .appendToGlobal:
+            return project.startupScripts.worktreeAgentUseBypassPermissions
+        }
     }
 
     nonisolated private static func shellQuote(_ s: String) -> String {
