@@ -186,13 +186,18 @@ publish_to_cache() {
   printf '%s\n' "${fp}" > "${_held_staging}/fingerprint" || { rm -rf "${_held_staging}"; _held_staging=""; return 1; }
   # Remove any stale entry before renaming so `mv` replaces it rather than
   # nesting the staging dir inside it (macOS mv semantics when target exists).
-  rm -rf "${entry}"
-  # Atomic rename. If another process has just published the same entry
-  # (unlikely without locking, but tolerate it), treat as success.
+  rm -rf "${entry}" 2>/dev/null || true
+  # Atomic rename. On failure, only treat as success if the entry that exists
+  # actually carries OUR fingerprint (i.e. another publisher won the race with
+  # identical content). An old, partial, or mismatched entry left behind by a
+  # failed rm must be reported so the caller warns and skips GC.
   if ! mv "${_held_staging}" "${entry}" 2>/dev/null; then
-    rm -rf "${_held_staging}"
+    rm -rf "${_held_staging}" 2>/dev/null || true
     _held_staging=""
-    [ -d "${entry}" ] && return 0 || return 1
+    if cache_entry_valid "${entry}" "${fp}"; then
+      return 0
+    fi
+    return 1
   fi
   _held_staging=""
 }
