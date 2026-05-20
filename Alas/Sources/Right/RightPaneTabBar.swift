@@ -27,6 +27,7 @@ struct RightPaneTabBar: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .windowDragHandle()
     }
 
     private func segment(_ tab: RightPaneTab, icon: String, label: String, count: Int?) -> some View {

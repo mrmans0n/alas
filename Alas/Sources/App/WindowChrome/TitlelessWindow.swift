@@ -11,9 +11,12 @@ final class TitlelessWindow: NSWindow {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         // isMovableByWindowBackground swallows SwiftUI gestures on transparent
-        // areas (like split dividers). Keep it off; window drag still works
-        // from the (invisible) titlebar zone at the top.
+        // areas (like split dividers). Keep it off.
         window.isMovableByWindowBackground = false
+        // Disable mouse-driven window-moves entirely (titlebar drag included)
+        // so the center pane's top tab bar doesn't get hijacked. Areas that
+        // should still drag the window opt in via `.windowDragHandle()`.
+        window.isMovable = false
         window.backgroundColor = .clear
         window.isOpaque = false
         // Hide the native titlebar separator
