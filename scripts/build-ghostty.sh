@@ -255,6 +255,13 @@ acquire_cache_lock() {
         if [ -z "${lock_pid}" ] || ! kill -0 "${lock_pid}" 2>/dev/null; then
           warn "removing stale lock at ${lock_dir} (pid=${lock_pid:-unknown})"
           rm -rf "${lock_dir}" 2>/dev/null || true
+          # If the lock dir survived the rm (e.g. EACCES on a sudo-owned
+          # cache root), we cannot make progress here. Short-circuit rather
+          # than spinning to the timeout.
+          if [ -d "${lock_dir}" ]; then
+            warn "could not remove stale lock dir; building locally without publishing"
+            return 1
+          fi
           # Loop and retry mkdir.
           continue
         fi
