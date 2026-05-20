@@ -1,4 +1,12 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+struct ProjectDragId: Codable, Transferable {
+    let id: String
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+    }
+}
 
 struct RepoGroupView: View {
     let project: ProjectConfig
@@ -23,6 +31,7 @@ struct RepoGroupView: View {
     let onRetryDelete: (Worktree) -> Void
     let onRemoveFailed: (Worktree) -> Void
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
+    let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
     @State private var plusHovering = false
@@ -89,6 +98,12 @@ struct RepoGroupView: View {
                 .padding(.trailing, 12)
             }
             .onHover { hovering = $0 }
+            .draggable(ProjectDragId(id: project.id))
+            .dropDestination(for: ProjectDragId.self) { items, _ in
+                guard let draggedId = items.first?.id, draggedId != project.id else { return false }
+                onDropProject(draggedId, project.id)
+                return true
+            }
             if !collapsed {
                 VStack(spacing: 1) {
                     ForEach(worktrees) { wt in

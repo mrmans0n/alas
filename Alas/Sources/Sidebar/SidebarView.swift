@@ -123,6 +123,13 @@ struct SidebarView: View {
                                         destinationId: destinationId
                                     )
                                     state.saveProjects()
+                                },
+                                onDropProject: { draggedId, destinationId in
+                                    state.projectsManager.reorderProject(
+                                        movingId: draggedId,
+                                        destinationId: destinationId
+                                    )
+                                    state.saveProjects()
                                 }
                             )
                         }

@@ -56,7 +56,8 @@ struct RepoGroupViewLayoutTests {
             onRetryCreate: { _ in },
             onRetryDelete: { _ in },
             onRemoveFailed: { _ in },
-            onDropWorktree: { _, _ in }
+            onDropWorktree: { _, _ in },
+            onDropProject: { _, _ in }
         )
         .environment(\.theme, try ThemeStore().current)
 
