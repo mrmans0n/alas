@@ -231,13 +231,15 @@ lock_holder_alive() {
 }
 
 # Read pid + start-time token from a lock's metadata file. Echoes a single
-# line "<pid> <token>"; either field may be empty.
+# line "<pid> <token>"; the token may be empty when the file holds only a PID
+# (legacy or partially-written lock). Callers split on the first space.
 read_lock_metadata() {
   local pid_file="$1"
   [ -f "${pid_file}" ] || { echo ""; return; }
-  # First word is PID; everything after the first whitespace is the token.
-  awk 'NR==1 { pid=$1; sub(/^[^ \t]+[ \t]+/, ""); print pid " " $0 }' \
-    "${pid_file}" 2>/dev/null || echo ""
+  local first rest
+  if IFS=$' \t' read -r first rest < "${pid_file}" 2>/dev/null; then
+    printf '%s %s\n' "${first}" "${rest}"
+  fi
 }
 
 # Try to mkdir-atomic-acquire the per-fingerprint lock. Loser polls (1s) until
