@@ -620,6 +620,71 @@ struct EditorBufferTests {
         #expect(fontB?.isFixedPitch == true)
     }
 
+    @Test func coordinatorRebindsActiveExternalEditorWhenLanguageAppears() throws {
+        let root = tempWorktree()
+        let externalURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("external-language-\(UUID().uuidString).foo")
+        try "value\n".write(to: externalURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: externalURL) }
+
+        let appState = AppState()
+        let buffer = appState.tabs.externalBuffer(
+            worktreeId: "wt",
+            tabId: "external-tab",
+            absoluteURL: externalURL,
+            worktreeRoot: root,
+            originatingFileURL: nil,
+            language: nil
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            worktreeRoot: root,
+            tabId: "external-tab",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme,
+            externalAbsolutePath: externalURL.path,
+            originatingRelativePath: nil
+        )
+        #expect(textView.indentationMode == .plain)
+
+        appState.lsp.updateRegistry(LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "foo",
+                extensions: ["foo"],
+                command: "foo-lsp",
+                args: [],
+                env: [:],
+                rootMarkers: [".git"],
+                enabled: true
+            )
+        ]))
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt",
+            worktreeRoot: root,
+            relativePath: externalURL.lastPathComponent,
+            tabId: "external-tab",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme,
+            externalAbsolutePath: externalURL.path,
+            originatingRelativePath: nil
+        )
+
+        #expect(textView.indentationMode == .bracketAware)
+    }
+
     @Test func coordinatorPathChangeDropsStaleDiagnostics() throws {
         // Regression: runHighlight captures diagnosticsFeature.current at the
         // start of its async task; if we don't reset before the rebind, the

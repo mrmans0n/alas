@@ -180,6 +180,15 @@ final class EditorBuffer {
         Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
     }
 
+    func reopenLSPDocument(afterRegistering language: String, forFileExtensions extensions: Set<String>) {
+        guard !isExternal, let lsp else { return }
+        let ext = (relativePath as NSString).pathExtension.lowercased()
+        guard extensions.contains(ext) else { return }
+        guard lsp.language(forFileExtension: ext) == language else { return }
+        self.language = language
+        reopenLSPDocument()
+    }
+
     @discardableResult
     func onEdit(_ block: @escaping () -> Void) -> EditObserverToken {
         onTextEdit { _ in block() }

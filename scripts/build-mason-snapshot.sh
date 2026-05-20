@@ -66,41 +66,58 @@ JSON
 # the user is forced to fill them in manually via the Add dialog.
 LSP_OVERRIDE_MAP=$(cat <<'JSON'
 {
+  "aiken":                          {"command": "aiken", "args": ["lsp"]},
+  "air":                            {"command": "air", "args": ["language-server"]},
   "ansible-language-server":        {"command": "ansible-language-server", "args": ["--stdio"]},
+  "ast-grep":                       {"command": "ast-grep", "args": ["lsp"]},
   "astro-language-server":          {"command": "astro-ls", "args": ["--stdio"]},
   "awk-language-server":            {"command": "awk-language-server", "args": ["--stdio"]},
   "azure-pipelines-language-server":{"command": "azure-pipelines-language-server", "args": ["--stdio"]},
   "bash-language-server":           {"command": "bash-language-server", "args": ["start"]},
   "basedpyright":                   {"command": "basedpyright-langserver", "args": ["--stdio"]},
   "biome":                          {"command": "biome", "args": ["lsp-proxy"]},
+  "buf":                            {"command": "buf", "args": ["lsp", "serve", "--log-format=text"]},
+  "clarinet":                       {"command": "clarinet", "args": ["lsp"]},
   "coffeesense-language-server":    {"command": "coffeesense-language-server", "args": ["--stdio"]},
   "css-lsp":                        {"command": "vscode-css-language-server", "args": ["--stdio"]},
   "cssmodules-language-server":     {"command": "cssmodules-language-server", "args": ["--stdio"]},
   "cucumber-language-server":       {"command": "cucumber-language-server", "args": ["--stdio"]},
   "cue":                            {"command": "cue", "args": ["lsp"]},
   "deno":                           {"command": "deno",  "args": ["lsp"]},
+  "dexter":                         {"command": "dexter", "args": ["lsp"]},
   "diagnostic-languageserver":      {"command": "diagnostic-languageserver", "args": ["--stdio"]},
   "django-template-lsp":            {"command": "djlsp", "args": ["--stdio"]},
+  "docker-language-server":         {"command": "docker-language-server", "args": ["start", "--stdio"]},
   "dockerfile-language-server":     {"command": "docker-langserver", "args": ["--stdio"]},
   "dot-language-server":            {"command": "dot-language-server", "args": ["--stdio"]},
+  "dprint":                         {"command": "dprint", "args": ["lsp"]},
   "elm-language-server":            {"command": "elm-language-server", "args": ["--stdio"]},
   "ember-language-server":          {"command": "ember-language-server", "args": ["--stdio"]},
   "emmet-language-server":          {"command": "emmet-language-server", "args": ["--stdio"]},
+  "erg":                            {"command": "erg", "args": ["--language-server"]},
   "eslint-lsp":                     {"command": "vscode-eslint-language-server", "args": ["--stdio"]},
+  "expert":                         {"command": "expert", "args": ["--stdio"]},
   "gh-actions-language-server":     {"command": "gh-actions-language-server", "args": ["--stdio"]},
   "glint":                          {"command": "glint", "args": ["--stdio"]},
   "grammarly-languageserver":       {"command": "grammarly-languageserver", "args": ["--stdio"]},
   "graphql-language-service-cli":   {"command": "graphql-lsp", "args": ["server", "-m", "stream"]},
+  "helm-ls":                        {"command": "helm_ls", "args": ["serve"]},
   "html-lsp":                       {"command": "vscode-html-language-server", "args": ["--stdio"]},
   "intelephense":                   {"command": "intelephense", "args": ["--stdio"]},
   "json-lsp":                       {"command": "vscode-json-language-server", "args": ["--stdio"]},
   "lwc-language-server":            {"command": "lwc-language-server", "args": ["--stdio"]},
   "marksman":                       {"command": "marksman", "args": ["server"]},
   "mdx-analyzer":                   {"command": "mdx-language-server", "args": ["--stdio"]},
+  "neocmakelsp":                    {"command": "neocmakelsp", "args": ["--stdio"]},
   "perlnavigator":                  {"command": "perlnavigator", "args": ["--stdio"]},
+  "postgres-language-server":       {"command": "postgres-language-server", "args": ["lsp-proxy"]},
   "prisma-language-server":         {"command": "prisma-language-server", "args": ["--stdio"]},
+  "pylyzer":                        {"command": "pylyzer", "args": ["--server"]},
   "pyright":                        {"command": "pyright-langserver", "args": ["--stdio"]},
+  "regal":                          {"command": "regal", "args": ["language-server"]},
+  "rumdl":                          {"command": "rumdl", "args": ["server"]},
   "ruff":                           {"command": "ruff",  "args": ["server"]},
+  "solidity":                       {"command": "solc", "args": ["--lsp"]},
   "some-sass-language-server":      {"command": "some-sass-language-server", "args": ["--stdio"]},
   "spyglassmc-language-server":     {"command": "spyglassmc-language-server", "args": ["--stdio"]},
   "sqlls":                          {"command": "sql-language-server", "args": ["up", "--method", "stdio"]},
@@ -108,8 +125,15 @@ LSP_OVERRIDE_MAP=$(cat <<'JSON'
   "starlark-rust":                  {"command": "starlark", "args": ["--lsp"]},
   "stylelint-language-server":      {"command": "stylelint-language-server", "args": ["--stdio"]},
   "stylelint-lsp":                  {"command": "stylelint-lsp", "args": ["--stdio"]},
+  "stylua":                         {"command": "stylua", "args": ["--lsp"]},
+  "superhtml":                      {"command": "superhtml", "args": ["lsp"]},
   "svelte-language-server":         {"command": "svelteserver", "args": ["--stdio"]},
+  "taplo":                          {"command": "taplo", "args": ["lsp", "stdio"]},
   "tailwindcss-language-server":    {"command": "tailwindcss-language-server", "args": ["--stdio"]},
+  "templ":                          {"command": "templ", "args": ["lsp"]},
+  "tilt":                           {"command": "tilt", "args": ["lsp", "start"]},
+  "tofu-ls":                        {"command": "tofu-ls", "args": ["serve"]},
+  "tombi":                          {"command": "tombi", "args": ["lsp"]},
   "tsp-server":                     {"command": "tsp-server", "args": ["--stdio"]},
   "twiggy-language-server":         {"command": "twiggy-language-server", "args": ["--stdio"]},
   "ty":                             {"command": "ty", "args": ["server"]},
@@ -118,7 +142,8 @@ LSP_OVERRIDE_MAP=$(cat <<'JSON'
   "vim-language-server":            {"command": "vim-language-server", "args": ["--stdio"]},
   "vscode-solidity-server":         {"command": "vscode-solidity-server", "args": ["--stdio"]},
   "vue-language-server":            {"command": "vue-language-server", "args": ["--stdio"]},
-  "yaml-language-server":           {"command": "yaml-language-server", "args": ["--stdio"]}
+  "yaml-language-server":           {"command": "yaml-language-server", "args": ["--stdio"]},
+  "zk":                             {"command": "zk", "args": ["lsp"]}
 }
 JSON
 )
@@ -261,8 +286,10 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
             recipes=$(jq -n --arg pkg "$n" '[{installer:"go", package:$pkg, extraArgs:[]}]')
             ;;
         pkg:github/*)
-            # GitHub binary downloads — out of scope, skip the package entirely.
-            continue
+            # GitHub binary downloads are out of scope for direct install.
+            # Keep the package only if the exact-name Homebrew probe below
+            # can supply a supported recipe.
+            recipes="[]"
             ;;
         *)
             # Unknown source kind — skip.
@@ -274,6 +301,9 @@ for pkg_yaml in "$TMP/registry/packages"/*/package.yaml; do
     # Uses --eval-all to search offline without hitting the API.
     if brew search --formula --eval-all "/^${name}\$/" 2>/dev/null | grep -qx "$name"; then
         recipes=$(jq --arg pkg "$name" '[{installer:"brew", package:$pkg, extraArgs:[]}] + .' <<<"$recipes")
+    fi
+    if [ "$(jq 'length' <<<"$recipes")" -eq 0 ]; then
+        continue
     fi
 
     cmd="$bin_entry"

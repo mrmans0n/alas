@@ -1,0 +1,182 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("InstallNudgeResolver")
+struct InstallNudgeResolverTests {
+    @Test("unknown extension resolves to installable Mason package")
+    func masonFallbackForUnknownExtension() {
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: []),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: [
+                package(id: "taplo", languageId: "toml", extensions: ["toml"], command: "taplo")
+            ]),
+            availabilityStatus: { _ in .notInstalled }
+        )
+
+        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/Config.toml")
+
+        #expect(nudge?.language == "toml")
+        #expect(nudge?.displayName == "taplo")
+        #expect(nudge?.command == "taplo")
+        #expect(nudge?.dismissalKey == "extension:toml")
+        #expect(nudge?.masonPackage?.masonId == "taplo")
+        #expect(nudge?.available.map(\.recipe.package) == ["taplo"])
+    }
+
+    @Test("Mason fallback skips dismissed extension key")
+    func masonFallbackDismissedByExtension() {
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: []),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: ["extension:toml"],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: [
+                package(id: "taplo", languageId: "toml", extensions: ["toml"], command: "taplo")
+            ]),
+            availabilityStatus: { _ in .notInstalled }
+        )
+
+        #expect(resolver.nudgeData(forAbsolutePath: "/tmp/Config.toml") == nil)
+    }
+
+    @Test("Mason fallback skips already available server command")
+    func masonFallbackSkipsAvailableServer() {
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: []),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: [
+                package(id: "taplo", languageId: "toml", extensions: ["toml"], command: "taplo")
+            ]),
+            availabilityStatus: { entry in
+                entry.command == "taplo" ? .available : .notInstalled
+            }
+        )
+
+        #expect(resolver.nudgeData(forAbsolutePath: "/tmp/Config.toml") == nil)
+    }
+
+    @Test("Mason fallback skips user-disabled registry extension")
+    func masonFallbackSkipsUserDisabledRegistryEntry() {
+        let disabled = LanguageServerConfig(
+            language: "toml",
+            extensions: ["toml"],
+            command: "taplo",
+            args: [],
+            env: [:],
+            rootMarkers: [".git"],
+            enabled: false
+        )
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: [disabled]),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: [
+                package(id: "taplo", languageId: "toml", extensions: ["toml"], command: "taplo")
+            ]),
+            availabilityStatus: { _ in .notInstalled }
+        )
+
+        #expect(resolver.nudgeData(forAbsolutePath: "/tmp/Config.toml") == nil)
+    }
+
+    @Test("Mason fallback runs for default-disabled built-in registry extension")
+    func masonFallbackRunsForDefaultDisabledBuiltIn() {
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: []),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: [
+                package(id: "kotlin-language-server", languageId: "kotlin", extensions: ["kt", "kts"], command: "kotlin-language-server")
+            ]),
+            availabilityStatus: { _ in .notInstalled }
+        )
+
+        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/Main.kt")
+
+        #expect(nudge?.language == "kotlin")
+        #expect(nudge?.masonPackage?.masonId == "kotlin-language-server")
+        #expect(nudge?.dismissalKey == "extension:kt")
+    }
+
+    @Test("registry nudge keeps language dismissal key")
+    func registryNudgeUsesLanguageDismissalKey() {
+        let rust = LanguageServerConfig(
+            language: "rust",
+            extensions: ["rs"],
+            command: "rust-analyzer",
+            args: [],
+            env: [:],
+            rootMarkers: [".git"],
+            enabled: true
+        )
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: [rust]),
+            userDefinedRecipes: [
+                "rust": [InstallRecipe(installer: .brew, package: "rust-analyzer")]
+            ],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: []),
+            availabilityStatus: { _ in .notInstalled }
+        )
+
+        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/main.rs")
+
+        #expect(nudge?.language == "rust")
+        #expect(nudge?.dismissalKey == "rust")
+        #expect(nudge?.masonPackage == nil)
+    }
+
+    @Test("Mason fallback does not run for enabled registry-owned extension")
+    func masonFallbackSkipsEnabledRegistryExtension() {
+        let javascript = LanguageServerConfig(
+            language: "javascript",
+            extensions: ["js"],
+            command: "typescript-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: [".git"],
+            enabled: true
+        )
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: [javascript]),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: [
+                package(id: "unrelated-js-lsp", languageId: "unrelated", extensions: ["js"], command: "unrelated-js-lsp")
+            ]),
+            availabilityStatus: { entry in
+                entry.language == "javascript" ? .available : .notInstalled
+            }
+        )
+
+        #expect(resolver.nudgeData(forAbsolutePath: "/tmp/app.js") == nil)
+    }
+
+    private func package(
+        id: String,
+        languageId: String,
+        extensions: [String],
+        command: String
+    ) -> MasonPackage {
+        MasonPackage(
+            masonId: id,
+            displayName: id,
+            languageId: languageId,
+            languages: languageId.isEmpty ? [] : [languageId],
+            extensions: extensions,
+            command: command,
+            args: ["lsp", "stdio"],
+            recipes: [InstallRecipe(installer: .brew, package: id)]
+        )
+    }
+}

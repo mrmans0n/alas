@@ -28,7 +28,7 @@ final class TabsManager {
     private struct ExternalLSPInfo: Equatable {
         var worktreeRoot: URL
         var originatingFileURL: URL?
-        var language: String
+        var language: String?
     }
     private var externalLSPInfo: [TabID: ExternalLSPInfo] = [:]
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
@@ -389,16 +389,25 @@ final class TabsManager {
                 file.activeTabId = s.id
                 byWorktree[worktreeId] = file
                 persist(worktreeId)
-                if originChanged, let originatingWorktreeRoot, let language {
-                    rebindExternalLSPHolder(
-                        tabId: s.id,
-                        absoluteURL: absoluteURL,
-                        worktreeRoot: originatingWorktreeRoot,
-                        originatingFileURL: originatingRelativePath.flatMap {
-                            originatingWorktreeRoot.appendingPathComponent($0)
-                        },
-                        language: language
-                    )
+                if originChanged, let originatingWorktreeRoot {
+                    let originatingFileURL = originatingRelativePath.flatMap {
+                        originatingWorktreeRoot.appendingPathComponent($0)
+                    }
+                    if let language {
+                        rebindExternalLSPHolder(
+                            tabId: s.id,
+                            absoluteURL: absoluteURL,
+                            worktreeRoot: originatingWorktreeRoot,
+                            originatingFileURL: originatingFileURL,
+                            language: language
+                        )
+                    } else if externalLSPInfo[s.id]?.language == nil {
+                        externalLSPInfo[s.id] = ExternalLSPInfo(
+                            worktreeRoot: originatingWorktreeRoot,
+                            originatingFileURL: originatingFileURL,
+                            language: nil
+                        )
+                    }
                 }
                 return .editor(s)
             }
@@ -445,14 +454,14 @@ final class TabsManager {
         pendingExternalOpenGen[tabId] = nil
 
         // If we already opened against the OLD holder, close that ref now.
-        if openedExternalDocs.contains(tabId), let old = oldInfo {
+        if openedExternalDocs.contains(tabId), let old = oldInfo, let oldLanguage = old.language {
             let lsp = self.lsp
             Task { [lsp, old] in
                 await lsp?.closeExternalDocument(
                     absoluteURL: absoluteURL,
                     originatingWorktreeRoot: old.worktreeRoot,
                     originatingFileURL: old.originatingFileURL,
-                    language: old.language
+                    language: oldLanguage
                 )
             }
         }
@@ -724,11 +733,13 @@ final class TabsManager {
         let buffer = bufferStore.externalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
         buffer.startWatching()
 
-        if let root = worktreeRoot, let lang = language {
+        if let root = worktreeRoot {
+            let existing = externalLSPInfo[tabId]
+            let shouldRefreshOrigin = language != nil || existing?.language == nil
             externalLSPInfo[tabId] = ExternalLSPInfo(
-                worktreeRoot: root,
-                originatingFileURL: originatingFileURL,
-                language: lang
+                worktreeRoot: shouldRefreshOrigin ? root : existing?.worktreeRoot ?? root,
+                originatingFileURL: shouldRefreshOrigin ? originatingFileURL : existing?.originatingFileURL,
+                language: language ?? existing?.language
             )
         }
 
@@ -746,6 +757,7 @@ final class TabsManager {
         guard !openedExternalDocs.contains(tabId), pendingExternalOpenTasks[tabId] == nil else { return }
         guard let lsp,
               let info = externalLSPInfo[tabId],
+              let language = info.language,
               let entry = externalTabURLs[tabId] else { return }
         let absoluteURL = entry.url
         let contents = bufferStore.externalBuffer(worktreeId: entry.worktreeId, absoluteURL: absoluteURL).storage.string
@@ -759,7 +771,7 @@ final class TabsManager {
                 absoluteURL: absoluteURL,
                 originatingWorktreeRoot: snapshot.worktreeRoot,
                 originatingFileURL: snapshot.originatingFileURL,
-                language: snapshot.language,
+                language: language,
                 contents: contents
             )
             await MainActor.run { [weak self] in
@@ -774,12 +786,14 @@ final class TabsManager {
                 if self.externalTabURLs[tabId] == nil {
                     if opened {
                         Task { [lsp, snapshot] in
-                            await lsp.closeExternalDocument(
-                                absoluteURL: absoluteURL,
-                                originatingWorktreeRoot: snapshot.worktreeRoot,
-                                originatingFileURL: snapshot.originatingFileURL,
-                                language: snapshot.language
-                            )
+                            if let language = snapshot.language {
+                                await lsp.closeExternalDocument(
+                                    absoluteURL: absoluteURL,
+                                    originatingWorktreeRoot: snapshot.worktreeRoot,
+                                    originatingFileURL: snapshot.originatingFileURL,
+                                    language: language
+                                )
+                            }
                         }
                     }
                     return
@@ -791,12 +805,14 @@ final class TabsManager {
                 if let current = self.externalLSPInfo[tabId], current != snapshot {
                     if opened {
                         Task { [lsp, snapshot] in
-                            await lsp.closeExternalDocument(
-                                absoluteURL: absoluteURL,
-                                originatingWorktreeRoot: snapshot.worktreeRoot,
-                                originatingFileURL: snapshot.originatingFileURL,
-                                language: snapshot.language
-                            )
+                            if let language = snapshot.language {
+                                await lsp.closeExternalDocument(
+                                    absoluteURL: absoluteURL,
+                                    originatingWorktreeRoot: snapshot.worktreeRoot,
+                                    originatingFileURL: snapshot.originatingFileURL,
+                                    language: language
+                                )
+                            }
                         }
                     }
                     return
@@ -842,14 +858,14 @@ final class TabsManager {
             pendingExternalOpenGen[tabId] = nil
             // Fire closeExternalDocument to release the LSP ref that was
             // acquired in externalBuffer(...) on cache miss.
-            if let info = externalLSPInfo.removeValue(forKey: tabId), let lsp {
+            if let info = externalLSPInfo.removeValue(forKey: tabId), let lsp, let language = info.language {
                 let url = ext.url
-                Task { [lsp, info] in
+                Task { [lsp, info, language] in
                     await lsp.closeExternalDocument(
                         absoluteURL: url,
                         originatingWorktreeRoot: info.worktreeRoot,
                         originatingFileURL: info.originatingFileURL,
-                        language: info.language
+                        language: language
                     )
                 }
             }
@@ -1135,7 +1151,29 @@ final class TabsManager {
             where buffer.language.map(group.contains) ?? false {
             buffer.reopenLSPDocument()
         }
-        for (tabId, info) in externalLSPInfo where group.contains(info.language) {
+        for (tabId, info) in externalLSPInfo where info.language.map(group.contains) ?? false {
+            ensureExternalLSPOpen(tabId: tabId)
+        }
+    }
+
+    func reopenLSPDocuments(forFileExtensions extensions: [String], language: String) {
+        let normalized = Set(extensions.map { $0.lowercased() }.filter { !$0.isEmpty })
+        guard !normalized.isEmpty else { return }
+        for buffer in buffers.values {
+            buffer.reopenLSPDocument(afterRegistering: language, forFileExtensions: normalized)
+        }
+        guard let lsp else { return }
+        for (tabId, entry) in externalTabURLs {
+            let ext = entry.url.pathExtension.lowercased()
+            guard normalized.contains(ext), lsp.language(forFileExtension: ext) == language else { continue }
+            guard var info = externalLSPInfo[tabId] else { continue }
+            guard info.language == nil || info.language == language else { continue }
+            let isRegisteringLanguage = info.language == nil
+            info.language = language
+            externalLSPInfo[tabId] = info
+            if isRegisteringLanguage {
+                openedExternalDocs.remove(tabId)
+            }
             ensureExternalLSPOpen(tabId: tabId)
         }
     }

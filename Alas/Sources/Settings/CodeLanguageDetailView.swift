@@ -156,30 +156,7 @@ struct CodeLanguageDetailView: View {
     }
 
     private func applyPrefill(_ pkg: MasonPackage) {
-        // Prefer the generator-normalized languageId so it lines up with the
-        // registry's built-in languageIds (e.g. "shellscript", not "bash";
-        // "cpp", not "c++"). Fall back to masonId only when the snapshot has
-        // no language data at all.
-        let resolved = pkg.languageId.isEmpty ? pkg.masonId.lowercased() : pkg.languageId
-        entry.language = resolved
-        entry.extensions = pkg.extensions
-        entry.command = pkg.command
-        entry.args = pkg.args
+        entry = LanguageServerConfig.prefilled(from: pkg)
         pendingRecipes = pkg.recipes
-    }
-}
-
-extension LanguageServerConfig {
-    func normalizedForSettingsSave() -> LanguageServerConfig {
-        var normalized = self
-        normalized.language = language.trimmingCharacters(in: .whitespaces)
-        normalized.command = command.trimmingCharacters(in: .whitespaces)
-        normalized.args = args
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        normalized.rootMarkers = rootMarkers
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        return normalized
     }
 }

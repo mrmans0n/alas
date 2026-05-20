@@ -168,31 +168,7 @@ struct CodePane: View {
     }
 
     private func save(originalLanguage: String?, _ entry: LanguageServerConfig, recipes: [InstallRecipe]?) {
-        let entry = entry.normalizedForSettingsSave()
-        var list = state.config.code.languageServers
-        // Look up by the original language ID so renaming an entry replaces
-        // it in place. Searching by the edited value (`entry.language`) would
-        // miss the existing config and orphan it — there's no delete action
-        // in the Code pane, so the stale entry would stick around and could
-        // keep claiming its old extensions.
-        let lookupKey = originalLanguage ?? entry.language
-        if let i = list.firstIndex(where: { $0.language == lookupKey }) {
-            list[i] = entry
-        } else {
-            list.append(entry)
-        }
-        state.config.code.languageServers = list
-        if let recipes, !recipes.isEmpty {
-            // New entry created from the Add dialog — write the recipes.
-            state.config.code.userDefinedRecipes[entry.language] = recipes
-        } else if let original = originalLanguage, original != entry.language {
-            // Edit dialog renamed an existing language. Migrate any existing
-            // recipes from the old key to the new one so the Install button
-            // stays visible.
-            if let existing = state.config.code.userDefinedRecipes.removeValue(forKey: original) {
-                state.config.code.userDefinedRecipes[entry.language] = existing
-            }
-        }
+        state.config.code.saveLanguageServerConfig(originalLanguage: originalLanguage, entry, recipes: recipes)
         state.saveConfig()
         selected = nil
         creatingNew = false

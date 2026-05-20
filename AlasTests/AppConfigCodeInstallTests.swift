@@ -63,4 +63,108 @@ struct AppConfigCodeInstallTests {
         #expect(decoded.code.userDefinedRecipes["zig"]?.first?.package == "zls")
         #expect(decoded.code.userDefinedRecipes["zig"]?.first?.installer == .brew)
     }
+
+    @Test("Mason package prefill produces enabled language server config")
+    func masonPrefillConfig() {
+        let pkg = MasonPackage(
+            masonId: "taplo",
+            displayName: "taplo",
+            languageId: "toml",
+            languages: ["TOML"],
+            extensions: ["toml"],
+            command: "taplo",
+            args: ["lsp", "stdio"],
+            recipes: [InstallRecipe(installer: .brew, package: "taplo")]
+        )
+
+        let config = LanguageServerConfig.prefilled(from: pkg)
+
+        #expect(config.language == "toml")
+        #expect(config.extensions == ["toml"])
+        #expect(config.command == "taplo")
+        #expect(config.args == ["lsp", "stdio"])
+        #expect(config.env == [:])
+        #expect(config.rootMarkers == [".git"])
+        #expect(config.enabled)
+    }
+
+    @Test("Mason package prefill falls back to mason id without language id")
+    func masonPrefillFallsBackToMasonId() {
+        let pkg = MasonPackage(
+            masonId: "custom-lsp",
+            displayName: "custom-lsp",
+            languageId: "",
+            languages: [],
+            extensions: ["custom"],
+            command: "custom-lsp",
+            args: [],
+            recipes: []
+        )
+
+        let config = LanguageServerConfig.prefilled(from: pkg)
+
+        #expect(config.language == "custom-lsp")
+    }
+
+    @Test("code config upserts language server and stores recipes")
+    func upsertLanguageServerStoresRecipes() {
+        var code = AppConfig.defaults.code
+        let config = LanguageServerConfig(
+            language: " toml ",
+            extensions: ["toml"],
+            command: " taplo ",
+            args: [" lsp ", " ", "stdio"],
+            env: [:],
+            rootMarkers: [" .git ", ""],
+            enabled: true
+        )
+        let recipes = [InstallRecipe(installer: .brew, package: "taplo")]
+
+        code.saveLanguageServerConfig(originalLanguage: nil, config, recipes: recipes)
+
+        #expect(code.languageServers == [
+            LanguageServerConfig(
+                language: "toml",
+                extensions: ["toml"],
+                command: "taplo",
+                args: ["lsp", "stdio"],
+                env: [:],
+                rootMarkers: [".git"],
+                enabled: true
+            )
+        ])
+        #expect(code.userDefinedRecipes["toml"] == recipes)
+    }
+
+    @Test("code config migrates recipes when language is renamed")
+    func upsertLanguageServerMigratesRecipesOnRename() {
+        var code = AppConfig.defaults.code
+        code.languageServers = [
+            LanguageServerConfig(
+                language: "old",
+                extensions: ["old"],
+                command: "old-lsp",
+                args: [],
+                env: [:],
+                rootMarkers: [".git"],
+                enabled: true
+            )
+        ]
+        code.userDefinedRecipes["old"] = [InstallRecipe(installer: .brew, package: "old-lsp")]
+
+        let renamed = LanguageServerConfig(
+            language: "new",
+            extensions: ["new"],
+            command: "new-lsp",
+            args: [],
+            env: [:],
+            rootMarkers: [".git"],
+            enabled: true
+        )
+        code.saveLanguageServerConfig(originalLanguage: "old", renamed, recipes: nil)
+
+        #expect(code.languageServers.map(\.language) == ["new"])
+        #expect(code.userDefinedRecipes["old"] == nil)
+        #expect(code.userDefinedRecipes["new"] == [InstallRecipe(installer: .brew, package: "old-lsp")])
+    }
 }
