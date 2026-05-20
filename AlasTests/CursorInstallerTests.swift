@@ -23,6 +23,22 @@ struct CursorInstallerTests {
         try await installer.install()
         #expect(installer.installState() == .installed)
 
+        let installed = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let installedHooks = installed["hooks"] as! [String: Any]
+        #expect(installedHooks["sessionStart"] != nil)
+        #expect(installedHooks["sessionEnd"] != nil)
+        #expect(installedHooks["beforeShellExecution"] != nil)
+        #expect(installedHooks["beforeMCPExecution"] != nil)
+
+        for event in ["beforeShellExecution", "beforeMCPExecution"] {
+            let entries = installedHooks[event] as! [[String: Any]]
+            #expect(entries.count == 1)
+            let command = entries[0]["command"] as! String
+            #expect(command.contains(#"printf '%s\n' '{"continue":true}'"#))
+            #expect(command.contains(#""event":"permission_request""#))
+            #expect(command.hasSuffix(AlasHookCommand.ownershipSentinel))
+        }
+
         try installer.uninstall()
         #expect(installer.installState() == .notInstalled)
     }
@@ -65,6 +81,21 @@ struct CursorInstallerTests {
         before.append(contentsOf: stop)
         hooks["beforeSubmitPrompt"] = before
         hooks.removeValue(forKey: "stop")
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
+
+        #expect(installer.installState() == .outdated)
+    }
+
+    @Test func installState_missingLifecyclePlacement_outdated() async throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let installer = CursorInstaller(settingsURL: url)
+        try await installer.install()
+
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        hooks.removeValue(forKey: "beforeShellExecution")
         json["hooks"] = hooks
         try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
 

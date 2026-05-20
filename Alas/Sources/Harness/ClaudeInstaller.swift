@@ -63,15 +63,24 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
         events: [.awaitingInput], agent: .claude, forwardStdinAsBody: true)
     private static let idleAndNotify = AlasHookCommand.compositeCommand(
         events: [.idle], agent: .claude, forwardStdinAsBody: true)
+    private static let attached = AlasHookCommand.compositeCommand(
+        events: [.attached], agent: .claude, forwardStdinAsBody: false)
+    private static let detached = AlasHookCommand.compositeCommand(
+        events: [.detached], agent: .claude, forwardStdinAsBody: false)
+    private static let permissionRequest = AlasHookCommand.compositeCommand(
+        events: [.permissionRequest], agent: .claude, forwardStdinAsBody: false)
 
     private func hooksByEvent() -> [String: [[String: Any]]] {
         [
+            "SessionStart": [hookGroup(command: Self.attached)],
+            "SessionEnd": [hookGroup(command: Self.detached)],
             "UserPromptSubmit": [hookGroup(command: Self.busy)],
             "PreToolUse": [
                 hookGroup(command: Self.busy, matcher: ""),
                 hookGroup(command: Self.awaitingInput, matcher: "AskUserQuestion|ExitPlanMode"),
             ],
             "PostToolUse": [hookGroup(command: Self.busy, matcher: "")],
+            "PermissionRequest": [hookGroup(command: Self.permissionRequest)],
             // Scope to input/permission-prompt notification types; an empty
             // matcher would fire on every Claude Notification (status updates,
             // background messages, etc.) and produce false "needs input"
