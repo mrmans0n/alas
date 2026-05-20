@@ -22,6 +22,7 @@ struct AgentInstallerRegistry: Sendable {
             CodexInstaller(),
             CursorInstaller(),
             GeminiInstaller(),
+            OpenCodeInstaller(),
         ]
     }
 

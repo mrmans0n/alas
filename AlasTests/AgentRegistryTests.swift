@@ -166,7 +166,7 @@ struct AgentRegistryTests {
     @Test func defaultInstallerRegistryExposesOnlyAgentsWithInstallers() {
         let registry = AgentInstallerRegistry()
 
-        #expect(registry.supportedAgents == [.claude, .codex, .cursor, .gemini])
+        #expect(registry.supportedAgents == [.claude, .codex, .cursor, .gemini, .opencode])
     }
 
     @Test func supportedInstallerAgentsFollowsRegisteredInstallers() {
