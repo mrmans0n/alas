@@ -72,6 +72,18 @@ ghostty_cache_keep="${ALAS_GHOSTTY_CACHE_KEEP:-5}"
 # Emit a one-line warning to stderr. Does not exit.
 warn() { echo "build-ghostty.sh: warning: $*" >&2; }
 
+# Resolve the path to the zig binary that build_and_install_local will use.
+# Echoes the path (which may not exist yet). Mirrors the resolution logic in
+# build_and_install_local; exists separately so print_fingerprint can include
+# the toolchain identity without invoking the full build.
+resolve_zig_bin() {
+  if [ -n "${ALAS_ZIG_BIN:-}" ]; then
+    printf '%s\n' "${ALAS_ZIG_BIN}"
+  else
+    printf '%s/bin/zig\n' "$(brew --prefix zig@0.15 2>/dev/null)"
+  fi
+}
+
 print_fingerprint() {
   (
     cd "${ghostty_dir}"
@@ -81,6 +93,17 @@ print_fingerprint() {
       git ls-files --others --exclude-standard | LC_ALL=C sort | shasum -a 256
       shasum -a 256 "${script_path}" | awk '{print $1}'
       if [ -f "${srcroot}/mise.toml" ]; then shasum -a 256 "${srcroot}/mise.toml" | awk '{print $1}'; fi
+      # Toolchain identity: different zig binaries can produce ABI-incompatible
+      # artifacts at the same Ghostty commit. Include the resolved path AND
+      # content hash so ALAS_ZIG_BIN overrides and brew upgrades both break
+      # cache reuse rather than silently mixing artifacts.
+      zig_bin_for_fp="$(resolve_zig_bin)"
+      printf '%s\n' "${zig_bin_for_fp}"
+      if [ -x "${zig_bin_for_fp}" ]; then
+        shasum -a 256 "${zig_bin_for_fp}" 2>/dev/null | awk '{print $1}'
+      else
+        echo "no-zig"
+      fi
     } | shasum -a 256 | awk '{print $1}'
   )
 }
@@ -108,11 +131,7 @@ build_and_install_local() {
     # See ThirdParty/ghostty/HACKING.md. The brew prefix is resolved dynamically
     # because Apple Silicon installs under /opt/homebrew while Intel uses
     # /usr/local. ALAS_ZIG_BIN overrides for tests and custom toolchains.
-    if [ -n "${ALAS_ZIG_BIN:-}" ]; then
-      zig_bin="${ALAS_ZIG_BIN}"
-    else
-      zig_bin="$(brew --prefix zig@0.15 2>/dev/null)/bin/zig"
-    fi
+    zig_bin="$(resolve_zig_bin)"
     if [ ! -x "${zig_bin}" ]; then
       echo "error: zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN" >&2
       exit 1
