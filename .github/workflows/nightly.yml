@@ -78,6 +78,10 @@ jobs:
         if: steps.skip-check.outputs.skip != 'true'
         run: brew install xcodegen zig@0.15 create-dmg
 
+      - name: Test build-ghostty.sh harness
+        if: steps.skip-check.outputs.skip != 'true'
+        run: bash scripts/tests/build-ghostty/run.sh
+
       - name: Compute Ghostty cache key inputs
         if: steps.skip-check.outputs.skip != 'true'
         run: |

@@ -33,6 +33,9 @@ jobs:
         # linker bug. See ThirdParty/ghostty/HACKING.md.
         run: brew install xcodegen zig@0.15 create-dmg
 
+      - name: Test build-ghostty.sh harness
+        run: bash scripts/tests/build-ghostty/run.sh
+
       - name: Compute Ghostty cache key inputs
         run: |
           git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
