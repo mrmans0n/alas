@@ -469,6 +469,7 @@ extension Notification.Name {
     static let alasNewWorktree       = Notification.Name("AlasNewWorktree")
     static let alasRefreshWorktrees  = Notification.Name("AlasRefreshWorktrees")
     static let alasNewTerminalTab  = Notification.Name("AlasNewTerminalTab")
+    static let alasOpenAgentLauncher = Notification.Name("AlasOpenAgentLauncher")
     static let alasCloseTab        = Notification.Name("AlasCloseTab")
     static let alasActivateTabByNumber = Notification.Name("AlasActivateTabByNumber")
     static let alasOpenSettings    = Notification.Name("AlasOpenSettings")

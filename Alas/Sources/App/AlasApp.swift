@@ -82,6 +82,11 @@ struct AlasApp: App {
                     NotificationCenter.default.post(name: .alasNewTerminalTab, object: nil)
                 }
                 .keyboardShortcut(state.shortcut(for: .newTerminalTab))
+                Button("Launch Agent Terminal…") {
+                    NotificationCenter.default.post(name: .alasOpenAgentLauncher, object: nil)
+                }
+                .keyboardShortcut(state.shortcut(for: .launchAgentTerminal))
+                .disabled(state.projects.isEmpty)
                 Button("Close Tab") {
                     NotificationCenter.default.post(name: .alasCloseTab, object: nil)
                 }
