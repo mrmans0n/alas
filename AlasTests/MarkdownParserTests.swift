@@ -67,7 +67,7 @@ struct MarkdownParserTests {
         #expect(heading?.plainText == "Body")
     }
 
-    @Test func stripsEmptyFrontmatterWithoutMetadata() {
+    @Test func leavesEmptyFrontmatterBlockAsMarkdown() {
         let parsed = MarkdownParser.parse("""
         ---
         ---
@@ -76,8 +76,22 @@ struct MarkdownParserTests {
         """)
 
         #expect(parsed.frontmatter == nil)
-        #expect(parsed.document.childCount == 1)
-        #expect(parsed.document.child(at: 0) is Paragraph)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
+    @Test func leavesMalformedFrontmatterBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        invalid
+        ---
+
+        Body
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
     }
 
     @Test func leavesDocumentsWithoutFrontmatterUnchanged() {

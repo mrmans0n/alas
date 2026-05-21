@@ -50,7 +50,10 @@ enum MarkdownParser {
             if trimmedDelimiter(line.text) == "---" {
                 let frontmatterText = String(source[opening.fullRange.upperBound..<line.fullRange.lowerBound])
                 let entries = parseFrontmatterEntries(frontmatterText)
-                let frontmatter = entries.isEmpty ? nil : MarkdownFrontmatter(entries: entries)
+                guard !entries.isEmpty else {
+                    return (nil, source)
+                }
+                let frontmatter = MarkdownFrontmatter(entries: entries)
                 let body = String(source[line.fullRange.upperBound...])
                 return (frontmatter, body)
             }
