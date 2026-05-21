@@ -74,16 +74,14 @@ struct AppStateCreateWorktreeSymlinkTests {
 
         try await waitForOperationToClear(state.projectsManager, id: optimisticId)
 
-        // Exactly one row for the new branch, and no lingering
-        // `.creating` state on either the optimistic id or the
-        // canonical-path id.
+        // Exactly one row for the new branch, no lingering `.creating`
+        // state, and the surviving row's id matches the optimistic id so
+        // `selectedWorktreeId` and tab/terminal routing target the live row.
         let trees = state.projectsManager.worktrees(projectId: project.id)
         let newRows = trees.filter { $0.branch == "symlink-branch" }
         #expect(newRows.count == 1)
+        #expect(newRows.first?.id == optimisticId)
         #expect(state.projectsManager.operationState(for: optimisticId) == nil)
-        let canonicalId = Worktree.makeId(
-            path: destinationThroughSymlink.resolvingSymlinksInPath()
-        )
-        #expect(state.projectsManager.operationState(for: canonicalId) == nil)
+        #expect(state.selectedWorktreeId == optimisticId)
     }
 }

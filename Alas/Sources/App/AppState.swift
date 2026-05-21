@@ -401,11 +401,15 @@ final class AppState {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
+        // Canonicalize once and use this URL everywhere downstream — both
+        // the optimistic row and the eventual `WorktreeService.add` return
+        // value derive their `id` from the path we hand in, so any
+        // divergence here would make `selectedWorktreeId` and terminal
+        // routing target a non-existent row after reconcile.
+        //
         // resolvingSymlinksInPath only resolves links along path components
         // that exist on disk; the leaf doesn't exist yet, so resolve the
-        // parent (which does) and reattach the leaf. Without this, the
-        // optimistic id diverges from the canonical id that `git worktree
-        // list` reports for symlinked parents, leaving a stuck Creating row.
+        // parent (which does) and reattach the leaf.
         let canonicalDestination = destination
             .deletingLastPathComponent()
             .resolvingSymlinksInPath()
@@ -445,7 +449,7 @@ final class AppState {
             do {
                 let newWorktree = try await Self.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: destination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
                 if runStartup && !startupScript.isEmpty {
