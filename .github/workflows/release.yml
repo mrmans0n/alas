@@ -16,11 +16,10 @@ jobs:
     # main HEAD requirement). Submodule + zig@0.15 are required for the
     # Ghostty xcframework build.
     runs-on: macos-26
-    # Two notarytool --wait --timeout 30m calls in this job (one for the
-    # .app, one for the .dmg) can each consume up to 30 min if Apple's
-    # notary queue is slow, so worst-case notary time alone is 60 min.
-    # 90 min leaves ~30 min headroom for build/package/upload even when
-    # both notary submissions hit their per-call timeout.
+    # Four notarytool --wait --timeout 30m calls in this job (one .app and
+    # one DMG per arch). Worst-case notary time alone is 120 min if Apple's
+    # queue is slow on all four submissions. 150 min leaves ~30 min headroom
+    # for build/package/upload even when every notary call hits its timeout.
     timeout-minutes: 150
     steps:
       - name: Checkout (with submodules)
@@ -90,12 +89,14 @@ jobs:
         run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-arm64.dmg"
 
       # --- x86_64 pass ------------------------------------------------------
-      - name: Reset worktree + keychain + DerivedData for x86_64 pass
-        # Wipe the per-arch ghostty worktree dir + xcodebuild DerivedData so the
-        # second pass starts clean. Without this, xcodebuild may keep the arm64
-        # .app at the same DerivedData path and confuse the codesign/notary
-        # step. The shared Ghostty cache at ~/Library/Caches/Alas/GhosttyKit
-        # is *not* wiped — the x86_64 build will hit it on subsequent CI runs.
+      - name: Reset ghostty worktree + signing keychain for x86_64 pass
+        # Wipe the per-arch ghostty worktree dir + the Alas.app build product
+        # from the arm64 pass so the x86_64 xcodebuild writes a fresh Alas.app
+        # at the same DerivedData path. (Intermediate object files at
+        # build/Build/Intermediates.noindex/ are intentionally left alone —
+        # xcodebuild rebuilds arch-specific objects on its own.) The shared
+        # Ghostty cache at ~/Library/Caches/Alas/GhosttyKit is *not* wiped —
+        # the x86_64 build will hit it on subsequent CI runs.
         # The signing keychain MUST also be wiped: sign-and-notarize.sh creates
         # a keychain at a fixed path ($RUNNER_TEMP/signing.keychain-db) and
         # `security create-keychain` errors when that file already exists, so
