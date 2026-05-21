@@ -177,6 +177,37 @@ struct RightPaneStateFileTreeTests {
         #expect(result.nodes == tree)
     }
 
+    @Test func mergingChildrenForLoadingDirectoryPreservesExistingChildren() {
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "App.swift",
+                        path: "Sources/App.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "M",
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.mergingChildren(in: tree, for: "Sources", with: [], state: .loading)
+        let sources = result.nodes.first
+
+        #expect(result.didMerge)
+        #expect(sources?.childrenState == .loading)
+        #expect(sources?.children?.map(\.path) == ["Sources/App.swift"])
+    }
+
     @Test func invalidatingFileTreeChildLoadsStartsNewGenerationAndClearsTracking() {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-filetree-generation-\(UUID().uuidString)")
