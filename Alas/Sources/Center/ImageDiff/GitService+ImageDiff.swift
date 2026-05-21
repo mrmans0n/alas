@@ -81,7 +81,7 @@ extension GitService {
         let fileURL = worktreePath.appendingPathComponent(relativePath)
         let fileExistsOnDisk = FileManager.default.fileExists(atPath: fileURL.path)
         let resolution = ImageDiffPairResolver.resolveWorkingCopy(
-            entry: entry, fileExistsOnDisk: fileExistsOnDisk
+            entry: entry, fileExistsOnDisk: fileExistsOnDisk, staged: staged
         )
 
         // Fetch the "before" blob. For renames, use the old path. The

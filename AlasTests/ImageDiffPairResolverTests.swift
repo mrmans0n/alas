@@ -9,7 +9,7 @@ struct ImageDiffPairResolverTests {
             path: "logo.png", status: "M", stage: .unstaged,
             add: 0, del: 0, renameFrom: nil
         )
-        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true)
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true, staged: false)
         #expect(r.kind == .modified)
         #expect(r.oldPath == nil)
     }
@@ -19,7 +19,7 @@ struct ImageDiffPairResolverTests {
             path: "new.png", status: "A", stage: .unstaged,
             add: 0, del: 0, renameFrom: nil
         )
-        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true)
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true, staged: false)
         #expect(r.kind == .added)
         #expect(r.oldPath == nil)
     }
@@ -29,7 +29,7 @@ struct ImageDiffPairResolverTests {
             path: "gone.png", status: "D", stage: .unstaged,
             add: 0, del: 0, renameFrom: nil
         )
-        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: false)
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: false, staged: false)
         #expect(r.kind == .deleted)
         #expect(r.oldPath == nil)
     }
@@ -39,7 +39,7 @@ struct ImageDiffPairResolverTests {
             path: "new/path.png", status: "R", stage: .unstaged,
             add: 0, del: 0, renameFrom: "old/path.png"
         )
-        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true)
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true, staged: false)
         #expect(r.kind == .renamed)
         #expect(r.oldPath == "old/path.png")
     }
@@ -49,7 +49,7 @@ struct ImageDiffPairResolverTests {
         // untracked, the entry is still produced with status "?". Treat as
         // added regardless of letter when there is no rename and `before`
         // doesn't exist in HEAD (caller signals via nil entry).
-        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: nil, fileExistsOnDisk: true)
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: nil, fileExistsOnDisk: true, staged: false)
         #expect(r.kind == .added)
     }
 
@@ -90,7 +90,7 @@ struct ImageDiffPairResolverTests {
     }
 
     @Test func resolvesMissingEntryAndMissingFileAsDeleted() {
-        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: nil, fileExistsOnDisk: false)
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: nil, fileExistsOnDisk: false, staged: false)
         #expect(r.kind == .deleted)
         #expect(r.oldPath == nil)
     }
@@ -103,8 +103,37 @@ struct ImageDiffPairResolverTests {
             path: "new.png", status: "R", stage: .unstaged,
             add: 0, del: 0, renameFrom: nil
         )
-        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true)
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true, staged: false)
         #expect(r.kind == .modified)
         #expect(r.oldPath == nil)
+    }
+
+    @Test func stagedModifiedRemainsModifiedWhenFileMissingFromDisk() {
+        // "MD" scenario: staged modification, unstaged deletion. The
+        // staged side compares HEAD vs index — both exist regardless of
+        // whether the working tree still has the file.
+        let file = ChangedFile(
+            path: "logo.png", status: "M", stage: .staged,
+            add: 0, del: 0, renameFrom: nil
+        )
+        let r = ImageDiffPairResolver.resolveWorkingCopy(
+            entry: file, fileExistsOnDisk: false, staged: true
+        )
+        #expect(r.kind == .modified)
+        #expect(r.oldPath == nil)
+    }
+
+    @Test func unstagedModifiedStillFallsBackToDeletedWhenFileMissing() {
+        // The pre-existing fallback for stale status is still useful for
+        // the unstaged side — a "M" status combined with a missing file
+        // usually means status was stale and the file's gone.
+        let file = ChangedFile(
+            path: "logo.png", status: "M", stage: .unstaged,
+            add: 0, del: 0, renameFrom: nil
+        )
+        let r = ImageDiffPairResolver.resolveWorkingCopy(
+            entry: file, fileExistsOnDisk: false, staged: false
+        )
+        #expect(r.kind == .deleted)
     }
 }

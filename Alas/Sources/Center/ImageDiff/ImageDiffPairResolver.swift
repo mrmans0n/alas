@@ -18,9 +18,12 @@ enum ImageDiffPairResolver {
     /// - parameter fileExistsOnDisk: Whether the working-tree file is
     ///   present. Used to disambiguate "D" entries (deleted) from edge
     ///   cases where status thinks the file exists but it doesn't.
+    /// - parameter staged: Whether this is being resolved for the staged
+    ///   side (HEAD vs index). When true, working-tree state is irrelevant.
     static func resolveWorkingCopy(
         entry: ChangedFile?,
-        fileExistsOnDisk: Bool
+        fileExistsOnDisk: Bool,
+        staged: Bool
     ) -> Result {
         guard let entry else {
             // No status entry. If the file is on disk, treat as added —
@@ -48,6 +51,15 @@ enum ImageDiffPairResolver {
         default:
             // "M", "T", "?" all become "modified" — we already have
             // both blobs to compare.
+            //
+            // The fileExistsOnDisk fallback to .deleted only applies for
+            // the unstaged side, where missing-from-disk genuinely means
+            // "deleted in working tree". The staged side is HEAD-vs-index
+            // and ignores the working tree, so an "MD" file (staged-M +
+            // unstaged-D) must stay .modified when read as staged.
+            if staged {
+                return Result(kind: .modified, oldPath: nil)
+            }
             return fileExistsOnDisk
                 ? Result(kind: .modified, oldPath: nil)
                 : Result(kind: .deleted, oldPath: nil)

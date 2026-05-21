@@ -36,7 +36,11 @@ struct ImageDiffDifferenceView: View {
     }
 
     private func compute() async {
-        guard result == nil else { return }
+        // .task(id: identityKey) restarts this whenever the image pair
+        // changes — reset the cached result so the old mask doesn't keep
+        // showing while the new one computes.
+        result = nil
+        percentChanged = nil
         computing = true
         defer { computing = false }
         // Background queue — the computer is CPU-heavy on large images.
@@ -46,6 +50,9 @@ struct ImageDiffDifferenceView: View {
                 before: captured.0, after: captured.1
             )
         }.value
+        // Bail if the task was cancelled in flight (identityKey changed
+        // again while we were computing).
+        if Task.isCancelled { return }
         result = r
         if r.totalPixels > 0 {
             percentChanged = Double(r.changedPixelCount) / Double(r.totalPixels) * 100.0
