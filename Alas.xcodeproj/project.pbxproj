@@ -231,6 +231,7 @@
 		7C8E278F6BED0924531E3C91 /* BundledFontRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DEA304B6038D986A372150 /* BundledFontRegistrar.swift */; };
 		7CDFA95F095090FF242B8248 /* EmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B24ABE96ED3C62146A3CED62 /* EmptyState.swift */; };
 		7D75AEB67376431930CB37E3 /* GitEventFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4575017544CD7603B3AB9069 /* GitEventFilter.swift */; };
+		7DEFB0A61614D65F509A11AE /* ImageDiffDifferenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4246F7A17DCEC4D2A669BC43 /* ImageDiffDifferenceView.swift */; };
 		7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A92711BC1D9A78D8A80561 /* GitTypes.swift */; };
 		7E56D356C235F59E1CE24210 /* AgentBuiltinsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AED8A6EE8EF0CC317D7A4C7 /* AgentBuiltinsTests.swift */; };
 		7EB64E55CE27886D660C5D0C /* DefinitionSnippetCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D6BC5CC26EC6A242C2FDDDA /* DefinitionSnippetCacheTests.swift */; };
@@ -603,6 +604,7 @@
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterSelectionState.swift; sourceTree = "<group>"; };
 		41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallNudgeBanner.swift; sourceTree = "<group>"; };
+		4246F7A17DCEC4D2A669BC43 /* ImageDiffDifferenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffDifferenceView.swift; sourceTree = "<group>"; };
 		4261E417947C1A21E77C1587 /* GitStatusCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusCache.swift; sourceTree = "<group>"; };
 		43DF691FC778F3A71CE20FBB /* StartupScriptInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptInstallerTests.swift; sourceTree = "<group>"; };
 		447D95D444F6AE08FCFA27A3 /* AppStateCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCleanupTests.swift; sourceTree = "<group>"; };
@@ -1664,6 +1666,7 @@
 				A8EFC853C0D2EB4AC2B01D9E /* GitService+ImageDiff.swift */,
 				206F1DBCB1C34D71BEBB7DE4 /* ImageCheckerboardBackground.swift */,
 				881B46F8FCAF830239357372 /* ImageDiffDifferenceComputer.swift */,
+				4246F7A17DCEC4D2A669BC43 /* ImageDiffDifferenceView.swift */,
 				09007B6E90DE89B7215A5D44 /* ImageDiffMode.swift */,
 				B87F114EBEEACCC95B9EF8D5 /* ImageDiffOverlayView.swift */,
 				0934F7BB22E33263B63925B7 /* ImageDiffPair.swift */,
@@ -2071,6 +2074,7 @@
 				CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */,
 				A4AB930CA0EEA2CEF0302646 /* ImageCheckerboardBackground.swift in Sources */,
 				A2E0A755C2854FE489530FE3 /* ImageDiffDifferenceComputer.swift in Sources */,
+				7DEFB0A61614D65F509A11AE /* ImageDiffDifferenceView.swift in Sources */,
 				0D65F2B699E6B0CF0915D25D /* ImageDiffMode.swift in Sources */,
 				8B2A37F58F2C7D842204A596 /* ImageDiffOverlayView.swift in Sources */,
 				45B3616A459480A78A5004E8 /* ImageDiffPair.swift in Sources */,
