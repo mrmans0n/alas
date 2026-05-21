@@ -1,7 +1,10 @@
 import AppKit
 import Foundation
+import os
 
 extension GitService {
+    private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
+
     /// Working-copy variant. Returns the before/after `NSImage`s and the
     /// kind of change (added/deleted/renamed/modified) for an image file.
     ///
@@ -21,7 +24,11 @@ extension GitService {
             entry: entry, fileExistsOnDisk: fileExistsOnDisk
         )
 
-        // Fetch the "before" blob from HEAD. For renames, use the old path.
+        // Fetch the "before" blob from HEAD. For renames, use the old
+        // path. The resolver guarantees `.renamed` carries a non-nil
+        // oldPath (and falls back to `.modified` if a "R" entry had a
+        // missing rename source), so the `??` is defensive — not load-
+        // bearing on any path the resolver actually emits.
         let beforePath = resolution.oldPath ?? relativePath
         let before: NSImage?
         switch resolution.kind {
@@ -76,8 +83,18 @@ extension GitService {
             ["show", spec], cwd: worktreePath
         )
         guard result.exitCode == 0 else {
-            // Missing blob (e.g. file did not exist at HEAD) → nil rather
-            // than throwing. Callers treat nil as "missing side".
+            // The expected non-zero is "path does not exist in <ref>",
+            // which is a legitimate missing-side signal (added: no HEAD
+            // blob; deleted: no current blob). Anything else (corrupted
+            // repo, bad ref, disk error) is unexpected — surface to the
+            // log so it can be diagnosed, but still return nil so the
+            // caller's missing-side handling keeps working.
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isExpectedMissing = stderr.contains("does not exist") ||
+                                    stderr.contains("exists on disk, but not in")
+            if !isExpectedMissing {
+                Self.imageDiffLogger.error("git show \(spec, privacy: .public) failed: \(stderr, privacy: .public)")
+            }
             return nil
         }
         return NSImage(data: result.stdout)

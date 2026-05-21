@@ -101,9 +101,12 @@ struct ImageDiffPairLoaderTests {
         _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
 
         // git mv keeps content identical; rename is detected. Also edit
-        // to give the rename a content delta so both blobs differ.
+        // to give the rename a content delta so both blobs differ. Re-add
+        // after the edit so the index reflects the new content (git mv
+        // only updates the index with the original blob).
         _ = try await Process.git(["mv", "old.png", "new.png"], cwd: repo)
         try PngFixture.blue.write(to: repo.appendingPathComponent("new.png"))
+        _ = try await Process.git(["add", "new.png"], cwd: repo)
 
         let pair = try await GitService().imageDiffPair(
             worktreePath: repo, relativePath: "new.png", staged: true
