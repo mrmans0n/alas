@@ -38,7 +38,7 @@ enum MarkdownParser {
 
     private static func extractFrontmatter(from source: String) -> (frontmatter: MarkdownFrontmatter?, body: String) {
         guard let opening = firstLine(in: source),
-              trimmedDelimiter(opening.text) == "---" else {
+              isFrontmatterDelimiter(opening.text) else {
             return (nil, source)
         }
 
@@ -47,7 +47,7 @@ enum MarkdownParser {
             guard let line = line(in: source, startingAt: searchIndex) else {
                 break
             }
-            if trimmedDelimiter(line.text) == "---" {
+            if isFrontmatterDelimiter(line.text) {
                 let frontmatterText = String(source[opening.fullRange.upperBound..<line.fullRange.lowerBound])
                 guard let entries = parseFrontmatterEntries(frontmatterText),
                       !entries.isEmpty else {
@@ -125,7 +125,8 @@ enum MarkdownParser {
         return (source[start..<textEnd], start..<fullEnd)
     }
 
-    private static func trimmedDelimiter(_ text: Substring) -> String {
-        text.trimmingCharacters(in: .whitespaces)
+    private static func isFrontmatterDelimiter(_ text: Substring) -> Bool {
+        guard text.hasPrefix("---") else { return false }
+        return text.dropFirst(3).allSatisfy(\.isWhitespace)
     }
 }

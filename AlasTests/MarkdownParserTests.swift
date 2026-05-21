@@ -143,6 +143,14 @@ struct MarkdownParserTests {
         #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
     }
 
+    @Test func leavesIndentedFrontmatterLikeCodeBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("    ---\n    title: Example\n    ---\n\nBody")
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is CodeBlock }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
     @Test func leavesDocumentsWithoutFrontmatterUnchanged() {
         let parsed = MarkdownParser.parse("Hello\n\n---\n\nWorld")
 
