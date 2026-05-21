@@ -5,8 +5,9 @@ struct TerminalPane: View {
     @Environment(\.theme) var theme
 
     @State private var hookStatus: [AgentKind: String] = [:]
-    @State private var installStates: [AgentKind: InstallState] = [:]
+    @State private var installStateRefreshToken = 0
     private let installerRegistry = AgentInstallerRegistry()
+    private let installStateRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ScrollView {
@@ -117,7 +118,7 @@ struct TerminalPane: View {
                     ForEach(installerRegistry.supportedAgents) { agent in
                         SettingsRow(name: agent.displayName) {
                             HStack {
-                                let integrationState = installState(for: agent)
+                                let integrationState = installState(for: agent, refreshToken: installStateRefreshToken)
                                 ForEach(TerminalIntegrationActions.actions(for: integrationState)) { action in
                                     AlasButton(title: action.title) {
                                         switch action.kind {
@@ -142,23 +143,17 @@ struct TerminalPane: View {
         .onAppear {
             refreshInstallStates()
         }
+        .onReceive(installStateRefreshTimer) { _ in
+            refreshInstallStates()
+        }
     }
 
-    private func installState(for agent: AgentKind) -> InstallState {
-        if let state = installStates[agent] {
-            return state
-        }
+    private func installState(for agent: AgentKind, refreshToken _: Int) -> InstallState {
         return installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
     }
 
     private func refreshInstallStates() {
-        for agent in installerRegistry.supportedAgents {
-            refreshInstallState(for: agent)
-        }
-    }
-
-    private func refreshInstallState(for agent: AgentKind) {
-        installStates[agent] = installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
+        installStateRefreshToken &+= 1
     }
 
     private func installAgent(_ agent: AgentKind) {
@@ -166,10 +161,10 @@ struct TerminalPane: View {
         Task {
             do {
                 try await installer.install()
-                refreshInstallState(for: agent)
+                refreshInstallStates()
                 hookStatus[agent] = "Installed"
             } catch {
-                refreshInstallState(for: agent)
+                refreshInstallStates()
                 hookStatus[agent] = "Error: \(error.localizedDescription)"
             }
         }
@@ -179,10 +174,10 @@ struct TerminalPane: View {
         guard let installer = installerRegistry.installer(for: agent) else { return }
         do {
             try installer.uninstall()
-            refreshInstallState(for: agent)
+            refreshInstallStates()
             hookStatus[agent] = "Uninstalled"
         } catch {
-            refreshInstallState(for: agent)
+            refreshInstallStates()
             hookStatus[agent] = "Error: \(error.localizedDescription)"
         }
     }
