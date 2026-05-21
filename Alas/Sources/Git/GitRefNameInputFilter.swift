@@ -35,7 +35,11 @@ struct GitRefNameInputFilter: Equatable {
 
         var components = value.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         for index in components.indices {
-            components[index] = sanitizeComponent(components[index], mode: mode)
+            components[index] = sanitizeComponent(
+                components[index],
+                mode: mode,
+                isFirstComponent: index == components.startIndex
+            )
         }
 
         while components.first == "" {
@@ -63,12 +67,12 @@ struct GitRefNameInputFilter: Equatable {
         return sanitize(next, mode: mode)
     }
 
-    private func sanitizeComponent(_ rawComponent: String, mode: Mode) -> String {
+    private func sanitizeComponent(_ rawComponent: String, mode: Mode, isFirstComponent: Bool) -> String {
         var component = rawComponent
         while component.hasPrefix(".") {
             component.removeFirst()
         }
-        while component.hasPrefix("-") {
+        while isFirstComponent && component.hasPrefix("-") {
             component.removeFirst()
         }
         while component.contains("..") {

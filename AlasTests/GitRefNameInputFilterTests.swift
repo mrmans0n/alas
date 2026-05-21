@@ -32,14 +32,25 @@ struct GitRefNameInputFilterTests {
         #expect(filtered == "")
     }
 
-    @Test func pasteStripsLeadingDashesFromPathComponents() {
+    @Test func pasteStripsLeadingDashesOnlyFromFirstPathComponent() {
         let filtered = GitRefNameInputFilter.branchName.applyingReplacement(
             to: "",
             range: NSRange(location: 0, length: 0),
             replacement: "-feature/-login"
         )
 
-        #expect(filtered == "feature/login")
+        #expect(filtered == "feature/-login")
+        #expect(GitNameValidator.validateBranchName(filtered) == .valid)
+    }
+
+    @Test func pastePreservesValidDashPrefixedNestedPathComponents() {
+        let filtered = GitRefNameInputFilter.branchName.applyingReplacement(
+            to: "",
+            range: NSRange(location: 0, length: 0),
+            replacement: "feature/-dash"
+        )
+
+        #expect(filtered == "feature/-dash")
         #expect(GitNameValidator.validateBranchName(filtered) == .valid)
     }
 
