@@ -171,6 +171,7 @@ final class RightPaneState {
                         var refreshed = existing
                         refreshed.badge = child.badge ?? existing.badge
                         refreshed.visibility = mergedVisibility(existing: existing.visibility, incoming: child.visibility)
+                        refreshed.isSubmodule = child.isSubmodule || existing.isSubmodule
                         refreshed.childrenState = mergedChildrenState(existing: existing.childrenState, incoming: child.childrenState)
                         if refreshed.children == nil {
                             refreshed.children = child.children

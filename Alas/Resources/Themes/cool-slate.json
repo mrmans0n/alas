@@ -21,6 +21,7 @@
     "del": "oklch(0.72 0.16 25)",
     "mod": "oklch(0.80 0.13 85)",
     "info": "oklch(0.76 0.11 230)",
+    "submodule": "oklch(0.74 0.11 295)",
     "warn": "oklch(0.80 0.13 65)",
     "syntax-keyword": "oklch(0.78 0.10 295)",
     "syntax-type": "oklch(0.80 0.09 215)",

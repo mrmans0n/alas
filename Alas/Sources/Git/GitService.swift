@@ -330,13 +330,34 @@ extension GitService {
             Self.logger.error("file tree root scan failed for \(worktreePath.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
 
+        let submodules = (try? await submodulePaths(worktreePath: worktreePath)) ?? []
+
         return FileTreeBuilder.build(
             paths: Array(paths),
             badges: badges,
             visibility: visibility,
             directories: directories,
-            lazyDirectories: lazyDirectories
+            lazyDirectories: lazyDirectories,
+            submodules: submodules
         )
+    }
+
+    func submodulePaths(worktreePath: URL) async throws -> Set<String> {
+        let result = try await Process.git(["ls-files", "--stage", "-z"], cwd: worktreePath)
+        guard result.exitCode == 0 else { return [] }
+        var paths = Set<String>()
+        // With -z the format is: "<mode> <sha> <stage>\t<path>\0 ..."
+        // — lines separated by \0 so paths with spaces are verbatim.
+        let entries = result.stdout.split(separator: "\0", omittingEmptySubsequences: true)
+        for entry in entries {
+            guard let tab = entry.firstIndex(of: "\t") else { continue }
+            let meta = String(entry[..<tab])
+            let path = String(entry[entry.index(after: tab)...])
+            let parts = meta.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count == 3, parts[0] == "160000" else { continue }
+            paths.insert(path)
+        }
+        return paths
     }
 
     func fileTreeChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
@@ -383,12 +404,15 @@ extension GitService {
             visibility[path] = .tracked
         }
 
+        let submodules = (try? await submodulePaths(worktreePath: worktreePath)) ?? []
+
         let built = FileTreeBuilder.build(
             paths: childPaths,
             badges: [:],
             visibility: visibility,
             directories: directories,
-            lazyDirectories: lazyDirectories
+            lazyDirectories: lazyDirectories,
+            submodules: submodules
         )
         guard !path.isEmpty else { return built }
         return findFileTreeNode(path: path, in: built)?.children ?? []
