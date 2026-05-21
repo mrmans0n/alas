@@ -340,4 +340,81 @@ struct GitServiceTests {
         #expect(children.contains { $0.path == "Sources/App.swift" && $0.visibility == .tracked })
         #expect(children.contains { $0.path == "Sources/cache.log" && $0.visibility == .ignored })
     }
+
+    @Test func submodulePathsDetectsRegisteredSubmodules() async throws {
+        let repo = try await makeRepo()
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alassubmodule-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: submoduleRepo)
+        }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: submoduleRepo)
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: repo
+        )
+
+        let svc = GitService()
+        let paths = try await svc.submodulePaths(worktreePath: repo)
+        #expect(paths == ["Deps/Submodule"])
+    }
+
+    @Test func submodulePathsHandlesSpacedSubmodulePath() async throws {
+        let repo = try await makeRepo()
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-spaced-sub-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: submoduleRepo)
+        }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: submoduleRepo)
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Space Name"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
+            cwd: repo
+        )
+
+        let svc = GitService()
+        let paths = try await svc.submodulePaths(worktreePath: repo)
+        #expect(paths == ["Deps/Space Name"])
+    }
+
+    @Test func submodulePathsHandlesDeletedSubmodule() async throws {
+        let repo = try await makeRepo()
+        let submoduleRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-deletedsub-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: submoduleRepo)
+        }
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: submoduleRepo)
+        _ = try await Process.git(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+
+        // Remove the submodule directory from disk without running submodule deinit
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("Deps/Submodule"))
+
+        let svc = GitService()
+        let paths = try await svc.submodulePaths(worktreePath: repo)
+        #expect(paths == ["Deps/Submodule"])
+    }
 }

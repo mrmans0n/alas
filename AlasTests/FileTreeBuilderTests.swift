@@ -142,6 +142,42 @@ struct FileTreeBuilderTests {
         #expect(trackedFile.visibility == .tracked)
     }
 
+    @Test func marksSubmoduleDirectory() {
+        let tree = FileTreeBuilder.build(
+            paths: ["Submodule"],
+            badges: [:],
+            directories: ["Submodule"],
+            submodules: ["Submodule"]
+        )
+        let node = tree.first { $0.path == "Submodule" }!
+        #expect(node.kind == .dir)
+        #expect(node.isSubmodule == true)
+    }
+
+    @Test func nonSubmoduleDirectoryStaysFalse() {
+        let tree = FileTreeBuilder.build(
+            paths: ["Sources/App.swift"],
+            badges: [:],
+            directories: ["Sources"]
+        )
+        let node = tree.first { $0.path == "Sources" }!
+        #expect(node.kind == .dir)
+        #expect(node.isSubmodule == false)
+    }
+
+    @Test func marksSubmoduleLeafAsDirectoryWithoutDirectoryMetadata() {
+        // A submodule represented only by its gitlink path has no directory
+        // metadata in the `directories` set, but should still be a dir.
+        let tree = FileTreeBuilder.build(
+            paths: ["Submodule"],
+            badges: [:],
+            submodules: ["Submodule"]
+        )
+        let node = tree.first { $0.path == "Submodule" }!
+        #expect(node.kind == .dir)
+        #expect(node.isSubmodule == true)
+    }
+
     private func assertPreservesFileAndDirectoryPathCollisions(
         _ paths: [String],
         directories: Set<String> = [],

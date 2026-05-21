@@ -6,7 +6,8 @@ enum FileTreeBuilder {
         badges: [String: String],
         visibility: [String: FileVisibility] = [:],
         directories: Set<String> = [],
-        lazyDirectories: Set<String> = []
+        lazyDirectories: Set<String> = [],
+        submodules: Set<String> = []
     ) -> [FileTreeNode] {
         var roots: [String: TreeBuildNode] = [:]
         let nestedDirectories = nestedDirectoryPaths(paths)
@@ -21,6 +22,7 @@ enum FileTreeBuilder {
                 directories: directories,
                 lazyDirectories: lazyDirectories,
                 nestedDirectories: nestedDirectories,
+                submodules: submodules,
                 prefix: ""
             )
         }
@@ -34,6 +36,7 @@ enum FileTreeBuilder {
         var badge: String?
         var visibility: FileVisibility
         var childrenState: DirectoryChildrenState
+        var isSubmodule: Bool
         var children: [String: TreeBuildNode] = [:]
         init(
             name: String,
@@ -41,7 +44,8 @@ enum FileTreeBuilder {
             isDir: Bool,
             badge: String?,
             visibility: FileVisibility,
-            childrenState: DirectoryChildrenState
+            childrenState: DirectoryChildrenState,
+            isSubmodule: Bool = false
         ) {
             self.name = name
             self.path = path
@@ -49,6 +53,7 @@ enum FileTreeBuilder {
             self.badge = badge
             self.visibility = visibility
             self.childrenState = childrenState
+            self.isSubmodule = isSubmodule
         }
     }
 
@@ -61,6 +66,7 @@ enum FileTreeBuilder {
         directories: Set<String>,
         lazyDirectories: Set<String>,
         nestedDirectories: Set<String>,
+        submodules: Set<String>,
         prefix: String
     ) {
         guard let head = parts.first else { return }
@@ -73,7 +79,7 @@ enum FileTreeBuilder {
         )
         let hasNestedChildren = nestedDirectories.contains(nodePath)
         let explicitDirectory = hasDirectoryMetadata && !hasNestedChildren
-        let isDir = !isLeaf || explicitDirectory
+        let isDir = !isLeaf || explicitDirectory || submodules.contains(nodePath)
         if isLeaf {
             let badge = badges[fullPath]
             if hasDirectoryMetadata && hasNestedChildren {
@@ -82,7 +88,8 @@ enum FileTreeBuilder {
                     path: nodePath,
                     into: &map,
                     visibility: visibility,
-                    lazyDirectories: lazyDirectories
+                    lazyDirectories: lazyDirectories,
+                    submodules: submodules
                 )
                 if badge == nil { return }
             }
@@ -95,12 +102,14 @@ enum FileTreeBuilder {
                     isDir: isDir,
                     badge: badge,
                     visibility: nodeVisibility(nodePath, visibility: visibility),
-                    childrenState: childrenState(path: nodePath, isDir: isDir, lazyDirectories: lazyDirectories)
+                    childrenState: childrenState(path: nodePath, isDir: isDir, lazyDirectories: lazyDirectories),
+                    isSubmodule: submodules.contains(nodePath) && isDir
                 )
             } else {
                 existing?.badge = badge
                 existing?.visibility = nodeVisibility(nodePath, visibility: visibility)
                 existing?.childrenState = childrenState(path: nodePath, isDir: isDir, lazyDirectories: lazyDirectories)
+                existing?.isSubmodule = submodules.contains(nodePath) && isDir
             }
         } else {
             let key = nodeKey(name: head, isDir: true)
@@ -111,10 +120,12 @@ enum FileTreeBuilder {
                 isDir: true,
                 badge: nil,
                 visibility: nodeVisibility(nodePath, visibility: visibility),
-                childrenState: childrenState(path: nodePath, isDir: true, lazyDirectories: lazyDirectories)
+                childrenState: childrenState(path: nodePath, isDir: true, lazyDirectories: lazyDirectories),
+                isSubmodule: submodules.contains(nodePath)
             )
             dir.visibility = nodeVisibility(nodePath, visibility: visibility)
             dir.childrenState = childrenState(path: nodePath, isDir: true, lazyDirectories: lazyDirectories)
+            dir.isSubmodule = submodules.contains(nodePath)
             map[key] = dir
             insert(
                 parts: Array(parts.dropFirst()),
@@ -125,6 +136,7 @@ enum FileTreeBuilder {
                 directories: directories,
                 lazyDirectories: lazyDirectories,
                 nestedDirectories: nestedDirectories,
+                submodules: submodules,
                 prefix: nodePath
             )
         }
@@ -135,7 +147,8 @@ enum FileTreeBuilder {
         path: String,
         into map: inout [String: TreeBuildNode],
         visibility: [String: FileVisibility],
-        lazyDirectories: Set<String>
+        lazyDirectories: Set<String>,
+        submodules: Set<String>
     ) {
         let key = nodeKey(name: name, isDir: true)
         let dir = map[key] ?? TreeBuildNode(
@@ -144,10 +157,12 @@ enum FileTreeBuilder {
             isDir: true,
             badge: nil,
             visibility: nodeVisibility(path, visibility: visibility),
-            childrenState: childrenState(path: path, isDir: true, lazyDirectories: lazyDirectories)
+            childrenState: childrenState(path: path, isDir: true, lazyDirectories: lazyDirectories),
+            isSubmodule: submodules.contains(path)
         )
         dir.visibility = nodeVisibility(path, visibility: visibility)
         dir.childrenState = childrenState(path: path, isDir: true, lazyDirectories: lazyDirectories)
+        dir.isSubmodule = submodules.contains(path)
         map[key] = dir
     }
 
@@ -199,7 +214,8 @@ enum FileTreeBuilder {
                 children: kids,
                 badge: node.badge,
                 visibility: node.visibility,
-                childrenState: node.childrenState
+                childrenState: node.childrenState,
+                isSubmodule: node.isSubmodule
             )
         }
     }

@@ -23,59 +23,71 @@ struct FilesTabView: View {
     }
 
     private func renderNode(_ node: FileTreeNode, depth: Int) -> AnyView {
-        if node.kind == .dir {
-            let open = openPaths.contains(node.path)
-            return AnyView(
-                Group {
-                    Button {
-                        if open {
-                            openPaths.remove(node.path)
-                        } else {
-                            openPaths.insert(node.path)
-                            onLoadChildren(node.path)
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
-                            Icon(name: "folder", size: 11, color: folderColor(for: node, open: open))
-                            Text(node.name)
-                                .font(.system(size: 11.5, design: .monospaced))
-                                .foregroundColor(rowForeground(for: node))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            if isOffGit(node) {
-                                visibilityPill(node)
+                if node.kind == .dir {
+                    let open = openPaths.contains(node.path)
+                    let canExpand = !node.isSubmodule
+                    return AnyView(
+                        Group {
+                            Button {
+                                guard canExpand else { return }
+                                if open {
+                                    openPaths.remove(node.path)
+                                } else {
+                                    openPaths.insert(node.path)
+                                    onLoadChildren(node.path)
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if canExpand {
+                                        Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+                                    } else {
+                                        Color.clear.frame(width: 10, height: 10)
+                                    }
+                                    Icon(name: "folder", size: 11, color: folderColor(for: node, open: open))
+                                    Text(node.name)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundColor(rowForeground(for: node))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer()
+                                    if node.isSubmodule {
+                                        submodulePill
+                                    }
+                                    if let badge = node.badge {
+                                        StatusBadge(status: badge)
+                                    }
+                                    if isOffGit(node) {
+                                        visibilityPill(node)
+                                    }
+                                }
+                                .padding(.leading, CGFloat(12 + depth * 14))
+                                .padding(.trailing, 12)
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .opacity(isOffGit(node) ? 0.72 : 1.0)
+                                .overlay(alignment: .leading) {
+                                    if isOffGit(node) {
+                                        ghostRail(depth: depth)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            if open && canExpand {
+                                switch node.childrenState {
+                                case .loading:
+                                    treeMessage("Loading...", depth: depth + 1)
+                                    renderChildren(of: node, depth: depth + 1)
+                                case .failed:
+                                    treeMessage("Could not load children", depth: depth + 1)
+                                    renderChildren(of: node, depth: depth + 1)
+                                case .loaded:
+                                    renderChildren(of: node, depth: depth + 1)
+                                case .notLoaded:
+                                    EmptyView()
+                                }
                             }
                         }
-                        .padding(.leading, CGFloat(12 + depth * 14))
-                        .padding(.trailing, 12)
-                        .padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .opacity(isOffGit(node) ? 0.72 : 1.0)
-                        .overlay(alignment: .leading) {
-                            if isOffGit(node) {
-                                ghostRail(depth: depth)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    if open {
-                        switch node.childrenState {
-                        case .loading:
-                            treeMessage("Loading...", depth: depth + 1)
-                            renderChildren(of: node, depth: depth + 1)
-                        case .failed:
-                            treeMessage("Could not load children", depth: depth + 1)
-                            renderChildren(of: node, depth: depth + 1)
-                        case .loaded:
-                            renderChildren(of: node, depth: depth + 1)
-                        case .notLoaded:
-                            EmptyView()
-                        }
-                    }
-                }
                 .task(id: loadTaskID(for: node, open: open)) {
                     if shouldAutoLoadChildren(for: node, open: open) {
                         onLoadChildren(node.path)
@@ -182,6 +194,16 @@ struct FilesTabView: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .background(theme.color("bg-4").opacity(0.75))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+
+    private var submodulePill: some View {
+        Text("submodule")
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundColor(theme.color("submodule"))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(theme.color("submodule").opacity(0.18))
             .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 

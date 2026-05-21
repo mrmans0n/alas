@@ -58,6 +58,7 @@ struct FileTreeNode: Identifiable, Equatable, Codable {
     var badge: String?        // "A"|"M"|"D"|"R" if status non-empty
     var visibility: FileVisibility = .tracked
     var childrenState: DirectoryChildrenState = .loaded
+    var isSubmodule: Bool = false
 
     enum Kind: String, Codable { case dir, file }
 }
