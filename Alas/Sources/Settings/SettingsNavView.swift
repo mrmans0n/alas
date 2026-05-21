@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case agents, appearance, changes, code, shortcuts, terminal, worktrees, advanced
+    case advanced, agents, appearance, changes, code, shortcuts, terminal, worktrees
     var id: String { rawValue }
     var label: String {
         switch self {

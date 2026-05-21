@@ -715,11 +715,14 @@ final class AppState {
     func clearProjectsWithoutWorktrees() async -> Int {
         var staleProjectIds: [String] = []
         for project in projects {
-            let didRefresh = (try? await projectsManager.refreshWorktrees(projectId: project.id)) != nil
-            if !didRefresh, !FileManager.default.fileExists(atPath: project.path) {
+            do {
+                try await projectsManager.refreshWorktrees(projectId: project.id)
+            } catch {
+                guard !FileManager.default.fileExists(atPath: project.path) else { continue }
                 staleProjectIds.append(project.id)
                 continue
             }
+
             if projectsManager.worktrees(projectId: project.id).isEmpty {
                 staleProjectIds.append(project.id)
             }

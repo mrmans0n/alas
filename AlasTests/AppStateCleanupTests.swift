@@ -456,6 +456,29 @@ struct AppStateCleanupTests {
         #expect(state.projects.isEmpty)
     }
 
+    @Test func clearProjectsWithoutWorktreesKeepsProjectWhenRefreshFailsButPathExists() async throws {
+        let nonRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-refresh-fails-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: nonRepo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: nonRepo) }
+
+        let project = ProjectConfig(
+            id: UUID().uuidString,
+            name: "non-repo",
+            path: nonRepo.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project]))
+        )
+
+        let removed = await state.clearProjectsWithoutWorktrees()
+
+        #expect(removed == 0)
+        #expect(state.projects.map(\.id) == [project.id])
+    }
+
     @Test func removeProjectResetsSelectionWhenSelectedWorktreeIsRemoved() async throws {
         let repoA = try await makeRepo(name: "remove-sel-a")
         let repoB = try await makeRepo(name: "remove-sel-b")
