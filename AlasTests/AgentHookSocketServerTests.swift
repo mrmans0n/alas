@@ -57,6 +57,22 @@ struct AgentHookSocketServerTests {
         #expect(received?.sessionId == "s1")
     }
 
+    @Test func aliasEnvelope_dispatchesMappedEvent() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/test.sock"
+        let server = AgentHookSocketServer(socketPath: path)
+        defer { server.shutdown() }
+
+        let json = #"{"v":1,"event":"SessionStart","agent":"claude","session_id":"s1","pid":123}"#
+        let (response, received) = try await awaitEvent(on: server, timeoutMs: 2000) {
+            try sendToSocket(path: path, payload: json)
+        }
+
+        #expect(response.contains("\"ok\":true") || response.contains("\"ok\": true"))
+        #expect(received?.event == .attached)
+    }
+
     @Test func malformedJSON_returnsError() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }

@@ -36,8 +36,35 @@ struct CodexInstallerTests {
         #expect(enableCalled)
         #expect(installer.installState() == .installed)
 
+        let installed = try JSONSerialization.jsonObject(with: Data(contentsOf: hooksURL)) as! [String: Any]
+        let installedHooks = installed["hooks"] as! [String: Any]
+        #expect(installedHooks["SessionStart"] != nil)
+        #expect(installedHooks["SessionEnd"] != nil)
+
         try installer.uninstall()
         #expect(installer.installState() == .notInstalled)
+    }
+
+    @Test func installState_missingLifecyclePlacement_outdated() async throws {
+        let (dir, cleanup) = tmpDir()
+        defer { cleanup() }
+        let hooksURL = dir.appendingPathComponent("hooks.json")
+        let configURL = dir.appendingPathComponent("config.toml")
+        try "[features]\nhooks = true\n".write(to: configURL, atomically: true, encoding: .utf8)
+
+        let installer = CodexInstaller(
+            hooksURL: hooksURL, configURL: configURL,
+            runEnableHooks: { .init(status: 0, stderr: "") }
+        )
+        try await installer.install()
+
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: hooksURL)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        hooks.removeValue(forKey: "SessionEnd")
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: hooksURL)
+
+        #expect(installer.installState() == .outdated)
     }
 
     /// Codex review (#102): a stale install with the right managed commands

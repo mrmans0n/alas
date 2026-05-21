@@ -1,10 +1,11 @@
+import AppKit
 import Testing
 @testable import Alas
 
 struct AgentBuiltinsTests {
-    @Test func catalogHasExactlySixEntriesInDeterministicOrder() {
+    @Test func catalogHasExactlySevenEntriesInDeterministicOrder() {
         let ids = AgentBuiltins.catalog.map(\.id)
-        #expect(ids == ["claude", "codex", "cursor-agent", "pi", "opencode", "gemini"])
+        #expect(ids == ["claude", "codex", "cursor-agent", "pi", "opencode", "gemini", "copilot"])
     }
 
     @Test func everyEntryIsMarkedBuiltin() {
@@ -41,6 +42,18 @@ struct AgentBuiltinsTests {
         #expect(e?.displayName == "Gemini CLI")
     }
 
+    @Test func copilotBuiltinMatchesRequiredDefinition() {
+        let e = AgentBuiltins.entry(id: "copilot")
+        #expect(e?.displayName == "Copilot")
+        #expect(e?.binary == "copilot")
+        #expect(e?.binaryOverride == nil)
+        #expect(e?.promptModeArgs == ["-i"])
+        #expect(e?.bypassPermissionsFlag == "--allow-tool=write")
+        #expect(e?.isBuiltin == true)
+        #expect(e?.isEnabled == true)
+        #expect(e?.builtinLogoAssetName == "agent-copilot")
+    }
+
     @Test func entryLookupReturnsNilForUnknownId() {
         #expect(AgentBuiltins.entry(id: "unknown-agent") == nil)
     }
@@ -51,9 +64,20 @@ struct AgentBuiltinsTests {
         }
     }
 
-    @Test func everyBuiltinHasLogoAssetName() {
+    @Test func everyBuiltinHasLogoAssetThatResolves() {
         for entry in AgentBuiltins.catalog {
-            #expect(entry.builtinLogoAssetName != nil, "\(entry.id) missing builtinLogoAssetName")
+            guard let name = entry.builtinLogoAssetName else {
+                #expect(Bool(false), "\(entry.id) missing builtinLogoAssetName")
+                continue
+            }
+            // bundle is the test bundle; NSImage(named:) falls back to the
+            // app-host main bundle, where the asset catalog is compiled.
+            let bundle = Bundle(for: AlasMarkerForBundle.self)
+            let image = bundle.image(forResource: name) ?? NSImage(named: name)
+            #expect(image != nil, "\(entry.id) logo asset '\(name)' not found in main bundle")
         }
     }
 }
+
+/// Marker used to locate the Alas test host bundle from inside Swift Testing.
+private final class AlasMarkerForBundle {}

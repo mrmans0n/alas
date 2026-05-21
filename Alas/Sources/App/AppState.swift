@@ -241,6 +241,8 @@ final class AppState {
     private let store: any PersistenceStoreProtocol
     @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
+    @ObservationIgnored
+    private let fileActionErrorHandler: (String, String) -> Void
 
     /// One FSEvents watcher per project, watching `<repo>/.git` to auto-refresh
     /// the sidebar when branches flip or worktrees appear/disappear externally.
@@ -250,10 +252,14 @@ final class AppState {
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
+        fileActionErrorHandler: ((String, String) -> Void)? = nil,
         terminalSessionOpener: TerminalSessionOpener? = nil
     ) {
         self.store = store
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
+            AppState.showWarningAlert(title: title, message: message)
+        }
+        self.fileActionErrorHandler = fileActionErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
         self.terminalSessionOpener = terminalSessionOpener
@@ -401,7 +407,20 @@ final class AppState {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
-        let optimisticId = Worktree.makeId(path: destination)
+        // Canonicalize once and use this URL everywhere downstream — both
+        // the optimistic row and the eventual `WorktreeService.add` return
+        // value derive their `id` from the path we hand in, so any
+        // divergence here would make `selectedWorktreeId` and terminal
+        // routing target a non-existent row after reconcile.
+        //
+        // resolvingSymlinksInPath only resolves links along path components
+        // that exist on disk; the leaf doesn't exist yet, so resolve the
+        // parent (which does) and reattach the leaf.
+        let canonicalDestination = destination
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(destination.lastPathComponent)
+        let optimisticId = Worktree.makeId(path: canonicalDestination)
         if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
             let isRetryingFailedCreate: Bool
             if case .createFailed = projectsManager.operationState(for: optimisticId) {
@@ -418,7 +437,7 @@ final class AppState {
             projectId: projectId,
             name: branch,
             branch: branch,
-            path: destination,
+            path: canonicalDestination,
             status: .clean,
             lastActivity: Date()
         )
@@ -436,7 +455,7 @@ final class AppState {
             do {
                 let newWorktree = try await Self.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: destination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
                 if runStartup && !startupScript.isEmpty {
@@ -537,6 +556,9 @@ final class AppState {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
+            if agent.id == AgentKind.copilot.rawValue {
+                try CopilotInstaller(projectRootURL: worktree.path).install()
+            }
             return try openTerminalTab(
                 for: worktree,
                 startupScriptSuffix: agentStartupCommand(for: agent, project: project)
@@ -607,8 +629,9 @@ final class AppState {
         startProjectGitWatcher(for: project)
     }
 
-    func removeProject(id: String) {
-        guard let project = projects.first(where: { $0.id == id }) else { return }
+    @discardableResult
+    func removeProject(id: String) -> Bool {
+        guard let project = projects.first(where: { $0.id == id }) else { return false }
 
         let mainId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
         let liveWorktrees = projectsManager.worktrees(projectId: id)
@@ -652,12 +675,12 @@ final class AppState {
             ) {
             case .save:
                 for entry in dirtyByWorktree {
-                    guard saveDirtyBuffers(in: entry.worktree) else { return }
+                    guard saveDirtyBuffers(in: entry.worktree) else { return false }
                 }
             case .discard:
                 break
             case .cancel:
-                return
+                return false
             }
         }
 
@@ -674,6 +697,43 @@ final class AppState {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
         }
+        return true
+    }
+
+    @discardableResult
+    func clearAllProjects() -> Int {
+        let ids = projects.map(\.id)
+        var removed = 0
+        for id in ids {
+            guard removeProject(id: id) else { break }
+            removed += 1
+        }
+        return removed
+    }
+
+    @discardableResult
+    func clearProjectsWithoutWorktrees() async -> Int {
+        var staleProjectIds: [String] = []
+        for project in projects {
+            do {
+                try await projectsManager.refreshWorktrees(projectId: project.id)
+            } catch {
+                guard !FileManager.default.fileExists(atPath: project.path) else { continue }
+                staleProjectIds.append(project.id)
+                continue
+            }
+
+            if projectsManager.worktrees(projectId: project.id).isEmpty {
+                staleProjectIds.append(project.id)
+            }
+        }
+
+        var removed = 0
+        for id in staleProjectIds {
+            guard removeProject(id: id) else { break }
+            removed += 1
+        }
+        return removed
     }
 
     /// Start a ProjectGitWatcher for `project` and wire its callbacks into
@@ -1404,7 +1464,12 @@ final class AppState {
     /// Open a file in the right-pane code editor by routing through the
     /// existing tabs system. Switches `selectedWorktreeId` if the file is
     /// in a different worktree.
-    func openFile(relativePath: String, worktreeId: String) {
+    func openFile(
+        relativePath: String,
+        worktreeId: String,
+        revealLine: Int? = nil,
+        revealCharacter: Int? = nil
+    ) {
         guard let worktree = worktree(withId: worktreeId) else { return }
         // Reject archived worktrees: their ids may still appear in some legacy
         // call sites (e.g. older persisted tabs). Selecting one would set
@@ -1418,19 +1483,12 @@ final class AppState {
             return
         }
 
-        let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .editor(let s) = tab { return s.relativePath == relativePath } else { return false }
-        }
-        if let existing {
-            tabs.activate(worktreeId: worktree.id, tabId: existing.id)
-        } else {
-            let tab = tabs.appendEditor(
-                worktreeId: worktree.id,
-                title: (relativePath as NSString).lastPathComponent,
-                relativePath: relativePath
-            )
-            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
-        }
+        _ = tabs.openEditor(
+            worktreeId: worktree.id,
+            relativePath: relativePath,
+            revealLine: revealLine,
+            revealCharacter: revealCharacter
+        )
     }
 
     /// Open a markdown relative-link target as a new editor tab in the same worktree.
@@ -1456,22 +1514,42 @@ final class AppState {
         }
         guard !path.isEmpty else { return false }
 
-        let absoluteURL: URL
+        let initialAbsoluteURL: URL
         if (path as NSString).isAbsolutePath {
-            absoluteURL = URL(fileURLWithPath: path).standardizedFileURL
+            initialAbsoluteURL = URL(fileURLWithPath: path).standardizedFileURL
         } else {
             let base = session.surface.currentWorkingDirectory ?? worktree.path
-            absoluteURL = base.appendingPathComponent(path).standardizedFileURL
+            initialAbsoluteURL = base.appendingPathComponent(path).standardizedFileURL
+        }
+
+        let target: TerminalOpenTarget
+        if FileManager.default.fileExists(atPath: initialAbsoluteURL.path) {
+            target = TerminalOpenTarget(url: initialAbsoluteURL, revealLine: nil, revealCharacter: nil)
+        } else if let parsed = Self.parseTerminalPathPosition(path) {
+            let url: URL
+            if (parsed.path as NSString).isAbsolutePath {
+                url = URL(fileURLWithPath: parsed.path).standardizedFileURL
+            } else {
+                let base = session.surface.currentWorkingDirectory ?? worktree.path
+                url = base.appendingPathComponent(parsed.path).standardizedFileURL
+            }
+            target = TerminalOpenTarget(
+                url: url,
+                revealLine: parsed.line - 1,
+                revealCharacter: (parsed.column ?? 1) - 1
+            )
+        } else {
+            target = TerminalOpenTarget(url: initialAbsoluteURL, revealLine: nil, revealCharacter: nil)
         }
 
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: absoluteURL.path, isDirectory: &isDirectory),
+        guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return false }
 
         // Resolve symlinks on both sides before the containment check so that
         // an in-tree symlink pointing outside the worktree (e.g.
         // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
-        let resolvedTarget = absoluteURL.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedTarget = target.url.resolvingSymlinksInPath().standardizedFileURL
         let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
         let rootComponents = resolvedRoot.pathComponents
         let targetComponents = resolvedTarget.pathComponents
@@ -1482,9 +1560,51 @@ final class AppState {
         let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
         guard !relativePath.isEmpty else { return false }
 
-        openFile(relativePath: relativePath, worktreeId: worktree.id)
+        openFile(
+            relativePath: relativePath,
+            worktreeId: worktree.id,
+            revealLine: target.revealLine,
+            revealCharacter: target.revealCharacter
+        )
         NSApp.activate(ignoringOtherApps: true)
         return true
+    }
+
+    private struct TerminalOpenTarget {
+        var url: URL
+        var revealLine: Int?
+        var revealCharacter: Int?
+    }
+
+    private struct TerminalPathPosition {
+        var path: String
+        var line: Int
+        var column: Int?
+    }
+
+    nonisolated private static func parseTerminalPathPosition(_ rawPath: String) -> TerminalPathPosition? {
+        guard let lineSplit = splitTrailingPositiveInteger(from: rawPath) else { return nil }
+        if let columnSplit = splitTrailingPositiveInteger(from: lineSplit.prefix) {
+            return TerminalPathPosition(
+                path: columnSplit.prefix,
+                line: columnSplit.value,
+                column: lineSplit.value
+            )
+        }
+        return TerminalPathPosition(path: lineSplit.prefix, line: lineSplit.value, column: nil)
+    }
+
+    nonisolated private static func splitTrailingPositiveInteger(from value: String) -> (prefix: String, value: Int)? {
+        guard let colon = value.lastIndex(of: ":") else { return nil }
+        let suffixStart = value.index(after: colon)
+        let suffix = value[suffixStart...]
+        guard !suffix.isEmpty,
+              suffix.allSatisfy(\.isNumber),
+              let number = Int(suffix),
+              number > 0 else { return nil }
+        let prefix = String(value[..<colon])
+        guard !prefix.isEmpty else { return nil }
+        return (prefix, number)
     }
 
     private func relativePath(for url: URL, in worktreeRoot: URL) throws -> String {
@@ -1510,7 +1630,7 @@ final class AppState {
     }
 
     private func showFileActionError(title: String, message: String) {
-        Self.showWarningAlert(title: title, message: message)
+        fileActionErrorHandler(title, message)
     }
 
     private static func showWarningAlert(title: String, message: String) {
@@ -1525,18 +1645,19 @@ final class AppState {
     /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
     /// failure sets `pendingForceDeleteWorktree` so SwiftUI can present a
     /// state-driven confirmation. Cleans up in-app state on success.
-    func deleteWorktree(_ worktree: Worktree) {
+    func deleteWorktree(_ worktree: Worktree, keepBranch: Bool = false) {
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         let saveBuffersFirst: Bool
         if dirty.isEmpty {
-            guard confirmDeleteWorktree(branch: worktree.branch) else { return }
+            guard confirmDeleteWorktree(branch: worktree.branch, keepBranch: keepBranch) else { return }
             saveBuffersFirst = false
         } else {
             switch promptForDirtyBuffers(
                 action: "Delete",
                 branch: worktree.branch,
                 dirtyCount: dirty.count,
-                onDiskDestructive: true
+                onDiskDestructive: true,
+                keepBranch: keepBranch
             ) {
             case .save: saveBuffersFirst = true
             case .discard: saveBuffersFirst = false
@@ -1551,7 +1672,10 @@ final class AppState {
             return
         }
         let repoPath = URL(fileURLWithPath: project.path)
-        let deleteBranch = config.worktrees.deleteBranchOnRemove
+        let deleteBranch = Self.resolveDeleteBranchIfMerged(
+            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+            keepBranch: keepBranch
+        )
 
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
@@ -1685,6 +1809,16 @@ final class AppState {
         }.value
     }
 
+    /// Resolve whether `git branch -d` should run after `git worktree remove`.
+    /// `keepBranch == true` (a per-operation override) always wins — the local
+    /// branch is preserved regardless of the global setting.
+    nonisolated static func resolveDeleteBranchIfMerged(
+        globalDeleteOnRemove: Bool,
+        keepBranch: Bool
+    ) -> Bool {
+        globalDeleteOnRemove && !keepBranch
+    }
+
     /// Permissive substring check: git's exact wording around dirty/submodule
     /// worktrees varies by version. If the match misses, the caller surfaces
     /// the raw stderr instead, which is acceptable degradation.
@@ -1705,10 +1839,12 @@ final class AppState {
         return nil
     }
 
-    private func confirmDeleteWorktree(branch: String) -> Bool {
+    private func confirmDeleteWorktree(branch: String, keepBranch: Bool) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Delete worktree '\(branch)'?"
-        alert.informativeText = "This removes its files from disk. The local branch will be deleted if merged."
+        alert.informativeText = keepBranch
+            ? "This removes its files from disk. The local branch will be kept."
+            : "This removes its files from disk. The local branch will be deleted if merged."
         alert.alertStyle = .warning
         let deleteButton = alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
@@ -1738,16 +1874,22 @@ final class AppState {
         action: String,
         branch: String,
         dirtyCount: Int,
-        onDiskDestructive: Bool
+        onDiskDestructive: Bool,
+        keepBranch: Bool = false
     ) -> DirtyBufferChoice {
         let alert = NSAlert()
         alert.messageText = "\(action) worktree '\(branch)'?"
         let countSentence = dirtyCount == 1
             ? "1 file has unsaved changes."
             : "\(dirtyCount) files have unsaved changes."
-        let actionSentence = onDiskDestructive
-            ? "This removes its files from disk. The local branch will be deleted if merged."
-            : "The worktree itself stays on disk."
+        let actionSentence: String
+        if onDiskDestructive {
+            actionSentence = keepBranch
+                ? "This removes its files from disk. The local branch will be kept."
+                : "This removes its files from disk. The local branch will be deleted if merged."
+        } else {
+            actionSentence = "The worktree itself stays on disk."
+        }
         alert.informativeText = "\(countSentence) Saving will write them to disk; discarding will lose them. \(actionSentence)"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Save & \(action)")

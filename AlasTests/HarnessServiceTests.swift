@@ -3,6 +3,7 @@ import Foundation
 import UserNotifications
 @testable import Alas
 
+@Suite(.serialized)
 struct HarnessServiceTests {
     private func makeEvent(
         event: ActivityEvent, agent: AgentKind = .claude,
@@ -26,6 +27,29 @@ struct HarnessServiceTests {
         let collector = RequestCollector()
         service.notifications.notificationAdder = { collector.requests.append($0) }
         return (service, collector)
+    }
+
+    private func waitForMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func waitForActivity(
+        _ service: HarnessService,
+        sessionId: String = "session-1",
+        where predicate: @escaping (HarnessService.HarnessActivityState?) -> Bool
+    ) async {
+        for _ in 0..<20 {
+            await waitForMainQueue()
+            if predicate(service.activityBySession[sessionId]) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        await waitForMainQueue()
     }
 
     @Test func awaitingNotificationPostsOnlyWhenEnteringAwaitingState() {
@@ -84,6 +108,88 @@ struct HarnessServiceTests {
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         #expect(service.activityBySession["session-1"]?.lastBody == nil)
+    }
+
+    @Test func attachedSetsSessionBusy() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .attached, agent: .codex, body: "attached"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .busy)
+        #expect(service.activityBySession["session-1"]?.agent == .codex)
+        #expect(service.activityBySession["session-1"]?.lastBody == nil)
+    }
+
+    @Test func detachedRemovesSessionActivity() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .busy),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .detached),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["session-1"] == nil)
+    }
+
+    @Test func permissionRequestSetsStateBodyAndAwaitingSummary() {
+        let (service, _) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .busy, sessionId: "s1"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .permissionRequest, agent: .cursor, sessionId: "s2", body: "Allow command?"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(service.activityBySession["s2"]?.state == .permissionRequest)
+        #expect(service.activityBySession["s2"]?.lastBody == "Allow command?")
+
+        let summary = service.summary(forSessionIds: ["s1", "s2"])
+        #expect(summary?.state == .awaiting)
+        #expect(summary?.agent == .cursor)
+        #expect(summary?.primarySessionId == "s2")
+        #expect(summary?.runningSessionCount == 1)
+        #expect(summary?.awaitingSessionCount == 1)
+    }
+
+    @Test func permissionRequestPostsPermissionNotificationWithFallbackBody() {
+        let (service, collector) = makeService()
+        service.handleSocketEvent(
+            makeEvent(event: .permissionRequest, agent: .codex, body: nil),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { true }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .permissionRequest)
+        #expect(collector.requests.count == 1)
+        #expect(collector.requests[0].content.title == "Codex needs permission")
+        #expect(collector.requests[0].content.body == "Session is waiting for you.")
+    }
+
+    @Test func agentKindMapsToHarnessKind() {
+        #expect(AgentKind.claude.asHarnessKind == .claudeCode)
+        #expect(AgentKind.codex.asHarnessKind == .codex)
+        #expect(AgentKind.cursor.asHarnessKind == .cursor)
+        #expect(AgentKind.gemini.asHarnessKind == .gemini)
+        #expect(AgentKind.opencode.asHarnessKind == .opencode)
+        #expect(AgentKind.pi.asHarnessKind == .pi)
+        #expect(AgentKind.copilot.asHarnessKind == .copilot)
+    }
+
+    @Test func harnessKindMapsToAgentKind() {
+        #expect(HarnessKind.claudeCode.asAgentKind == .claude)
+        #expect(HarnessKind.codex.asAgentKind == .codex)
+        #expect(HarnessKind.cursor.asAgentKind == .cursor)
+        #expect(HarnessKind.gemini.asAgentKind == .gemini)
+        #expect(HarnessKind.opencode.asAgentKind == .opencode)
+        #expect(HarnessKind.pi.asAgentKind == .pi)
+        #expect(HarnessKind.copilot.asAgentKind == .copilot)
     }
 
     @Test func summary_returnsNil_whenIdsEmpty() {
@@ -173,7 +279,7 @@ struct HarnessServiceTests {
         )
         #expect(service.activityBySession["session-1"]?.state == .busy)
 
-        try await Task.sleep(nanoseconds: 80_000_000) // 80 ms > 50 ms
+        await waitForActivity(service) { $0?.state == .idle }
         #expect(service.activityBySession["session-1"]?.state == .idle)
     }
 
@@ -194,7 +300,7 @@ struct HarnessServiceTests {
             shouldNotifyOnAwaiting: { false }
         )
 
-        try await Task.sleep(nanoseconds: 80_000_000)
+        await waitForActivity(service) { $0?.state == .idle && $0?.lastBody == "second" }
         #expect(service.activityBySession["session-1"]?.state == .idle)
         #expect(service.activityBySession["session-1"]?.lastBody == "second")
         #expect(collector.requests.count == 1)
@@ -217,7 +323,8 @@ struct HarnessServiceTests {
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
 
-        try await Task.sleep(nanoseconds: 80_000_000)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        await waitForMainQueue()
         #expect(service.activityBySession["session-1"]?.state == .busy)
     }
 
@@ -236,8 +343,30 @@ struct HarnessServiceTests {
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
 
-        try await Task.sleep(nanoseconds: 80_000_000)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        await waitForMainQueue()
         #expect(service.activityBySession["session-1"]?.state == .awaitingInput)
+    }
+
+    @Test func cursorIdleDebounce_isCancelledByPermissionRequest() async throws {
+        let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
+        service.handleSocketEvent(
+            makeEvent(event: .busy, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .idle, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+        service.handleSocketEvent(
+            makeEvent(event: .permissionRequest, agent: .cursor),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        await waitForActivity(service) { $0?.state == .permissionRequest }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        await waitForMainQueue()
+        #expect(service.activityBySession["session-1"]?.state == .permissionRequest)
     }
 
     @Test func claudeIdle_isNotDebounced() {
@@ -265,7 +394,8 @@ struct HarnessServiceTests {
         )
         service.forgetSession("session-1")
 
-        try await Task.sleep(nanoseconds: 80_000_000)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        await waitForMainQueue()
         #expect(service.activityBySession["session-1"] == nil)
     }
 }

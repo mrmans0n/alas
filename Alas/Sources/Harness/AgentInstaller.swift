@@ -21,11 +21,18 @@ struct AgentInstallerRegistry: Sendable {
             ClaudeInstaller(),
             CodexInstaller(),
             CursorInstaller(),
+            GeminiInstaller(),
+            OpenCodeInstaller(),
+            PiInstaller(),
         ]
     }
 
     init(installers: [any AgentInstaller]) {
         self.installers = installers
+    }
+
+    var supportedAgents: [AgentKind] {
+        installers.map(\.agent)
     }
 
     func installer(for agent: AgentKind) -> (any AgentInstaller)? {

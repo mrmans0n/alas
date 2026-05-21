@@ -6,8 +6,10 @@ import AppKit
 struct MarkdownRendererTests {
     static func render(_ source: String) throws -> MarkdownRenderResult {
         let theme = try Theme.loadBundled(id: "cool-slate")
+        let parsed = MarkdownParser.parse(source)
         return MarkdownRenderer().render(
-            document: MarkdownParser.parse(source),
+            document: parsed.document,
+            frontmatter: parsed.frontmatter,
             theme: theme,
             monospacedFontFamily: "SF Mono",
             monospacedFontSize: 13,
@@ -226,6 +228,52 @@ struct MarkdownRendererTests {
         #expect(headerBlock?.borderColor(for: .minX) != nil)
     }
 
+    @Test func rendersFrontmatterAsNativeMetadataTable() throws {
+        let r = try MarkdownRendererTests.render("""
+        ---
+        title: Example
+        date: 2026-05-21
+        ---
+
+        # Body
+        """)
+        let s = r.attributedString.string
+
+        #expect(s.contains("Key"))
+        #expect(s.contains("Value"))
+        #expect(s.contains("title"))
+        #expect(s.contains("Example"))
+        #expect(s.contains("Body"))
+        #expect(!s.contains("---"))
+
+        let keyBlock = tableBlock(at: "Key", in: r.attributedString)
+        let titleBlock = tableBlock(at: "title", in: r.attributedString)
+        let exampleBlock = tableBlock(at: "Example", in: r.attributedString)
+        #expect(keyBlock != nil)
+        #expect(titleBlock != nil)
+        #expect(exampleBlock != nil)
+        #expect(keyBlock?.startingRow == 0)
+        #expect(titleBlock?.startingRow == 1)
+        #expect(exampleBlock?.startingColumn == 1)
+        #expect(keyBlock?.backgroundColor != nil)
+        #expect(titleBlock?.borderColor(for: .minX) != nil)
+    }
+
+    @Test func renderingWithoutFrontmatterStaysUnchanged() throws {
+        let withNoFrontmatter = try MarkdownRendererTests.render("Hello\n\n---\n\nWorld")
+        let directDocument = MarkdownParser.parseDocument("Hello\n\n---\n\nWorld")
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let direct = MarkdownRenderer().render(
+            document: directDocument,
+            theme: theme,
+            monospacedFontFamily: "SF Mono",
+            monospacedFontSize: 13,
+            baseDirectory: URL(fileURLWithPath: "/tmp")
+        )
+
+        #expect(withNoFrontmatter.attributedString.string == direct.attributedString.string)
+    }
+
     @Test func tableCellsPreserveInlineMarkdownAttributes() throws {
         let source = """
         | Link | Styled |
@@ -323,7 +371,7 @@ struct MarkdownRendererTests {
 
         let theme = try Theme.loadBundled(id: "cool-slate")
         let r = MarkdownRenderer().render(
-            document: MarkdownParser.parse("![alt](dot.png)"),
+            document: MarkdownParser.parseDocument("![alt](dot.png)"),
             theme: theme,
             monospacedFontFamily: "SF Mono",
             monospacedFontSize: 13,
@@ -337,7 +385,7 @@ struct MarkdownRendererTests {
     @Test func rendersRemoteImagePlaceholderAndRecordsRef() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let r = MarkdownRenderer().render(
-            document: MarkdownParser.parse("![logo](https://example.com/logo.png)"),
+            document: MarkdownParser.parseDocument("![logo](https://example.com/logo.png)"),
             theme: theme,
             monospacedFontFamily: "SF Mono",
             monospacedFontSize: 13,

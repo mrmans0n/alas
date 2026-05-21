@@ -31,8 +31,16 @@ struct ClaudeInstallerTests {
         try await installer.install()
         #expect(installer.installState() == .installed)
 
+        let installed = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let installedHooks = installed["hooks"] as! [String: Any]
+        #expect(installedHooks["SessionStart"] != nil)
+        #expect(installedHooks["SessionEnd"] != nil)
+        #expect(installedHooks["PermissionRequest"] != nil)
+        let notifications = installedHooks["Notification"] as! [[String: Any]]
+        #expect(notifications[0]["matcher"] as? String == "idle_prompt|elicitation_dialog")
+
         // Third-party entry survives
-        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var json = installed
         var hooks = json["hooks"] as! [String: Any]
         var stopEntries = hooks["Stop"] as! [[String: Any]]
         stopEntries.append(["hooks": [["type": "command", "command": "/usr/local/bin/my-hook"]]])
@@ -68,6 +76,21 @@ struct ClaudeInstallerTests {
             json["hooks"] = hooks
             try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
         }
+
+        #expect(installer.installState() == .outdated)
+    }
+
+    @Test func installState_missingLifecyclePlacement_outdated() async throws {
+        let (url, cleanup) = tmpSettingsURL()
+        defer { cleanup() }
+        let installer = ClaudeInstaller(settingsURL: url)
+        try await installer.install()
+
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var hooks = json["hooks"] as! [String: Any]
+        hooks.removeValue(forKey: "SessionStart")
+        json["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted).write(to: url)
 
         #expect(installer.installState() == .outdated)
     }

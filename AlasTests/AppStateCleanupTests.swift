@@ -5,6 +5,23 @@ import Foundation
 @Suite(.serialized)
 @MainActor
 struct AppStateCleanupTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        var config: AppConfig? = nil
+        var projectsFile: ProjectsFile? = nil
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
+            if T.self == AppConfig.self {
+                return config as? T
+            }
+            if T.self == ProjectsFile.self {
+                return projectsFile as? T
+            }
+            return nil
+        }
+    }
+
     private func makeRepo(name: String) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleanup-\(name)-\(UUID().uuidString)")
@@ -287,6 +304,17 @@ struct AppStateCleanupTests {
         #expect(AppState.forceDeleteReason(for: "") == nil)
     }
 
+    @Test func resolveDeleteBranchIfMergedRespectsKeepBranchOverride() {
+        // Global on, no override → delete branch.
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: true, keepBranch: false) == true)
+        // Global on, override on → keep branch.
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: true, keepBranch: true) == false)
+        // Global off, no override → keep branch (existing behavior).
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: false, keepBranch: false) == false)
+        // Global off, override on → keep branch.
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: false, keepBranch: true) == false)
+    }
+
     @Test func cancelForceDeleteClearsPendingState() async throws {
         let repo = try await makeRepo(name: "cancel-force")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -334,6 +362,121 @@ struct AppStateCleanupTests {
 
         #expect(state.projects.contains(where: { $0.id == project.id }) == false)
         #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
+    }
+
+    @Test func clearAllProjectsRemovesEveryProject() async throws {
+        let repoA = try await makeRepo(name: "clear-all-a")
+        let repoB = try await makeRepo(name: "clear-all-b")
+        defer {
+            try? FileManager.default.removeItem(at: repoA)
+            try? FileManager.default.removeItem(at: repoB)
+        }
+
+        let state = AppState(store: MemoryStore())
+        let projectA = try await state.projectsManager.addProject(
+            path: repoA, displayName: "clearA", color: "#5fb7c4"
+        )
+        let projectB = try await state.projectsManager.addProject(
+            path: repoB, displayName: "clearB", color: "#c89d6f"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: projectA.id)
+        try await state.projectsManager.refreshWorktrees(projectId: projectB.id)
+
+        let worktreeId = try #require(state.projectsManager.worktrees(projectId: projectA.id).first?.id)
+        state.selectedWorktreeId = worktreeId
+        state.tabs.appendTerminal(worktreeId: worktreeId, title: "term", sessionId: "s1")
+
+        let removed = state.clearAllProjects()
+
+        #expect(removed == 2)
+        #expect(state.projects.isEmpty)
+        #expect(state.selectedWorktreeId == nil)
+        #expect(state.tabs.tabs(forWorktree: worktreeId).isEmpty)
+    }
+
+    @Test func clearProjectsWithoutWorktreesKeepsProjectsWithLiveWorktrees() async throws {
+        let repo = try await makeRepo(name: "clear-without-worktrees-keep")
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-missing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let liveProject = ProjectConfig(
+            id: UUID().uuidString,
+            name: "live",
+            path: repo.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let staleProject = ProjectConfig(
+            id: UUID().uuidString,
+            name: "stale",
+            path: missing.path,
+            color: "#c89d6f",
+            addedAt: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [liveProject, staleProject]))
+        )
+
+        let removed = await state.clearProjectsWithoutWorktrees()
+
+        #expect(removed == 1)
+        #expect(state.projects.map(\.id) == [liveProject.id])
+        #expect(state.projectsManager.worktrees(projectId: liveProject.id).isEmpty == false)
+    }
+
+    @Test func clearProjectsWithoutWorktreesRemovesMissingProjectWithStaleRows() async throws {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-missing-\(UUID().uuidString)")
+        let staleProject = ProjectConfig(
+            id: UUID().uuidString,
+            name: "stale",
+            path: missing.path,
+            color: "#c89d6f",
+            addedAt: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [staleProject]))
+        )
+        let staleWorktree = Worktree(
+            id: Worktree.makeId(path: missing),
+            projectId: staleProject.id,
+            name: "main",
+            branch: "main",
+            path: missing,
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager.insertOptimisticWorktree(staleWorktree)
+        #expect(state.projectsManager.worktrees(projectId: staleProject.id).isEmpty == false)
+
+        let removed = await state.clearProjectsWithoutWorktrees()
+
+        #expect(removed == 1)
+        #expect(state.projects.isEmpty)
+    }
+
+    @Test func clearProjectsWithoutWorktreesKeepsProjectWhenRefreshFailsButPathExists() async throws {
+        let nonRepo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-refresh-fails-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: nonRepo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: nonRepo) }
+
+        let project = ProjectConfig(
+            id: UUID().uuidString,
+            name: "non-repo",
+            path: nonRepo.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project]))
+        )
+
+        let removed = await state.clearProjectsWithoutWorktrees()
+
+        #expect(removed == 0)
+        #expect(state.projects.map(\.id) == [project.id])
     }
 
     @Test func removeProjectResetsSelectionWhenSelectedWorktreeIsRemoved() async throws {

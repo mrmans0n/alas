@@ -16,12 +16,11 @@ jobs:
     # main HEAD requirement). Submodule + zig@0.15 are required for the
     # Ghostty xcframework build.
     runs-on: macos-26
-    # Two notarytool --wait --timeout 30m calls in this job (one for the
-    # .app, one for the .dmg) can each consume up to 30 min if Apple's
-    # notary queue is slow, so worst-case notary time alone is 60 min.
-    # 90 min leaves ~30 min headroom for build/package/upload even when
-    # both notary submissions hit their per-call timeout.
-    timeout-minutes: 90
+    # Four notarytool --wait --timeout 30m calls in this job (one .app and
+    # one DMG per arch). Worst-case notary time alone is 120 min if Apple's
+    # queue is slow on all four submissions. 150 min leaves ~30 min headroom
+    # for build/package/upload even when every notary call hits its timeout.
+    timeout-minutes: 150
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v6
@@ -46,17 +45,22 @@ jobs:
         with:
           path: |
             .build/ghostty
+            ~/Library/Caches/Alas/GhosttyKit
           key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
-
-      - name: Build Ghostty xcframework
-        # Must run before xcodebuild — Xcode validates xcframework refs at
-        # build description time, before preBuildScripts run.
-        run: ./scripts/build-ghostty.sh
 
       - name: Generate project
         run: xcodegen
 
-      - name: Build release app
+      - name: Compute version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # --- arm64 pass -------------------------------------------------------
+      - name: Build Ghostty xcframework (arm64)
+        env:
+          ALAS_GHOSTTY_TARGET_ARCH: arm64
+        run: ./scripts/build-ghostty.sh
+
+      - name: Build release app (arm64)
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -configuration Release \
@@ -64,10 +68,7 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
-      - name: Compute version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-
-      - name: Sign + notarize + staple .app
+      - name: Sign + notarize + staple .app (arm64)
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD:   ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -77,15 +78,68 @@ jobs:
           MACOS_NOTARY_TEAM_ID:         ${{ secrets.MACOS_NOTARY_TEAM_ID }}
         run: ./scripts/sign-and-notarize.sh build/Build/Products/Release/Alas.app
 
-      - name: Package .app (zip + DMG)
+      - name: Package .app — arm64 (zip + DMG)
         run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app "Alas-${VERSION}-arm64"
 
-      - name: Notarize + staple DMG
+      - name: Notarize + staple DMG (arm64)
         env:
           MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
           MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
         run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-arm64.dmg"
+
+      # --- x86_64 pass ------------------------------------------------------
+      - name: Reset ghostty worktree + signing keychain for x86_64 pass
+        # Wipe the per-arch ghostty worktree dir + the Alas.app build product
+        # from the arm64 pass so the x86_64 xcodebuild writes a fresh Alas.app
+        # at the same DerivedData path. (Intermediate object files at
+        # build/Build/Intermediates.noindex/ are intentionally left alone —
+        # xcodebuild rebuilds arch-specific objects on its own.) The shared
+        # Ghostty cache at ~/Library/Caches/Alas/GhosttyKit is *not* wiped —
+        # the x86_64 build will hit it on subsequent CI runs.
+        # The signing keychain MUST also be wiped: sign-and-notarize.sh creates
+        # a keychain at a fixed path ($RUNNER_TEMP/signing.keychain-db) and
+        # `security create-keychain` errors when that file already exists, so
+        # the second pass would fail without this. cleanup-signing-keychain.sh
+        # is idempotent — calling it mid-run is safe; the final `if: always()`
+        # cleanup step at job end still runs against the x86_64 keychain.
+        run: |
+          rm -rf .build/ghostty
+          rm -rf build/Build/Products/Release/Alas.app
+          ./scripts/cleanup-signing-keychain.sh
+
+      - name: Build Ghostty xcframework (x86_64)
+        env:
+          ALAS_GHOSTTY_TARGET_ARCH: x86_64
+        run: ./scripts/build-ghostty.sh
+
+      - name: Build release app (x86_64)
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -configuration Release \
+            -derivedDataPath build \
+            -destination 'platform=macOS,arch=x86_64' \
+            -quiet build
+
+      - name: Sign + notarize + staple .app (x86_64)
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD:   ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY:       ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_NOTARY_APPLE_ID:        ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_APP_PASSWORD:    ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+          MACOS_NOTARY_TEAM_ID:         ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: ./scripts/sign-and-notarize.sh build/Build/Products/Release/Alas.app
+
+      - name: Package .app — x86_64 (zip + DMG)
+        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app "Alas-${VERSION}-x86_64"
+
+      - name: Notarize + staple DMG (x86_64)
+        env:
+          MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+          MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-x86_64.dmg"
 
       - name: Cleanup signing keychain
         if: always()
@@ -110,6 +164,8 @@ jobs:
           files: |
             build/Build/Products/Release/Alas-*-arm64.app.zip
             build/Build/Products/Release/Alas-*-arm64.dmg
+            build/Build/Products/Release/Alas-*-x86_64.app.zip
+            build/Build/Products/Release/Alas-*-x86_64.dmg
 
   update-homebrew:
     name: Update Homebrew Cask
@@ -123,10 +179,15 @@ jobs:
       - name: Get version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Download DMG and compute checksum
+      - name: Download DMGs and compute checksums
         run: |
-          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/Alas-${VERSION}-arm64.dmg" -o alas.dmg
-          echo "SHA_ARM=$(shasum -a 256 alas.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/Alas-${VERSION}-arm64.dmg" -o alas-arm64.dmg
+          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/Alas-${VERSION}-x86_64.dmg" -o alas-x86_64.dmg
+          # Both shasum lines emit just the digest; the cut prevents stray
+          # filename data from leaking into the env var (which update-cask.py
+          # validates regex-strictly).
+          echo "SHA_ARM=$(shasum -a 256 alas-arm64.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA_INTEL=$(shasum -a 256 alas-x86_64.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - name: Checkout homebrew-tap
         run: |

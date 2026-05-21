@@ -78,6 +78,8 @@ struct SidebarView: View {
                                 },
                                 onArchive: { wt in state.archiveWorktree(wt) },
                                 onDelete: { wt in state.deleteWorktree(wt) },
+                                onDeleteKeepBranch: { wt in state.deleteWorktree(wt, keepBranch: true) },
+                                showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
                                 onActivateHarness: { wt in
                                     let ids = state.tabs.tabs(forWorktree: wt.id).flatMap { tab -> [String] in
                                         if case .terminal(let s) = tab { return s.root.leaves().map(\.sessionId) }

@@ -54,6 +54,21 @@ final class NotificationService {
         notificationAdder(req)
     }
 
+    func notifyHarnessPermission(agent: AgentKind, body: String?,
+                                 projectId: String, worktreeId: String, sessionId: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "\(agent.displayName) needs permission"
+        content.body = body ?? "Session is waiting for you."
+        content.sound = .default
+        content.userInfo = [
+            "projectId": projectId,
+            "worktreeId": worktreeId,
+            "sessionId": sessionId
+        ]
+        let req = UNNotificationRequest(identifier: "\(sessionId)-permission", content: content, trigger: nil)
+        notificationAdder(req)
+    }
+
     func notifyHarnessFinished(agent: AgentKind, body: String?,
                                projectId: String, worktreeId: String, sessionId: String) {
         guard enabled else { return }

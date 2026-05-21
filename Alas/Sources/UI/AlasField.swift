@@ -8,18 +8,20 @@ struct AlasField: View {
     var focusOnAppear: Bool = false
     var onSubmit: (() -> Void)? = nil
     var leadingIcon: String? = nil
+    var inputFilter: GitRefNameInputFilter? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
-        if focusOnAppear || onSubmit != nil {
+        if focusOnAppear || onSubmit != nil || inputFilter != nil {
             AlasNSTextField(
                 text: $text,
                 placeholder: placeholder,
                 monospaced: monospaced,
                 focusOnAppear: focusOnAppear,
-                onSubmit: onSubmit
+                onSubmit: onSubmit,
+                inputFilter: inputFilter
             )
-            .frame(height: 28)
+            .fieldChrome(theme: theme)
         } else {
             let field = TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
@@ -62,6 +64,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     var monospaced: Bool
     var focusOnAppear: Bool
     var onSubmit: (() -> Void)?
+    var inputFilter: GitRefNameInputFilter?
 
     func makeNSView(context: Context) -> AlasNSTextFieldView {
         let field = AlasNSTextFieldView()
@@ -82,6 +85,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: AlasNSTextFieldView, context: Context) {
+        context.coordinator.parent = self
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
@@ -110,17 +114,55 @@ private struct AlasNSTextField: NSViewRepresentable {
         }
 
         @objc func action(_ sender: NSTextField) {
-            if sender.stringValue != parent.text {
-                parent.text = sender.stringValue
+            let value = parent.inputFilter?.sanitize(sender.stringValue, mode: .editing) ?? sender.stringValue
+            if sender.stringValue != value {
+                sender.stringValue = value
+            }
+            if value != parent.text {
+                parent.text = value
             }
             parent.onSubmit?()
         }
 
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
-            if field.stringValue != parent.text {
-                parent.text = field.stringValue
+            let value = parent.inputFilter?.sanitize(field.stringValue, mode: .editing) ?? field.stringValue
+            if field.stringValue != value {
+                field.stringValue = value
             }
+            if value != parent.text {
+                parent.text = value
+            }
+        }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            shouldChangeCharactersIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            guard let inputFilter = parent.inputFilter, let replacementString else { return true }
+
+            let proposed = (textView.string as NSString)
+                .replacingCharacters(in: affectedCharRange, with: replacementString)
+            let sanitized = inputFilter.applyingReplacement(
+                to: textView.string,
+                range: affectedCharRange,
+                replacement: replacementString
+            )
+            guard sanitized != proposed else { return true }
+
+            textView.string = sanitized
+            let insertionLocation = min(
+                (sanitized as NSString).length,
+                affectedCharRange.location + (replacementString as NSString).length
+            )
+            textView.setSelectedRange(NSRange(location: insertionLocation, length: 0))
+            if let field = control as? NSTextField {
+                field.stringValue = sanitized
+            }
+            parent.text = sanitized
+            return false
         }
     }
 }

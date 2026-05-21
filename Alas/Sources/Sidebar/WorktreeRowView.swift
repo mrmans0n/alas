@@ -12,6 +12,8 @@ struct WorktreeRowView: View {
     let onRevealInFinder: () -> Void
     let onArchive: () -> Void
     let onDelete: () -> Void
+    let onDeleteKeepBranch: () -> Void
+    let showKeepBranchOption: Bool
     let onActivateHarness: () -> Void
     let onCopyError: (String) -> Void
     let onRemoveFailed: () -> Void
@@ -139,6 +141,9 @@ struct WorktreeRowView: View {
                 Divider()
                 Button("Archive", action: onArchive)
                 Button("Delete Worktree…", role: .destructive, action: onDelete)
+                if showKeepBranchOption {
+                    Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
+                }
             }
         }
     }

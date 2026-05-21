@@ -155,7 +155,7 @@ private struct AgentCard: View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    logo
+                    AgentLogoView(agent: agent)
                     Text(agent.displayName)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(theme.color("fg"))
@@ -184,19 +184,6 @@ private struct AgentCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private var logo: some View {
-        if let asset = agent.builtinLogoAssetName, NSImage(named: asset) != nil {
-            Image(asset)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 16, height: 16)
-        } else {
-            Icon(name: "sparkle", size: 14, color: theme.color("fg-muted"))
-                .frame(width: 16, height: 16)
-        }
     }
 
     @ViewBuilder

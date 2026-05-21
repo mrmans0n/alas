@@ -95,6 +95,19 @@ enum AgentBuiltins {
             isEnabled: true,
             builtinLogoAssetName: "agent-gemini"
         ),
+        // Recorded from the Task 5 built-in catalog requirements (2026-05-20).
+        // -i is the prompt-mode arg; --allow-tool=write scopes write access.
+        AgentDefinition(
+            id: "copilot",
+            displayName: "Copilot",
+            binary: "copilot",
+            binaryOverride: nil,
+            promptModeArgs: ["-i"],
+            bypassPermissionsFlag: "--allow-tool=write",
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-copilot"
+        ),
     ]
 
     /// Look up a catalog entry by id; nil for unknown ids.

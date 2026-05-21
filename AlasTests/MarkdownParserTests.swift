@@ -4,13 +4,13 @@ import Markdown
 
 struct MarkdownParserTests {
     @Test func parsesSimpleParagraph() {
-        let doc = MarkdownParser.parse("Hello, world.")
+        let doc = MarkdownParser.parseDocument("Hello, world.")
         #expect(doc.childCount == 1)
         #expect(doc.child(at: 0) is Paragraph)
     }
 
     @Test func parsesHeadings() {
-        let doc = MarkdownParser.parse("# Title")
+        let doc = MarkdownParser.parseDocument("# Title")
         let heading = doc.child(at: 0) as? Heading
         #expect(heading?.level == 1)
     }
@@ -21,12 +21,12 @@ struct MarkdownParserTests {
         | - | - |
         | 1 | 2 |
         """
-        let doc = MarkdownParser.parse(source)
+        let doc = MarkdownParser.parseDocument(source)
         #expect(doc.children.contains(where: { $0 is Table }))
     }
 
     @Test func parsesTaskList() {
-        let doc = MarkdownParser.parse("- [x] done\n- [ ] todo")
+        let doc = MarkdownParser.parseDocument("- [x] done\n- [ ] todo")
         let list = doc.child(at: 0) as? UnorderedList
         let items = list?.listItems.map { $0 } ?? []
         #expect(items.count == 2)
@@ -35,10 +35,136 @@ struct MarkdownParserTests {
     }
 
     @Test func parsesStrikethrough() {
-        let doc = MarkdownParser.parse("~~gone~~")
+        let doc = MarkdownParser.parseDocument("~~gone~~")
         // Walk down to find a Strikethrough node.
         let para = doc.child(at: 0) as? Paragraph
         let hasStrike = para?.children.contains(where: { $0 is Strikethrough }) ?? false
         #expect(hasStrike)
+    }
+
+    @Test func parsesLeadingFrontmatterEntries() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        title: "Release Notes"
+        date: 2026-05-21
+        draft: false
+        tags: [swift, markdown]
+        # ignored
+        ---
+
+        # Body
+        """)
+
+        #expect(parsed.frontmatter?.entries == [
+            MarkdownFrontmatterEntry(key: "title", value: "Release Notes"),
+            MarkdownFrontmatterEntry(key: "date", value: "2026-05-21"),
+            MarkdownFrontmatterEntry(key: "draft", value: "false"),
+            MarkdownFrontmatterEntry(key: "tags", value: "[swift, markdown]")
+        ])
+
+        let heading = parsed.document.child(at: 0) as? Heading
+        #expect(heading?.plainText == "Body")
+    }
+
+    @Test func leavesEmptyFrontmatterBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        ---
+
+        Body
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
+    @Test func leavesMalformedFrontmatterBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        invalid
+        ---
+
+        Body
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
+    @Test func leavesMixedYamlFrontmatterBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        title: Release Notes
+        tags:
+        - swift
+        ---
+
+        Body
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
+    @Test func parsesIndentedFrontmatterEntries() {
+        let parsed = MarkdownParser.parse("""
+        ---
+          title: Release Notes
+          draft: false
+        ---
+
+        # Body
+        """)
+
+        #expect(parsed.frontmatter?.entries == [
+            MarkdownFrontmatterEntry(key: "title", value: "Release Notes"),
+            MarkdownFrontmatterEntry(key: "draft", value: "false")
+        ])
+
+        let heading = parsed.document.child(at: 0) as? Heading
+        #expect(heading?.plainText == "Body")
+    }
+
+    @Test func leavesNestedYamlFrontmatterBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        author:
+          name: Bob
+        ---
+
+        Body
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
+    @Test func leavesIndentedFrontmatterLikeCodeBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("    ---\n    title: Example\n    ---\n\nBody")
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is CodeBlock }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
+    @Test func leavesDocumentsWithoutFrontmatterUnchanged() {
+        let parsed = MarkdownParser.parse("Hello\n\n---\n\nWorld")
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+    }
+
+    @Test func leavesUnclosedFrontmatterAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        title: Missing close
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
     }
 }

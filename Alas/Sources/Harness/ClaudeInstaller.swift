@@ -63,28 +63,39 @@ struct ClaudeInstaller: AgentInstaller, Sendable {
         events: [.awaitingInput], agent: .claude, forwardStdinAsBody: true)
     private static let idleAndNotify = AlasHookCommand.compositeCommand(
         events: [.idle], agent: .claude, forwardStdinAsBody: true)
+    private static let attached = AlasHookCommand.compositeCommand(
+        events: [.attached], agent: .claude, forwardStdinAsBody: false)
+    private static let detached = AlasHookCommand.compositeCommand(
+        events: [.detached], agent: .claude, forwardStdinAsBody: false)
+    private static let permissionRequest = AlasHookCommand.compositeCommand(
+        events: [.permissionRequest], agent: .claude, forwardStdinAsBody: false)
 
     private func hooksByEvent() -> [String: [[String: Any]]] {
         [
+            "SessionStart": [hookGroup(command: Self.attached)],
+            "SessionEnd": [hookGroup(command: Self.detached)],
             "UserPromptSubmit": [hookGroup(command: Self.busy)],
             "PreToolUse": [
                 hookGroup(command: Self.busy, matcher: ""),
                 hookGroup(command: Self.awaitingInput, matcher: "AskUserQuestion|ExitPlanMode"),
             ],
             "PostToolUse": [hookGroup(command: Self.busy, matcher: "")],
-            // Scope to input/permission-prompt notification types; an empty
+            "PermissionRequest": [hookGroup(command: Self.permissionRequest)],
+            // Scope to input notification types; an empty
             // matcher would fire on every Claude Notification (status updates,
             // background messages, etc.) and produce false "needs input"
             // notifications. Mirrors the filter the old wrapper script applied.
-            "Notification": [hookGroup(command: Self.awaitingInputAndNotify, matcher: "permission_prompt|idle_prompt|elicitation_dialog")],
+            // Permission prompts are handled by the dedicated PermissionRequest
+            // hook above so they do not double-emit awaiting-input state.
+            "Notification": [hookGroup(command: Self.awaitingInputAndNotify, matcher: "idle_prompt|elicitation_dialog")],
             // Stop fires when Claude finishes responding — the moment we want
             // to surface the "Claude finished" notification. Intentionally
-            // omit SessionEnd: it fires on /clear, /resume, logout, and
-            // session close (per Claude's hook docs), so sending idle there
-            // produces a false "finished" notification (and a duplicate
-            // after the last real Stop) for events that aren't actually
-            // response-completion. Process-exit teardown still happens
-            // naturally via HarnessService's detector clear.
+            // keep idle notification off SessionEnd: it fires on /clear,
+            // /resume, logout, and session close (per Claude's hook docs), so
+            // sending idle there produces a false "finished" notification
+            // (and a duplicate after the last real Stop) for events that
+            // aren't actually response-completion. The SessionEnd detached
+            // hook above still records lifecycle teardown.
             "Stop": [hookGroup(command: Self.idleAndNotify)],
         ]
     }

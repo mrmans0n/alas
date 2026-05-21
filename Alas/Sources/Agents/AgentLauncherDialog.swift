@@ -65,7 +65,7 @@ struct AgentLauncherDialog: View {
                     if rows.isEmpty {
                         emptyState
                     } else {
-                        ForEach(Array(rows.enumerated()), id: \.element.id) { idx, agent in
+                        ForEach(Array(rows.enumerated()), id: \.offset) { idx, agent in
                             AgentLauncherRow(
                                 agent: agent,
                                 isSelected: idx == appState.agentLauncher.selectedIndex,
@@ -75,7 +75,6 @@ struct AgentLauncherDialog: View {
                                 },
                                 onHover: { appState.agentLauncher.selectedIndex = idx }
                             )
-                            .id(idx)
                         }
                     }
                 }
@@ -174,7 +173,7 @@ private struct AgentLauncherRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            logo
+            AgentLogoView(agent: agent)
             Text(agent.displayName)
                 .font(.system(size: 13))
                 .foregroundColor(theme.color("fg"))
@@ -188,19 +187,6 @@ private struct AgentLauncherRow: View {
         .onTapGesture(perform: onTap)
         .onHover { hovering in
             if hovering { onHover() }
-        }
-    }
-
-    @ViewBuilder
-    private var logo: some View {
-        if let asset = agent.builtinLogoAssetName, NSImage(named: asset) != nil {
-            Image(asset)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 16, height: 16)
-        } else {
-            Icon(name: "sparkle", size: 14, color: theme.color("fg-muted"))
-                .frame(width: 16, height: 16)
         }
     }
 }
