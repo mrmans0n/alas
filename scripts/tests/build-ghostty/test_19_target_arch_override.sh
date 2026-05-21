@@ -30,3 +30,26 @@ assert_eq "$(stub_invocations)" "1" "shared cache hit for x86_64 skips zig"
 run_build_script ALAS_GHOSTTY_TARGET_ARCH=arm64
 assert_eq "$(stub_invocations)" "2" "different target arch forces rebuild"
 assert_dir_exists "${CACHE_DIR}/arm64"
+
+# Direct fingerprint comparison: confirms target_arch participates in the
+# fingerprint (catches regressions where someone removes target_arch from
+# print_fingerprint without breaking the count-based assertions above).
+fp_x86="$(env -i \
+  HOME="${SANDBOX}/home" \
+  PATH="${PATH}" \
+  SRCROOT="${SRCROOT}" \
+  ALAS_ZIG_BIN="${STUB_ZIG}" \
+  ALAS_GHOSTTY_CACHE_DIR="${CACHE_DIR}" \
+  ALAS_GHOSTTY_TARGET_ARCH=x86_64 \
+  "${BUILD_SCRIPT}" --print-fingerprint)"
+
+fp_arm="$(env -i \
+  HOME="${SANDBOX}/home" \
+  PATH="${PATH}" \
+  SRCROOT="${SRCROOT}" \
+  ALAS_ZIG_BIN="${STUB_ZIG}" \
+  ALAS_GHOSTTY_CACHE_DIR="${CACHE_DIR}" \
+  ALAS_GHOSTTY_TARGET_ARCH=arm64 \
+  "${BUILD_SCRIPT}" --print-fingerprint)"
+
+[ "${fp_x86}" != "${fp_arm}" ] || fail "fingerprint identical for x86_64 and arm64"
