@@ -1685,6 +1685,16 @@ final class AppState {
         }.value
     }
 
+    /// Resolve whether `git branch -d` should run after `git worktree remove`.
+    /// `keepBranch == true` (a per-operation override) always wins — the local
+    /// branch is preserved regardless of the global setting.
+    nonisolated static func resolveDeleteBranchIfMerged(
+        globalDeleteOnRemove: Bool,
+        keepBranch: Bool
+    ) -> Bool {
+        globalDeleteOnRemove && !keepBranch
+    }
+
     /// Permissive substring check: git's exact wording around dirty/submodule
     /// worktrees varies by version. If the match misses, the caller surfaces
     /// the raw stderr instead, which is acceptable degradation.
