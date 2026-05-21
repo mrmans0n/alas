@@ -99,4 +99,16 @@ struct AgentLauncherModelTests {
         #expect(model.selectedIndex == 0)
         #expect(model.scrollToSelectionTick == 0)
     }
+
+    @Test func realCatalogFilterCursorReturnsCursorAgentOnly() {
+        let model = AgentLauncherModel()
+        model.query = "cursor"
+        // Use the catalog the user actually sees, filtered to "enabled" set
+        // matching the bug report (claude / codex / cursor-agent).
+        let enabled = AgentBuiltins.catalog.filter {
+            ["claude", "codex", "cursor-agent"].contains($0.id)
+        }
+        let rows = model.rows(agents: enabled)
+        #expect(rows.map(\.id) == ["cursor-agent"])
+    }
 }
