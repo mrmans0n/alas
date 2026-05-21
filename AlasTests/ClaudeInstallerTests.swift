@@ -36,6 +36,8 @@ struct ClaudeInstallerTests {
         #expect(installedHooks["SessionStart"] != nil)
         #expect(installedHooks["SessionEnd"] != nil)
         #expect(installedHooks["PermissionRequest"] != nil)
+        let notifications = installedHooks["Notification"] as! [[String: Any]]
+        #expect(notifications[0]["matcher"] as? String == "idle_prompt|elicitation_dialog")
 
         // Third-party entry survives
         var json = installed
