@@ -89,9 +89,15 @@ struct CodexInstaller: AgentInstaller, Sendable {
         events: [.busy], agent: .codex, forwardStdinAsBody: false)
     private static let idleAndNotify = AlasHookCommand.compositeCommand(
         events: [.idle], agent: .codex, forwardStdinAsBody: true)
+    private static let attached = AlasHookCommand.compositeCommand(
+        events: [.attached], agent: .codex, forwardStdinAsBody: false)
+    private static let detached = AlasHookCommand.compositeCommand(
+        events: [.detached], agent: .codex, forwardStdinAsBody: false)
 
     private func hooksByEvent() -> [String: [[String: Any]]] {
         [
+            "SessionStart": [flatEntry(command: Self.attached)],
+            "SessionEnd": [flatEntry(command: Self.detached)],
             "UserPromptSubmit": [flatEntry(command: Self.busy)],
             "Stop": [flatEntry(command: Self.idleAndNotify)],
         ]

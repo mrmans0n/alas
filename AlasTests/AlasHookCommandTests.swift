@@ -40,6 +40,27 @@ struct AlasHookCommandTests {
         return obj
     }
 
+    private func runShellCommandWithoutAlasEnv(_ command: String) throws -> (status: Int32, stdout: String, stderr: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        proc.arguments = ["-c", command]
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "ALAS_SOCKET_PATH")
+        env.removeValue(forKey: "ALAS_SESSION_ID")
+        proc.environment = env
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        try proc.run()
+        proc.waitUntilExit()
+
+        let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (proc.terminationStatus, stdout, stderr)
+    }
+
     @Test func busyWithoutBody_producesSimpleCommand() {
         let cmd = AlasHookCommand.compositeCommand(
             events: [.busy], agent: .codex, forwardStdinAsBody: false
@@ -50,6 +71,63 @@ struct AlasHookCommandTests {
         #expect(cmd.contains("$ALAS_SOCKET_PATH"))
         #expect(cmd.hasSuffix(Self.sentinel))
         #expect(!cmd.contains("payload=$(cat"))
+    }
+
+    @Test func stdoutResponse_isAbsentByDefault() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy], agent: .codex, forwardStdinAsBody: false
+        )
+        #expect(!cmd.contains("printf '%s\\n'"))
+    }
+
+    @Test func stdoutResponse_printsBeforeHookDelivery() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy],
+            agent: .codex,
+            forwardStdinAsBody: false,
+            stdoutResponse: #"{"continue":true}"#
+        )
+        let responseStep = #"printf '%s\n' '{"continue":true}'"#
+        let deliveryStep = #"printf '{"v":1,"event":"busy""#
+
+        #expect(cmd.hasPrefix("{ \(responseStep);"))
+        #expect(cmd.contains(deliveryStep))
+        #expect(cmd.range(of: responseStep)!.lowerBound < cmd.range(of: deliveryStep)!.lowerBound)
+    }
+
+    @Test func stdoutResponse_printsWithoutAlasEnvironment() throws {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.permissionRequest],
+            agent: .cursor,
+            forwardStdinAsBody: false,
+            stdoutResponse: #"{"continue":true}"#
+        )
+
+        let result = try runShellCommandWithoutAlasEnv(cmd)
+
+        #expect(result.status == 0)
+        #expect(result.stdout == #"{"continue":true}"# + "\n")
+        #expect(result.stderr == "")
+    }
+
+    @Test func stdoutResponse_escapesSingleQuotes() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy],
+            agent: .codex,
+            forwardStdinAsBody: false,
+            stdoutResponse: "can't"
+        )
+        #expect(cmd.contains(#"printf '%s\n' 'can'\''t'"#))
+    }
+
+    @Test func stdoutResponse_preservesSentinelSuffix() {
+        let cmd = AlasHookCommand.compositeCommand(
+            events: [.busy],
+            agent: .codex,
+            forwardStdinAsBody: false,
+            stdoutResponse: "{}"
+        )
+        #expect(cmd.hasSuffix(Self.sentinel))
     }
 
     @Test func idleWithBody_includesPayloadExtraction() {

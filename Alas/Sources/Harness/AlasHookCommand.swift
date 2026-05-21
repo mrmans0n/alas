@@ -13,12 +13,13 @@ enum AlasHookCommand {
     static func compositeCommand(
         events: [ActivityEvent],
         agent: AgentKind,
-        forwardStdinAsBody: Bool
+        forwardStdinAsBody: Bool,
+        stdoutResponse: String? = nil
     ) -> String {
         precondition(!events.isEmpty, "compositeCommand needs at least one event")
 
         if events.count == 1, !forwardStdinAsBody {
-            return managed(envelopePipeline(event: events[0], agent: agent))
+            return managed(envelopePipeline(event: events[0], agent: agent), stdoutResponse: stdoutResponse)
         }
 
         // When forwardStdinAsBody is true, the LAST event carries the body and
@@ -39,11 +40,19 @@ enum AlasHookCommand {
         if forwardStdinAsBody {
             steps.append(bodyEnvelopePipeline(event: events.last!, agent: agent))
         }
-        return managed("{ \(steps.joined(separator: "; ")); }")
+        return managed("{ \(steps.joined(separator: "; ")); }", stdoutResponse: stdoutResponse)
     }
 
-    private static func managed(_ pipeline: String) -> String {
-        "\(envCheck) && \(pipeline) >/dev/null 2>&1 || true \(ownershipSentinel)"
+    private static func managed(_ pipeline: String, stdoutResponse: String? = nil) -> String {
+        guard let stdoutResponse else {
+            return "\(envCheck) && \(pipeline) >/dev/null 2>&1 || true \(ownershipSentinel)"
+        }
+        let responseStep = #"printf '%s\n' \#(singleQuoted(stdoutResponse))"#
+        return "{ \(responseStep); \(envCheck) && \(pipeline) >/dev/null 2>&1 || true; } \(ownershipSentinel)"
+    }
+
+    private static func singleQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: #"'\''"#))'"
     }
 
     private static func envelopePipeline(event: ActivityEvent, agent: AgentKind) -> String {
