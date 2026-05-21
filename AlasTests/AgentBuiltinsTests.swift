@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 @testable import Alas
 
@@ -63,9 +64,20 @@ struct AgentBuiltinsTests {
         }
     }
 
-    @Test func everyBuiltinHasLogoAssetName() {
+    @Test func everyBuiltinHasLogoAssetThatResolves() {
         for entry in AgentBuiltins.catalog {
-            #expect(entry.builtinLogoAssetName != nil, "\(entry.id) missing builtinLogoAssetName")
+            guard let name = entry.builtinLogoAssetName else {
+                #expect(Bool(false), "\(entry.id) missing builtinLogoAssetName")
+                continue
+            }
+            // bundle is the test bundle; NSImage(named:) falls back to the
+            // app-host main bundle, where the asset catalog is compiled.
+            let bundle = Bundle(for: AlasMarkerForBundle.self)
+            let image = bundle.image(forResource: name) ?? NSImage(named: name)
+            #expect(image != nil, "\(entry.id) logo asset '\(name)' not found in main bundle")
         }
     }
 }
+
+/// Marker used to locate the Alas test host bundle from inside Swift Testing.
+private final class AlasMarkerForBundle {}
