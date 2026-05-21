@@ -1,0 +1,89 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite(.serialized)
+@MainActor
+struct AppStateCreateWorktreeSymlinkTests {
+    private func makeRepo(name: String) async throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-symlink-\(name)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        return dir
+    }
+
+    /// Wait for the async `createWorktree` Task to clear the `.creating`
+    /// operation state, or fail the test if it never does.
+    private func waitForOperationToClear(
+        _ mgr: ProjectsManager,
+        id: String,
+        timeoutSeconds: Double = 10
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if mgr.operationState(for: id) == nil { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        Issue.record("Timed out waiting for operationState to clear for id \(id)")
+    }
+
+    @Test
+    func createWorktreeThroughSymlinkDoesNotDuplicateRow() async throws {
+        // Layout:
+        //   <tmp>/real/        — actual repo
+        //   <tmp>/link         — symlink → <tmp>/real
+        // The destination URL is built through `link`, so its un-resolved
+        // form differs from git's canonical output.
+        let realRepo = try await makeRepo(name: "real")
+        let parent = realRepo.deletingLastPathComponent()
+        let linkURL = parent.appendingPathComponent("link-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: realRepo)
+        defer {
+            try? FileManager.default.removeItem(at: linkURL)
+            try? FileManager.default.removeItem(at: realRepo)
+        }
+
+        let state = AppState()
+        // Register the project using the real (resolved) path so the
+        // project itself isn't the variable under test.
+        let project = try await state.projectsManager.addProject(
+            path: realRepo,
+            displayName: "symlink-repo",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        #expect(state.projectsManager.worktrees(projectId: project.id).count == 1)
+
+        // Destination URL routes through the symlink. The un-resolved
+        // form has parent = <tmp>/link; the resolved form has
+        // parent = <tmp>/real, which is what `git worktree list` will
+        // report.
+        let destinationThroughSymlink = linkURL.appendingPathComponent("wt-symlink")
+
+        let optimisticId = state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "symlink-branch",
+            destination: destinationThroughSymlink,
+            runStartup: false,
+            openTerminal: false
+        )
+        #expect(!optimisticId.isEmpty)
+
+        try await waitForOperationToClear(state.projectsManager, id: optimisticId)
+
+        // Exactly one row for the new branch, and no lingering
+        // `.creating` state on either the optimistic id or the
+        // canonical-path id.
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        let newRows = trees.filter { $0.branch == "symlink-branch" }
+        #expect(newRows.count == 1)
+        #expect(state.projectsManager.operationState(for: optimisticId) == nil)
+        let canonicalId = Worktree.makeId(
+            path: destinationThroughSymlink.resolvingSymlinksInPath()
+        )
+        #expect(state.projectsManager.operationState(for: canonicalId) == nil)
+    }
+}

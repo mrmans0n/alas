@@ -401,7 +401,11 @@ final class AppState {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
-        let optimisticId = Worktree.makeId(path: destination)
+        let canonicalDestination = destination
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(destination.lastPathComponent)
+        let optimisticId = Worktree.makeId(path: canonicalDestination)
         if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
             let isRetryingFailedCreate: Bool
             if case .createFailed = projectsManager.operationState(for: optimisticId) {
@@ -418,7 +422,7 @@ final class AppState {
             projectId: projectId,
             name: branch,
             branch: branch,
-            path: destination,
+            path: canonicalDestination,
             status: .clean,
             lastActivity: Date()
         )
