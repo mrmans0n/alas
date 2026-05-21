@@ -1525,11 +1525,11 @@ final class AppState {
     /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
     /// failure sets `pendingForceDeleteWorktree` so SwiftUI can present a
     /// state-driven confirmation. Cleans up in-app state on success.
-    func deleteWorktree(_ worktree: Worktree) {
+    func deleteWorktree(_ worktree: Worktree, keepBranch: Bool = false) {
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         let saveBuffersFirst: Bool
         if dirty.isEmpty {
-            guard confirmDeleteWorktree(branch: worktree.branch) else { return }
+            guard confirmDeleteWorktree(branch: worktree.branch, keepBranch: keepBranch) else { return }
             saveBuffersFirst = false
         } else {
             switch promptForDirtyBuffers(
@@ -1551,7 +1551,10 @@ final class AppState {
             return
         }
         let repoPath = URL(fileURLWithPath: project.path)
-        let deleteBranch = config.worktrees.deleteBranchOnRemove
+        let deleteBranch = Self.resolveDeleteBranchIfMerged(
+            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+            keepBranch: keepBranch
+        )
 
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
@@ -1715,10 +1718,12 @@ final class AppState {
         return nil
     }
 
-    private func confirmDeleteWorktree(branch: String) -> Bool {
+    private func confirmDeleteWorktree(branch: String, keepBranch: Bool) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Delete worktree '\(branch)'?"
-        alert.informativeText = "This removes its files from disk. The local branch will be deleted if merged."
+        alert.informativeText = keepBranch
+            ? "This removes its files from disk. The local branch will be kept."
+            : "This removes its files from disk. The local branch will be deleted if merged."
         alert.alertStyle = .warning
         let deleteButton = alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
