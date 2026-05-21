@@ -11,7 +11,7 @@ run_build_script ALAS_GHOSTTY_TARGET_ARCH=x86_64
 # Stub zig should have been invoked once and seen the -Dtarget flag.
 assert_eq "$(stub_invocations)" "1" "zig invoked once on cold build"
 target_seen="$(cat "${SANDBOX}/stub-zig.target.log" 2>/dev/null || echo '')"
-assert_eq "${target_seen}" "x86_64-macos" "stub-zig saw -Dtarget=x86_64-macos"
+assert_eq "${target_seen}" "x86_64-macos.14.0" "stub-zig saw -Dtarget=x86_64-macos.14.0 for x86_64 build"
 
 # Shared cache must be keyed under the TARGET arch, not the host arch.
 assert_dir_exists "${CACHE_DIR}/x86_64"
@@ -30,6 +30,8 @@ assert_eq "$(stub_invocations)" "1" "shared cache hit for x86_64 skips zig"
 run_build_script ALAS_GHOSTTY_TARGET_ARCH=arm64
 assert_eq "$(stub_invocations)" "2" "different target arch forces rebuild"
 assert_dir_exists "${CACHE_DIR}/arm64"
+target_seen_arm="$(cat "${SANDBOX}/stub-zig.target.log" 2>/dev/null || echo '')"
+assert_eq "${target_seen_arm}" "aarch64-macos.14.0" "stub-zig saw -Dtarget=aarch64-macos.14.0 for arm64 build (translated from Apple name)"
 
 # Direct fingerprint comparison: confirms target_arch participates in the
 # fingerprint (catches regressions where someone removes target_arch from

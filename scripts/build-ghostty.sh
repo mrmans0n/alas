@@ -145,11 +145,25 @@ build_and_install_local() {
       echo "error: zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN" >&2
       exit 1
     fi
+    # Zig uses the LLVM triple name `aarch64`, not Apple's `arm64`. Translate
+    # before passing to zig; everything else (cache path, fingerprint, env
+    # var) keeps the Apple name for consistency with `uname -m` and Xcode.
+    # Pin macOS 14.0 in the triple so the embedded LC_BUILD_VERSION minos is
+    # deterministic and matches project.yml's MACOSX_DEPLOYMENT_TARGET (14.0)
+    # — without this, the embedded minos floats with whatever floor zig
+    # picks for the bare `*-macos` triple, which is not stable across zig
+    # releases. Note: zig 0.15 requires at least a two-component version
+    # (14.0), not a bare major (14), to parse the triple correctly.
+    case "${target_arch}" in
+      arm64)  zig_arch="aarch64" ;;
+      x86_64) zig_arch="x86_64" ;;
+      *)      echo "error: unsupported target_arch '${target_arch}'" >&2; exit 1 ;;
+    esac
     "${zig_bin}" build \
       -Doptimize=ReleaseFast \
       -Demit-xcframework=true \
       -Dsentry=false \
-      -Dtarget="${target_arch}-macos" \
+      -Dtarget="${zig_arch}-macos.14.0" \
       --prefix "${ghostty_build_root}" \
       --cache-dir "${ghostty_local_cache_dir}" \
       --global-cache-dir "${ghostty_global_cache_dir}"
