@@ -18,11 +18,12 @@ enum AgentLifecycleEventMapper {
              "AfterTool",
              "userPromptSubmitted",
              "postToolUse",
+             "preToolUse",
              "task_started":
             return .busy
         case "PermissionRequest",
+             "permissionRequest",
              "PreToolUse",
-             "preToolUse",
              "exec_approval_request",
              "apply_patch_approval_request",
              "request_user_input":

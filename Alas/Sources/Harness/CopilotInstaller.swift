@@ -138,9 +138,30 @@ struct CopilotInstaller: Sendable {
         else {
             return nil
         }
-        return gitDirURL
+
+        let commonDirURL = try resolveCommonGitDirURL(from: gitDirURL) ?? gitDirURL
+        return commonDirURL
             .appendingPathComponent("info", isDirectory: true)
             .appendingPathComponent("exclude", isDirectory: false)
+    }
+
+    private func resolveCommonGitDirURL(from gitDirURL: URL) throws -> URL? {
+        let commonDirFileURL = gitDirURL.appendingPathComponent("commondir", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: commonDirFileURL.path) else { return nil }
+
+        let commonDirFile = try String(contentsOf: commonDirFileURL, encoding: .utf8)
+        guard let firstLine = commonDirFile.split(separator: "\n").first else { return nil }
+        let rawCommonDir = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawCommonDir.isEmpty else { return nil }
+
+        if rawCommonDir.hasPrefix("/") {
+            return URL(fileURLWithPath: rawCommonDir, isDirectory: true)
+        }
+        return URL(
+            fileURLWithPath: (gitDirURL.path as NSString)
+                .appendingPathComponent(rawCommonDir),
+            isDirectory: true
+        ).standardizedFileURL
     }
 
     private static let attached = AlasHookCommand.compositeCommand(

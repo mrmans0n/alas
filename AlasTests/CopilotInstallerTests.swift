@@ -106,10 +106,19 @@ struct CopilotInstallerTests {
     @Test func installAddsHookPathToLinkedWorktreeInfoExclude() throws {
         let (dir, cleanup) = tmpDir()
         defer { cleanup() }
-        let gitDir = dir.appendingPathComponent("actual-git-dir", isDirectory: true)
-        let infoURL = gitDir.appendingPathComponent("info", isDirectory: true)
-        try FileManager.default.createDirectory(at: infoURL, withIntermediateDirectories: true)
-        try "gitdir: actual-git-dir\n".write(
+        let mainGitDir = dir.appendingPathComponent("main-git-dir", isDirectory: true)
+        let worktreeGitDir = mainGitDir
+            .appendingPathComponent("worktrees", isDirectory: true)
+            .appendingPathComponent("linked", isDirectory: true)
+        let commonInfoURL = mainGitDir.appendingPathComponent("info", isDirectory: true)
+        try FileManager.default.createDirectory(at: commonInfoURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: worktreeGitDir, withIntermediateDirectories: true)
+        try "../..".write(
+            to: worktreeGitDir.appendingPathComponent("commondir", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "gitdir: main-git-dir/worktrees/linked\n".write(
             to: dir.appendingPathComponent(".git", isDirectory: false),
             atomically: true,
             encoding: .utf8
@@ -117,9 +126,12 @@ struct CopilotInstallerTests {
 
         try CopilotInstaller(projectRootURL: dir).install()
 
-        let excludeURL = infoURL.appendingPathComponent("exclude", isDirectory: false)
+        let excludeURL = commonInfoURL.appendingPathComponent("exclude", isDirectory: false)
         let exclude = try String(contentsOf: excludeURL, encoding: .utf8)
         #expect(exclude.contains(".github/hooks/alas-notify.json\n"))
+        #expect(!FileManager.default.fileExists(
+            atPath: worktreeGitDir.appendingPathComponent("info/exclude", isDirectory: false).path
+        ))
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(".git/info/exclude").path))
     }
 

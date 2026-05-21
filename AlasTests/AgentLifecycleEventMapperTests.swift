@@ -18,7 +18,9 @@ struct AgentLifecycleEventMapperTests {
 
     @Test func cursorAndSupersetStyleEvents_mapToLifecycleEvents() {
         #expect(AgentLifecycleEventMapper.map("userPromptSubmitted") == .busy)
+        #expect(AgentLifecycleEventMapper.map("preToolUse") == .busy)
         #expect(AgentLifecycleEventMapper.map("postToolUse") == .busy)
+        #expect(AgentLifecycleEventMapper.map("permissionRequest") == .permissionRequest)
         #expect(AgentLifecycleEventMapper.map("agentStop") == .idle)
         #expect(AgentLifecycleEventMapper.map("task_started") == .busy)
         #expect(AgentLifecycleEventMapper.map("task_complete") == .idle)
