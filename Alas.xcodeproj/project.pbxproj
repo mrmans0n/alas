@@ -362,6 +362,7 @@
 		D05BDEF0D8651A9C2BD8C857 /* Seg.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489C9B383554D7DAB170C2F8 /* Seg.swift */; };
 		D0F4A4F5BF5F1C3C625F11D9 /* Clipboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E6600436B01C75D85C01FFA /* Clipboard.swift */; };
 		D13AFC98364971915782491C /* ProjectConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */; };
+		D1C14B54BE27D97E354F448B /* ProcessGitDataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF741B889D6DC8B1F4EB350F /* ProcessGitDataTests.swift */; };
 		D1F372532A0F9607051020F5 /* HarnessDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F198697EB5305E5ECE97BC61 /* HarnessDetectorTests.swift */; };
 		D1FF11465D1309A56FCFFAF0 /* AppConfigCodeInstallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8ACFACD788DF2035534F62E /* AppConfigCodeInstallTests.swift */; };
 		D27A1F6D7592D6A4BDD9FC4F /* GitIgnoreServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EB58175A9A39073E9D73F85 /* GitIgnoreServiceTests.swift */; };
@@ -881,6 +882,7 @@
 		FE66950F2226F1182DCDD39A /* RightPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneView.swift; sourceTree = "<group>"; };
 		FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalPane.swift; sourceTree = "<group>"; };
 		FEC68B05B719B9235865027F /* ThreePaneSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneSizing.swift; sourceTree = "<group>"; };
+		FF741B889D6DC8B1F4EB350F /* ProcessGitDataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessGitDataTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1029,6 +1031,7 @@
 				295319DB8544C170DDD6328D /* PathsTests.swift */,
 				856607304A9F2409EF40BD5F /* PendingDiscardTests.swift */,
 				7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */,
+				FF741B889D6DC8B1F4EB350F /* ProcessGitDataTests.swift */,
 				5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */,
 				E1FD24B10ED0B3D4280F15E8 /* ProjectConfigAgentOverrideTests.swift */,
 				5B3FF64CC698074BFDE2A36A /* ProjectConfigTests.swift */,
@@ -2259,6 +2262,7 @@
 				497D21A67A062CE6282008CD /* PathsTests.swift in Sources */,
 				11B4AA1D032F054C666DD7F4 /* PendingDiscardTests.swift in Sources */,
 				EE4E9C47863C4306F0D88A2F /* PersistenceStoreTests.swift in Sources */,
+				D1C14B54BE27D97E354F448B /* ProcessGitDataTests.swift in Sources */,
 				7FC2A96DE87638A594DD8B61 /* ProcessGitTests.swift in Sources */,
 				636ED129478744F9169AD774 /* ProjectConfigAgentOverrideTests.swift in Sources */,
 				D13AFC98364971915782491C /* ProjectConfigTests.swift in Sources */,
