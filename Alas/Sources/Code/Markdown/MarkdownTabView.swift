@@ -208,9 +208,10 @@ struct MarkdownTabView: View {
                 if Task.isCancelled { return }
             }
             let source = buffer.storage.string
-            let doc = MarkdownParser.parse(source)
+            let parsed = MarkdownParser.parse(source)
             let result = MarkdownRenderer().render(
-                document: doc,
+                document: parsed.document,
+                frontmatter: parsed.frontmatter,
                 theme: theme,
                 monospacedFontFamily: fontFamily,
                 monospacedFontSize: fontSize,
