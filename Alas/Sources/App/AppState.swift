@@ -407,7 +407,20 @@ final class AppState {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
-        let optimisticId = Worktree.makeId(path: destination)
+        // Canonicalize once and use this URL everywhere downstream — both
+        // the optimistic row and the eventual `WorktreeService.add` return
+        // value derive their `id` from the path we hand in, so any
+        // divergence here would make `selectedWorktreeId` and terminal
+        // routing target a non-existent row after reconcile.
+        //
+        // resolvingSymlinksInPath only resolves links along path components
+        // that exist on disk; the leaf doesn't exist yet, so resolve the
+        // parent (which does) and reattach the leaf.
+        let canonicalDestination = destination
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(destination.lastPathComponent)
+        let optimisticId = Worktree.makeId(path: canonicalDestination)
         if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
             let isRetryingFailedCreate: Bool
             if case .createFailed = projectsManager.operationState(for: optimisticId) {
@@ -424,7 +437,7 @@ final class AppState {
             projectId: projectId,
             name: branch,
             branch: branch,
-            path: destination,
+            path: canonicalDestination,
             status: .clean,
             lastActivity: Date()
         )
@@ -442,7 +455,7 @@ final class AppState {
             do {
                 let newWorktree = try await Self.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: destination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
                 if runStartup && !startupScript.isEmpty {
