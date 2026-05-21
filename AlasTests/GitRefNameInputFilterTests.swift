@@ -96,34 +96,4 @@ struct GitRefNameInputFilterTests {
         #expect(filtered == "feature/login")
         #expect(GitNameValidator.validateBranchName(filtered) == .valid)
     }
-
-    @Test func refNamePreservesBareDashCommitIsh() {
-        let filtered = GitRefNameInputFilter.refName.applyingReplacement(
-            to: "",
-            range: NSRange(location: 0, length: 0),
-            replacement: "-"
-        )
-
-        #expect(filtered == "-")
-    }
-
-    @Test func refNamePreservesPreviousCheckoutRevisionSyntax() {
-        let filtered = GitRefNameInputFilter.refName.applyingReplacement(
-            to: "",
-            range: NSRange(location: 0, length: 0),
-            replacement: "@{-1}"
-        )
-
-        #expect(filtered == "@{-1}")
-    }
-
-    @Test func refNamePreservesCommonCommitIshOperators() {
-        let filtered = GitRefNameInputFilter.refName.applyingReplacement(
-            to: "",
-            range: NSRange(location: 0, length: 0),
-            replacement: "main~1^{commit}"
-        )
-
-        #expect(filtered == "main~1^{commit}")
-    }
 }

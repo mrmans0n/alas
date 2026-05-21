@@ -36,7 +36,7 @@ struct WorktreesPane: View {
                     }
                     SettingsRow(name: "Base branch",
                                 desc: "Default base branch for new worktrees; repo branches can be selected in the create dialog.") {
-                        AlasField(text: bind(\.worktrees.baseBranch), monospaced: true, inputFilter: .refName)
+                        AlasField(text: bind(\.worktrees.baseBranch), monospaced: true)
                     }
                 }
                 // trackUpstream / autoFetch / fetchIntervalMinutes / pruneStale
