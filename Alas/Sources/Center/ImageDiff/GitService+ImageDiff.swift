@@ -3,6 +3,60 @@ import Foundation
 import os
 
 extension GitService {
+    /// Commit variant. Returns the before/after `NSImage`s for an image
+    /// file changed in commit `sha`. The caller passes the
+    /// `CommitChangedFile` (which already carries status + originalPath)
+    /// to avoid re-running diff-tree.
+    ///
+    /// before = `git show <parent>:<oldPath>` (nil for added / initial-commit cases)
+    /// after  = `git show <sha>:<path>`        (nil for deleted)
+    func imageDiffPairForCommit(
+        worktreePath: URL,
+        sha: String,
+        file: CommitChangedFile
+    ) async throws -> ImageDiffPair {
+        let resolution = ImageDiffPairResolver.resolveCommit(entry: file)
+
+        // Parent. Empty for initial commits — handled below as no `before`.
+        let parentsResult = try await Process.git(
+            ["rev-list", "--parents", "-n", "1", sha], cwd: worktreePath
+        )
+        let parts = parentsResult.stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        let parentSha: String? = parts.count > 1 ? String(parts[1]) : nil
+
+        let beforePath = resolution.oldPath ?? file.path
+        let before: NSImage?
+        if let parentSha, resolution.kind != .added {
+            before = try await loadBlobImage(
+                worktreePath: worktreePath, ref: parentSha, path: beforePath
+            )
+        } else {
+            before = nil
+        }
+
+        let after: NSImage?
+        if resolution.kind != .deleted {
+            after = try await loadBlobImage(
+                worktreePath: worktreePath, ref: sha, path: file.path
+            )
+        } else {
+            after = nil
+        }
+
+        return ImageDiffPair(
+            before: before,
+            after: after,
+            oldPath: resolution.oldPath,
+            kind: resolution.kind,
+            beforeFrameCount: frameCount(for: before),
+            afterFrameCount: frameCount(for: after)
+        )
+    }
+}
+
+extension GitService {
     private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
 
     /// Working-copy variant. Returns the before/after `NSImage`s and the

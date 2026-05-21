@@ -116,4 +116,73 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.before != nil)
         #expect(pair.after != nil)
     }
+
+    @Test func loadsCommitImageDiffPairModified() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        try PngFixture.blue.write(to: pngURL)
+        _ = try await Process.git(["commit", "-q", "-am", "edit"], cwd: repo)
+        let sha = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let file = CommitChangedFile(
+            path: "logo.png", originalPath: nil, status: "M", add: 0, del: 0
+        )
+        let pair = try await GitService().imageDiffPairForCommit(
+            worktreePath: repo, sha: sha, file: file
+        )
+        #expect(pair.kind == .modified)
+        #expect(pair.before != nil)
+        #expect(pair.after != nil)
+    }
+
+    @Test func loadsCommitImageDiffPairAddedAtInitialCommit() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try PngFixture.green.write(to: repo.appendingPathComponent("new.png"))
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        let sha = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let file = CommitChangedFile(
+            path: "new.png", originalPath: nil, status: "A", add: 0, del: 0
+        )
+        let pair = try await GitService().imageDiffPairForCommit(
+            worktreePath: repo, sha: sha, file: file
+        )
+        #expect(pair.kind == .added)
+        #expect(pair.before == nil)
+        #expect(pair.after != nil)
+    }
+
+    @Test func loadsCommitImageDiffPairRenamed() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try PngFixture.red.write(to: repo.appendingPathComponent("old.png"))
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        // git mv records a 100%-similarity rename in the index; no need
+        // to also exercise the similarity heuristic.
+        _ = try await Process.git(["mv", "old.png", "new.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "rename"], cwd: repo)
+        let sha = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let file = CommitChangedFile(
+            path: "new.png", originalPath: "old.png", status: "R",
+            add: 0, del: 0
+        )
+        let pair = try await GitService().imageDiffPairForCommit(
+            worktreePath: repo, sha: sha, file: file
+        )
+        #expect(pair.kind == .renamed)
+        #expect(pair.oldPath == "old.png")
+        #expect(pair.before != nil)
+        #expect(pair.after != nil)
+    }
 }
