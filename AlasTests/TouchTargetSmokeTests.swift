@@ -59,6 +59,8 @@ struct TouchTargetSmokeTests {
             onNewTerminal: { },
             enabledAgents: [],
             onLaunchAgent: { _ in },
+            onRevealRightSidebar: { },
+            rightSidebarHidden: false,
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())
@@ -86,6 +88,47 @@ struct TouchTargetSmokeTests {
             onNewTerminal: { },
             enabledAgents: [],
             onLaunchAgent: { _ in },
+            onRevealRightSidebar: { },
+            rightSidebarHidden: false,
+            onMove: { _, _ in }
+        )
+        .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(controller.view != nil)
+    }
+
+    @Test func tabBarViewWithRightSidebarRevealRendersWithoutCrashing() {
+        let tab = Tab.editor(EditorTabState(
+            id: "t1",
+            title: "hello.swift",
+            relativePath: "hello.swift",
+            revealLine: nil,
+            revealCharacter: nil,
+            externalAbsolutePath: nil,
+            originatingRelativePath: nil,
+            markdownViewMode: nil,
+            markdownSplitFraction: nil
+        ))
+        let view = TabBarView(
+            tabs: [tab],
+            activeId: tab.id,
+            harnessLookup: { _ in nil },
+            dirtyLookup: { _ in false },
+            onActivate: { _ in },
+            onClose: { _ in },
+            onCloseOthers: { _ in },
+            onCloseAll: { },
+            onCloseToLeft: { _ in },
+            onCloseToRight: { _ in },
+            onCopyPath: { _ in },
+            onCopyRelativePath: { _ in },
+            onRenameTerminal: { _ in },
+            onNewTerminal: { },
+            enabledAgents: [],
+            onLaunchAgent: { _ in },
+            onRevealRightSidebar: { },
+            rightSidebarHidden: true,
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())

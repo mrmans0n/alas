@@ -3,8 +3,7 @@ import SwiftUI
 import AppKit
 @testable import Alas
 
-/// Smoke tests for SidebarHeaderView to guard against crashes when rendering
-/// with the right-sidebar reveal button visible and hidden.
+/// Smoke tests for SidebarHeaderView to guard against crashes when rendering.
 @Suite(.serialized)
 @MainActor
 struct SidebarHeaderViewTests {
@@ -12,27 +11,11 @@ struct SidebarHeaderViewTests {
         try! ThemeStore().current
     }
 
-    @Test func headerWithHiddenRightSidebarRendersWithoutCrashing() {
+    @Test func headerRendersWithoutCrashing() {
         let view = SidebarHeaderView(
             onSettings: {},
             onAddProject: {},
-            onSearch: {},
-            onRevealRightSidebar: {},
-            rightSidebarHidden: true
-        )
-        .environment(\.theme, currentTheme())
-        let controller = NSHostingController(rootView: view)
-        controller.view.layoutSubtreeIfNeeded()
-        #expect(controller.view != nil)
-    }
-
-    @Test func headerWithVisibleRightSidebarRendersWithoutCrashing() {
-        let view = SidebarHeaderView(
-            onSettings: {},
-            onAddProject: {},
-            onSearch: {},
-            onRevealRightSidebar: {},
-            rightSidebarHidden: false
+            onSearch: {}
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
