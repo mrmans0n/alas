@@ -65,7 +65,7 @@ struct AgentLauncherDialog: View {
                     if rows.isEmpty {
                         emptyState
                     } else {
-                        ForEach(Array(rows.enumerated()), id: \.element.id) { idx, agent in
+                        ForEach(Array(rows.enumerated()), id: \.offset) { idx, agent in
                             AgentLauncherRow(
                                 agent: agent,
                                 isSelected: idx == appState.agentLauncher.selectedIndex,
@@ -75,7 +75,6 @@ struct AgentLauncherDialog: View {
                                 },
                                 onHover: { appState.agentLauncher.selectedIndex = idx }
                             )
-                            .id(idx)
                         }
                     }
                 }
