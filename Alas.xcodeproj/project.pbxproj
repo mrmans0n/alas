@@ -251,6 +251,7 @@
 		89A5E5AD13431B6C9E16669B /* ImageFileTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300F7033D91C4A0D283F75E /* ImageFileTypeTests.swift */; };
 		8ACF2EE38E46F72F5466DB01 /* SettingsRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE607EE1ACDE73C1DB0FCA00 /* SettingsRow.swift */; };
 		8B0F53A453343AF8DA0B4C0C /* MarkdownViewModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC3328C0EF905A8AC6F6F34D /* MarkdownViewModeTests.swift */; };
+		8B2A37F58F2C7D842204A596 /* ImageDiffOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B87F114EBEEACCC95B9EF8D5 /* ImageDiffOverlayView.swift */; };
 		8C60AB3736F2160FC2A49281 /* CommitComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DACC2D855F4316038CB40C7 /* CommitComposerView.swift */; };
 		8D86580619CA83FE832ACB25 /* AppConfigHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A216C9D856D2A6C43964E74 /* AppConfigHarnessTests.swift */; };
 		8E2FB28D4C7681611BC67537 /* WorkspaceLSPManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE809DBC1E614321EE793D00 /* WorkspaceLSPManager.swift */; };
@@ -782,6 +783,7 @@
 		B7E50B0600EF60A0D9B09877 /* HighlightCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightCapture.swift; sourceTree = "<group>"; };
 		B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarHeaderView.swift; sourceTree = "<group>"; };
 		B86E7E91F81AA92ED7108D82 /* GitStatusCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusCacheTests.swift; sourceTree = "<group>"; };
+		B87F114EBEEACCC95B9EF8D5 /* ImageDiffOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffOverlayView.swift; sourceTree = "<group>"; };
 		BCA505FF2E6CFA8278C95C6E /* GhosttyConfigBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyConfigBuilder.swift; sourceTree = "<group>"; };
 		BD4A3B9B1103346242438940 /* FilesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabView.swift; sourceTree = "<group>"; };
 		BD708EEB35D93A7E7150981D /* ProjectsManagerHeadUpdatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerHeadUpdatesTests.swift; sourceTree = "<group>"; };
@@ -1658,6 +1660,7 @@
 				206F1DBCB1C34D71BEBB7DE4 /* ImageCheckerboardBackground.swift */,
 				881B46F8FCAF830239357372 /* ImageDiffDifferenceComputer.swift */,
 				09007B6E90DE89B7215A5D44 /* ImageDiffMode.swift */,
+				B87F114EBEEACCC95B9EF8D5 /* ImageDiffOverlayView.swift */,
 				0934F7BB22E33263B63925B7 /* ImageDiffPair.swift */,
 				38EAFDB135BDCF0DFF0121B1 /* ImageDiffPairKind.swift */,
 				D568D53950A3CA2CD1F4EECB /* ImageDiffPairResolver.swift */,
@@ -2063,6 +2066,7 @@
 				A4AB930CA0EEA2CEF0302646 /* ImageCheckerboardBackground.swift in Sources */,
 				A2E0A755C2854FE489530FE3 /* ImageDiffDifferenceComputer.swift in Sources */,
 				0D65F2B699E6B0CF0915D25D /* ImageDiffMode.swift in Sources */,
+				8B2A37F58F2C7D842204A596 /* ImageDiffOverlayView.swift in Sources */,
 				45B3616A459480A78A5004E8 /* ImageDiffPair.swift in Sources */,
 				8035C82C1C3F79801A0F2F39 /* ImageDiffPairKind.swift in Sources */,
 				A15C8E0D7A942160A74BD68E /* ImageDiffPairResolver.swift in Sources */,
