@@ -25,6 +25,8 @@ struct RepoGroupView: View {
     let onRevealInFinder: (Worktree) -> Void
     let onArchive: (Worktree) -> Void
     let onDelete: (Worktree) -> Void
+    let onDeleteKeepBranch: (Worktree) -> Void
+    let showKeepBranchOption: Bool
     let onActivateHarness: (Worktree) -> Void
     let onCopyError: (String) -> Void
     let onRetryCreate: (Worktree) -> Void
@@ -119,6 +121,8 @@ struct RepoGroupView: View {
                             onRevealInFinder: { onRevealInFinder(wt) },
                             onArchive: { onArchive(wt) },
                             onDelete: { onDelete(wt) },
+                            onDeleteKeepBranch: { onDeleteKeepBranch(wt) },
+                            showKeepBranchOption: showKeepBranchOption,
                             onActivateHarness: { onActivateHarness(wt) },
                             onCopyError: onCopyError,
                             onRemoveFailed: { onRemoveFailed(wt) },

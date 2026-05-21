@@ -51,6 +51,8 @@ struct RepoGroupViewLayoutTests {
             onRevealInFinder: { _ in },
             onArchive: { _ in },
             onDelete: { _ in },
+            onDeleteKeepBranch: { _ in },
+            showKeepBranchOption: false,
             onActivateHarness: { _ in },
             onCopyError: { _ in },
             onRetryCreate: { _ in },

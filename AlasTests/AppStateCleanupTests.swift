@@ -287,6 +287,17 @@ struct AppStateCleanupTests {
         #expect(AppState.forceDeleteReason(for: "") == nil)
     }
 
+    @Test func resolveDeleteBranchIfMergedRespectsKeepBranchOverride() {
+        // Global on, no override → delete branch.
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: true, keepBranch: false) == true)
+        // Global on, override on → keep branch.
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: true, keepBranch: true) == false)
+        // Global off, no override → keep branch (existing behavior).
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: false, keepBranch: false) == false)
+        // Global off, override on → keep branch.
+        #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: false, keepBranch: true) == false)
+    }
+
     @Test func cancelForceDeleteClearsPendingState() async throws {
         let repo = try await makeRepo(name: "cancel-force")
         defer { try? FileManager.default.removeItem(at: repo) }

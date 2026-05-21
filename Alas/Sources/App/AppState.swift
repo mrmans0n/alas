@@ -1607,18 +1607,19 @@ final class AppState {
     /// Delete a worktree from disk. Shows a confirm dialog; on dirty-tree
     /// failure sets `pendingForceDeleteWorktree` so SwiftUI can present a
     /// state-driven confirmation. Cleans up in-app state on success.
-    func deleteWorktree(_ worktree: Worktree) {
+    func deleteWorktree(_ worktree: Worktree, keepBranch: Bool = false) {
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         let saveBuffersFirst: Bool
         if dirty.isEmpty {
-            guard confirmDeleteWorktree(branch: worktree.branch) else { return }
+            guard confirmDeleteWorktree(branch: worktree.branch, keepBranch: keepBranch) else { return }
             saveBuffersFirst = false
         } else {
             switch promptForDirtyBuffers(
                 action: "Delete",
                 branch: worktree.branch,
                 dirtyCount: dirty.count,
-                onDiskDestructive: true
+                onDiskDestructive: true,
+                keepBranch: keepBranch
             ) {
             case .save: saveBuffersFirst = true
             case .discard: saveBuffersFirst = false
@@ -1633,7 +1634,10 @@ final class AppState {
             return
         }
         let repoPath = URL(fileURLWithPath: project.path)
-        let deleteBranch = config.worktrees.deleteBranchOnRemove
+        let deleteBranch = Self.resolveDeleteBranchIfMerged(
+            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+            keepBranch: keepBranch
+        )
 
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
@@ -1767,6 +1771,16 @@ final class AppState {
         }.value
     }
 
+    /// Resolve whether `git branch -d` should run after `git worktree remove`.
+    /// `keepBranch == true` (a per-operation override) always wins — the local
+    /// branch is preserved regardless of the global setting.
+    nonisolated static func resolveDeleteBranchIfMerged(
+        globalDeleteOnRemove: Bool,
+        keepBranch: Bool
+    ) -> Bool {
+        globalDeleteOnRemove && !keepBranch
+    }
+
     /// Permissive substring check: git's exact wording around dirty/submodule
     /// worktrees varies by version. If the match misses, the caller surfaces
     /// the raw stderr instead, which is acceptable degradation.
@@ -1787,10 +1801,12 @@ final class AppState {
         return nil
     }
 
-    private func confirmDeleteWorktree(branch: String) -> Bool {
+    private func confirmDeleteWorktree(branch: String, keepBranch: Bool) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Delete worktree '\(branch)'?"
-        alert.informativeText = "This removes its files from disk. The local branch will be deleted if merged."
+        alert.informativeText = keepBranch
+            ? "This removes its files from disk. The local branch will be kept."
+            : "This removes its files from disk. The local branch will be deleted if merged."
         alert.alertStyle = .warning
         let deleteButton = alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
@@ -1820,16 +1836,22 @@ final class AppState {
         action: String,
         branch: String,
         dirtyCount: Int,
-        onDiskDestructive: Bool
+        onDiskDestructive: Bool,
+        keepBranch: Bool = false
     ) -> DirtyBufferChoice {
         let alert = NSAlert()
         alert.messageText = "\(action) worktree '\(branch)'?"
         let countSentence = dirtyCount == 1
             ? "1 file has unsaved changes."
             : "\(dirtyCount) files have unsaved changes."
-        let actionSentence = onDiskDestructive
-            ? "This removes its files from disk. The local branch will be deleted if merged."
-            : "The worktree itself stays on disk."
+        let actionSentence: String
+        if onDiskDestructive {
+            actionSentence = keepBranch
+                ? "This removes its files from disk. The local branch will be kept."
+                : "This removes its files from disk. The local branch will be deleted if merged."
+        } else {
+            actionSentence = "The worktree itself stays on disk."
+        }
         alert.informativeText = "\(countSentence) Saving will write them to disk; discarding will lose them. \(actionSentence)"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Save & \(action)")
