@@ -50,7 +50,6 @@ struct MarkdownParserTests {
         draft: false
         tags: [swift, markdown]
         # ignored
-        invalid
         ---
 
         # Body
@@ -84,6 +83,22 @@ struct MarkdownParserTests {
         let parsed = MarkdownParser.parse("""
         ---
         invalid
+        ---
+
+        Body
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
+    @Test func leavesMixedYamlFrontmatterBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        title: Release Notes
+        tags:
+        - swift
         ---
 
         Body

@@ -49,8 +49,8 @@ enum MarkdownParser {
             }
             if trimmedDelimiter(line.text) == "---" {
                 let frontmatterText = String(source[opening.fullRange.upperBound..<line.fullRange.lowerBound])
-                let entries = parseFrontmatterEntries(frontmatterText)
-                guard !entries.isEmpty else {
+                guard let entries = parseFrontmatterEntries(frontmatterText),
+                      !entries.isEmpty else {
                     return (nil, source)
                 }
                 let frontmatter = MarkdownFrontmatter(entries: entries)
@@ -63,17 +63,17 @@ enum MarkdownParser {
         return (nil, source)
     }
 
-    private static func parseFrontmatterEntries(_ source: String) -> [MarkdownFrontmatterEntry] {
+    private static func parseFrontmatterEntries(_ source: String) -> [MarkdownFrontmatterEntry]? {
         var entries: [MarkdownFrontmatterEntry] = []
         for rawLine in source.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty, !line.hasPrefix("#"),
-                  let separator = line.firstIndex(of: ":") else {
+            guard !line.isEmpty, !line.hasPrefix("#") else {
                 continue
             }
+            guard let separator = line.firstIndex(of: ":") else { return nil }
 
             let key = line[..<separator].trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty else { continue }
+            guard !key.isEmpty else { return nil }
 
             let valueStart = line.index(after: separator)
             let rawValue = line[valueStart...].trimmingCharacters(in: .whitespaces)
