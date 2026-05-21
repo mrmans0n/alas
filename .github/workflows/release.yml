@@ -179,10 +179,15 @@ jobs:
       - name: Get version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Download DMG and compute checksum
+      - name: Download DMGs and compute checksums
         run: |
-          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/Alas-${VERSION}-arm64.dmg" -o alas.dmg
-          echo "SHA_ARM=$(shasum -a 256 alas.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/Alas-${VERSION}-arm64.dmg" -o alas-arm64.dmg
+          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/Alas-${VERSION}-x86_64.dmg" -o alas-x86_64.dmg
+          # Both shasum lines emit just the digest; the cut prevents stray
+          # filename data from leaking into the env var (which update-cask.py
+          # validates regex-strictly).
+          echo "SHA_ARM=$(shasum -a 256 alas-arm64.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA_INTEL=$(shasum -a 256 alas-x86_64.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - name: Checkout homebrew-tap
         run: |
