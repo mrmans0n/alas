@@ -1,5 +1,4 @@
 import AppKit
-import CoreImage
 import CoreGraphics
 
 /// Pure pixel comparison. Top-left aligned, union-of-dimensions canvas.
@@ -41,26 +40,26 @@ enum ImageDiffDifferenceComputer {
         var mask = [UInt8](repeating: 0, count: total * 4) // RGBA
         var changed = 0
         for i in 0..<total {
-            let bIdx = i * 4
-            let aR = beforePixels[bIdx + 0], aG = beforePixels[bIdx + 1]
-            let aB = beforePixels[bIdx + 2], aA = beforePixels[bIdx + 3]
-            let cR = afterPixels[bIdx + 0],  cG = afterPixels[bIdx + 1]
-            let cB = afterPixels[bIdx + 2],  cA = afterPixels[bIdx + 3]
+            let idx = i * 4
+            let bR = beforePixels[idx + 0], bG = beforePixels[idx + 1]
+            let bB = beforePixels[idx + 2], bA = beforePixels[idx + 3]
+            let aR = afterPixels[idx + 0],  aG = afterPixels[idx + 1]
+            let aB = afterPixels[idx + 2],  aA = afterPixels[idx + 3]
             let d = max(
-                absDiff(aR, cR),
-                absDiff(aG, cG),
-                absDiff(aB, cB),
-                absDiff(aA, cA)
+                absDiff(bR, aR),
+                absDiff(bG, aG),
+                absDiff(bB, aB),
+                absDiff(bA, aA)
             )
             if d > threshold {
                 changed += 1
                 // Pink #f472b6 on opaque black background.
-                mask[bIdx + 0] = 0xf4
-                mask[bIdx + 1] = 0x72
-                mask[bIdx + 2] = 0xb6
-                mask[bIdx + 3] = 0xff
+                mask[idx + 0] = 0xf4
+                mask[idx + 1] = 0x72
+                mask[idx + 2] = 0xb6
+                mask[idx + 3] = 0xff
             } else {
-                mask[bIdx + 3] = 0xff
+                mask[idx + 3] = 0xff
             }
         }
 
