@@ -144,11 +144,10 @@ struct CopilotInstallerTests {
         let invalidUTF8 = Data([0xff, 0xfe, 0xfd])
         try invalidUTF8.write(to: excludeURL)
 
-        #expect(throws: CopilotInstallerError.self) {
-            try CopilotInstaller(projectRootURL: dir).install()
-        }
+        try CopilotInstaller(projectRootURL: dir).install()
 
         #expect(try Data(contentsOf: excludeURL) == invalidUTF8)
+        #expect(FileManager.default.fileExists(atPath: hookURL(in: dir).path))
     }
 
     @Test func excludeUpdateIsIdempotent() throws {

@@ -32,7 +32,11 @@ struct CopilotInstaller: Sendable {
             withIntermediateDirectories: true
         )
         try Self.hookData().write(to: hookURL, options: .atomic)
-        try updateGitInfoExcludeIfPresent()
+        do {
+            try updateGitInfoExcludeIfPresent()
+        } catch {
+            // Git ignore metadata is best-effort; the hook install should still succeed.
+        }
     }
 
     private func validateProjectRoot() throws {
@@ -78,7 +82,7 @@ struct CopilotInstaller: Sendable {
             do {
                 existing = try String(contentsOf: excludeURL, encoding: .utf8)
             } catch {
-                throw CopilotInstallerError.excludeUnreadable(excludeURL.path)
+                return
             }
         } else {
             existing = ""
@@ -202,15 +206,12 @@ struct CopilotInstaller: Sendable {
 
 enum CopilotInstallerError: Error, LocalizedError, Equatable {
     case invalidProjectRoot(String)
-    case excludeUnreadable(String)
     case unmanagedHookExists(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidProjectRoot(let path):
             return "Copilot hooks can only be installed in an existing project directory. Missing or invalid path: \(path)."
-        case .excludeUnreadable(let path):
-            return "Could not read the Git exclude file at \(path). The Copilot hook was not added to it."
         case .unmanagedHookExists(let path):
             return "An unmanaged Copilot hook already exists at \(path). Remove it before installing the Alas hook."
         }
