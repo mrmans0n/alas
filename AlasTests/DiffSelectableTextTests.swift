@@ -67,9 +67,16 @@ struct DiffSelectableTextTests {
 
     // MARK: CommitDiffView integration
 
+    private func sampleFile(path: String = "Sources/App.swift") -> CommitChangedFile {
+        CommitChangedFile(path: path, originalPath: nil, status: "M", add: 1, del: 0)
+    }
+
     @Test func commitDiffViewWithHunksRendersWithoutCrashing() {
         let diff = ParsedDiff(hunks: [sampleHunk()])
         let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp"),
+            sha: "abc1234",
+            file: sampleFile(),
             path: "Sources/App.swift",
             diff: diff,
             loading: false,
@@ -84,6 +91,9 @@ struct DiffSelectableTextTests {
 
     @Test func commitDiffViewEmptyHunksRendersWithoutCrashing() {
         let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp"),
+            sha: "abc1234",
+            file: sampleFile(path: "a.txt"),
             path: "a.txt",
             diff: ParsedDiff(hunks: []),
             loading: false,

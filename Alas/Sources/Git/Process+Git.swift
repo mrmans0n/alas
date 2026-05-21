@@ -189,6 +189,201 @@ extension Process {
     }
 }
 
+struct ProcessResultData {
+    let exitCode: Int32
+    let stdout: Data
+    let stderr: String
+}
+
+extension Process {
+    /// Same as `git(_:cwd:stdin:timeout:)` but returns stdout as raw `Data`
+    /// instead of UTF-8 `String`. Use this for `git show <ref>:<path>` on
+    /// binary blobs (images, etc.) where UTF-8 decoding would corrupt the
+    /// payload.
+    static func gitData(
+        _ args: [String],
+        cwd: URL? = nil,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessResultData {
+        try await runData(
+            "/usr/bin/env",
+            args: ["git"] + args,
+            cwd: cwd,
+            env: gitEnv(),
+            timeout: timeout
+        )
+    }
+
+    /// Internal: same shape as `run(...)` but emits stdout as `Data`.
+    static func runData(
+        _ executable: String,
+        args: [String],
+        cwd: URL? = nil,
+        env: [String: String]? = nil,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessResultData {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        if let cwd { process.currentDirectoryURL = cwd }
+        if let env { process.environment = env }
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let exit = ExitGateData()
+        process.terminationHandler = { _ in exit.didExit() }
+
+        let outAccum = ByteAccumulatorData()
+        let errAccum = ByteAccumulatorData()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+            } else {
+                outAccum.append(data)
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                errAccum.markClosed()
+            } else {
+                errAccum.append(data)
+            }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            throw ProcessError.launchFailed(error.localizedDescription)
+        }
+
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+
+        let timedOutFlag = TimedOutFlag()
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if Task.isCancelled { return }
+            if process.isRunning {
+                timedOutFlag.mark()
+                fputs(
+                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                    stderr
+                )
+                process.terminate()
+            }
+        }
+
+        await withTaskCancellationHandler {
+            await exit.wait()
+        } onCancel: {
+            if process.isRunning { process.terminate() }
+        }
+        watchdog.cancel()
+
+        async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        _ = await (outClosed, errClosed)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+
+        if timedOutFlag.value {
+            throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
+        }
+
+        return ProcessResultData(
+            exitCode: process.terminationStatus,
+            stdout: outAccum.snapshot(),
+            stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? ""
+        )
+    }
+}
+
+private final class TimedOutFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v = false
+    var value: Bool { lock.lock()
+    defer { lock.unlock() }
+    return v }
+    func mark() { lock.lock()
+    v = true
+    lock.unlock() }
+}
+
+private final class ExitGateData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var exited = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func didExit() {
+        lock.lock()
+        if let c = continuation { continuation = nil
+        lock.unlock()
+        c.resume()
+        return }
+        exited = true
+        lock.unlock()
+    }
+    func wait() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if exited { lock.unlock()
+            cont.resume()
+            return }
+            continuation = cont
+            lock.unlock()
+        }
+    }
+}
+
+private final class ByteAccumulatorData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private var closed = false
+    private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    func append(_ chunk: Data) { lock.lock()
+    data.append(chunk)
+    lock.unlock() }
+    func markClosed() {
+        lock.lock()
+        let conts = Array(waiters.values)
+        waiters = [:]
+        closed = true
+        lock.unlock()
+        for c in conts { c.resume(returning: true) }
+    }
+    func waitForClose(timeoutNanoseconds: UInt64) async -> Bool {
+        await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            lock.lock()
+            if closed { lock.unlock()
+            cont.resume(returning: true)
+            return }
+            let id = UUID()
+            waiters[id] = cont
+            lock.unlock()
+            Task {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                self.timeOut(id: id)
+            }
+        }
+    }
+    private func timeOut(id: UUID) {
+        lock.lock()
+        guard let c = waiters.removeValue(forKey: id) else { lock.unlock()
+        return }
+        lock.unlock()
+        c.resume(returning: false)
+    }
+    func snapshot() -> Data { lock.lock()
+    defer { lock.unlock() }
+    return data }
+}
+
 private final class TimeoutState: @unchecked Sendable {
     private let lock = NSLock()
     private var timedOut = false

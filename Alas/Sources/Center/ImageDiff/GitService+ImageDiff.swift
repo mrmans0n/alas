@@ -1,0 +1,180 @@
+import AppKit
+import Foundation
+import os
+
+extension GitService {
+    /// Commit variant. Returns the before/after `NSImage`s for an image
+    /// file changed in commit `sha`. The caller passes the
+    /// `CommitChangedFile` (which already carries status + originalPath)
+    /// to avoid re-running diff-tree.
+    ///
+    /// before = `git show <parent>:<oldPath>` (nil for added / initial-commit cases)
+    /// after  = `git show <sha>:<path>`        (nil for deleted)
+    func imageDiffPairForCommit(
+        worktreePath: URL,
+        sha: String,
+        file: CommitChangedFile
+    ) async throws -> ImageDiffPair {
+        let resolution = ImageDiffPairResolver.resolveCommit(entry: file)
+
+        // Parent. Empty for initial commits — handled below as no `before`.
+        let parentsResult = try await Process.git(
+            ["rev-list", "--parents", "-n", "1", sha], cwd: worktreePath
+        )
+        let parts = parentsResult.stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        let parentSha: String? = parts.count > 1 ? String(parts[1]) : nil
+
+        let beforePath = resolution.oldPath ?? file.path
+        let before: NSImage?
+        if let parentSha, resolution.kind != .added {
+            before = try await loadBlobImage(
+                worktreePath: worktreePath, ref: parentSha, path: beforePath
+            )
+        } else {
+            before = nil
+        }
+
+        let after: NSImage?
+        if resolution.kind != .deleted {
+            after = try await loadBlobImage(
+                worktreePath: worktreePath, ref: sha, path: file.path
+            )
+        } else {
+            after = nil
+        }
+
+        return ImageDiffPair(
+            before: before,
+            after: after,
+            oldPath: resolution.oldPath,
+            kind: resolution.kind,
+            beforeFrameCount: frameCount(for: before),
+            afterFrameCount: frameCount(for: after)
+        )
+    }
+}
+
+extension GitService {
+    private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
+
+    /// Working-copy variant. Returns the before/after `NSImage`s and the
+    /// kind of change (added/deleted/renamed/modified) for an image file.
+    ///
+    /// `staged == false`: before = HEAD blob, after = working-tree file.
+    /// `staged == true`:  before = HEAD blob, after = index blob.
+    func imageDiffPair(
+        worktreePath: URL,
+        relativePath: String,
+        staged: Bool
+    ) async throws -> ImageDiffPair {
+        let entries = try await status(worktreePath: worktreePath)
+        // A path can appear twice in status when it has both staged AND
+        // unstaged changes. Pick the entry whose stage matches the caller's
+        // intent; fall back to the other side only if the requested stage
+        // has no entry (e.g. an untracked file shows up only as unstaged).
+        let requestedStage: ChangeStage = staged ? .staged : .unstaged
+        let entry = entries.first { $0.path == relativePath && $0.stage == requestedStage }
+            ?? entries.first { $0.path == relativePath }
+
+        let fileURL = worktreePath.appendingPathComponent(relativePath)
+        let fileExistsOnDisk = FileManager.default.fileExists(atPath: fileURL.path)
+        let resolution = ImageDiffPairResolver.resolveWorkingCopy(
+            entry: entry, fileExistsOnDisk: fileExistsOnDisk, staged: staged
+        )
+
+        // Fetch the "before" blob. For renames, use the old path. The
+        // resolver guarantees `.renamed` carries a non-nil oldPath (and
+        // falls back to `.modified` if a "R" entry had a missing rename
+        // source), so the `??` is defensive — not load-bearing on any
+        // path the resolver actually emits.
+        //
+        // Semantics:
+        //   staged == true  → HEAD vs index:  before = HEAD blob.
+        //   staged == false → index vs worktree: before = index blob.
+        //
+        // Using the index as "before" for the unstaged side is important
+        // when a file has been staged-added (no HEAD blob) and then
+        // deleted from the working tree: HEAD has nothing, but the index
+        // has the blob that should appear on the left side of the diff.
+        let beforeRef: String = staged ? "HEAD" : ""
+        let beforePath = resolution.oldPath ?? relativePath
+        let before: NSImage?
+        switch resolution.kind {
+        case .added:
+            before = nil
+        default:
+            before = try await loadBlobImage(
+                worktreePath: worktreePath, ref: beforeRef, path: beforePath
+            )
+        }
+
+        // Fetch the "after" blob.
+        let after: NSImage?
+        switch resolution.kind {
+        case .deleted:
+            after = nil
+        default:
+            if staged {
+                // Read the index version (`:` is the index ref).
+                after = try await loadBlobImage(
+                    worktreePath: worktreePath, ref: "", path: relativePath
+                )
+            } else {
+                // Read the file from disk.
+                if fileExistsOnDisk {
+                    after = NSImage(contentsOf: fileURL)
+                } else {
+                    after = nil
+                }
+            }
+        }
+
+        return ImageDiffPair(
+            before: before,
+            after: after,
+            oldPath: resolution.oldPath,
+            kind: resolution.kind,
+            beforeFrameCount: frameCount(for: before),
+            afterFrameCount: frameCount(for: after)
+        )
+    }
+
+    /// Internal: `git show <ref>:<path>` → `NSImage`. `ref == ""` means
+    /// the index (i.e. `:path`).
+    fileprivate func loadBlobImage(
+        worktreePath: URL,
+        ref: String,
+        path: String
+    ) async throws -> NSImage? {
+        let spec = "\(ref):\(path)"
+        let result = try await Process.gitData(
+            ["show", spec], cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            // The expected non-zero is "path does not exist in <ref>",
+            // which is a legitimate missing-side signal (added: no HEAD
+            // blob; deleted: no current blob). Anything else (corrupted
+            // repo, bad ref, disk error) is unexpected — surface to the
+            // log so it can be diagnosed, but still return nil so the
+            // caller's missing-side handling keeps working.
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isExpectedMissing = stderr.contains("does not exist") ||
+                                    stderr.contains("exists on disk, but not in")
+            if !isExpectedMissing {
+                Self.imageDiffLogger.error("git show \(spec, privacy: .public) failed: \(stderr, privacy: .public)")
+            }
+            return nil
+        }
+        return NSImage(data: result.stdout)
+    }
+
+    fileprivate func frameCount(for image: NSImage?) -> Int {
+        guard let image,
+              let rep = image.representations.first as? NSBitmapImageRep,
+              let value = rep.value(forProperty: .frameCount) as? Int
+        else { return image == nil ? 0 : 1 }
+        return value
+    }
+}

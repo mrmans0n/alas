@@ -1,0 +1,29 @@
+import Testing
+import Foundation
+import CoreFoundation
+@testable import Alas
+
+struct ImageDiffSideBySideViewTests {
+    @Test func transformResetReturnsToIdentity() {
+        var t = ImageDiffTransform(scale: 3.0, offset: .init(width: 50, height: 50))
+        t.reset()
+        #expect(t.scale == 1.0)
+        #expect(t.offset == .zero)
+    }
+
+    @Test func zoomClampsToRange() {
+        var t = ImageDiffTransform()
+        t.applyZoomDelta(100) // try to zoom way past max
+        #expect(t.scale == 10.0)
+        t.applyZoomDelta(-100)
+        #expect(t.scale == 1.0)
+    }
+
+    @Test func panAccumulates() {
+        var t = ImageDiffTransform()
+        t.applyPanDelta(dx: 10, dy: 20)
+        t.applyPanDelta(dx: 5, dy: -10)
+        #expect(t.offset.width == 15)
+        #expect(t.offset.height == 10)
+    }
+}

@@ -17,10 +17,66 @@ struct DiffTabView: View {
     @State private var confirmingDiscardHunk: ParsedDiff.Hunk? = nil
     @State private var isFileTracked: Bool = true
     @State private var isFileDeleted: Bool = false
+    @State private var imagePair: ImageDiffPair?
+    @State private var imagePairLoaded: Bool = false
 
     private let git = GitService()
 
     var body: some View {
+        if ImageFileType.isSupported(relativePath: relativePath) {
+            imageBody
+        } else {
+            textBody
+        }
+    }
+
+    @ViewBuilder
+    private var imageBody: some View {
+        Group {
+            if !imagePairLoaded {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let pair = imagePair {
+                ImageDiffView(
+                    pair: pair,
+                    relativePath: relativePath,
+                    onOpenFile: onOpenFile
+                )
+            } else {
+                Text("Could not load image diff for \(relativePath)")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(theme.color("bg-1"))
+        .task(id: imageLoadKey) { await loadImagePair() }
+    }
+
+    private var imageLoadKey: String {
+        "img:\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)"
+    }
+
+    private func loadImagePair() async {
+        imagePairLoaded = false
+        imagePair = nil
+        do {
+            let pair = try await git.imageDiffPair(
+                worktreePath: worktreePath,
+                relativePath: relativePath,
+                staged: staged
+            )
+            guard !Task.isCancelled else { return }
+            imagePair = pair
+        } catch {
+            // Leave imagePair nil to show the error placeholder.
+        }
+        imagePairLoaded = true
+    }
+
+    @ViewBuilder
+    private var textBody: some View {
         VStack(spacing: 0) {
             header
             if let error {

@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct CommitDiffView: View {
+    let worktreePath: URL
+    let sha: String
+    let file: CommitChangedFile
     let path: String
     let diff: ParsedDiff
     let loading: Bool
@@ -10,13 +13,63 @@ struct CommitDiffView: View {
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
     @State private var titleHovering = false
+    @State private var imagePair: ImageDiffPair?
+    @State private var imagePairLoaded: Bool = false
+    private let git = GitService()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            content
+        if ImageFileType.isSupported(relativePath: path) {
+            imageBody
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                content
+            }
+            .background(theme.color("bg-1"))
+        }
+    }
+
+    @ViewBuilder
+    private var imageBody: some View {
+        Group {
+            if !imagePairLoaded {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let pair = imagePair {
+                ImageDiffView(
+                    pair: pair,
+                    relativePath: path,
+                    onOpenFile: onOpenFile
+                )
+            } else {
+                Text("Could not load image diff for \(path)")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .background(theme.color("bg-1"))
+        .task(id: imageLoadKey) { await loadImagePair() }
+    }
+
+    private var imageLoadKey: String {
+        "img-commit:\(worktreePath.path)\u{0}\(sha)\u{0}\(path)"
+    }
+
+    private func loadImagePair() async {
+        imagePairLoaded = false
+        imagePair = nil
+        do {
+            let pair = try await git.imageDiffPairForCommit(
+                worktreePath: worktreePath, sha: sha, file: file
+            )
+            guard !Task.isCancelled else { return }
+            imagePair = pair
+        } catch {
+            // Leave imagePair nil; the placeholder shows the error path.
+        }
+        imagePairLoaded = true
     }
 
     private var header: some View {
