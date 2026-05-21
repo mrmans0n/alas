@@ -26,7 +26,7 @@ struct WorktreesPane: View {
                     SettingsRow(name: "Branch prefix",
                                 desc: "Default prefix when creating a new worktree.") {
                         VStack(alignment: .leading, spacing: 2) {
-                            AlasField(text: branchPrefixBinding, monospaced: true)
+                            AlasField(text: branchPrefixBinding, monospaced: true, inputFilter: .branchPrefix)
                             if let prefixError = branchPrefixError {
                                 Text(prefixError)
                                     .font(.system(size: 11))
@@ -36,7 +36,7 @@ struct WorktreesPane: View {
                     }
                     SettingsRow(name: "Base branch",
                                 desc: "Default base branch for new worktrees; repo branches can be selected in the create dialog.") {
-                        AlasField(text: bind(\.worktrees.baseBranch), monospaced: true)
+                        AlasField(text: bind(\.worktrees.baseBranch), monospaced: true, inputFilter: .refName)
                     }
                 }
                 // trackUpstream / autoFetch / fetchIntervalMinutes / pruneStale
