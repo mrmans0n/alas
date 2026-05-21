@@ -18,6 +18,7 @@ enum AgentLifecycleEventMapper {
              "AfterTool",
              "userPromptSubmitted",
              "postToolUse",
+             "postToolUseFailure",
              "preToolUse",
              "task_started":
             return .busy

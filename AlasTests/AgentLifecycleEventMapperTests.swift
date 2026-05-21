@@ -20,6 +20,7 @@ struct AgentLifecycleEventMapperTests {
         #expect(AgentLifecycleEventMapper.map("userPromptSubmitted") == .busy)
         #expect(AgentLifecycleEventMapper.map("preToolUse") == .busy)
         #expect(AgentLifecycleEventMapper.map("postToolUse") == .busy)
+        #expect(AgentLifecycleEventMapper.map("postToolUseFailure") == .busy)
         #expect(AgentLifecycleEventMapper.map("permissionRequest") == .permissionRequest)
         #expect(AgentLifecycleEventMapper.map("agentStop") == .idle)
         #expect(AgentLifecycleEventMapper.map("task_started") == .busy)

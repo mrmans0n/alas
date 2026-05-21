@@ -61,6 +61,7 @@ struct CopilotInstaller: Sendable {
                     "userPromptSubmitted": [entry(command: busy)],
                     "preToolUse": [entry(command: busy)],
                     "postToolUse": [entry(command: busy)],
+                    "postToolUseFailure": [entry(command: busy)],
                 ],
             ],
             options: [.prettyPrinted, .sortedKeys]

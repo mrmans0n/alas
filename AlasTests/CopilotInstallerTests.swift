@@ -39,6 +39,7 @@ struct CopilotInstallerTests {
             "userPromptSubmitted": "busy",
             "preToolUse": "busy",
             "postToolUse": "busy",
+            "postToolUseFailure": "busy",
         ]
         #expect(Set(hooks.keys) == Set(expectedEvents.keys))
         for (event, activity) in expectedEvents {
