@@ -401,6 +401,11 @@ final class AppState {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
+        // resolvingSymlinksInPath only resolves links along path components
+        // that exist on disk; the leaf doesn't exist yet, so resolve the
+        // parent (which does) and reattach the leaf. Without this, the
+        // optimistic id diverges from the canonical id that `git worktree
+        // list` reports for symlinked parents, leaving a stuck Creating row.
         let canonicalDestination = destination
             .deletingLastPathComponent()
             .resolvingSymlinksInPath()
