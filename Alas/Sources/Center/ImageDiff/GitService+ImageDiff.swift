@@ -3,6 +3,8 @@ import Foundation
 import os
 
 extension GitService {
+    private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
+
     /// Commit variant. Returns the before/after `NSImage`s for an image
     /// file changed in commit `sha`. The caller passes the
     /// `CommitChangedFile` (which already carries status + originalPath)
@@ -54,10 +56,6 @@ extension GitService {
             afterFrameCount: frameCount(for: after)
         )
     }
-}
-
-extension GitService {
-    private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
 
     /// Working-copy variant. Returns the before/after `NSImage`s and the
     /// kind of change (added/deleted/renamed/modified) for an image file.
