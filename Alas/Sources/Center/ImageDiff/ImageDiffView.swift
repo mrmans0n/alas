@@ -8,6 +8,7 @@ struct ImageDiffView: View {
 
     @State private var mode: ImageDiffMode = .sideBySide
     @State private var percentChanged: Double?
+    @State private var transform = ImageDiffTransform()
     @Environment(\.theme) private var theme
 
     /// Pure helper exposed for testing. If the currently-selected mode is
@@ -59,6 +60,9 @@ struct ImageDiffView: View {
             }
             Spacer()
             modeSwitcher
+            if mode == .sideBySide {
+                resetButton
+            }
             if let onOpenFile {
                 AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
             }
@@ -106,6 +110,21 @@ struct ImageDiffView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
+    private var resetButton: some View {
+        Button {
+            transform.reset()
+        } label: {
+            Image(systemName: "arrow.counterclockwise")
+                .font(.system(size: 11))
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .contentShape(Rectangle())
+                .foregroundColor(theme.color("fg-muted"))
+        }
+        .buttonStyle(.plain)
+        .help("Reset zoom")
+        .disabled(transform == .init())
+    }
+
     @ViewBuilder
     private func modeButton(_ m: ImageDiffMode) -> some View {
         let enabled = m.isApplicable(for: pair.kind)
@@ -135,7 +154,8 @@ struct ImageDiffView: View {
         case .sideBySide:
             ImageDiffSideBySideView(
                 before: pair.before, after: pair.after,
-                beforeLabel: "Before", afterLabel: "After"
+                beforeLabel: "Before", afterLabel: "After",
+                transform: $transform
             )
         case .overlay:
             if let b = pair.before, let a = pair.after {

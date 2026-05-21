@@ -70,7 +70,13 @@ extension GitService {
         staged: Bool
     ) async throws -> ImageDiffPair {
         let entries = try await status(worktreePath: worktreePath)
-        let entry = entries.first { $0.path == relativePath }
+        // A path can appear twice in status when it has both staged AND
+        // unstaged changes. Pick the entry whose stage matches the caller's
+        // intent; fall back to the other side only if the requested stage
+        // has no entry (e.g. an untracked file shows up only as unstaged).
+        let requestedStage: ChangeStage = staged ? .staged : .unstaged
+        let entry = entries.first { $0.path == relativePath && $0.stage == requestedStage }
+            ?? entries.first { $0.path == relativePath }
 
         let fileURL = worktreePath.appendingPathComponent(relativePath)
         let fileExistsOnDisk = FileManager.default.fileExists(atPath: fileURL.path)
@@ -78,11 +84,21 @@ extension GitService {
             entry: entry, fileExistsOnDisk: fileExistsOnDisk
         )
 
-        // Fetch the "before" blob from HEAD. For renames, use the old
-        // path. The resolver guarantees `.renamed` carries a non-nil
-        // oldPath (and falls back to `.modified` if a "R" entry had a
-        // missing rename source), so the `??` is defensive — not load-
-        // bearing on any path the resolver actually emits.
+        // Fetch the "before" blob. For renames, use the old path. The
+        // resolver guarantees `.renamed` carries a non-nil oldPath (and
+        // falls back to `.modified` if a "R" entry had a missing rename
+        // source), so the `??` is defensive — not load-bearing on any
+        // path the resolver actually emits.
+        //
+        // Semantics:
+        //   staged == true  → HEAD vs index:  before = HEAD blob.
+        //   staged == false → index vs worktree: before = index blob.
+        //
+        // Using the index as "before" for the unstaged side is important
+        // when a file has been staged-added (no HEAD blob) and then
+        // deleted from the working tree: HEAD has nothing, but the index
+        // has the blob that should appear on the left side of the diff.
+        let beforeRef: String = staged ? "HEAD" : ""
         let beforePath = resolution.oldPath ?? relativePath
         let before: NSImage?
         switch resolution.kind {
@@ -90,7 +106,7 @@ extension GitService {
             before = nil
         default:
             before = try await loadBlobImage(
-                worktreePath: worktreePath, ref: "HEAD", path: beforePath
+                worktreePath: worktreePath, ref: beforeRef, path: beforePath
             )
         }
 

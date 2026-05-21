@@ -185,4 +185,40 @@ struct ImageDiffPairLoaderTests {
         #expect(pair.before != nil)
         #expect(pair.after != nil)
     }
+
+    @Test func picksUnstagedEntryWhenBothStagedAndUnstagedExist() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        // Need at least one prior commit so HEAD exists.
+        try "seed\n".write(to: repo.appendingPathComponent("seed.txt"),
+                           atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        // Add a new image to the index (staged-add), then delete it from
+        // the working tree. `git status` emits TWO rows for logo.png:
+        //   (path: "logo.png", status: "A", stage: .staged)
+        //   (path: "logo.png", status: "D", stage: .unstaged)
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        try FileManager.default.removeItem(at: pngURL)
+
+        // staged: false should pick the unstaged entry → .deleted.
+        let unstaged = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "logo.png", staged: false
+        )
+        #expect(unstaged.kind == .deleted)
+        #expect(unstaged.before != nil)
+        #expect(unstaged.after == nil)
+
+        // staged: true should pick the staged entry → .added.
+        let stagedPair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "logo.png", staged: true
+        )
+        #expect(stagedPair.kind == .added)
+        #expect(stagedPair.before == nil)
+        #expect(stagedPair.after != nil)
+    }
 }

@@ -37,8 +37,8 @@ struct ImageDiffSideBySideView: View {
     let after: NSImage?
     let beforeLabel: String
     let afterLabel: String
+    @Binding var transform: ImageDiffTransform
     @Environment(\.theme) private var theme
-    @State private var transform = ImageDiffTransform()
 
     var body: some View {
         GeometryReader { proxy in
