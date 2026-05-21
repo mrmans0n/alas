@@ -6,24 +6,30 @@ struct GitRefNameInputFilter: Equatable {
         case paste
     }
 
-    static let branchName = GitRefNameInputFilter(allowsTrailingSlashOnPaste: false)
-    static let branchPrefix = GitRefNameInputFilter(allowsTrailingSlashOnPaste: true)
-    static let refName = GitRefNameInputFilter(allowsTrailingSlashOnPaste: false)
+    static let branchName = GitRefNameInputFilter(allowsTrailingSlashOnPaste: false, allowsRevisionSyntax: false)
+    static let branchPrefix = GitRefNameInputFilter(allowsTrailingSlashOnPaste: true, allowsRevisionSyntax: false)
+    static let refName = GitRefNameInputFilter(allowsTrailingSlashOnPaste: false, allowsRevisionSyntax: true)
 
     private let allowsTrailingSlashOnPaste: Bool
+    private let allowsRevisionSyntax: Bool
 
-    private init(allowsTrailingSlashOnPaste: Bool) {
+    private init(allowsTrailingSlashOnPaste: Bool, allowsRevisionSyntax: Bool) {
         self.allowsTrailingSlashOnPaste = allowsTrailingSlashOnPaste
+        self.allowsRevisionSyntax = allowsRevisionSyntax
     }
 
     func sanitize(_ rawValue: String, mode: Mode) -> String {
         let filteredScalars = rawValue.unicodeScalars.compactMap { scalar -> UnicodeScalar? in
             if scalar.properties.generalCategory == .control { return nil }
             if CharacterSet.whitespacesAndNewlines.contains(scalar) { return nil }
-            if Self.forbiddenScalars.contains(scalar) { return nil }
+            if !allowsRevisionSyntax && Self.forbiddenScalars.contains(scalar) { return nil }
             return scalar
         }
         var value = String(String.UnicodeScalarView(filteredScalars))
+
+        if allowsRevisionSyntax {
+            return value
+        }
 
         value = value.replacingOccurrences(of: "@{", with: "@")
         while value.contains("//") {
