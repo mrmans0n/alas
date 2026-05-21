@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-05-21
+
+### ✨ Features
+
+- add Harness entry point from Agents settings (#208).
+- add agent terminal launcher (#214).
+- enable drag-to-reorder for center pane top tabs (#219).
+- add drag-and-drop reordering for sidebar projects (#220).
+- expand agent hook lifecycle support (#221).
+
+### 🐛 Fixes
+
+- broaden LSP install nudges with Mason fallback (#209).
+- allow text selection in diff panes (#212).
+- fix initial focus for command overlays (#216).
+- make commit errors expandable (#218).
+
+### 🏗️ Internal
+
+- clarify Mason LSP search field (#210).
+- reduce cursor-agent hook overhead and clean up harness on quit (#211).
+- decouple agent bypass setting (#213).
+- show copy feedback for git references (#215).
+- share GhosttyKit builds across worktrees via fingerprint-keyed cache (#217).
+
 ## [0.3.7] - 2026-05-20
 
 ### ✨ Features
