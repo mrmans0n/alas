@@ -30,10 +30,12 @@ cask "alas" do
 
   on_arm do
     sha256 "{SHA_ARM}"
+
     url "https://github.com/mrmans0n/alas/releases/download/v#{{version}}/Alas-#{{version}}-arm64.dmg"
   end
   on_intel do
     sha256 "{SHA_INTEL}"
+
     url "https://github.com/mrmans0n/alas/releases/download/v#{{version}}/Alas-#{{version}}-x86_64.dmg"
   end
 
