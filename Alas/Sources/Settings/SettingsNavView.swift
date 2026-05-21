@@ -1,10 +1,11 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case agents, appearance, changes, code, shortcuts, terminal, worktrees
+    case advanced, agents, appearance, changes, code, shortcuts, terminal, worktrees
     var id: String { rawValue }
     var label: String {
         switch self {
+        case .advanced:   return "Advanced"
         case .agents:     return "Agents"
         case .appearance: return "Appearance"
         case .changes:    return "Changes"
@@ -16,6 +17,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     }
     var icon: String {
         switch self {
+        case .advanced:   return "wrench.and.screwdriver"
         case .agents:     return "sparkle"
         case .appearance: return "palette"
         case .changes:    return "diff"
@@ -29,11 +31,12 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
 struct SettingsNavView: View {
     @Binding var selection: SettingsSection
+    var showsAdvanced: Bool
     @Environment(\.theme) var theme
 
     var body: some View {
         VStack(spacing: 1) {
-            ForEach(SettingsSection.allCases.sorted(by: { $0.label < $1.label })) { section in
+            ForEach(sections) { section in
                 Button { selection = section } label: {
                     HStack(spacing: 9) {
                         Icon(name: section.icon, size: 14,
@@ -61,5 +64,11 @@ struct SettingsNavView: View {
         .frame(width: 200)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .trailing)
+    }
+
+    private var sections: [SettingsSection] {
+        SettingsSection.allCases
+            .filter { showsAdvanced || $0 != .advanced }
+            .sorted(by: { $0.label < $1.label })
     }
 }
