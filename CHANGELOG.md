@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-05-22
+
+### ✨ Features
+
+- add terminal file-link routing with line and column positions (#222).
+- add a context-menu action to delete a worktree while keeping its branch (#224).
+- render markdown frontmatter as a metadata table in previews (#226).
+- add vendor logos to terminal agents UI (#227).
+- add advanced project cleanup settings behind the debug flag (#230).
+- add image diff side-by-side, overlay, swipe, and difference modes (#231).
+- show a purple submodule badge on directories in the Files pane (#232).
+- add right sidebar toggle shortcut support (#236).
+
+### 🐛 Fixes
+
+- resolve symlinks before computing optimistic worktree IDs (#223).
+- refresh terminal integration actions after install state changes (#228).
+- prevent invalid git ref input for branch names and prefixes while leaving manual refs to Git validation (#229).
+- polish image diff alignment, rename detection, and SVG support (#233).
+- replace Files tree loading rows with inline loading indicators (#234).
+- move the hidden-sidebar reveal control to the center header (#235).
+
 ### 🏗️ Internal
 
 - release pipeline now publishes both arm64 and x86_64 DMGs; Homebrew cask serves both via `on_arm`/`on_intel`.
