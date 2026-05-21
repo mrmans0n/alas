@@ -63,6 +63,7 @@ final class MarkdownRenderer {
 
     func render(
         document: Document,
+        frontmatter: MarkdownFrontmatter? = nil,
         theme: Theme,
         monospacedFontFamily: String,
         monospacedFontSize: Int,
@@ -81,6 +82,10 @@ final class MarkdownRenderer {
         self.inStrikethrough = false
         self.listDepth = 0
         self.slugCounts = [:]
+
+        if let frontmatter, !frontmatter.isEmpty {
+            renderFrontmatterTable(frontmatter)
+        }
 
         for child in document.children {
             visit(child)
@@ -404,6 +409,51 @@ final class MarkdownRenderer {
         return paragraph
     }
 
+    private func renderFrontmatterTable(_ frontmatter: MarkdownFrontmatter) {
+        let columnCount = 2
+        let textTable = NSTextTable()
+        textTable.numberOfColumns = columnCount
+        textTable.layoutAlgorithm = .automaticLayoutAlgorithm
+        textTable.collapsesBorders = true
+        textTable.hidesEmptyCells = false
+
+        var renderedCells: [RenderedTableCell] = [
+            RenderedTableCell(
+                content: NSAttributedString(string: "Key", attributes: bodyAttributes()),
+                row: 0,
+                column: 0,
+                isHeader: true,
+                alignment: .left
+            ),
+            RenderedTableCell(
+                content: NSAttributedString(string: "Value", attributes: bodyAttributes()),
+                row: 0,
+                column: 1,
+                isHeader: true,
+                alignment: .left
+            )
+        ]
+
+        for (index, entry) in frontmatter.entries.enumerated() {
+            renderedCells.append(RenderedTableCell(
+                content: NSAttributedString(string: entry.key, attributes: bodyAttributes()),
+                row: index + 1,
+                column: 0,
+                isHeader: false,
+                alignment: .left
+            ))
+            renderedCells.append(RenderedTableCell(
+                content: NSAttributedString(string: entry.value, attributes: bodyAttributes()),
+                row: index + 1,
+                column: 1,
+                isHeader: false,
+                alignment: .left
+            ))
+        }
+
+        appendTableCells(renderedCells, table: textTable, columnCount: columnCount)
+    }
+
     private func visitTable(_ table: Markdown.Table) {
         let headerCells = Array(table.head.cells)
         let bodyRows = Array(table.body.rows)
@@ -457,6 +507,14 @@ final class MarkdownRenderer {
             }
         }
 
+        appendTableCells(renderedCells, table: textTable, columnCount: columnCount)
+    }
+
+    private func appendTableCells(
+        _ renderedCells: [RenderedTableCell],
+        table textTable: NSTextTable,
+        columnCount: Int
+    ) {
         for cell in renderedCells {
             let mutable = NSMutableAttributedString(attributedString: cell.content)
             let style = tableParagraphStyle(
