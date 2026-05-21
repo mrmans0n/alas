@@ -43,7 +43,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .searchFiles:              return "Search Files"
         case .switchRepository:         return "Switch Repository"
         case .findAndReplace:           return "Find and Replace"
-        case .toggleRightPane:          return "Toggle Right Pane"
+        case .toggleRightPane:          return "Toggle Right Sidebar"
         case .createProject:            return "Create Project"
         case .newWorktree:              return "New Worktree"
         case .newTerminalTab:           return "New Terminal Tab"
@@ -96,7 +96,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .searchFiles:              return .init(key: "p",          modifiers: [.command])
         case .switchRepository:         return .init(key: "k",          modifiers: [.command])
         case .findAndReplace:           return .init(key: "f",          modifiers: [.command, .option])
-        case .toggleRightPane:          return .init(key: "return",     modifiers: [.command, .option])
+        case .toggleRightPane:          return .init(key: "b",          modifiers: [.command, .option])
         case .createProject:            return .init(key: "n",          modifiers: [.command, .shift])
         case .newWorktree:              return .init(key: "n",          modifiers: [.command, .option])
         case .newTerminalTab:           return .init(key: "t",          modifiers: [.command])

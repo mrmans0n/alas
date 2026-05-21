@@ -312,8 +312,7 @@ private struct RootBaseHandlers: ViewModifier {
     func body(content: Content) -> some View {
         let a = content
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
-                state.config.rightPaneVisible.toggle()
-                state.saveConfig()
+                state.toggleRightPaneVisibility()
             }
         let b = a
             .onReceive(NotificationCenter.default.publisher(for: .alasCreateProject)) { _ in

@@ -74,7 +74,7 @@ struct AlasApp: App {
                 .disabled(!state.hasActiveCodeEditorTab)
             }
             CommandGroup(after: .toolbar) {
-                Button("Toggle Right Pane") {
+                Button("Toggle Right Sidebar") {
                     NotificationCenter.default.post(name: .alasToggleRightPane, object: nil)
                 }
                 .keyboardShortcut(state.shortcut(for: .toggleRightPane))
