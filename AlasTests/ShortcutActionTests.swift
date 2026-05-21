@@ -23,7 +23,7 @@ struct ShortcutActionTests {
             (.searchFiles,          "p",          [.command]),
             (.switchRepository,     "k",          [.command]),
             (.findAndReplace,       "f",          [.command, .option]),
-            (.toggleRightPane,      "return",     [.command, .option]),
+            (.toggleRightPane,      "b",          [.command, .option]),
             (.createProject,        "n",          [.command, .shift]),
             (.newWorktree,          "n",          [.command, .option]),
             (.newTerminalTab,       "t",          [.command]),
