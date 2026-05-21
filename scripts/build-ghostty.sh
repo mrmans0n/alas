@@ -64,7 +64,12 @@ xcframework_path="${ghostty_build_root}/GhosttyKit.xcframework"
 ghostty_resources_path="${ghostty_build_root}/share/ghostty"
 ghostty_terminfo_path="${ghostty_build_root}/share/terminfo"
 
-arch="$(uname -m)"
+# Target arch for the Ghostty build. Defaults to the host arch (uname -m)
+# so local dev keeps working unchanged; CI sets this explicitly to produce
+# both arm64 and x86_64 slices from one Apple Silicon runner via zig's
+# cross-compilation.
+target_arch="${ALAS_GHOSTTY_TARGET_ARCH:-$(uname -m)}"
+arch="${target_arch}"
 ghostty_cache_root_default="${HOME}/Library/Caches/Alas/GhosttyKit"
 ghostty_cache_root="${ALAS_GHOSTTY_CACHE_DIR:-${ghostty_cache_root_default}}/${arch}"
 ghostty_cache_keep="${ALAS_GHOSTTY_CACHE_KEEP:-5}"
@@ -104,6 +109,10 @@ print_fingerprint() {
       else
         echo "no-zig"
       fi
+      # Target arch participates in the fingerprint: a different -Dtarget
+      # produces a different binary even at identical Ghostty/toolchain state,
+      # so two arches must not share a cache entry.
+      printf 'target=%s\n' "${target_arch}"
     } | shasum -a 256 | awk '{print $1}'
   )
 }
@@ -140,6 +149,7 @@ build_and_install_local() {
       -Doptimize=ReleaseFast \
       -Demit-xcframework=true \
       -Dsentry=false \
+      -Dtarget="${target_arch}-macos" \
       --prefix "${ghostty_build_root}" \
       --cache-dir "${ghostty_local_cache_dir}" \
       --global-cache-dir "${ghostty_global_cache_dir}"
