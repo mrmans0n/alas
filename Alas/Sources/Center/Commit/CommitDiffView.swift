@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct CommitDiffView: View {
+    let worktreePath: URL
+    let sha: String
+    let file: CommitChangedFile
     let path: String
     let diff: ParsedDiff
     let loading: Bool

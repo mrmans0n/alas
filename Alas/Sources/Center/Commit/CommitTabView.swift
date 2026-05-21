@@ -72,11 +72,15 @@ struct CommitTabView: View {
                     appState.saveConfig()
                 })
                 Group {
-                    if let path = selectedPath {
+                    if let path = selectedPath,
+                       let file = details.files.first(where: { $0.path == path }) {
                         let openAvailable = DiffOpenFileAvailability.isAvailable(
                             worktreePath: worktreePath, relativePath: path
                         )
                         CommitDiffView(
+                            worktreePath: worktreePath,
+                            sha: sha,
+                            file: file,
                             path: path,
                             diff: diff,
                             loading: loadingDiff,
