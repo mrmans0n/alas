@@ -17,6 +17,13 @@ for name, value in (("SHA_ARM", SHA_ARM), ("SHA_INTEL", SHA_INTEL)):
     if not _SHA_RE.fullmatch(value):
         sys.exit(f"error: {name} is not a 64-char lowercase hex sha256 ({value!r})")
 
+# Reject tags that would inject quotes/newlines/backslashes into the rendered
+# .rb file. The regex matches strict semver plus a permissive suffix for
+# pre-release/dry-run tags like "0.0.0-intel-test" or "1.2.3-rc1".
+_VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[a-zA-Z0-9._-]*)")
+if not _VERSION_RE.fullmatch(VERSION):
+    sys.exit(f"error: VERSION does not look like a semver-ish tag ({VERSION!r})")
+
 CASK = f'''\
 cask "alas" do
   version "{VERSION}"
@@ -49,6 +56,10 @@ cask "alas" do
 end
 '''
 
+# Path is relative to cwd — run from the homebrew-tap repo root.
+# release.yml sets `working-directory: homebrew-tap` for this step; the
+# Task 3 dry-run in the plan writes a stray Casks/ alongside this repo,
+# which is rm'd before commit.
 path = pathlib.Path("Casks/alas.rb")
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(CASK)
