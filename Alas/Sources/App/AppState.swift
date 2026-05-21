@@ -1413,7 +1413,12 @@ final class AppState {
     /// Open a file in the right-pane code editor by routing through the
     /// existing tabs system. Switches `selectedWorktreeId` if the file is
     /// in a different worktree.
-    func openFile(relativePath: String, worktreeId: String) {
+    func openFile(
+        relativePath: String,
+        worktreeId: String,
+        revealLine: Int? = nil,
+        revealCharacter: Int? = nil
+    ) {
         guard let worktree = worktree(withId: worktreeId) else { return }
         // Reject archived worktrees: their ids may still appear in some legacy
         // call sites (e.g. older persisted tabs). Selecting one would set
@@ -1427,19 +1432,12 @@ final class AppState {
             return
         }
 
-        let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .editor(let s) = tab { return s.relativePath == relativePath } else { return false }
-        }
-        if let existing {
-            tabs.activate(worktreeId: worktree.id, tabId: existing.id)
-        } else {
-            let tab = tabs.appendEditor(
-                worktreeId: worktree.id,
-                title: (relativePath as NSString).lastPathComponent,
-                relativePath: relativePath
-            )
-            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
-        }
+        _ = tabs.openEditor(
+            worktreeId: worktree.id,
+            relativePath: relativePath,
+            revealLine: revealLine,
+            revealCharacter: revealCharacter
+        )
     }
 
     /// Open a markdown relative-link target as a new editor tab in the same worktree.
@@ -1465,22 +1463,42 @@ final class AppState {
         }
         guard !path.isEmpty else { return false }
 
-        let absoluteURL: URL
+        let initialAbsoluteURL: URL
         if (path as NSString).isAbsolutePath {
-            absoluteURL = URL(fileURLWithPath: path).standardizedFileURL
+            initialAbsoluteURL = URL(fileURLWithPath: path).standardizedFileURL
         } else {
             let base = session.surface.currentWorkingDirectory ?? worktree.path
-            absoluteURL = base.appendingPathComponent(path).standardizedFileURL
+            initialAbsoluteURL = base.appendingPathComponent(path).standardizedFileURL
+        }
+
+        let target: TerminalOpenTarget
+        if FileManager.default.fileExists(atPath: initialAbsoluteURL.path) {
+            target = TerminalOpenTarget(url: initialAbsoluteURL, revealLine: nil, revealCharacter: nil)
+        } else if let parsed = Self.parseTerminalPathPosition(path) {
+            let url: URL
+            if (parsed.path as NSString).isAbsolutePath {
+                url = URL(fileURLWithPath: parsed.path).standardizedFileURL
+            } else {
+                let base = session.surface.currentWorkingDirectory ?? worktree.path
+                url = base.appendingPathComponent(parsed.path).standardizedFileURL
+            }
+            target = TerminalOpenTarget(
+                url: url,
+                revealLine: parsed.line - 1,
+                revealCharacter: (parsed.column ?? 1) - 1
+            )
+        } else {
+            target = TerminalOpenTarget(url: initialAbsoluteURL, revealLine: nil, revealCharacter: nil)
         }
 
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: absoluteURL.path, isDirectory: &isDirectory),
+        guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return false }
 
         // Resolve symlinks on both sides before the containment check so that
         // an in-tree symlink pointing outside the worktree (e.g.
         // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
-        let resolvedTarget = absoluteURL.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedTarget = target.url.resolvingSymlinksInPath().standardizedFileURL
         let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
         let rootComponents = resolvedRoot.pathComponents
         let targetComponents = resolvedTarget.pathComponents
@@ -1491,9 +1509,51 @@ final class AppState {
         let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
         guard !relativePath.isEmpty else { return false }
 
-        openFile(relativePath: relativePath, worktreeId: worktree.id)
+        openFile(
+            relativePath: relativePath,
+            worktreeId: worktree.id,
+            revealLine: target.revealLine,
+            revealCharacter: target.revealCharacter
+        )
         NSApp.activate(ignoringOtherApps: true)
         return true
+    }
+
+    private struct TerminalOpenTarget {
+        var url: URL
+        var revealLine: Int?
+        var revealCharacter: Int?
+    }
+
+    private struct TerminalPathPosition {
+        var path: String
+        var line: Int
+        var column: Int?
+    }
+
+    nonisolated private static func parseTerminalPathPosition(_ rawPath: String) -> TerminalPathPosition? {
+        guard let lineSplit = splitTrailingPositiveInteger(from: rawPath) else { return nil }
+        if let columnSplit = splitTrailingPositiveInteger(from: lineSplit.prefix) {
+            return TerminalPathPosition(
+                path: columnSplit.prefix,
+                line: columnSplit.value,
+                column: lineSplit.value
+            )
+        }
+        return TerminalPathPosition(path: lineSplit.prefix, line: lineSplit.value, column: nil)
+    }
+
+    nonisolated private static func splitTrailingPositiveInteger(from value: String) -> (prefix: String, value: Int)? {
+        guard let colon = value.lastIndex(of: ":") else { return nil }
+        let suffixStart = value.index(after: colon)
+        let suffix = value[suffixStart...]
+        guard !suffix.isEmpty,
+              suffix.allSatisfy(\.isNumber),
+              let number = Int(suffix),
+              number > 0 else { return nil }
+        let prefix = String(value[..<colon])
+        guard !prefix.isEmpty else { return nil }
+        return (prefix, number)
     }
 
     private func relativePath(for url: URL, in worktreeRoot: URL) throws -> String {

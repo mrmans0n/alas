@@ -103,6 +103,36 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    @Test func routeTerminalOpenURLResolvesRelativePathWithLineAndColumn() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-relative-position")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let subdir = worktree.path.appendingPathComponent("notes")
+        try FileManager.default.createDirectory(at: subdir, withIntermediateDirectories: true)
+        let file = subdir.appendingPathComponent("plan.md")
+        try "first\nsecond\nthird\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        surface.setCurrentWorkingDirectory(subdir)
+        let session = TerminalSession(
+            id: "s1", worktreeId: worktree.id, projectId: project.id,
+            surface: surface, executable: "/bin/zsh", args: []
+        )
+        state.terminal.registry.register(session)
+
+        let handled = state.routeTerminalOpenURL(rawURL: "plan.md:2:4", sessionId: "s1")
+
+        #expect(handled == true)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 {
+                return s.relativePath == "notes/plan.md"
+                    && s.revealLine == 1
+                    && s.revealCharacter == 3
+                    && !s.isExternal
+            }
+            return false
+        })
+    }
+
     @Test func routeTerminalOpenURLAcceptsAbsolutePathInsideWorkspace() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-absolute")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
@@ -121,6 +151,33 @@ struct AppStateCLIRoutingTests {
         #expect(handled == true)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
             if case .editor(let s) = $0 { return s.relativePath == "README.md" && !s.isExternal }
+            return false
+        })
+    }
+
+    @Test func routeTerminalOpenURLAcceptsAbsolutePathWithLine() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-absolute-position")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let file = worktree.path.appendingPathComponent("README.md")
+        try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        let session = TerminalSession(
+            id: "s1", worktreeId: worktree.id, projectId: project.id,
+            surface: surface, executable: "/bin/zsh", args: []
+        )
+        state.terminal.registry.register(session)
+
+        let handled = state.routeTerminalOpenURL(rawURL: "\(file.path):2", sessionId: "s1")
+
+        #expect(handled == true)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 {
+                return s.relativePath == "README.md"
+                    && s.revealLine == 1
+                    && s.revealCharacter == 0
+                    && !s.isExternal
+            }
             return false
         })
     }
