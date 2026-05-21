@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Log this invocation so tests can count zig calls.
+# Log this invocation so tests can count zig calls. Also record the
+# -Dtarget=... value (if present) into a sibling log so tests can assert
+# the build script forwarded the target arch correctly.
 if [ -n "${STUB_ZIG_INVOCATION_LOG:-}" ]; then
   echo "$(date +%s) $*" >> "${STUB_ZIG_INVOCATION_LOG}"
+  for arg in "$@"; do
+    case "$arg" in
+      -Dtarget=*)
+        printf '%s\n' "${arg#-Dtarget=}" > "$(dirname "${STUB_ZIG_INVOCATION_LOG}")/stub-zig.target.log"
+        ;;
+    esac
+  done
 fi
 
 # Parse --prefix; everything else ignored.
