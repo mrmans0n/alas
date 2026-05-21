@@ -308,8 +308,12 @@ extension Process {
 private final class TimedOutFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var v = false
-    var value: Bool { lock.lock(); defer { lock.unlock() }; return v }
-    func mark() { lock.lock(); v = true; lock.unlock() }
+    var value: Bool { lock.lock()
+    defer { lock.unlock() }
+    return v }
+    func mark() { lock.lock()
+    v = true
+    lock.unlock() }
 }
 
 private final class ExitGateData: @unchecked Sendable {
@@ -318,14 +322,21 @@ private final class ExitGateData: @unchecked Sendable {
     private var continuation: CheckedContinuation<Void, Never>?
     func didExit() {
         lock.lock()
-        if let c = continuation { continuation = nil; lock.unlock(); c.resume(); return }
-        exited = true; lock.unlock()
+        if let c = continuation { continuation = nil
+        lock.unlock()
+        c.resume()
+        return }
+        exited = true
+        lock.unlock()
     }
     func wait() async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             lock.lock()
-            if exited { lock.unlock(); cont.resume(); return }
-            continuation = cont; lock.unlock()
+            if exited { lock.unlock()
+            cont.resume()
+            return }
+            continuation = cont
+            lock.unlock()
         }
     }
 }
@@ -335,18 +346,26 @@ private final class ByteAccumulatorData: @unchecked Sendable {
     private var data = Data()
     private var closed = false
     private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
-    func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
+    func append(_ chunk: Data) { lock.lock()
+    data.append(chunk)
+    lock.unlock() }
     func markClosed() {
         lock.lock()
-        let conts = Array(waiters.values); waiters = [:]; closed = true
+        let conts = Array(waiters.values)
+        waiters = [:]
+        closed = true
         lock.unlock()
         for c in conts { c.resume(returning: true) }
     }
     func waitForClose(timeoutNanoseconds: UInt64) async -> Bool {
         await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             lock.lock()
-            if closed { lock.unlock(); cont.resume(returning: true); return }
-            let id = UUID(); waiters[id] = cont; lock.unlock()
+            if closed { lock.unlock()
+            cont.resume(returning: true)
+            return }
+            let id = UUID()
+            waiters[id] = cont
+            lock.unlock()
             Task {
                 try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                 self.timeOut(id: id)
@@ -355,10 +374,14 @@ private final class ByteAccumulatorData: @unchecked Sendable {
     }
     private func timeOut(id: UUID) {
         lock.lock()
-        guard let c = waiters.removeValue(forKey: id) else { lock.unlock(); return }
-        lock.unlock(); c.resume(returning: false)
+        guard let c = waiters.removeValue(forKey: id) else { lock.unlock()
+        return }
+        lock.unlock()
+        c.resume(returning: false)
     }
-    func snapshot() -> Data { lock.lock(); defer { lock.unlock() }; return data }
+    func snapshot() -> Data { lock.lock()
+    defer { lock.unlock() }
+    return data }
 }
 
 private final class TimeoutState: @unchecked Sendable {
