@@ -5,6 +5,7 @@ struct TerminalPane: View {
     @Environment(\.theme) var theme
 
     @State private var hookStatus: [AgentKind: String] = [:]
+    @State private var installStates: [AgentKind: InstallState] = [:]
     private let installerRegistry = AgentInstallerRegistry()
 
     var body: some View {
@@ -116,13 +117,16 @@ struct TerminalPane: View {
                     ForEach(installerRegistry.supportedAgents) { agent in
                         SettingsRow(name: agent.displayName) {
                             HStack {
-                                let state = installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
-                                AlasButton(
-                                    title: state == .installed ? "Reinstall" : state == .outdated ? "Update" : "Install",
-                                    action: { installAgent(agent) }
-                                )
-                                if state == .installed {
-                                    AlasButton(title: "Uninstall", action: { uninstallAgent(agent) })
+                                let integrationState = installState(for: agent)
+                                ForEach(TerminalIntegrationActions.actions(for: integrationState)) { action in
+                                    AlasButton(title: action.title) {
+                                        switch action.kind {
+                                        case .install:
+                                            installAgent(agent)
+                                        case .uninstall:
+                                            uninstallAgent(agent)
+                                        }
+                                    }
                                 }
                                 if let status = hookStatus[agent] {
                                     Text(status).font(.system(size: 11))
@@ -135,6 +139,26 @@ struct TerminalPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
+        .onAppear {
+            refreshInstallStates()
+        }
+    }
+
+    private func installState(for agent: AgentKind) -> InstallState {
+        if let state = installStates[agent] {
+            return state
+        }
+        return installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
+    }
+
+    private func refreshInstallStates() {
+        for agent in installerRegistry.supportedAgents {
+            refreshInstallState(for: agent)
+        }
+    }
+
+    private func refreshInstallState(for agent: AgentKind) {
+        installStates[agent] = installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
     }
 
     private func installAgent(_ agent: AgentKind) {
@@ -142,8 +166,10 @@ struct TerminalPane: View {
         Task {
             do {
                 try await installer.install()
+                refreshInstallState(for: agent)
                 hookStatus[agent] = "Installed"
             } catch {
+                refreshInstallState(for: agent)
                 hookStatus[agent] = "Error: \(error.localizedDescription)"
             }
         }
@@ -153,9 +179,36 @@ struct TerminalPane: View {
         guard let installer = installerRegistry.installer(for: agent) else { return }
         do {
             try installer.uninstall()
-            hookStatus[agent] = nil
+            refreshInstallState(for: agent)
+            hookStatus[agent] = "Uninstalled"
         } catch {
+            refreshInstallState(for: agent)
             hookStatus[agent] = "Error: \(error.localizedDescription)"
+        }
+    }
+}
+
+struct TerminalIntegrationAction: Equatable, Identifiable {
+    enum Kind: Equatable {
+        case install
+        case uninstall
+    }
+
+    let kind: Kind
+    let title: String
+
+    var id: String { title }
+}
+
+enum TerminalIntegrationActions {
+    static func actions(for installState: InstallState) -> [TerminalIntegrationAction] {
+        switch installState {
+        case .notInstalled:
+            return [TerminalIntegrationAction(kind: .install, title: "Install")]
+        case .outdated:
+            return [TerminalIntegrationAction(kind: .install, title: "Update")]
+        case .installed:
+            return [TerminalIntegrationAction(kind: .uninstall, title: "Uninstall")]
         }
     }
 }
