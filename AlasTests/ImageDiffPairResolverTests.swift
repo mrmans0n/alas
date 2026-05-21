@@ -88,4 +88,23 @@ struct ImageDiffPairResolverTests {
         let r = ImageDiffPairResolver.resolveCommit(entry: f)
         #expect(r.kind == .modified)
     }
+
+    @Test func resolvesMissingEntryAndMissingFileAsDeleted() {
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: nil, fileExistsOnDisk: false)
+        #expect(r.kind == .deleted)
+        #expect(r.oldPath == nil)
+    }
+
+    @Test func resolvesRenameWithoutRenameFromAsModified() {
+        // Defensive: git generally pairs "R" with a non-nil rename source,
+        // but the data type allows nil. Don't surface .renamed with no path
+        // to the loader — it would have nothing to fetch.
+        let file = ChangedFile(
+            path: "new.png", status: "R", stage: .unstaged,
+            add: 0, del: 0, renameFrom: nil
+        )
+        let r = ImageDiffPairResolver.resolveWorkingCopy(entry: file, fileExistsOnDisk: true)
+        #expect(r.kind == .modified)
+        #expect(r.oldPath == nil)
+    }
 }
