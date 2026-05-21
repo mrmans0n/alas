@@ -1,0 +1,116 @@
+import Testing
+import Foundation
+import AppKit
+@testable import Alas
+
+@Suite(.serialized)
+struct ImageDiffPairLoaderTests {
+    private func makeRepo() async throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-imgdiff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "t@e.com"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: tmp)
+        return tmp
+    }
+
+    /// Minimal valid 1x1 RGB PNG bytes generated offline. Using hardcoded
+    /// bytes avoids relying on NSBitmapImageRep's colorspace handling, which
+    /// emits warnings in headless test-host environments and may produce
+    /// identical output for different color inputs.
+    private enum PngFixture {
+        /// 1x1 red pixel.
+        static let red = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+        )!
+        /// 1x1 blue pixel.
+        static let blue = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
+        )!
+        /// 1x1 green pixel.
+        static let green = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC"
+        )!
+    }
+
+    @Test func loadsModifiedImagePair() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+
+        // Modify the file on disk.
+        try PngFixture.blue.write(to: pngURL)
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "logo.png", staged: false
+        )
+        #expect(pair.kind == .modified)
+        #expect(pair.before != nil)
+        #expect(pair.after != nil)
+        #expect(pair.oldPath == nil)
+    }
+
+    @Test func loadsAddedImagePair() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Need at least one prior commit so HEAD exists.
+        try "seed\n".write(to: repo.appendingPathComponent("seed.txt"),
+                           atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        try PngFixture.green.write(to: repo.appendingPathComponent("new.png"))
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "new.png", staged: false
+        )
+        #expect(pair.kind == .added)
+        #expect(pair.before == nil)
+        #expect(pair.after != nil)
+    }
+
+    @Test func loadsDeletedImagePair() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let pngURL = repo.appendingPathComponent("logo.png")
+        try PngFixture.red.write(to: pngURL)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+
+        try FileManager.default.removeItem(at: pngURL)
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "logo.png", staged: false
+        )
+        #expect(pair.kind == .deleted)
+        #expect(pair.before != nil)
+        #expect(pair.after == nil)
+    }
+
+    @Test func loadsRenamedImagePair() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let oldURL = repo.appendingPathComponent("old.png")
+        try PngFixture.red.write(to: oldURL)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+
+        // git mv keeps content identical; rename is detected. Also edit
+        // to give the rename a content delta so both blobs differ.
+        _ = try await Process.git(["mv", "old.png", "new.png"], cwd: repo)
+        try PngFixture.blue.write(to: repo.appendingPathComponent("new.png"))
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "new.png", staged: true
+        )
+        #expect(pair.kind == .renamed)
+        #expect(pair.oldPath == "old.png")
+        #expect(pair.before != nil)
+        #expect(pair.after != nil)
+    }
+}
