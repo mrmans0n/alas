@@ -204,7 +204,11 @@ private struct AgentSparkleMenu: View {
                     Button {
                         onLaunchAgent(agent.id)
                     } label: {
-                        Text(agent.displayName)
+                        Label {
+                            Text(agent.displayName)
+                        } icon: {
+                            AgentLogoView(agent: agent, size: 16)
+                        }
                     }
                 }
             }
