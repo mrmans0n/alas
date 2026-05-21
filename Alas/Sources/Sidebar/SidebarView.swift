@@ -24,12 +24,7 @@ struct SidebarView: View {
                     onAddProject: onAddProject,
                     onSearch: {
                         NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
-                    },
-                    onRevealRightSidebar: {
-                        state.config.rightPaneVisible = true
-                        state.saveConfig()
-                    },
-                    rightSidebarHidden: !state.config.rightPaneVisible
+                    }
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {

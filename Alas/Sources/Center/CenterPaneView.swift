@@ -58,6 +58,11 @@ struct CenterPaneView: View {
                 onLaunchAgent: { agentId in
                     _ = try? state.openAgentTerminalTab(for: worktree, agentId: agentId)
                 },
+                onRevealRightSidebar: {
+                    state.config.rightPaneVisible = true
+                    state.saveConfig()
+                },
+                rightSidebarHidden: !state.config.rightPaneVisible,
                 onMove: { draggedId, destinationId in
                     state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
                 }

@@ -17,6 +17,8 @@ struct TabBarView: View {
     let onNewTerminal: () -> Void
     let enabledAgents: [AgentDefinition]
     let onLaunchAgent: (String) -> Void
+    let onRevealRightSidebar: () -> Void
+    let rightSidebarHidden: Bool
     let onMove: (TabID, TabID) -> Void
     @Environment(\.theme) var theme
 
@@ -86,7 +88,11 @@ struct TabBarView: View {
                 agents: enabledAgents,
                 onLaunchAgent: onLaunchAgent
             )
-            .padding(.trailing, 8)
+            .padding(.trailing, rightSidebarHidden ? 2 : 8)
+            if rightSidebarHidden {
+                ToolbarIconButton(iconName: "sidebar.right", tooltip: "Show right sidebar", action: onRevealRightSidebar)
+                    .padding(.trailing, 8)
+            }
         }
         .frame(height: 34)
         .background(theme.color("bg-2"))

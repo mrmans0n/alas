@@ -4,17 +4,12 @@ struct SidebarHeaderView: View {
     let onSettings: () -> Void
     let onAddProject: () -> Void
     let onSearch: () -> Void
-    let onRevealRightSidebar: () -> Void
-    let rightSidebarHidden: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             TrafficLights()
             Spacer()
             HStack(alignment: .center, spacing: 2) {
-                if rightSidebarHidden {
-                    ToolbarBtn(icon: "sidebar.right", action: onRevealRightSidebar)
-                }
                 ToolbarBtn(icon: "search", action: onSearch)
                 ToolbarBtn(icon: "folder-plus", action: onAddProject)
                 ToolbarBtn(icon: "gear", action: onSettings)
