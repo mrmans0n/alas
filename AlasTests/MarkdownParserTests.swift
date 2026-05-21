@@ -109,6 +109,25 @@ struct MarkdownParserTests {
         #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
     }
 
+    @Test func parsesIndentedFrontmatterEntries() {
+        let parsed = MarkdownParser.parse("""
+        ---
+          title: Release Notes
+          draft: false
+        ---
+
+        # Body
+        """)
+
+        #expect(parsed.frontmatter?.entries == [
+            MarkdownFrontmatterEntry(key: "title", value: "Release Notes"),
+            MarkdownFrontmatterEntry(key: "draft", value: "false")
+        ])
+
+        let heading = parsed.document.child(at: 0) as? Heading
+        #expect(heading?.plainText == "Body")
+    }
+
     @Test func leavesNestedYamlFrontmatterBlockAsMarkdown() {
         let parsed = MarkdownParser.parse("""
         ---

@@ -64,13 +64,18 @@ enum MarkdownParser {
     }
 
     private static func parseFrontmatterEntries(_ source: String) -> [MarkdownFrontmatterEntry]? {
-        var entries: [MarkdownFrontmatterEntry] = []
-        for rawLine in source.components(separatedBy: .newlines) {
+        let contentLines = source.components(separatedBy: .newlines).compactMap { rawLine -> (raw: String, line: String, indent: Int)? in
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty, !line.hasPrefix("#") else {
-                continue
-            }
-            guard rawLine.first?.isWhitespace != true else { return nil }
+            guard !line.isEmpty, !line.hasPrefix("#") else { return nil }
+            return (rawLine, line, rawLine.prefix(while: { $0.isWhitespace }).count)
+        }
+        let baseIndent = contentLines.map(\.indent).min() ?? 0
+
+        var entries: [MarkdownFrontmatterEntry] = []
+        for contentLine in contentLines {
+            let dedentedLine = contentLine.raw.dropFirst(baseIndent)
+            guard dedentedLine.first?.isWhitespace != true else { return nil }
+            let line = dedentedLine.trimmingCharacters(in: .whitespaces)
             guard let separator = line.firstIndex(of: ":") else { return nil }
 
             let key = line[..<separator].trimmingCharacters(in: .whitespaces)
