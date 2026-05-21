@@ -48,7 +48,13 @@ struct NewWorktreeDialog: View {
                     )
                 }
                 DialogField(label: "Branch name") {
-                    AlasField(text: $branch, monospaced: true, focusOnAppear: true, onSubmit: submitCreate)
+                    AlasField(
+                        text: $branch,
+                        monospaced: true,
+                        focusOnAppear: true,
+                        onSubmit: submitCreate,
+                        inputFilter: .branchName
+                    )
                 }
                 HStack(spacing: 10) {
                     AlasToggle(on: $runStartup)
