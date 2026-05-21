@@ -109,6 +109,21 @@ struct MarkdownParserTests {
         #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
     }
 
+    @Test func leavesNestedYamlFrontmatterBlockAsMarkdown() {
+        let parsed = MarkdownParser.parse("""
+        ---
+        author:
+          name: Bob
+        ---
+
+        Body
+        """)
+
+        #expect(parsed.frontmatter == nil)
+        #expect(parsed.document.children.contains(where: { $0 is ThematicBreak }))
+        #expect(parsed.document.children.contains(where: { $0 is Paragraph }))
+    }
+
     @Test func leavesDocumentsWithoutFrontmatterUnchanged() {
         let parsed = MarkdownParser.parse("Hello\n\n---\n\nWorld")
 

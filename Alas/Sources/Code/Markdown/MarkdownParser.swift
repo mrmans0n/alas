@@ -70,6 +70,7 @@ enum MarkdownParser {
             guard !line.isEmpty, !line.hasPrefix("#") else {
                 continue
             }
+            guard rawLine.first?.isWhitespace != true else { return nil }
             guard let separator = line.firstIndex(of: ":") else { return nil }
 
             let key = line[..<separator].trimmingCharacters(in: .whitespaces)
