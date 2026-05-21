@@ -12,6 +12,7 @@ enum ImageFileType {
         "heic",
         "heif",
         "webp",
+        "svg",
     ]
 
     static func isSupported(relativePath: String) -> Bool {

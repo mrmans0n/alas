@@ -3,6 +3,8 @@ import Foundation
 import os
 
 extension GitService {
+    private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
+
     /// Commit variant. Returns the before/after `NSImage`s for an image
     /// file changed in commit `sha`. The caller passes the
     /// `CommitChangedFile` (which already carries status + originalPath)
@@ -54,10 +56,6 @@ extension GitService {
             afterFrameCount: frameCount(for: after)
         )
     }
-}
-
-extension GitService {
-    private static let imageDiffLogger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
 
     /// Working-copy variant. Returns the before/after `NSImage`s and the
     /// kind of change (added/deleted/renamed/modified) for an image file.
@@ -69,7 +67,14 @@ extension GitService {
         relativePath: String,
         staged: Bool
     ) async throws -> ImageDiffPair {
-        let entries = try await status(worktreePath: worktreePath)
+        // Use a dedicated status fetch with a more permissive rename
+        // threshold than `GitService.status(...)` uses for the rest of
+        // the app. Image renames frequently come with significant edits
+        // (logo redesign, compression change, format conversion), and
+        // git's default 50%-similarity heuristic misses those. A 30%
+        // threshold catches the realistic cases without producing false
+        // pairings between unrelated images.
+        let entries = try await imageDiffStatus(worktreePath: worktreePath)
         // A path can appear twice in status when it has both staged AND
         // unstaged changes. Pick the entry whose stage matches the caller's
         // intent; fall back to the other side only if the requested stage
@@ -176,5 +181,27 @@ extension GitService {
               let value = rep.value(forProperty: .frameCount) as? Int
         else { return image == nil ? 0 : 1 }
         return value
+    }
+
+    /// Internal: `git status` with a more permissive rename threshold
+    /// than the app-wide `GitService.status(...)`. The image-diff path
+    /// needs this because real image renames (logo redesigns, format
+    /// conversions, palette swaps) frequently fall below git's default
+    /// 50% similarity threshold.
+    ///
+    /// Mirrors `status(...)`'s arg shape and parses via the same
+    /// `StatusParser`, but doesn't enrich with numstat — the loader
+    /// only needs `path`/`status`/`stage`/`renameFrom`.
+    fileprivate func imageDiffStatus(worktreePath: URL) async throws -> [ChangedFile] {
+        let result = try await Process.git(
+            [
+                "status", "--porcelain=v2", "-z",
+                "--untracked-files=all",
+                "--find-renames=30%",
+            ],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { return [] }
+        return try StatusParser.parse(result.stdout)
     }
 }

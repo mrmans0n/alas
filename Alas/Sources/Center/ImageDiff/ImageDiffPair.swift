@@ -8,6 +8,6 @@ struct ImageDiffPair {
     let after: NSImage?
     let oldPath: String?       // non-nil only when `kind == .renamed`
     let kind: ImageDiffPairKind
-    let beforeFrameCount: Int  // 1 for non-multi-frame; >1 for animated GIFs
-    let afterFrameCount: Int
+    let beforeFrameCount: Int  // 0 when `before` is nil; 1 for static; >1 for animated GIFs
+    let afterFrameCount: Int   // 0 when `after`  is nil; 1 for static; >1 for animated GIFs
 }

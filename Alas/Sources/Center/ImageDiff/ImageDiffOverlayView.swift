@@ -3,6 +3,12 @@ import SwiftUI
 /// Single canvas. `before` painted opaque; `after` painted on top with
 /// adjustable opacity. Slider labelled "Before … After" so direction is
 /// obvious without legends.
+///
+/// Both images are placed top-left on a shared "union" canvas sized to
+/// `max(beforeW, afterW) × max(beforeH, afterH)` at their natural pixel
+/// dimensions, then the union canvas is scaled to fit the viewport.
+/// This way an image that grew or shrank between revisions visibly does
+/// so in the overlay, instead of both being silently fit to the same box.
 struct ImageDiffOverlayView: View {
     let before: NSImage
     let after: NSImage
@@ -17,20 +23,39 @@ struct ImageDiffOverlayView: View {
     }
 
     private var canvas: some View {
-        ZStack {
-            ImageCheckerboardBackground()
-            Image(nsImage: before)
-                .resizable()
-                .interpolation(.none)
-                .aspectRatio(contentMode: .fit)
-            Image(nsImage: after)
-                .resizable()
-                .interpolation(.none)
-                .aspectRatio(contentMode: .fit)
-                .opacity(opacity)
+        GeometryReader { proxy in
+            let geom = UnionCanvasGeometry(
+                before: before.size, after: after.size, viewport: proxy.size
+            )
+            ZStack {
+                ImageCheckerboardBackground()
+                ZStack(alignment: .topLeading) {
+                    Image(nsImage: before)
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(
+                            width: before.size.width * geom.scale,
+                            height: before.size.height * geom.scale
+                        )
+                    Image(nsImage: after)
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(
+                            width: after.size.width * geom.scale,
+                            height: after.size.height * geom.scale
+                        )
+                        .opacity(opacity)
+                }
+                .frame(
+                    width: geom.scaledUnionSize.width,
+                    height: geom.scaledUnionSize.height,
+                    alignment: .topLeading
+                )
+                .offset(x: geom.origin.x, y: geom.origin.y)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
         }
-        .clipped()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var slider: some View {
