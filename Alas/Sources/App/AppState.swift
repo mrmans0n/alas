@@ -1536,7 +1536,8 @@ final class AppState {
                 action: "Delete",
                 branch: worktree.branch,
                 dirtyCount: dirty.count,
-                onDiskDestructive: true
+                onDiskDestructive: true,
+                keepBranch: keepBranch
             ) {
             case .save: saveBuffersFirst = true
             case .discard: saveBuffersFirst = false
@@ -1753,16 +1754,22 @@ final class AppState {
         action: String,
         branch: String,
         dirtyCount: Int,
-        onDiskDestructive: Bool
+        onDiskDestructive: Bool,
+        keepBranch: Bool = false
     ) -> DirtyBufferChoice {
         let alert = NSAlert()
         alert.messageText = "\(action) worktree '\(branch)'?"
         let countSentence = dirtyCount == 1
             ? "1 file has unsaved changes."
             : "\(dirtyCount) files have unsaved changes."
-        let actionSentence = onDiskDestructive
-            ? "This removes its files from disk. The local branch will be deleted if merged."
-            : "The worktree itself stays on disk."
+        let actionSentence: String
+        if onDiskDestructive {
+            actionSentence = keepBranch
+                ? "This removes its files from disk. The local branch will be kept."
+                : "This removes its files from disk. The local branch will be deleted if merged."
+        } else {
+            actionSentence = "The worktree itself stays on disk."
+        }
         alert.informativeText = "\(countSentence) Saving will write them to disk; discarding will lose them. \(actionSentence)"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Save & \(action)")
