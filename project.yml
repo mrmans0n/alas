@@ -57,7 +57,7 @@ targets:
         CFBundleIconFile: AppIcon
         CFBundleIconName: AppIcon
     dependencies:
-      - framework: .build/ghostty/GhosttyKit.xcframework
+      - framework: $(SRCROOT)/.build/ghostty/GhosttyKit.xcframework
         embed: false
         link: true
         codeSign: false

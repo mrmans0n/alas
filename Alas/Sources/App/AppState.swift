@@ -629,8 +629,9 @@ final class AppState {
         startProjectGitWatcher(for: project)
     }
 
-    func removeProject(id: String) {
-        guard let project = projects.first(where: { $0.id == id }) else { return }
+    @discardableResult
+    func removeProject(id: String) -> Bool {
+        guard let project = projects.first(where: { $0.id == id }) else { return false }
 
         let mainId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
         let liveWorktrees = projectsManager.worktrees(projectId: id)
@@ -674,12 +675,12 @@ final class AppState {
             ) {
             case .save:
                 for entry in dirtyByWorktree {
-                    guard saveDirtyBuffers(in: entry.worktree) else { return }
+                    guard saveDirtyBuffers(in: entry.worktree) else { return false }
                 }
             case .discard:
                 break
             case .cancel:
-                return
+                return false
             }
         }
 
@@ -696,6 +697,40 @@ final class AppState {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
         }
+        return true
+    }
+
+    @discardableResult
+    func clearAllProjects() -> Int {
+        let ids = projects.map(\.id)
+        var removed = 0
+        for id in ids {
+            guard removeProject(id: id) else { break }
+            removed += 1
+        }
+        return removed
+    }
+
+    @discardableResult
+    func clearProjectsWithoutWorktrees() async -> Int {
+        var staleProjectIds: [String] = []
+        for project in projects {
+            let didRefresh = (try? await projectsManager.refreshWorktrees(projectId: project.id)) != nil
+            if !didRefresh, !FileManager.default.fileExists(atPath: project.path) {
+                staleProjectIds.append(project.id)
+                continue
+            }
+            if projectsManager.worktrees(projectId: project.id).isEmpty {
+                staleProjectIds.append(project.id)
+            }
+        }
+
+        var removed = 0
+        for id in staleProjectIds {
+            guard removeProject(id: id) else { break }
+            removed += 1
+        }
+        return removed
     }
 
     /// Start a ProjectGitWatcher for `project` and wire its callbacks into
