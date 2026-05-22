@@ -42,6 +42,12 @@ final class RightPaneState {
     var behindBase: GitService.BehindStatus? = nil
     var behindUpstream: GitService.BehindStatus? = nil
 
+    /// Live branch name, refreshed on each `refresh()`. The `worktree.branch`
+    /// snapshot captured at construction goes stale after a `git checkout`
+    /// inside the same worktree, so the chip predicates read this instead.
+    /// Empty when HEAD is detached or unborn.
+    var currentBranch: String
+
     /// `true` once `refresh()` has decided the initial `activeTab`. After
     /// that, the user's tab choice is sticky and refreshes leave it alone.
     private var didInitDefaultTab: Bool = false
@@ -74,8 +80,8 @@ final class RightPaneState {
     var showBehindBaseChip: Bool {
         guard let s = behindBase else { return false }
         guard s.count > 0 else { return false }
-        guard !worktree.branch.isEmpty else { return false } // detached HEAD
-        guard worktree.branch != baseBranch else { return false }
+        guard !currentBranch.isEmpty else { return false } // detached HEAD
+        guard currentBranch != baseBranch else { return false }
         return true
     }
 
@@ -84,13 +90,14 @@ final class RightPaneState {
     var showBehindUpstreamChip: Bool {
         guard let s = behindUpstream else { return false }
         guard s.count > 0 else { return false }
-        guard !worktree.branch.isEmpty else { return false } // detached HEAD
+        guard !currentBranch.isEmpty else { return false } // detached HEAD
         return true
     }
 
     init(worktree: Worktree, baseBranch: String) {
         self.worktree = worktree
         self.baseBranch = baseBranch
+        self.currentBranch = worktree.branch
         self.watcher = WorktreeWatcher(path: worktree.path)
         watcher.onChange = { [weak self] in
             Task { @MainActor in await self?.refresh() }
@@ -135,6 +142,7 @@ final class RightPaneState {
             self.isLoadingOlder = false
             async let s = git.status(worktreePath: worktree.path)
             async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch)
+            async let br = git.currentBranch(worktreePath: worktree.path)
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
@@ -142,6 +150,7 @@ final class RightPaneState {
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
+            self.currentBranch = (try? await br) ?? self.currentBranch
             // Gate the Amend toggle: an unborn branch (no commits yet)
             // has nothing to amend. If the probe itself throws, default
             // to `true` so we never wrongly disable the control on a

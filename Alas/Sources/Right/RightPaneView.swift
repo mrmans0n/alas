@@ -66,6 +66,13 @@ struct RightPaneView: View {
         .task(id: worktree.id) {
             await rps.refresh()
         }
+        // When the right pane is hidden or unmounted (no worktree selected),
+        // stop the active state's filesystem watcher and 5-min sync timer
+        // so they don't keep running with no UI consumer. Re-mounting
+        // restarts via `state(for:)`'s activate hook.
+        .onDisappear {
+            state.rightPaneStore.deactivate()
+        }
         // Host the discard confirmation here (not on ChangesTabView) so
         // diff-tab Discard actions still present the alert when the right
         // pane is on the Files tab — `requestDiscardFile` sets pending state

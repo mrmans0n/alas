@@ -66,4 +66,15 @@ final class RightPaneStore {
         state.start()
         activeId = id
     }
+
+    /// Stops the currently-active state's background work. Call when the
+    /// right pane is hidden or no worktree is selected, so the FSEvents
+    /// watcher and the 5-min sync timer don't keep running with no
+    /// consumer.
+    func deactivate() {
+        if let prev = activeId, let prevState = states[prev] {
+            prevState.stop()
+        }
+        activeId = nil
+    }
 }
