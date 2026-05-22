@@ -15,6 +15,7 @@ struct SubHeader: View {
         Button(action: onToggle) {
             HStack(spacing: 5) {
                 Icon(name: expanded ? "chev-down" : "chev-right", size: 9, color: theme.color("fg-faint"))
+                    .frame(width: 12, height: 12)
                 Text(title)
                     .font(.system(size: 10.5, weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))

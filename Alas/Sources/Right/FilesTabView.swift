@@ -40,8 +40,9 @@ struct FilesTabView: View {
                         HStack(spacing: 6) {
                             if canExpand {
                                 Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+                                    .frame(width: 14, height: 14)
                             } else {
-                                Color.clear.frame(width: 10, height: 10)
+                                Color.clear.frame(width: 14, height: 14)
                             }
                             Icon(name: "folder", size: 11, color: folderColor(for: node, open: open))
                             Text(node.name)

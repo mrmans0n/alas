@@ -15,6 +15,7 @@ struct SectionHeader<Trailing: View>: View {
         Button(action: onToggle) {
             HStack(spacing: 6) {
                 Icon(name: expanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
+                    .frame(width: 14, height: 14)
                 Text(title.uppercased())
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.5)
