@@ -982,6 +982,18 @@ extension GitService {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Returns the current HEAD SHA for the worktree.
+    func revParseHEAD(worktreePath: URL) async throws -> String {
+        let result = try await Process.git(
+            ["rev-parse", "HEAD"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw BehindStatusError.revParseFailed(stderr: result.stderr)
+        }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Resolves the base ref to compare against for a given worktree.
     /// Returns nil when neither `origin/<base>` nor local `<base>` exists.
     /// `remote == nil` means "no fetch path; use the local ref as-is".
