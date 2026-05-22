@@ -75,6 +75,33 @@ struct GitServiceBehindStatusTests {
         #expect(resolved?.ref == "origin/main")
     }
 
+    @Test func resolveUpstreamRefHandlesRemoteNameWithSlash() async throws {
+        // Configure a remote whose name contains a slash. Without robust
+        // parsing the splitter would pick "foo" as the remote and silently
+        // fail to fetch.
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-behind-slash-\(UUID().uuidString)")
+        let remote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-behind-slash-rmt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: repo)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "root"], cwd: repo)
+        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
+        _ = try await Process.git(["remote", "add", "foo/bar", remote.path], cwd: repo)
+        _ = try await Process.git(["push", "-q", "-u", "foo/bar", "main"], cwd: repo)
+
+        let svc = GitService()
+        let resolved = try await svc.resolveUpstreamRef(worktreePath: repo)
+        #expect(resolved?.remote == "foo/bar")
+        #expect(resolved?.ref == "foo/bar/main")
+    }
+
     @Test func resolveUpstreamRefReturnsNilForUnpushedBranch() async throws {
         let (repo, remote) = try await makeRepoWithRemote()
         defer {

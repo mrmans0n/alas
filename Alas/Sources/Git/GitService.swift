@@ -1014,9 +1014,20 @@ extension GitService {
         guard result.exitCode == 0 else { return nil }
         let name = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != "@{u}" else { return nil }
-        // `name` is "<remote>/<branch>"; take the first segment as remote.
-        guard let slash = name.firstIndex(of: "/") else { return nil }
-        let remote = String(name[..<slash])
+        // `name` is "<remote>/<branch>". Both segments may contain slashes
+        // (`foo/bar` is a valid remote name, `release/v1` is a valid branch
+        // name), so we can't split on the first slash. Match against the
+        // configured remotes and pick the longest one that prefixes `name`.
+        let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
+        guard remotesResult.exitCode == 0 else { return nil }
+        let remotes = remotesResult.stdout
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard let remote = remotes
+            .filter({ name.hasPrefix($0 + "/") })
+            .max(by: { $0.count < $1.count })
+        else { return nil }
         return (remote: remote, ref: name)
     }
 

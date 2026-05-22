@@ -6,13 +6,20 @@ import Observation
 final class RightPaneStore {
     private var states: [String: RightPaneState] = [:]
 
+    /// Id of the state currently being surfaced in the UI. Only that state
+    /// runs its background sync timer + watcher; others sit cached but
+    /// quiescent until they're requested again.
+    private var activeId: String? = nil
+
     /// Weak back-reference used to close diff tabs after a successful discard.
     /// Set by `AppState` after both objects exist. Weak so the store doesn't
     /// retain the app.
     weak var appState: AppState?
 
     func state(for worktree: Worktree, baseBranch: String) -> RightPaneState {
-        if let existing = states[worktree.id] {
+        let id = worktree.id
+        let result: RightPaneState
+        if let existing = states[id] {
             // Keep the cached state in sync with the currently-configured
             // base branch. If it changed (Settings → Worktrees → Base branch),
             // update the field and trigger a refresh so commitsAhead runs
@@ -23,25 +30,34 @@ final class RightPaneStore {
                 existing.baseBranch = baseBranch
                 Task { @MainActor in await existing.refresh() }
             }
-            return existing
-        }
-        let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
-        let worktreeId = worktree.id
-        new.closeDiffTabs = { [weak self] paths in
-            guard let app = self?.appState else { return }
-            let pathSet = Set(paths)
-            for tab in app.tabs.tabs(forWorktree: worktreeId) {
-                if case .diff(let s) = tab, pathSet.contains(s.relativePath) {
-                    app.closeTab(worktreeId: worktreeId, tabId: s.id)
+            result = existing
+        } else {
+            let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+            new.closeDiffTabs = { [weak self] paths in
+                guard let app = self?.appState else { return }
+                let pathSet = Set(paths)
+                for tab in app.tabs.tabs(forWorktree: id) {
+                    if case .diff(let s) = tab, pathSet.contains(s.relativePath) {
+                        app.closeTab(worktreeId: id, tabId: s.id)
+                    }
                 }
             }
+            states[id] = new
+            result = new
         }
-        states[worktree.id] = new
-        new.start()
-        return new
+        activate(id, on: result)
+        return result
     }
 
-    func releaseUnselected(keep id: String) {
-        _ = id
+    /// Marks `id` as the currently-displayed worktree. Stops the previously
+    /// active state's filesystem watcher and sync timer so background work
+    /// doesn't leak across every worktree the user has ever opened.
+    private func activate(_ id: String, on state: RightPaneState) {
+        guard activeId != id else { return }
+        if let prev = activeId, let prevState = states[prev] {
+            prevState.stop()
+        }
+        state.start()
+        activeId = id
     }
 }
