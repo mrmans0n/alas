@@ -8,12 +8,15 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TabActivityIconTintTests {
+    private typealias AppTab = Alas.Tab
+    private typealias AppTabID = Alas.TabID
+
     private func currentTheme() -> Theme {
         try! ThemeStore().current
     }
 
     @Test func tabWidthIsStableAcrossActivityStates() {
-        let tab = Tab.terminal(TerminalTabState(id: "t1", title: "bash", sessionId: "s1"))
+        let tab = AppTab.terminal(TerminalTabState(id: "t1", title: "bash", sessionId: "s1"))
         let states: [ActivityState?] = [nil, .idle, .busy, .awaitingInput, .permissionRequest]
         let widths = states.map { state in
             tabBarWidth(tab: tab, activityState: state)
@@ -25,7 +28,7 @@ struct TabActivityIconTintTests {
     }
 
     @Test func editorTabWidthIsStableWithAndWithoutHarness() {
-        let tab = Tab.editor(EditorTabState(
+        let tab = AppTab.editor(EditorTabState(
             id: "e1",
             title: "hello.swift",
             relativePath: "hello.swift",
@@ -43,8 +46,8 @@ struct TabActivityIconTintTests {
 
     // MARK: - Helpers
 
-    private func tabBarWidth(tab: Tab, activityState: ActivityState?) -> CGFloat {
-        let lookup: (TabID) -> (agent: AgentKind, state: ActivityState)? = { _ in
+    private func tabBarWidth(tab: AppTab, activityState: ActivityState?) -> CGFloat {
+        let lookup: (AppTabID) -> (agent: AgentKind, state: ActivityState)? = { _ in
             guard let state = activityState else { return nil }
             return (agent: .codex, state: state)
         }

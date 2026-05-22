@@ -164,7 +164,7 @@ private struct TabButton: View {
     }
 
     private var iconColor: Color {
-        if let info = harnessInfo, info.state != .idle {
+        if let info = harnessInfo {
             return stateColor(info.state)
         }
         return active ? theme.color("accent") : theme.color("fg-faint")
