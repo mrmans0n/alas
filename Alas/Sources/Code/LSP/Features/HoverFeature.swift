@@ -70,18 +70,30 @@ final class HoverFeature {
             return
         }
         let body: String
+        let isPlain: Bool
         switch result.contents {
-        case .markupContent(_, let value): body = value
-        case .plain(let s):                body = s
+        case .markupContent(_, let value):
+            body = value
+            isPlain = false
+        case .plain(let s):
+            body = s
+            isPlain = true
         }
         guard !body.isEmpty else {
             closePopover()
             return
         }
+        let markdown: String
+        if isPlain {
+            let fence = LSPMarkup.longestBacktickRun(in: body)
+            markdown = "\(fence)\n\(body)\n\(fence)"
+        } else {
+            markdown = body
+        }
         let textRect = textView.firstRect(for: position) ?? CGRect(origin: point, size: .zero)
         await MainActor.run {
             guard self.isCurrentRequest(currentRequestID, uri: uri, position: position, point: point) else { return }
-            self.presentPopover(text: body, anchor: textRect, in: textView)
+            self.presentPopover(text: markdown, anchor: textRect, in: textView)
         }
     }
 

@@ -199,14 +199,17 @@ enum LSPMarkup: Decodable, Sendable {
                     pieces.append(s)
                 } else if let nested = try? arr.decode(LSPMarkup.self) {
                     switch nested {
-                    case .plain(let p):            pieces.append(p)
-                    case .markupContent(_, let v): pieces.append(v)
+                    case .plain(let p):
+                        pieces.append(p)
+                    case .markupContent(let kind, let v):
+                        let fence = LSPMarkup.longestBacktickRun(in: v)
+                        pieces.append("\(fence)\n\(v)\n\(fence)")
                     }
                 } else {
                     _ = try? arr.decode(JSONValue.self)  // skip unknown
                 }
             }
-            self = .plain(pieces.joined(separator: "\n\n"))
+            self = .markupContent(kind: "markdown", value: pieces.joined(separator: "\n\n"))
             return
         }
         // 3. Object form. `MarkupContent` is `{kind, value}`; legacy
@@ -230,6 +233,21 @@ enum LSPMarkup: Decodable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey { case kind, value, language }
+
+    static func longestBacktickRun(in text: String) -> String {
+        var longest = 0
+        var current = 0
+        for ch in text {
+            if ch == "`" {
+                current += 1
+                longest = max(longest, current)
+            } else {
+                current = 0
+            }
+        }
+        let count = max(3, longest + 1)
+        return String(repeating: "`", count: count)
+    }
 }
 
 struct LSPDocumentSymbol: Decodable, Sendable {
