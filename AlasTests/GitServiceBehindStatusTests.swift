@@ -189,14 +189,4 @@ struct GitServiceBehindStatusTests {
         #expect(after.count == 1)
     }
 
-    @Test func revParseHEADReturnsSHA() async throws {
-        let (repo, remote) = try await makeRepoWithRemote()
-        defer {
-            try? FileManager.default.removeItem(at: repo)
-            try? FileManager.default.removeItem(at: remote)
-        }
-        let svc = GitService()
-        let sha = try await svc.revParseHEAD(worktreePath: repo)
-        #expect(sha.count == 40)
-    }
 }

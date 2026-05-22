@@ -989,7 +989,7 @@ extension GitService {
             cwd: worktreePath
         )
         guard result.exitCode == 0 else {
-            throw BehindStatusError.revParseFailed(stderr: result.stderr)
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
