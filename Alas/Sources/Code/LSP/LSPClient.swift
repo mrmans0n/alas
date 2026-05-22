@@ -161,6 +161,31 @@ actor LSPClient {
         return (try? JSONDecoder().decode([LSPTextEdit].self, from: raw)) ?? []
     }
 
+    /// Sends `textDocument/diagnostic` (LSP 3.17 pull diagnostics).
+    /// Returns diagnostics on a full report, `nil` on unchanged (caller
+    /// reuses cached diagnostics), or throws on error.
+    func requestDiagnostics(uri: String, previousResultId: String?) async throws -> [LSPDiagnostic]? {
+        guard supportsPullDiagnostics else { return nil }
+        var params: [String: Any] = [
+            "textDocument": ["uri": uri]
+        ]
+        if let previousResultId {
+            params["previousResultId"] = previousResultId
+        }
+        let raw = try await sendRequest(method: "textDocument/diagnostic", params: params)
+        guard let raw, raw.count > 4 else { return nil }
+        // Attempt full report decoding first.
+        if let report = try? JSONDecoder().decode(LSPFullDocumentDiagnosticReport.self, from: raw) {
+            return report.items
+        }
+        // Attempt unchanged report — caller receives nil and reuses cache.
+        if let _ = try? JSONDecoder().decode(LSPUnchangedDocumentDiagnosticReport.self, from: raw) {
+            return nil
+        }
+        // Legacy fallback: some servers omit `kind` and return bare [Diagnostic].
+        return try? JSONDecoder().decode([LSPDiagnostic].self, from: raw)
+    }
+
     func shutdown() async {
         // Send the polite handshake only if we ever reached `.ready`. For
         // clients that died during `initialize()` (or never started), the

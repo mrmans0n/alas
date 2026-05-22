@@ -218,4 +218,56 @@ struct LSPClientLifecycleTests {
         #expect(!change.contains(#""range":"#))
         transport.finish()
     }
+
+    @Test("requestDiagnostics decodes full report")
+    func requestDiagnosticsDecodesFullReport() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "kotlin", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"diagnosticProvider":{}}}}"#)
+            } else if sent.contains("\"method\":\"textDocument/diagnostic\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":2,"result":{"kind":"full","items":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":5}},"severity":1,"message":"error"}]}}"#)
+            }
+        }
+        try await client.initialize()
+        let diags = try await client.requestDiagnostics(uri: "file:///tmp/x.kt", previousResultId: nil)
+        #expect(diags?.count == 1)
+        #expect(diags?.first?.message == "error")
+        transport.finish()
+    }
+
+    @Test("requestDiagnostics returns nil on unchanged report")
+    func requestDiagnosticsUnchangedReport() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "kotlin", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"diagnosticProvider":{}}}}"#)
+            } else if sent.contains("\"method\":\"textDocument/diagnostic\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":2,"result":{"kind":"unchanged","resultId":"abc"}}"#)
+            }
+        }
+        try await client.initialize()
+        let diags = try await client.requestDiagnostics(uri: "file:///tmp/x.kt", previousResultId: nil)
+        #expect(diags == nil)
+        transport.finish()
+    }
+
+    @Test("requestDiagnostics includes previousResultId when non-nil")
+    func requestDiagnosticsIncludesPreviousResultId() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "kotlin", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"diagnosticProvider":{}}}}"#)
+            } else if sent.contains("\"method\":\"textDocument/diagnostic\"") {
+                #expect(sent.contains("\"previousResultId\":\"prev123\""))
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":2,"result":{"kind":"full","items":[]}}"#)
+            }
+        }
+        try await client.initialize()
+        _ = try await client.requestDiagnostics(uri: "file:///tmp/x.kt", previousResultId: "prev123")
+        transport.finish()
+    }
 }
