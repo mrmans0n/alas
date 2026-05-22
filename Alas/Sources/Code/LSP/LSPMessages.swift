@@ -154,6 +154,24 @@ struct LSPLocationLink: Codable, Hashable, Sendable {
     let targetSelectionRange: LSPRange
 }
 
+// MARK: - Pull Diagnostics
+
+enum LSPDocumentDiagnosticReportKind: String, Codable {
+    case full = "full"
+    case unchanged = "unchanged"
+}
+
+struct LSPFullDocumentDiagnosticReport: Codable {
+    let kind: LSPDocumentDiagnosticReportKind
+    let resultId: String?
+    let items: [LSPDiagnostic]
+}
+
+struct LSPUnchangedDocumentDiagnosticReport: Codable {
+    let kind: LSPDocumentDiagnosticReportKind
+    let resultId: String
+}
+
 // MARK: - Hover / Definition / Symbols / Diagnostics
 
 struct LSPHoverResult: Decodable, Sendable {

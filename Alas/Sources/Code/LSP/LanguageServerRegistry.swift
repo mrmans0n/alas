@@ -39,10 +39,8 @@ struct LanguageServerRegistry {
             enabled: true
         ),
         // JetBrains kotlin-lsp uses pull-based diagnostics
-        // (`textDocument/diagnostic`) and the LSPClient currently only
-        // handles push-based `publishDiagnostics`. Ship the preset
-        // disabled so it's discoverable in Settings but doesn't silently
-        // open .kt/.kts files with diagnostics that never arrive.
+        // (`textDocument/diagnostic`). The client now supports both push
+        // and pull models, so the preset is enabled by default.
         LanguageServerConfig(
             language: "kotlin",
             extensions: ["kt", "kts"],
@@ -54,7 +52,7 @@ struct LanguageServerRegistry {
                 "settings.gradle.kts", "settings.gradle",
                 "pom.xml", ".git"
             ],
-            enabled: false
+            enabled: true
         ),
         LanguageServerConfig(
             language: "markdown",

@@ -29,6 +29,15 @@ struct TreeSitterHighlighterTests {
         #expect(spans.isEmpty)
     }
 
+    @Test("fallback highlighter recognizes Kotlin")
+    func fallbackHighlighterRecognizesKotlin() throws {
+        let kt = TreeSitterHighlighter.highlight(source: "fun main() { println(\"hi\") }", fileExtension: "kt")
+        let kts = TreeSitterHighlighter.highlight(source: "val x = 1", fileExtension: "kts")
+        #expect(kt.contains(where: { $0.capture == .keyword }))
+        #expect(kt.contains(where: { $0.capture == .string }))
+        #expect(kts.contains(where: { $0.capture == .keyword }))
+    }
+
     @Test("string literal captured")
     func stringLiteral() throws {
         let src = #"let x = "hi""#

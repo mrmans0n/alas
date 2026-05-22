@@ -13,6 +13,7 @@ actor LSPClient {
     private var pending: [LSPID: CheckedContinuation<Data?, Error>] = [:]
     private var textDocumentSyncKind: TextDocumentSyncKind = .full
     private(set) var supportsDocumentFormatting: Bool = false
+    private(set) var supportsPullDiagnostics: Bool = false
     // `AsyncStream` is single-consumer — values are delivered to whichever
     // iterator races to read first, not broadcast. Multiple coordinators
     // sharing one client (two tabs in the same worktree/language) used to
@@ -71,6 +72,7 @@ actor LSPClient {
         let caps = Self.decodeCapabilities(from: rawResult)
         textDocumentSyncKind = caps.syncKind
         supportsDocumentFormatting = caps.supportsFormatting
+        supportsPullDiagnostics = caps.supportsPullDiagnostics
         try sendNotification(method: "initialized", params: [String: Any]())
         state = .ready
     }
@@ -159,6 +161,31 @@ actor LSPClient {
         return (try? JSONDecoder().decode([LSPTextEdit].self, from: raw)) ?? []
     }
 
+    /// Sends `textDocument/diagnostic` (LSP 3.17 pull diagnostics).
+    /// Returns diagnostics on a full report, `nil` on unchanged (caller
+    /// reuses cached diagnostics), or throws on error.
+    func requestDiagnostics(uri: String, previousResultId: String?) async throws -> [LSPDiagnostic]? {
+        guard supportsPullDiagnostics else { return nil }
+        var params: [String: Any] = [
+            "textDocument": ["uri": uri]
+        ]
+        if let previousResultId {
+            params["previousResultId"] = previousResultId
+        }
+        let raw = try await sendRequest(method: "textDocument/diagnostic", params: params)
+        guard let raw, raw.count > 4 else { return nil }
+        // Attempt full report decoding first.
+        if let report = try? JSONDecoder().decode(LSPFullDocumentDiagnosticReport.self, from: raw) {
+            return report.items
+        }
+        // Attempt unchanged report — caller receives nil and reuses cache.
+        if let _ = try? JSONDecoder().decode(LSPUnchangedDocumentDiagnosticReport.self, from: raw) {
+            return nil
+        }
+        // Legacy fallback: some servers omit `kind` and return bare [Diagnostic].
+        return try? JSONDecoder().decode([LSPDiagnostic].self, from: raw)
+    }
+
     func shutdown() async {
         // Send the polite handshake only if we ever reached `.ready`. For
         // clients that died during `initialize()` (or never started), the
@@ -224,14 +251,20 @@ actor LSPClient {
         }
     }
 
-    private static func decodeCapabilities(from data: Data?) -> (syncKind: TextDocumentSyncKind, supportsFormatting: Bool) {
-        guard let data else { return (.full, false) }
+    private static func decodeCapabilities(from data: Data?) -> (syncKind: TextDocumentSyncKind, supportsFormatting: Bool, supportsPullDiagnostics: Bool) {
+        guard let data else { return (.full, false, false) }
         struct InitializeResult: Decodable {
             let capabilities: ServerCapabilities
         }
         struct ServerCapabilities: Decodable {
             let textDocumentSync: TextDocumentSync?
             let documentFormattingProvider: DocumentFormattingProvider?
+            let diagnosticProvider: DiagnosticProvider?
+        }
+        struct DiagnosticProvider: Decodable {
+            let identifier: String?
+            let interFileDependencies: Bool?
+            let workspaceDiagnostics: Bool?
         }
         enum DocumentFormattingProvider: Decodable {
             case unsupported
@@ -274,7 +307,7 @@ actor LSPClient {
         }
 
         guard let result = try? JSONDecoder().decode(InitializeResult.self, from: data) else {
-            return (.full, false)
+            return (.full, false, false)
         }
         let syncKind: TextDocumentSyncKind = {
             guard let sync = result.capabilities.textDocumentSync else { return .full }
@@ -283,7 +316,8 @@ actor LSPClient {
             }
         }()
         let supportsFormatting = result.capabilities.documentFormattingProvider?.isSupported ?? false
-        return (syncKind, supportsFormatting)
+        let supportsPullDiagnostics = result.capabilities.diagnosticProvider != nil
+        return (syncKind, supportsFormatting, supportsPullDiagnostics)
     }
 
     private static func fullRange(for text: String) -> LSPRange {
