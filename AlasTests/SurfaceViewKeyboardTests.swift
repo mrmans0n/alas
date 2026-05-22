@@ -446,13 +446,11 @@ struct SurfaceViewKeyboardTests {
         #expect(io.calls.isEmpty)
     }
 
-    @Test @MainActor func keyDown_setsComposingFlagWhenMarkedTextExists() {
+    @Test @MainActor func markTextAndUnmarkText_updatesCompositionState() {
         let io = FakeGhosttySurfaceIO()
         let view = AlasGhostty.SurfaceView(testIO: io)
 
         view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
-        // keyDown is hard to synthesise in unit tests; instead we directly
-        // verify that hasMarkedText reflects the marked state.
         #expect(view.hasMarkedText() == true)
 
         view.unmarkText()
