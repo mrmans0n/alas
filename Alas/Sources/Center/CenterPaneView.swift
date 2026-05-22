@@ -114,6 +114,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             relativePath: s.relativePath,
                             staged: s.staged,
+                            codeFontFamily: state.config.code.fontFamily,
+                            codeFontSize: CGFloat(state.config.code.fontSize),
                             onOpenFile: openAvailable
                                 ? { state.openFile(relativePath: s.relativePath, worktreeId: worktree.id) }
                                 : nil,

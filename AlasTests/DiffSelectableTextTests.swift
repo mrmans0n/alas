@@ -106,6 +106,64 @@ struct DiffSelectableTextTests {
         #expect(controller.view != nil)
     }
 
+    // MARK: Code font configuration
+
+    @Test func codeFontResolutionReturnsMonospacedForEmptyFamily() {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        #expect(font.isFixedPitch)
+        #expect(font.pointSize == 13)
+    }
+
+    @Test func codeFontResolutionMatchesEditorForNamedFamily() {
+        let diffFont = CenterTypography.resolveCodeFont(family: "SF Mono", size: 14)
+        let editorFont = CodeEditorCoordinator.resolveFont(family: "SF Mono", size: 14)
+        #expect(diffFont.fontName == editorFont.fontName)
+        #expect(diffFont.pointSize == editorFont.pointSize)
+    }
+
+    @Test func codeFontRendersForConfiguredFamilyName() {
+        let font = CenterTypography.codeFont(family: "SF Mono", size: 14)
+        #expect(font != Font.system(size: 14))
+    }
+
+    @Test func hunkViewRendersWithCustomFontSize() {
+        for size: CGFloat in [8, 13, 24, 64] {
+            let view = HunkView(hunk: sampleHunk(), fileExtension: "swift", codeFontFamily: "", codeFontSize: size)
+                .environment(\.theme, currentTheme())
+            let controller = NSHostingController(rootView: view)
+            controller.view.layoutSubtreeIfNeeded()
+            #expect(controller.view != nil)
+        }
+    }
+
+    @Test func hunkViewRendersWithCustomFontFamily() {
+        let view = HunkView(hunk: sampleHunk(), fileExtension: "swift", codeFontFamily: "Menlo", codeFontSize: 15)
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(controller.view != nil)
+    }
+
+    @Test func commitDiffViewRendersWithCustomFont() {
+        let diff = ParsedDiff(hunks: [sampleHunk()])
+        let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp"),
+            sha: "abc1234",
+            file: sampleFile(),
+            path: "Sources/App.swift",
+            diff: diff,
+            loading: false,
+            error: nil,
+            codeFontFamily: "Menlo",
+            codeFontSize: 18,
+            onOpenFile: nil
+        )
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(controller.view != nil)
+    }
+
     @Test func hunkViewWithPlainTextExtensionRendersWithoutCrashing() {
         let hunk = ParsedDiff.Hunk(
             header: "@@ -1,3 +1,3 @@",

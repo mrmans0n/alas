@@ -4,6 +4,8 @@ struct DiffTabView: View {
     let worktreePath: URL
     let relativePath: String
     let staged: Bool
+    var codeFontFamily: String = ""
+    var codeFontSize: CGFloat = 13
     let onOpenFile: (() -> Void)?
     let onRequestDiscardFile: (() -> Void)?
     @Environment(\.theme) var theme
@@ -81,7 +83,7 @@ struct DiffTabView: View {
             header
             if let error {
                 Text(error)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
                     .foregroundColor(theme.color("del"))
                     .padding(.horizontal, 14).padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -99,6 +101,8 @@ struct DiffTabView: View {
                             HunkView(
                                 hunk: hunk,
                                 fileExtension: (relativePath as NSString).pathExtension,
+                                codeFontFamily: codeFontFamily,
+                                codeFontSize: codeFontSize,
                                 onStage: actions.stage,
                                 onDiscard: actions.discard
                             )
@@ -138,7 +142,7 @@ struct DiffTabView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Text((relativePath as NSString).lastPathComponent)
-                .font(.system(size: 12, design: .monospaced))
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .foregroundColor(theme.color("fg"))
             if staged {
                 Text("STAGED")
@@ -150,7 +154,7 @@ struct DiffTabView: View {
             }
             Text("·").foregroundColor(theme.color("fg-faint"))
             Text((relativePath as NSString).deletingLastPathComponent)
-                .font(.system(size: 11.5))
+                .font(.system(size: codeFontSize - 1.5))
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
             if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
@@ -158,7 +162,7 @@ struct DiffTabView: View {
                     Text("+\(totalAdd)").foregroundColor(theme.color("add"))
                     Text("−\(totalDel)").foregroundColor(theme.color("del"))
                 }
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1.5))
             }
             HStack(spacing: 4) {
                 if let onOpenFile {
@@ -301,6 +305,8 @@ struct DiffTabView: View {
 struct HunkView: View {
     let hunk: ParsedDiff.Hunk
     let fileExtension: String
+    var codeFontFamily: String = ""
+    var codeFontSize: CGFloat = 13
     var onStage:   (() -> Void)? = nil
     var onDiscard: (() -> Void)? = nil
     @Environment(\.theme) var theme
@@ -309,7 +315,7 @@ struct HunkView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text(hunk.header)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(CenterTypography.codeFont(family: codeFontFamily, size: headerFontSize))
                     .foregroundColor(theme.color("fg-dim"))
                 Spacer(minLength: 8)
                 if onStage != nil {
@@ -331,7 +337,7 @@ struct HunkView: View {
                     Text(highlightedLine(line.text, ext: fileExtension))
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 12.5, design: .monospaced))
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .padding(.horizontal, 14)
                 .centerPanelRowSpacing()
                 .background(rowBg(line))
@@ -414,6 +420,9 @@ struct HunkView: View {
         case .context: return .clear
         }
     }
+
+    /// The hunk header (@@…@@) is rendered slightly smaller than diff content.
+    private var headerFontSize: CGFloat { (codeFontSize * 0.85).rounded() }
 
     private func markerColor(_ l: ParsedDiff.Hunk.Line) -> Color {
         switch l.kind {
