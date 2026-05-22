@@ -200,6 +200,71 @@ struct RepoSelectorModelTests {
         #expect(recentIds == ["w4", "w3", "w2", "w1"])
     }
 
+    @Test func emptyQueryBackfillsRecentFromLegacyPerProjectListsWhenFlatRefsEmpty() {
+        // Upgrade case: a config written before `recentWorktreeRefs` existed
+        // only carries `projectIds` + `worktreeIdsByProject`. The RECENT
+        // section should still populate (round-robin interleaved across
+        // projects in projectIds order) instead of being empty until the
+        // next focus.
+        let model = RepoSelectorModel()
+        let pA = project("A")
+        let pB = project("B")
+        let aWts: [Worktree] = (1...3).map { worktree("a\($0)", projectId: "A", branch: "A/\($0)") }
+        let bWts: [Worktree] = (1...2).map { worktree("b\($0)", projectId: "B", branch: "B/\($0)") }
+        var r = RepoSelectorRecents()
+        // Legacy shape — `recentWorktreeRefs` left empty on purpose.
+        r.projectIds = ["B", "A"]  // B is the most recently touched project
+        r.worktreeIdsByProject = ["A": ["a1", "a2", "a3"], "B": ["b1", "b2"]]
+        let e = env(
+            projects: [pA, pB],
+            worktrees: ["A": aWts, "B": bWts],
+            recents: r
+        )
+        let rows = model.rows(environment: e)
+        let recentIds: [String] = rows
+            .dropFirst()  // skip .recentHeader
+            .prefix(while: { row in
+                if case .projectHeader = row { return false }
+                return true
+            })
+            .compactMap { if case .worktree(let w, _, _) = $0 { return w.id } else { return nil } }
+        // Round-robin from projectIds order ["B", "A"]:
+        //   slot 0: b1, a1
+        //   slot 1: b2, a2
+        //   slot 2: a3   (B exhausted)
+        // Cap is 5, so all of these fit.
+        #expect(recentIds == ["b1", "a1", "b2", "a2", "a3"])
+    }
+
+    @Test func emptyQueryDoesNotBackfillWhenFlatRefsArePopulated() {
+        // Once `recentWorktreeRefs` exists, it's authoritative — the
+        // backfill must not contribute.
+        let model = RepoSelectorModel()
+        let pA = project("A")
+        let pB = project("B")
+        let aWts = [worktree("a1", projectId: "A", branch: "A/1")]
+        let bWts = [worktree("b1", projectId: "B", branch: "B/1")]
+        var r = RepoSelectorRecents()
+        r.projectIds = ["A", "B"]
+        r.worktreeIdsByProject = ["A": ["a1"], "B": ["b1"]]
+        // Only B's worktree in the flat list — A's a1 must not be backfilled.
+        r.recentWorktreeRefs = [.init(projectId: "B", worktreeId: "b1")]
+        let e = env(
+            projects: [pA, pB],
+            worktrees: ["A": aWts, "B": bWts],
+            recents: r
+        )
+        let rows = model.rows(environment: e)
+        let recentIds: [String] = rows
+            .dropFirst()
+            .prefix(while: { row in
+                if case .projectHeader = row { return false }
+                return true
+            })
+            .compactMap { if case .worktree(let w, _, _) = $0 { return w.id } else { return nil } }
+        #expect(recentIds == ["b1"])
+    }
+
     @Test func emptyQueryProjectSectionOrdersByRecencyThenAlpha() {
         let model = RepoSelectorModel()
         let p1 = project("p1")

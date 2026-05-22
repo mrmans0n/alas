@@ -127,13 +127,58 @@ final class RepoSelectorModel {
         let refs = recents.liveRecentWorktreeRefs(
             projectsWithVisibleWorktrees: visibleByProject
         )
+        let effectiveRefs = refs.isEmpty
+            ? legacyRecentRefs(
+                projects: projects,
+                worktreesByProject: worktreesByProject,
+                visibleByProject: visibleByProject,
+                recents: recents
+            )
+            : refs
+
         var output: [RepoSelectorRow] = []
-        for ref in refs {
+        for ref in effectiveRefs {
             guard let w = worktreeByPair[ref.projectId]?[ref.worktreeId] else { continue }
             output.append(.worktree(w, indices: [], isCurrent: w.id == currentId))
             if output.count >= Self.recentLimit { break }
         }
         return output
+    }
+
+    /// Synthesize cross-project recents from the legacy per-project lists
+    /// for users upgrading from configs that pre-date `recentWorktreeRefs`.
+    /// Interleaves projects round-robin (most-recently-touched project's
+    /// most-recent worktree first), which is the best approximation
+    /// possible without per-worktree timestamps. The next `focus()` call
+    /// populates the flat list and this fallback stops being used.
+    private func legacyRecentRefs(
+        projects: [ProjectConfig],
+        worktreesByProject: [String: [Worktree]],
+        visibleByProject: [String: Set<String>],
+        recents: RepoSelectorRecents
+    ) -> [RepoSelectorRecents.RecentWorktreeRef] {
+        let validProjectIds = Set(projects.map(\.id))
+        let projectOrder = recents.liveProjectIds(validProjectIds: validProjectIds)
+        guard !projectOrder.isEmpty else { return [] }
+
+        let perProject: [(projectId: String, ids: [String])] = projectOrder.map { pid in
+            let visible = visibleByProject[pid] ?? []
+            let ids = recents.liveWorktreeIds(in: pid, validWorktreeIds: visible)
+            return (pid, ids)
+        }
+        guard perProject.contains(where: { !$0.ids.isEmpty }) else { return [] }
+
+        var refs: [RepoSelectorRecents.RecentWorktreeRef] = []
+        var slot = 0
+        let maxSlots = perProject.map(\.ids.count).max() ?? 0
+        while slot < maxSlots && refs.count < Self.recentLimit {
+            for entry in perProject where slot < entry.ids.count {
+                refs.append(.init(projectId: entry.projectId, worktreeId: entry.ids[slot]))
+                if refs.count >= Self.recentLimit { break }
+            }
+            slot += 1
+        }
+        return refs
     }
 
     /// Projects ordered by the recency of their most-recently-touched
