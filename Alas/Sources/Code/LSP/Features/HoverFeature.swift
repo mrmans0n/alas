@@ -195,7 +195,10 @@ private struct HoverContentView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            true
+            if let url = link as? URL {
+                NSWorkspace.shared.open(url)
+            }
+            return true
         }
     }
 }
