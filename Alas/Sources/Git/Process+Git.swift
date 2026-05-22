@@ -9,6 +9,7 @@ struct ProcessResult {
 enum ProcessError: Error {
     case launchFailed(String)
     case timedOut(executable: String, args: [String], seconds: TimeInterval)
+    case nonZeroExit(Int32, String)
 }
 
 extension Process {

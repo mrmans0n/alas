@@ -417,4 +417,31 @@ struct GitServiceTests {
         let paths = try await svc.submodulePaths(worktreePath: repo)
         #expect(paths == ["Deps/Submodule"])
     }
+
+    private func makeRepoWithRemote() async throws -> (URL, URL) {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-revparse-\(UUID().uuidString)")
+        let remote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-revparse-rmt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: repo)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
+        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: repo)
+        return (repo, remote)
+    }
+
+    @Test func revParseHEADReturnsSHA() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let svc = GitService()
+        let sha = try await svc.revParseHEAD(worktreePath: repo)
+        #expect(sha.count == 40)
+    }
 }

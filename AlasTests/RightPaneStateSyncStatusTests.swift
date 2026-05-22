@@ -265,4 +265,64 @@ struct RightPaneStateSyncStatusTests {
         #expect(state.behindUpstream?.count == 1)
         #expect(state.showBehindUpstreamChip == true)
     }
+
+    // MARK: - rebase-triggered refresh
+
+    private func makeFeatureBehindRemoteMain() async throws -> (repo: URL, remote: URL) {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-sync-reb-\(UUID().uuidString)")
+        let remote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-sync-reb-rmt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: repo)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "root"], cwd: repo)
+        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
+        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: repo)
+
+        // Create feature behind origin/main by one commit.
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat-1"], cwd: repo)
+
+        // Push one commit to origin/main from a separate clone so feature is behind.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-sync-reb-tmp-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try await Process.git(["clone", "-q", remote.path, tmp.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "x@e"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "x"], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "main-1"], cwd: tmp)
+        _ = try await Process.git(["push", "-q", "origin", "main"], cwd: tmp)
+
+        return (repo, remote)
+    }
+
+    @Test func refreshSyncStatusFiresOnRebase() async throws {
+        let (repo, remote) = try await makeFeatureBehindRemoteMain()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let state = RightPaneState(
+            worktree: makeWorktree(at: repo, branch: "feature"),
+            baseBranch: "main"
+        )
+
+        // First refresh — feature is behind origin/main.
+        await state.refresh()
+        // The background refreshSyncStatus task needs a moment to finish on MainActor.
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(state.behindBase?.count == 1, "feature should be behind origin/main by 1 commit")
+
+        // Rebase feature onto origin/main — now in sync.
+        _ = try await Process.git(["rebase", "origin/main"], cwd: repo)
+
+        // Second refresh — HEAD SHA changed (same branch), so refreshSyncStatus
+        // should fire and update behindBase to 0.
+        await state.refresh()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(state.behindBase?.count == 0, "after rebase feature should be in sync with origin/main")
+    }
 }
