@@ -40,13 +40,34 @@ jobs:
           git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
           shasum scripts/build-ghostty.sh >> .ghostty-pin
 
-      - name: Cache Ghostty build outputs
-        uses: actions/cache@v5
+      - name: Restore Ghostty cache
+        # Split restore + save (Option B): the combined `actions/cache@v5` only
+        # saves at end-of-job on success. This job runs up to 150 min through
+        # four notarytool --wait calls — any failure or timeout there would
+        # discard the freshly-built arm64+x86_64 xcframeworks and force the
+        # next run to cold-build both. With explicit restore + save, the
+        # cross-arch shared cache is persisted immediately after both builds
+        # complete, before notary work starts.
+        #
+        # restore-keys gives us a warm cache when .ghostty-pin changes (new
+        # submodule SHA or build-ghostty.sh edit): we fall back to the most
+        # recent prior cache, and build-ghostty.sh's in-script fingerprint
+        # table (~/Library/Caches/Alas/GhosttyKit/${arch}/ keeps the last 5
+        # entries) can fast-path the build if any prior fingerprint matches.
+        #
+        # `.build/ghostty` is intentionally NOT cached here — it's the per-arch
+        # zig worktree and gets wiped between the arm64 and x86_64 passes, so
+        # whatever ends up in it at job-end is single-arch and useless to the
+        # opposite arch's next run. build-ghostty.sh repopulates it from
+        # ~/Library/Caches/Alas/GhosttyKit/${arch}/ via APFS clonefile when
+        # fingerprints match.
+        id: ghostty-cache
+        uses: actions/cache/restore@v5
         with:
-          path: |
-            .build/ghostty
-            ~/Library/Caches/Alas/GhosttyKit
+          path: ~/Library/Caches/Alas/GhosttyKit
           key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+          restore-keys: |
+            ghostty-${{ runner.os }}-
 
       - name: Generate project
         run: xcodegen
@@ -112,6 +133,18 @@ jobs:
         env:
           ALAS_GHOSTTY_TARGET_ARCH: x86_64
         run: ./scripts/build-ghostty.sh
+
+      - name: Save Ghostty cache
+        # Save the moment both arches are built, BEFORE the rest of the job
+        # (xcodebuild + four notarytool calls) has a chance to fail. If we
+        # waited until end-of-job, a notary timeout would throw away ~25 min
+        # of cold zig work on each arch. `cache-hit != 'true'` skips a no-op
+        # save when restore already hit the exact primary key.
+        if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/Library/Caches/Alas/GhosttyKit
+          key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Build release app (x86_64)
         run: |
