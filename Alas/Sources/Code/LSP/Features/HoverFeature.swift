@@ -200,6 +200,54 @@ private struct HoverContentView: NSViewRepresentable {
     }
 }
 
+enum HoverFeatureTesting {
+    @MainActor
+    static func makeHoverContainer(result: MarkdownRenderResult, theme: Theme) -> NSScrollView {
+        let scrollView = NSScrollView()
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.drawsBackground = false
+        textView.isSelectable = true
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.isHorizontallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        scrollView.documentView = textView
+        scrollView.drawsBackground = true
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+
+        textView.textStorage?.setAttributedString(result.attributedString)
+        scrollView.backgroundColor = NSColor(theme.color("bg-1"))
+        return scrollView
+    }
+
+    static func computePreferredSize(for result: MarkdownRenderResult) -> NSSize {
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(containerSize: NSSize(width: 500, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        textContainer.lineFragmentPadding = 0
+        layoutManager.addTextContainer(textContainer)
+
+        let textStorage = NSTextStorage(attributedString: result.attributedString)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.glyphRange(for: textContainer)
+
+        var usedRect = layoutManager.usedRect(for: textContainer)
+        usedRect.size.width += 16 + 20
+        usedRect.size.height += 16 + 20
+
+        let minSize = NSSize(width: 360, height: 220)
+        let maxSize = NSSize(width: 500, height: 400)
+        return NSSize(
+            width: max(minSize.width, min(usedRect.size.width, maxSize.width)),
+            height: max(minSize.height, min(usedRect.size.height, maxSize.height))
+        )
+    }
+}
+
 extension CodeTextView {
     /// Resolves an `LSPPosition` (line, UTF-16 character) for a point in the
     /// view's coordinate space. Returns nil if outside the text area.
