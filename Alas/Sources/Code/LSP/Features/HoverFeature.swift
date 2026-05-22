@@ -70,46 +70,19 @@ final class HoverFeature {
             return
         }
         let body: String
-        let isPlain: Bool
         switch result.contents {
-        case .markupContent(_, let value):
-            body = value
-            isPlain = false
-        case .plain(let s):
-            body = s
-            isPlain = true
+        case .markupContent(_, let value): body = value
+        case .plain(let s):                body = s
         }
         guard !body.isEmpty else {
             closePopover()
             return
         }
-        let markdown: String
-        if isPlain {
-            let fence = longestBacktickRun(in: body)
-            markdown = "\(fence)\n\(body)\n\(fence)"
-        } else {
-            markdown = body
-        }
         let textRect = textView.firstRect(for: position) ?? CGRect(origin: point, size: .zero)
         await MainActor.run {
             guard self.isCurrentRequest(currentRequestID, uri: uri, position: position, point: point) else { return }
-            self.presentPopover(text: markdown, anchor: textRect, in: textView)
+            self.presentPopover(text: body, anchor: textRect, in: textView)
         }
-    }
-
-    private func longestBacktickRun(in text: String) -> String {
-        var longest = 0
-        var current = 0
-        for ch in text {
-            if ch == "`" {
-                current += 1
-                longest = max(longest, current)
-            } else {
-                current = 0
-            }
-        }
-        let count = max(3, longest + 1)
-        return String(repeating: "`", count: count)
     }
 
     private func isCurrentRequest(_ currentRequestID: UInt64, uri: String, position: LSPPosition, point: NSPoint) -> Bool {
