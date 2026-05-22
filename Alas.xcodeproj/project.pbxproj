@@ -386,6 +386,7 @@
 		C893CA3167A5CC6637FCD8C8 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 1688AB1B49758FAB5BF0AF2F /* light.json */; };
 		C91AE8901B9D4B16A1EE67FB /* EditorBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6E896FEA37B4691BD16E2DD /* EditorBufferTests.swift */; };
 		C9BC01285F80FB20F665A765 /* CodeTextViewMultiCursorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A52FE6A88564AD523AC577CC /* CodeTextViewMultiCursorTests.swift */; };
+		C9DAC0F907752F6D3B955DD8 /* HoverFeatureRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1D8FEB5416139D8B2BA780 /* HoverFeatureRenderingTests.swift */; };
 		CAE149AF78F3A62AC985EA2D /* TerminalIntegrationActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 606DD97D8F66AC2B5883F984 /* TerminalIntegrationActionsTests.swift */; };
 		CAE7524F4289A256FF1069FC /* PaneTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16C9E59E3987C1D3C9989D91 /* PaneTreeTests.swift */; };
 		CB27451157E1BF95BE47248A /* GitServiceStagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF0AEE54BDB4FC4FD5E02F4 /* GitServiceStagingTests.swift */; };
@@ -638,6 +639,7 @@
 		3DAAC7481503A68EA0888682 /* AgentDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDetectorTests.swift; sourceTree = "<group>"; };
 		3DCEFADD952DB870B8BAB890 /* CommitRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitRow.swift; sourceTree = "<group>"; };
 		3E10A1919A8DDC6A8DBB8B97 /* ChangedRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangedRow.swift; sourceTree = "<group>"; };
+		3F1D8FEB5416139D8B2BA780 /* HoverFeatureRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverFeatureRenderingTests.swift; sourceTree = "<group>"; };
 		3F4C58E8C0B1BC5B7CB2BBCB /* Code.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Code.swift; sourceTree = "<group>"; };
 		4069925EE709DD18AEA810B3 /* ShortcutResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutResolver.swift; sourceTree = "<group>"; };
 		410A42B1C46E68965FD36793 /* ShortcutChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutChip.swift; sourceTree = "<group>"; };
@@ -1121,6 +1123,7 @@
 				2F8A28C3DBC50749BB1D2BEA /* HeadReaderTests.swift */,
 				23532A4B85092F720FD0E9F9 /* HookCommandShellTests.swift */,
 				C54F4827435F746DC54616D0 /* HookInstallNudgeResolverTests.swift */,
+				3F1D8FEB5416139D8B2BA780 /* HoverFeatureRenderingTests.swift */,
 				FA486F66BE4CEB2A16EB148B /* HunkPatchBuilderTests.swift */,
 				9278ED5964A66871F5299F0C /* ImageDiffDifferenceComputerTests.swift */,
 				638E94907851A6D0B4AB8F52 /* ImageDiffEndToEndTests.swift */,
@@ -2423,6 +2426,7 @@
 				3EA6388E72FDD02E5242002C /* HeadReaderTests.swift in Sources */,
 				D3EAFAA986CE4441B7F103F9 /* HookCommandShellTests.swift in Sources */,
 				1AE5FCAF7D44694876754813 /* HookInstallNudgeResolverTests.swift in Sources */,
+				C9DAC0F907752F6D3B955DD8 /* HoverFeatureRenderingTests.swift in Sources */,
 				D2B345D1AEB1D5CEF48354C3 /* HoverHighlightFeatureTests.swift in Sources */,
 				E31120BCB281A62D767D85BC /* HunkPatchBuilderTests.swift in Sources */,
 				3961F6003185B2FC9DFE7E14 /* ImageDiffDifferenceComputerTests.swift in Sources */,
