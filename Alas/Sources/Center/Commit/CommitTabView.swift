@@ -85,6 +85,8 @@ struct CommitTabView: View {
                             diff: diff,
                             loading: loadingDiff,
                             error: diffError,
+                            codeFontFamily: appState.config.code.fontFamily,
+                            codeFontSize: CGFloat(appState.config.code.fontSize),
                             onOpenFile: openAvailable
                                 ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
                                 : nil

@@ -8,6 +8,8 @@ struct CommitDiffView: View {
     let diff: ParsedDiff
     let loading: Bool
     let error: String?
+    var codeFontFamily: String = ""
+    var codeFontSize: CGFloat = 13
     let onOpenFile: (() -> Void)?
 
     @Environment(\.theme) private var theme
@@ -76,11 +78,11 @@ struct CommitDiffView: View {
         HStack(spacing: 6) {
             HStack(spacing: 6) {
                 Text((path as NSString).lastPathComponent)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                     .foregroundColor(titleHovering ? theme.color("accent") : theme.color("fg"))
                 Text("·").foregroundColor(theme.color("fg-faint"))
                 Text((path as NSString).deletingLastPathComponent)
-                    .font(.system(size: 11))
+                    .font(.system(size: codeFontSize - 2))
                     .foregroundColor(titleHovering ? theme.color("accent") : theme.color("fg-dim"))
             }
             .contentShape(Rectangle())
@@ -107,7 +109,7 @@ struct CommitDiffView: View {
             ProgressView().padding()
         } else if let error {
             Text("Could not load diff for \(path): \(error)")
-                .font(.system(size: 11))
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
                 .foregroundColor(theme.color("del"))
                 .padding()
         } else if diff.hunks.isEmpty {
@@ -118,7 +120,7 @@ struct CommitDiffView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
-                        HunkView(hunk: hunk, fileExtension: (path as NSString).pathExtension)
+                        HunkView(hunk: hunk, fileExtension: (path as NSString).pathExtension, codeFontFamily: codeFontFamily, codeFontSize: codeFontSize)
                     }
                 }
                 .padding(.vertical, 8)

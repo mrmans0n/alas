@@ -50,33 +50,7 @@ final class CodeEditorCoordinator {
     private let highlightSession = TreeSitterHighlighter.Session()
 
     static func resolveFont(family: String, size: CGFloat) -> NSFont {
-        guard !family.isEmpty else {
-            return .monospacedSystemFont(ofSize: size, weight: .regular)
-        }
-        // The picker stores family names (e.g. "JetBrains Mono"), but
-        // NSFont(name:size:) requires the PostScript name of a specific
-        // face ("JetBrainsMono-Regular"). Walk the family's members and
-        // pick the face closest to regular weight (NSFontManager weight 5)
-        // so multi-face families resolve to a real face instead of nil.
-        let members = NSFontManager.shared.availableMembers(ofFontFamily: family) ?? []
-        if !members.isEmpty {
-            let sorted = members.sorted { lhs, rhs in
-                let lw = (lhs.count > 2 ? lhs[2] as? Int : nil) ?? 5
-                let rw = (rhs.count > 2 ? rhs[2] as? Int : nil) ?? 5
-                return abs(lw - 5) < abs(rw - 5)
-            }
-            if let psName = sorted.first?.first as? String,
-               let font = NSFont(name: psName, size: size) {
-                return font
-            }
-        }
-        // Last-resort fallbacks: try the user's string verbatim (covers the
-        // case where they typed a PostScript name themselves), then a font
-        // descriptor by family, then the system default.
-        if let font = NSFont(name: family, size: size) { return font }
-        let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
-        if let font = NSFont(descriptor: descriptor, size: size) { return font }
-        return .monospacedSystemFont(ofSize: size, weight: .regular)
+        CenterTypography.resolveCodeFont(family: family, size: size)
     }
 
     init(appState: AppState) {
