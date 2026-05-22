@@ -1,9 +1,16 @@
+import AppKit
 import SwiftUI
 
 struct RepoSelectorDialog: View {
     @Bindable var appState: AppState
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
+    /// Screen-coords cursor position from the most recently accepted hover.
+    /// Used to ignore hovers that fire because the row scrolled under a
+    /// stationary cursor (rather than the cursor actually moving). Without
+    /// this guard, keyboard navigation fights with the scrolled-into-place
+    /// row claiming hover and snapping selection back.
+    @State private var lastHoverLocation: CGPoint?
 
     var body: some View {
         if appState.isRepoSelectorOpen {
@@ -89,7 +96,12 @@ struct RepoSelectorDialog: View {
                                 appState.repoSelector.setSelectedIndex(idx, in: rows)
                                 activate(rows: rows)
                             },
-                            onHover: { appState.repoSelector.setSelectedIndex(idx, in: rows) }
+                            onHover: {
+                                let current = NSEvent.mouseLocation
+                                if lastHoverLocation == current { return }
+                                lastHoverLocation = current
+                                appState.repoSelector.setSelectedIndex(idx, in: rows)
+                            }
                         )
                         .id(idx)
                     }
@@ -98,7 +110,11 @@ struct RepoSelectorDialog: View {
             }
             .frame(minHeight: 200, maxHeight: 420)
             .onChange(of: appState.repoSelector.scrollToSelectionTick) { _, _ in
-                proxy.scrollTo(appState.repoSelector.selectedIndex, anchor: .center)
+                // anchor: nil scrolls just enough to make the row visible.
+                // .center would re-center on every arrow press, shifting the
+                // list under the cursor and triggering hover-induced
+                // selection bouncing.
+                proxy.scrollTo(appState.repoSelector.selectedIndex)
             }
         }
     }
