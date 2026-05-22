@@ -202,8 +202,12 @@ enum LSPMarkup: Decodable, Sendable {
                     case .plain(let p):
                         pieces.append(p)
                     case .markupContent(let kind, let v):
-                        let fence = LSPMarkup.longestBacktickRun(in: v)
-                        pieces.append("\(fence)\n\(v)\n\(fence)")
+                        if kind == "markdown" || kind == "plaintext" {
+                            pieces.append(v)
+                        } else {
+                            let fence = LSPMarkup.longestBacktickRun(in: v)
+                            pieces.append("\(fence)\(kind)\n\(v)\n\(fence)")
+                        }
                     }
                 } else {
                     _ = try? arr.decode(JSONValue.self)  // skip unknown
