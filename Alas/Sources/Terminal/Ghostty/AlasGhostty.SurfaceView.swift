@@ -117,6 +117,10 @@ extension AlasGhostty {
         /// Whether the surface currently has keyboard focus.
         private var isFocused: Bool = false
 
+        /// Temporarily non-nil while inside keyDown so insertText can accumulate
+        /// text without double-delivering it via both insertText and raw key events.
+        var keyTextAccumulator: [String]?
+
         // MARK: - Init
 
         /// - Parameters:
@@ -350,17 +354,11 @@ extension AlasGhostty {
         // MARK: - Keyboard events
 
         override func keyDown(with event: NSEvent) {
-            // If surface init failed, the view is in a broken state — drop the
-            // event rather than routing it into `interpretKeyEvents` and then
-            // crashing in an NSTextInputClient callback that needs surfaceIO.
             guard let surface = cSurface, let io = surfaceIO else { return }
 
             let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
 
-            // Translation-modifier dance: ask Ghostty which modifiers should
-            // participate in text translation for configs like
-            // `macos-option-as-alt`. The result feeds `consumed_mods` on the
-            // key event below.
+            // Translation-modifier dance (same as before).
             let rawMods = alasGhosttyMods(event.modifierFlags)
             let translatedGhosttyMods = ghostty_surface_key_translation_mods(surface, rawMods)
             let translatedAppKitMods = alasAppKitModifierFlags(from: translatedGhosttyMods)
@@ -373,12 +371,6 @@ extension AlasGhostty {
                 }
             }
 
-            // Build a translation event whose modifiers match what Ghostty
-            // wants for character translation (handles `macos-option-as-alt`
-            // and similar). Used in two places below: to extract the layout-
-            // translated character for Cmd/Ctrl forwarding, and as the event
-            // fed to interpretKeyEvents so AppKit doesn't commit Option-
-            // glyphs like `ƒ` after the raw Alt-modified key was delivered.
             let translationEvent: NSEvent
             if translationFlags == event.modifierFlags {
                 translationEvent = event
@@ -397,57 +389,100 @@ extension AlasGhostty {
                 ) ?? event
             }
 
-            // Step 0: While an IME composition is active, defer the entire
-            // keystroke to AppKit. Forwarding Backspace/Enter/arrows/Ctrl-H
-            // to Ghostty mid-composition would also mutate the shell line
-            // behind the preedit (Ghostty's encoder doesn't know that those
-            // keys are meant to edit/commit the composition rather than
-            // reach the PTY). The NSTextInputClient callbacks
-            // (setMarkedText / unmarkText / insertText / doCommand) carry
-            // whatever should actually reach the surface.
+            // 0. While an IME composition is already active, just let AppKit handle it.
             if hasMarkedText() {
                 interpretKeyEvents([translationEvent])
                 return
             }
 
-            // Step A: forward the raw key event to Ghostty so it can match a
-            // keybinding.
-            //
-            // Attach translated printable text to the key event. If Ghostty
-            // consumes the key, this is the only payload the PTY/TUI receives;
-            // if it does not consume it, Step C still lets AppKit commit text
-            // through insertText so we avoid doubling.
-            var keyEv = event.alasGhosttyKeyEvent(action, translationFlags: translationFlags)
+            // 1. Record pre-IME state.
+            let markedTextBefore = hasMarkedText()
 
-            let cmdOrCtrl = event.modifierFlags.contains(.command)
-                || event.modifierFlags.contains(.control)
-            let consumed: Bool
-            if let chars = translationEvent.alasGhosttyForwardedText {
-                consumed = chars.withCString { ptr -> Bool in
+            // 2. Initialise the accumulator so insertText can collect text.
+            keyTextAccumulator = []
+            defer { keyTextAccumulator = nil }
+
+            // 3. Let AppKit handle dead keys, IME, and selectors.
+            interpretKeyEvents([translationEvent])
+
+            // 4. Determine whether we are still composing.
+            let composing = hasMarkedText() || markedTextBefore
+
+            // 5. If we had preedit and it committed, send the committed text first.
+            if markedTextBefore,
+               let accumulator = keyTextAccumulator,
+               !accumulator.isEmpty {
+                for text in accumulator {
+                    if SurfaceView.shouldSuppressComposingControlInput(text, composing: composing) {
+                        continue
+                    }
+                    _ = keyAction(action, event: event, translationEvent: translationEvent, text: text, composing: composing)
+                }
+
+                // If the key should still reach the terminal after committing preedit,
+                // send a raw key event with composing=false.  For simplicity we replay
+                // all non-modifier keys here; upstream is more selective.
+                _ = keyAction(action, event: event, translationEvent: translationEvent, composing: false)
+                return
+            }
+
+            // 6. If interpretKeyEvents committed text, send it.
+            if let accumulator = keyTextAccumulator, !accumulator.isEmpty {
+                for text in accumulator {
+                    if SurfaceView.shouldSuppressComposingControlInput(text, composing: composing) {
+                        continue
+                    }
+                    _ = keyAction(action, event: event, translationEvent: translationEvent, text: text, composing: composing)
+                }
+                return
+            }
+
+            // 7. No text produced — raw key event.
+            if SurfaceView.shouldSuppressComposingControlInput(event.characters, composing: composing) {
+                return
+            }
+            _ = keyAction(action, event: event, translationEvent: translationEvent, text: translationEvent.alasGhosttyForwardedText, composing: composing)
+        }
+
+        /// Send a key event to the Ghostty surface, respecting composition.
+        private func keyAction(
+            _ action: ghostty_input_action_e,
+            event: NSEvent,
+            translationEvent: NSEvent? = nil,
+            text: String? = nil,
+            composing: Bool = false
+        ) -> Bool {
+            guard let io = surfaceIO else { return false }
+
+            var keyEv = event.alasGhosttyKeyEvent(
+                action,
+                translationFlags: translationEvent?.modifierFlags
+            )
+            keyEv.composing = composing
+
+            if let text, !text.isEmpty,
+               let first = text.utf8.first, first >= 0x20 {
+                return text.withCString { ptr -> Bool in
                     keyEv.text = ptr
                     return io.sendKey(keyEv)
                 }
-            } else {
-                consumed = io.sendKey(keyEv)
             }
-            if consumed { return }
+            return io.sendKey(keyEv)
+        }
 
-            // Step B: Cmd/Ctrl events bypass interpretKeyEvents so menus and
-            // IMEs can't swallow Cmd+C / Ctrl+C. The raw key (with text, see
-            // Step A) was already delivered above, which is all Ghostty needs
-            // for these shortcuts.
-            //
-            // Option is intentionally NOT gated here — it must reach
-            // interpretKeyEvents so dead-key composition (Opt+e + letter on
-            // some layouts) and Opt+letter selectors (Opt+Backspace →
-            // deleteWordBackward:) can fire.
-            if cmdOrCtrl { return }
-
-            // Step C: let AppKit resolve dead keys, IME composition, and
-            // special selectors. The NSTextInputClient callbacks
-            // (insertText / setMarkedText / unmarkText / doCommand) forward
-            // to the IO seam as appropriate.
-            interpretKeyEvents([translationEvent])
+        /// Return true if a text string contains only bare control characters
+        /// that the IME produced while composing. We drop these so they don't
+        /// leak into the terminal.
+        static func shouldSuppressComposingControlInput(
+            _ text: String?, composing: Bool
+        ) -> Bool {
+            guard composing, let text else { return false }
+            // A single control character produced during composition should be
+            // suppressed.  Any printable text or multi-character text is fine.
+            guard text.count == 1,
+                  let scalar = text.unicodeScalars.first,
+                  scalar.value < 0x20 else { return false }
+            return true
         }
 
         override func keyUp(with event: NSEvent) {
@@ -458,6 +493,9 @@ extension AlasGhostty {
 
         override func flagsChanged(with event: NSEvent) {
             guard let io = surfaceIO else { return }
+
+            // Don't disturb an active IME composition with modifier noise.
+            if hasMarkedText() { return }
 
             // Determine which modifier changed and whether it was pressed or released.
             let mod: UInt32
@@ -800,8 +838,16 @@ extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
         else { return }
 
         guard !text.isEmpty else { return }
-        guard let io = surfaceIO else { return }
 
+        // If we're inside keyDown, accumulate so keyDown can decide
+        // whether to send raw keycodes or the resolved text.
+        if keyTextAccumulator != nil {
+            keyTextAccumulator?.append(text)
+            return
+        }
+
+        // Outside keyDown (e.g. dictation, accessibility), send immediately.
+        guard let io = surfaceIO else { return }
         io.sendText(text)
         markedText = nil
         io.setPreedit(nil)
@@ -817,18 +863,14 @@ extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
 
         if text.isEmpty {
             markedText = nil
-            io.setPreedit(nil)
         } else {
             markedText = text
-            io.setPreedit(text)
         }
+
+        io.setPreedit(markedText)
     }
 
     func unmarkText() {
-        // Per Apple's NSTextInputClient.unmarkText contract, when an IME
-        // ends composition this way (without first sending insertText), the
-        // marked text must be accepted as normal text. Commit it before
-        // clearing so the composed character is not lost.
         if let marked = markedText, !marked.isEmpty {
             surfaceIO?.sendText(marked)
         }
