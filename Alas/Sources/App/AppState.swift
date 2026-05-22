@@ -287,6 +287,13 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+
+        // Kick off a background resolution of the user's login-shell PATH so
+        // every `Process.git()` invocation uses the same environment a terminal
+        // session would (Homebrew, nvm, rbenv, etc.). Fire-and-forget: if it
+        // hasn't finished by the first git command, gitEnv() falls back to the
+        // process PATH (same behaviour as before).
+        ShellEnvResolver.shared.resolve()
     }
 
     /// All worktree IDs currently known to the projects manager (including

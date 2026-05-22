@@ -167,6 +167,9 @@ extension Process {
     static func gitEnv() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["GIT_OPTIONAL_LOCKS"] = "0"
+        if let shellPath = ShellEnvResolver.shared.resolvedPath {
+            env["PATH"] = shellPath
+        }
         return env
     }
 

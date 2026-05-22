@@ -99,10 +99,12 @@ struct ProcessGitTests {
         // Stronger than the keyed tests above: a broken implementation that
         // returned a hardcoded minimal dict (PATH/HOME only) would pass the
         // single-key checks. Verify the whole parent env round-trips, with
-        // the single deliberate exception of GIT_OPTIONAL_LOCKS.
+        // the deliberate exceptions of GIT_OPTIONAL_LOCKS (always overridden)
+        // and PATH (overridden when ShellEnvResolver discovered a login-shell
+        // PATH, which happens in integration test environments).
         let parent = ProcessInfo.processInfo.environment
         let env = Process.gitEnv()
-        for (key, value) in parent where key != "GIT_OPTIONAL_LOCKS" {
+        for (key, value) in parent where key != "GIT_OPTIONAL_LOCKS" && key != "PATH" {
             #expect(env[key] == value, "key \(key) was dropped or changed")
         }
     }
@@ -129,5 +131,24 @@ struct ProcessGitTests {
         let result = try await Process.git(["--version"])
         #expect(result.exitCode == 0)
         #expect(result.stdout.contains("git version"))
+    }
+
+    @Test func gitEnvPrefersResolvedShellPath() {
+        let prior = ShellEnvResolver.shared.resolvedPath
+        ShellEnvResolver.shared.resolvedPath = "/custom/shell/bin"
+        defer { ShellEnvResolver.shared.resolvedPath = prior }
+
+        let env = Process.gitEnv()
+        #expect(env["PATH"] == "/custom/shell/bin")
+        #expect(env["GIT_OPTIONAL_LOCKS"] == "0")
+    }
+
+    @Test func gitEnvFallsBackToProcessPathWhenResolverIsNil() {
+        let prior = ShellEnvResolver.shared.resolvedPath
+        ShellEnvResolver.shared.resolvedPath = nil
+        defer { ShellEnvResolver.shared.resolvedPath = prior }
+
+        let env = Process.gitEnv()
+        #expect(env["PATH"] == ProcessInfo.processInfo.environment["PATH"])
     }
 }
