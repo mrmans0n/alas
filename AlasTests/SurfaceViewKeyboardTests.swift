@@ -37,6 +37,10 @@ final class FakeGhosttySurfaceIO: GhosttySurfaceIO {
         calls.append(.preedit(text))
     }
 
+    func clearCalls() {
+        calls.removeAll()
+    }
+
     func imePoint() -> CGRect {
         return imePointRect
     }
@@ -422,5 +426,59 @@ struct SurfaceViewKeyboardTests {
             text: nil,
             composing: false
         )])
+    }
+
+    // MARK: - Dead-key pipeline tests
+
+    @Test @MainActor func keyDown_aggregatesInsertTextIntoAccumulator() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+
+        // Simulate interpretKeyEvents calling insertText twice inside keyDown.
+        // In reality this happens via AppKit, but we drive the callback directly.
+        view.keyTextAccumulator = [] // simulate accumulator start (normally set by keyDown)
+        view.insertText("\"", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.keyTextAccumulator = nil
+
+        // Because insertText returns early when accumulator is active, no direct
+        // io.sendText calls should have occurred yet.
+        #expect(io.calls.isEmpty)
+    }
+
+    @Test @MainActor func markTextAndUnmarkText_updatesCompositionState() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+
+        view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.hasMarkedText() == true)
+
+        view.unmarkText()
+        #expect(view.hasMarkedText() == false)
+    }
+
+    @Test @MainActor func flagsChanged_doesNothingWhileCompositionActive() {
+        let io = FakeGhosttySurfaceIO()
+        let view = AlasGhostty.SurfaceView(testIO: io)
+        view.setMarkedText("か" as NSString, selectedRange: NSRange(location: 0, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        io.clearCalls() // isolate flagsChanged behavior from setMarkedText side effects
+
+        // Simulate a shift-key flagsChanged event.
+        let event = NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: .shift,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 0x38
+        )!
+        view.flagsChanged(with: event)
+
+        // No key events should have been sent.
+        #expect(io.calls.isEmpty)
     }
 }
