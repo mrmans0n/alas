@@ -65,6 +65,21 @@ struct EditorBufferTests {
         #expect(buffer.dirty == false)
     }
 
+    @Test func coldLoadResolvesSymlinkToTargetContents() throws {
+        let root = tempWorktree()
+        let target = root.appendingPathComponent("real.txt")
+        try "hello from symlink target\n".write(to: target, atomically: true, encoding: .utf8)
+
+        let linkURL = root.appendingPathComponent("link.txt")
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: target)
+
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "link.txt")
+
+        #expect(buffer.storage.string == "hello from symlink target\n")
+        #expect(buffer.readOnly == true)
+        #expect(buffer.dirty == false)
+    }
+
     @Test func saveWritesContentAndClearsDirty() throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "hello\n")

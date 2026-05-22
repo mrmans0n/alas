@@ -829,12 +829,19 @@ final class EditorBuffer {
         loading = true
         defer { loading = false }
         let url = worktreeRoot.appendingPathComponent(relativePath)
-        guard FileManager.default.fileExists(atPath: url.path) else {
+        let resolvedURL = url.resolvingSymlinksInPath()
+        guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
             storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
             readOnly = true
             return
         }
-        guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+        let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        guard !isDirectory else {
+            storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+            readOnly = true
+            return
+        }
+        guard let raw = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
             storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
             readOnly = true
             return
@@ -844,10 +851,12 @@ final class EditorBuffer {
         storage.setAttributedString(NSAttributedString(string: canonical))
         originalText = canonical
         lineEnding = detected
-        updateOriginalFileAttributes(from: url)
-        // External buffers remain read-only even after a successful reload;
-        // the isExternal flag is the authoritative source of read-only-ness.
-        readOnly = isExternal ? true : false
+        updateOriginalFileAttributes(from: resolvedURL)
+        // Symlink-backed buffers are read-only to preserve semantics:
+        // save() writes to the unresolved path, which would replace the
+        // symlink entry instead of updating its target.
+        let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+        readOnly = isExternal || isSymlink ? true : false
     }
 }
 
