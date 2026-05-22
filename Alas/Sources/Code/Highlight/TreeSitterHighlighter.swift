@@ -166,6 +166,7 @@ private enum RegexFallbackHighlighter {
         case "md", "markdown": return "markdown"
         case "py": return "python"
         case "ts", "tsx", "js", "jsx": return "ts"
+        case "kt", "kts": return "kotlin"
         default: return "plain"
         }
     }
@@ -192,6 +193,16 @@ private enum RegexFallbackHighlighter {
             return ["def", "class", "if", "elif", "else", "for", "while", "return", "try",
                     "except", "finally", "import", "from", "as", "with", "yield",
                     "True", "False", "None", "lambda", "pass", "break", "continue"]
+        case "kotlin":
+            return [
+                "val", "var", "fun", "class", "interface", "object", "sealed", "open", "abstract", "override",
+                "lateinit", "companion", "data", "enum", "annotation", "typealias", "import", "package",
+                "if", "else", "when", "while", "do", "for", "in", "return", "break", "continue",
+                "throw", "try", "catch", "finally", "true", "false", "null", "this", "super",
+                "is", "as", "by", "where", "out", "reified", "inline", "noinline", "crossinline",
+                "operator", "infix", "tailrec", "suspend", "internal", "public", "private", "protected",
+                "expect", "actual", "const", "vararg", "dynamic", "external"
+            ]
         default:
             return []
         }
