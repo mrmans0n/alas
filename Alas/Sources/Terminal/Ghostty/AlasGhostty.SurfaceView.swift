@@ -444,6 +444,47 @@ extension AlasGhostty {
             _ = keyAction(action, event: event, translationEvent: translationEvent, composing: composing)
         }
 
+        /// Send a key event to the Ghostty surface, respecting composition.
+        private func keyAction(
+            _ action: ghostty_input_action_e,
+            event: NSEvent,
+            translationEvent: NSEvent? = nil,
+            text: String? = nil,
+            composing: Bool = false
+        ) -> Bool {
+            guard let io = surfaceIO else { return false }
+
+            var keyEv = event.alasGhosttyKeyEvent(
+                action,
+                translationFlags: translationEvent?.modifierFlags
+            )
+            keyEv.composing = composing
+
+            if let text, !text.isEmpty,
+               let first = text.utf8.first, first >= 0x20 {
+                return text.withCString { ptr -> Bool in
+                    keyEv.text = ptr
+                    return io.sendKey(keyEv)
+                }
+            }
+            return io.sendKey(keyEv)
+        }
+
+        /// Return true if a text string contains only bare control characters
+        /// that the IME produced while composing. We drop these so they don't
+        /// leak into the terminal.
+        static func shouldSuppressComposingControlInput(
+            _ text: String?, composing: Bool
+        ) -> Bool {
+            guard composing, let text else { return false }
+            // A single control character produced during composition should be
+            // suppressed.  Any printable text or multi-character text is fine.
+            guard text.count == 1,
+                  let scalar = text.unicodeScalars.first,
+                  scalar.value < 0x20 else { return false }
+            return true
+        }
+
         override func keyUp(with event: NSEvent) {
             guard let io = surfaceIO else { return }
             let keyEv = event.alasGhosttyKeyEvent(GHOSTTY_ACTION_RELEASE)
@@ -452,6 +493,9 @@ extension AlasGhostty {
 
         override func flagsChanged(with event: NSEvent) {
             guard let io = surfaceIO else { return }
+
+            // Don't disturb an active IME composition with modifier noise.
+            if hasMarkedText() { return }
 
             // Determine which modifier changed and whether it was pressed or released.
             let mod: UInt32
@@ -745,6 +789,25 @@ private func alasGhosttyMomentum(_ phase: NSEvent.Phase) -> ghostty_input_mouse_
     }
 }
 
+// MARK: - ghostty_input_key_s convenience init
+
+extension ghostty_input_key_s {
+    /// Minimal synthesised key event for text that has already been resolved
+    /// by `interpretKeyEvents`.  Used when we only have a string payload
+    /// and don't need a physical keycode or modifier state.
+    init(action: ghostty_input_action_e, text: String) {
+        self = ghostty_input_key_s()
+        self.action = action
+        self.keycode = 0
+        self.text = nil
+        self.composing = false
+        self.mods = GHOSTTY_MODS_NONE
+        self.consumed_mods = GHOSTTY_MODS_NONE
+        self.unshifted_codepoint = 0
+        text.withCString { self.text = $0 }
+    }
+}
+
 // MARK: - NSTextInputClient
 
 extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
@@ -794,8 +857,16 @@ extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
         else { return }
 
         guard !text.isEmpty else { return }
-        guard let io = surfaceIO else { return }
 
+        // If we're inside keyDown, accumulate so keyDown can decide
+        // whether to send raw keycodes or the resolved text.
+        if keyTextAccumulator != nil {
+            keyTextAccumulator?.append(text)
+            return
+        }
+
+        // Outside keyDown (e.g. dictation, accessibility), send immediately.
+        guard let io = surfaceIO else { return }
         io.sendText(text)
         markedText = nil
         io.setPreedit(nil)
@@ -811,23 +882,31 @@ extension AlasGhostty.SurfaceView: @preconcurrency NSTextInputClient {
 
         if text.isEmpty {
             markedText = nil
-            io.setPreedit(nil)
         } else {
             markedText = text
-            io.setPreedit(text)
+        }
+
+        // When keyboard layout changes while composing, AppKit may call
+        // setMarkedText outside keyDown. Only sync in that path so we don't
+        // double-deliver inside keyDown where the pipeline already handles it.
+        if keyTextAccumulator == nil {
+            io.setPreedit(markedText)
         }
     }
 
     func unmarkText() {
-        // Per Apple's NSTextInputClient.unmarkText contract, when an IME
-        // ends composition this way (without first sending insertText), the
-        // marked text must be accepted as normal text. Commit it before
-        // clearing so the composed character is not lost.
         if let marked = markedText, !marked.isEmpty {
             surfaceIO?.sendText(marked)
         }
         markedText = nil
-        surfaceIO?.setPreedit(nil)
+
+        // If unmarkText fires outside keyDown (layout change while composing),
+        // clear the preedit so the terminal doesn't leave stale composition.
+        // When called inside keyDown, keyDown's pipeline already manages
+        // preedit, so we skip the extra call here to avoid double clear.
+        if keyTextAccumulator == nil {
+            surfaceIO?.setPreedit(nil)
+        }
     }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
