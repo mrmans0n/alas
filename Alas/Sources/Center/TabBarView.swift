@@ -116,6 +116,7 @@ private struct TabButton: View {
         HStack(spacing: 6) {
             Icon(name: tab.iconName, size: 11,
                  color: iconColor)
+                .modifier(TabActivityPulse(activityState: harnessInfo?.state))
             Text(tab.title)
                 .font(.system(size: 11.5))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
