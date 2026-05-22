@@ -187,6 +187,21 @@ struct LSPClientLifecycleTests {
         transport.finish()
     }
 
+    @Test("decode capabilities extracts pull diagnostics support")
+    func decodeCapabilitiesExtractsPullDiagnostics() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "kotlin", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains("\"method\":\"initialize\"") {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"diagnosticProvider":{"identifier":null,"interFileDependencies":true,"workspaceDiagnostics":false}}}}"#)
+            }
+        }
+        try await client.initialize()
+        let supportsPull = await client.supportsPullDiagnostics
+        #expect(supportsPull)
+        transport.finish()
+    }
+
     @Test("full text sync keeps full-document changes")
     func fullTextSyncUsesFullDocumentPayload() async throws {
         let transport = FakeTransport()
