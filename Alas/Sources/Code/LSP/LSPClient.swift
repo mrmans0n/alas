@@ -3,6 +3,11 @@ import Foundation
 actor LSPClient {
     enum State { case starting, initializing, ready, dead }
     enum TextDocumentSyncKind: Int { case none = 0, full = 1, incremental = 2 }
+
+    private struct InitializeParams: Encodable, Sendable {
+        let processId: Int
+        let rootUri: String
+    }
     private static let shutdownTimeoutNanoseconds: UInt64 = 2_000_000_000
 
     let language: String
@@ -14,6 +19,7 @@ actor LSPClient {
     private var textDocumentSyncKind: TextDocumentSyncKind = .full
     private(set) var supportsDocumentFormatting: Bool = false
     private(set) var supportsPullDiagnostics: Bool = false
+    private(set) var completionTriggerCharacters: [String] = []
     // `AsyncStream` is single-consumer — values are delivered to whichever
     // iterator races to read first, not broadcast. Multiple coordinators
     // sharing one client (two tabs in the same worktree/language) used to
@@ -55,24 +61,16 @@ actor LSPClient {
     func initialize() async throws {
         try transport.start()
         state = .initializing
-        let params: [String: Any] = [
-            "processId": Int(ProcessInfo.processInfo.processIdentifier),
-            "rootUri": rootURI,
-            "capabilities": [
-                "textDocument": [
-                    "hover": ["contentFormat": ["markdown", "plaintext"]],
-                    "definition": [:],
-                    "documentSymbol": ["hierarchicalDocumentSymbolSupport": true],
-                    "publishDiagnostics": [:],
-                    "formatting": ["dynamicRegistration": false]
-                ]
-            ] as [String: Any]
-        ]
+        let params = InitializeParams(
+            processId: Int(ProcessInfo.processInfo.processIdentifier),
+            rootUri: rootURI
+        )
         let rawResult = try await sendRequest(method: "initialize", params: params)
         let caps = Self.decodeCapabilities(from: rawResult)
         textDocumentSyncKind = caps.syncKind
         supportsDocumentFormatting = caps.supportsFormatting
         supportsPullDiagnostics = caps.supportsPullDiagnostics
+        completionTriggerCharacters = caps.completionTriggerCharacters
         try sendNotification(method: "initialized", params: [String: Any]())
         state = .ready
     }
@@ -150,6 +148,20 @@ actor LSPClient {
         return (try? JSONDecoder().decode([LSPDocumentSymbol].self, from: raw)) ?? []
     }
 
+    func completion(uri: String, position: LSPPosition, context: LSPCompletionContext?) async throws -> LSPCompletionResult {
+        let params = LSPCompletionParams(
+            textDocument: LSPTextDocumentIdentifier(uri: uri),
+            position: position,
+            context: context
+        )
+        let raw = try await sendRequest(method: "textDocument/completion", params: params)
+        guard let raw, raw.count > 4 else {
+            return LSPCompletionResult(isIncomplete: false, items: [])
+        }
+        return (try? JSONDecoder().decode(LSPCompletionResult.self, from: raw))
+            ?? LSPCompletionResult(isIncomplete: false, items: [])
+    }
+
     func formatting(uri: String, options: LSPFormattingOptions) async throws -> [LSPTextEdit] {
         guard supportsDocumentFormatting else { return [] }
         let params = LSPDocumentFormattingParams(
@@ -220,7 +232,12 @@ actor LSPClient {
             method: method,
             params: params.map { AnyEncodable($0) }
         )
-        let data = try JSONEncoder().encode(req)
+        let data: Data
+        if method == "initialize", let initializeParams = params as? InitializeParams {
+            data = try Self.encodeInitializeRequest(id: id, params: initializeParams)
+        } else {
+            data = try Self.outgoingJSONEncoder().encode(req)
+        }
         let timeoutTask = timeoutNanoseconds.map { timeoutNanoseconds in
             Task {
                 do {
@@ -251,8 +268,13 @@ actor LSPClient {
         }
     }
 
-    private static func decodeCapabilities(from data: Data?) -> (syncKind: TextDocumentSyncKind, supportsFormatting: Bool, supportsPullDiagnostics: Bool) {
-        guard let data else { return (.full, false, false) }
+    private static func decodeCapabilities(from data: Data?) -> (
+        syncKind: TextDocumentSyncKind,
+        supportsFormatting: Bool,
+        supportsPullDiagnostics: Bool,
+        completionTriggerCharacters: [String]
+    ) {
+        guard let data else { return (.full, false, false, []) }
         struct InitializeResult: Decodable {
             let capabilities: ServerCapabilities
         }
@@ -260,11 +282,15 @@ actor LSPClient {
             let textDocumentSync: TextDocumentSync?
             let documentFormattingProvider: DocumentFormattingProvider?
             let diagnosticProvider: DiagnosticProvider?
+            let completionProvider: CompletionProvider?
         }
         struct DiagnosticProvider: Decodable {
             let identifier: String?
             let interFileDependencies: Bool?
             let workspaceDiagnostics: Bool?
+        }
+        struct CompletionProvider: Decodable {
+            let triggerCharacters: [String]?
         }
         enum DocumentFormattingProvider: Decodable {
             case unsupported
@@ -307,7 +333,7 @@ actor LSPClient {
         }
 
         guard let result = try? JSONDecoder().decode(InitializeResult.self, from: data) else {
-            return (.full, false, false)
+            return (.full, false, false, [])
         }
         let syncKind: TextDocumentSyncKind = {
             guard let sync = result.capabilities.textDocumentSync else { return .full }
@@ -317,7 +343,8 @@ actor LSPClient {
         }()
         let supportsFormatting = result.capabilities.documentFormattingProvider?.isSupported ?? false
         let supportsPullDiagnostics = result.capabilities.diagnosticProvider != nil
-        return (syncKind, supportsFormatting, supportsPullDiagnostics)
+        let triggerCharacters = result.capabilities.completionProvider?.triggerCharacters ?? []
+        return (syncKind, supportsFormatting, supportsPullDiagnostics, triggerCharacters)
     }
 
     private static func fullRange(for text: String) -> LSPRange {
@@ -350,8 +377,34 @@ actor LSPClient {
 
     private nonisolated func sendNotification(method: String, params: Any?) throws {
         let note = LSPNotification(method: method, params: params.map { AnyEncodable($0) })
-        let data = try JSONEncoder().encode(note)
+        let data = try Self.outgoingJSONEncoder().encode(note)
         try transport.send(data)
+    }
+
+    private nonisolated static func outgoingJSONEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        return encoder
+    }
+
+    private nonisolated static func encodeInitializeRequest(id: LSPID, params: InitializeParams) throws -> Data {
+        let idString: String
+        switch id {
+        case .int(let value):
+            idString = String(value)
+        case .string(let value):
+            idString = try jsonString(value)
+        }
+        let rootUri = try jsonString(params.rootUri)
+        let json = """
+        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":false},"contextSupport":true}}}}}
+        """
+        return Data(json.utf8)
+    }
+
+    private nonisolated static func jsonString(_ value: String) throws -> String {
+        let data = try outgoingJSONEncoder().encode(value)
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func consume() async {

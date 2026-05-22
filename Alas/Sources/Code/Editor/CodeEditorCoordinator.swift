@@ -43,12 +43,23 @@ final class CodeEditorCoordinator {
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
     private var hoverHighlight: HoverHighlightFeature?
+    private var completion: CompletionFeature?
 
     private var editObserverToken: EditorBuffer.EditObserverToken?
     private var didChangeTask: Task<Void, Never>?
     private var hasPendingDidChange = false
     private var pendingTextEdits: [EditorTextEdit] = []
     private let highlightSession = TreeSitterHighlighter.Session()
+
+    private struct LSPDidChangePayload {
+        let worktreeRoot: URL
+        let relativePath: String
+        let fileURL: URL
+        let language: String
+        let text: String
+        let edits: [EditorTextEdit]?
+        let theme: Theme?
+    }
 
     static func resolveFont(family: String, size: CGFloat) -> NSFont {
         CenterTypography.resolveCodeFont(family: family, size: size)
@@ -98,10 +109,10 @@ final class CodeEditorCoordinator {
                 if let abs = self.currentExternalAbsolutePath,
                    let originating = self.currentOriginatingWorktreeRoot {
                     let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
+                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
                 }
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
+                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
                 guard let self else { return nil }
@@ -122,10 +133,10 @@ final class CodeEditorCoordinator {
                 if let abs = self.currentExternalAbsolutePath,
                    let originating = self.currentOriginatingWorktreeRoot {
                     let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
+                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
                 }
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
+                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
                 guard let self else { return nil }
@@ -183,10 +194,10 @@ final class CodeEditorCoordinator {
                 if let abs = self.currentExternalAbsolutePath,
                    let originating = self.currentOriginatingWorktreeRoot {
                     let absURL = URL(fileURLWithPath: abs)
-                    return self.appState.lsp.client(forFile: absURL, worktreeRoot: originating, language: lang)
+                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
                 }
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
-                return self.appState.lsp.client(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
+                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
             },
             getURI: { [weak self] in
                 guard let self else { return nil }
@@ -196,6 +207,44 @@ final class CodeEditorCoordinator {
                 guard let root = self.currentRoot,
                       let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
+            }
+        )
+        completion = CompletionFeature(
+            textView: textView,
+            getClient: { [weak self] in
+                guard let self, let lang = self.currentLanguage else { return nil }
+                if let abs = self.currentExternalAbsolutePath,
+                   let originating = self.currentOriginatingWorktreeRoot {
+                    let absURL = URL(fileURLWithPath: abs)
+                    return self.appState.lsp.openedClient(forFile: absURL, worktreeRoot: originating, language: lang)
+                }
+                guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
+                return self.appState.lsp.openedClient(forFile: root.appendingPathComponent(rel), worktreeRoot: root, language: lang)
+            },
+            getURI: { [weak self] in
+                guard let self else { return nil }
+                if let abs = self.currentExternalAbsolutePath {
+                    return URL(fileURLWithPath: abs).lspURI
+                }
+                guard let root = self.currentRoot,
+                      let rel = self.currentRelativePath else { return nil }
+                return root.appendingPathComponent(rel).lspURI
+            },
+            isEnabled: { [weak self] in
+                guard let self,
+                      self.currentExternalAbsolutePath == nil,
+                      self.currentLanguage != nil,
+                      self.buffer?.isExternal != true,
+                      self.buffer?.readOnly == false else {
+                    return false
+                }
+                return true
+            },
+            getTheme: { [weak self] in self?.currentTheme ?? (try? ThemeStore().current) ?? (try? Theme.loadBundled(id: "cool-slate")) ?? Theme(id: "fallback", name: "Fallback", tokens: [:]) },
+            getMonoFontFamily: { [weak self] in self?.currentFontFamily ?? self?.appState.config.code.fontFamily ?? "SF Mono" },
+            getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 },
+            prepareForCompletionRequest: { [weak self] in
+                await self?.flushPendingLSPDidChangeForCompletion()
             }
         )
 
@@ -251,6 +300,7 @@ final class CodeEditorCoordinator {
 
         if pathChanged {
             hoverHighlight?.cancelAndClear()
+            completion?.cancelAndDismiss()
             didChangeTask?.cancel()
             hasPendingDidChange = false
             pendingTextEdits.removeAll()
@@ -410,10 +460,16 @@ final class CodeEditorCoordinator {
         hover = nil
         definition = nil
         hoverHighlight = nil
+        completion?.cancelAndDismiss()
+        completion = nil
         textView?.hoverHandler = nil
         textView?.commandClickHandler = nil
         textView?.flagsChangedHandler = nil
         textView?.mouseExitedHandler = nil
+        textView?.completionManualTriggerHandler = nil
+        textView?.completionChangeHandler = nil
+        textView?.completionSelectionChangeHandler = nil
+        textView?.completionKeyHandler = nil
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
@@ -453,22 +509,60 @@ final class CodeEditorCoordinator {
     }
 
     private func notifyLSPDidChange(edits: [EditorTextEdit]? = nil) {
-        guard let buffer, let language = currentLanguage else { return }
+        guard let payload = makeLSPDidChangePayload(edits: edits) else { return }
+        Task { [weak self] in
+            await self?.sendLSPDidChange(payload, awaitPullDiagnostics: true)
+        }
+    }
+
+    private func flushPendingLSPDidChangeForCompletion() async {
+        didChangeTask?.cancel()
+        guard hasPendingDidChange else { return }
+
+        hasPendingDidChange = false
+        if let theme = currentTheme {
+            runHighlight(theme: theme)
+        }
+        let edits = pendingTextEdits
+        pendingTextEdits.removeAll()
+        guard let payload = makeLSPDidChangePayload(edits: edits) else { return }
+        await sendLSPDidChange(payload, awaitPullDiagnostics: false)
+    }
+
+    private func makeLSPDidChangePayload(edits: [EditorTextEdit]? = nil) -> LSPDidChangePayload? {
+        guard let buffer, let language = currentLanguage else { return nil }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
-        let text = buffer.storage.string
-        let theme = currentTheme
-        Task {
-            await appState.lsp.didChange(
-                worktreeRoot: buffer.worktreeRoot,
-                fileURL: url,
-                languageId: language,
-                text: text,
-                edits: edits
-            )
-            if let theme,
-               let client = appState.lsp.client(forFile: url, worktreeRoot: buffer.worktreeRoot, language: language),
-               await client.supportsPullDiagnostics {
-                await self.performPullDiagnostics(client: client, uri: url.lspURI, theme: theme)
+        return LSPDidChangePayload(
+            worktreeRoot: buffer.worktreeRoot,
+            relativePath: buffer.relativePath,
+            fileURL: url,
+            language: language,
+            text: buffer.storage.string,
+            edits: edits,
+            theme: currentTheme
+        )
+    }
+
+    private func sendLSPDidChange(_ payload: LSPDidChangePayload, awaitPullDiagnostics: Bool) async {
+        await appState.lsp.didChange(
+            worktreeRoot: payload.worktreeRoot,
+            fileURL: payload.fileURL,
+            languageId: payload.language,
+            text: payload.text,
+            edits: payload.edits
+        )
+        guard currentRoot == payload.worktreeRoot,
+              currentRelativePath == payload.relativePath,
+              currentLanguage == payload.language else { return }
+        if let theme = payload.theme,
+           let client = appState.lsp.client(forFile: payload.fileURL, worktreeRoot: payload.worktreeRoot, language: payload.language),
+           await client.supportsPullDiagnostics {
+            if awaitPullDiagnostics {
+                await performPullDiagnostics(client: client, uri: payload.fileURL.lspURI, theme: theme)
+            } else {
+                Task { [weak self] in
+                    await self?.performPullDiagnostics(client: client, uri: payload.fileURL.lspURI, theme: theme)
+                }
             }
         }
     }

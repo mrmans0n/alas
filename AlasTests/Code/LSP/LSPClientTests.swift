@@ -121,6 +121,53 @@ struct LSPClientLifecycleTests {
         transport.finish()
     }
 
+    @Test("completion request sends document position and context")
+    func completion() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            } else if sent.contains(#""method":"textDocument/completion""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":2,"result":{"isIncomplete":false,"items":[{"label":"openEditor","kind":2}]}}"#)
+            }
+        }
+
+        try await client.initialize()
+        #expect((transport.sent.first ?? "").contains(#""completion":{"dynamicRegistration":false"#))
+
+        let result = try await client.completion(
+            uri: "file:///tmp/AppState.swift",
+            position: LSPPosition(line: 4, character: 12),
+            context: LSPCompletionContext(triggerKind: .invoked, triggerCharacter: nil)
+        )
+
+        let request = transport.sent.last ?? ""
+        #expect(request.contains(#""method":"textDocument/completion""#))
+        #expect(request.contains(#""uri":"file:///tmp/AppState.swift""#))
+        #expect(request.contains(#""line":4"#))
+        #expect(request.contains(#""character":12"#))
+        #expect(request.contains(#""triggerKind":1"#))
+        #expect(result.items.map(\.label) == ["openEditor"])
+        transport.finish()
+    }
+
+    @Test("initialize stores completion trigger characters")
+    func completionTriggerCharacters() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "cpp", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"completionProvider":{"triggerCharacters":[".","->","::"]}}}}"#)
+            }
+        }
+
+        try await client.initialize()
+
+        #expect(await client.completionTriggerCharacters == [".", "->", "::"])
+        transport.finish()
+    }
+
     @Test("incremental text sync sends a ranged full replacement")
     func incrementalTextSyncUsesRange() async throws {
         let transport = FakeTransport()

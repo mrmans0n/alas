@@ -6,6 +6,13 @@ import AppKit
 /// dirty tracking, save, file-watch, and LSP `didChange` are all
 /// orchestrated by the buffer + coordinator pair.
 final class CodeTextView: NSTextView, FontSizeResponder {
+    enum CompletionKeyAction: Equatable {
+        case acceptTop
+        case acceptSelected
+        case moveSelection(Int)
+        case dismiss
+    }
+
     private static let pairedDelimiters: [Character: Character] = [
         "(": ")",
         "[": "]",
@@ -21,6 +28,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
+    var completionManualTriggerHandler: (() -> Void)?
+    var completionChangeHandler: (() -> Void)?
+    var completionSelectionChangeHandler: (() -> Void)?
+    var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
     var indentationMode: IndentationMode = .plain
 
     var autoPairDisabled: Bool = false
@@ -33,6 +44,9 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     private var multiCursorSelectedRanges: [NSValue]?
     private var possibleColumnSelectionDrag: ColumnSelectionDrag?
+    private var suppressCompletionChangeNotifications = false
+    private var suppressCompletionSelectionNotifications = false
+    private var isApplyingSelectionChange = false
 
     private struct ColumnSelectionDrag {
         let startPoint: NSPoint
@@ -72,11 +86,29 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func setSelectedRange(_ charRange: NSRange) {
+        let wasApplyingSelectionChange = isApplyingSelectionChange
+        let shouldNotify = !wasApplyingSelectionChange
+        isApplyingSelectionChange = true
+        defer {
+            isApplyingSelectionChange = wasApplyingSelectionChange
+            if shouldNotify {
+                notifyCompletionSelectionChanged()
+            }
+        }
         multiCursorSelectedRanges = nil
         super.setSelectedRange(charRange)
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        let wasApplyingSelectionChange = isApplyingSelectionChange
+        let shouldNotify = !wasApplyingSelectionChange
+        isApplyingSelectionChange = true
+        defer {
+            isApplyingSelectionChange = wasApplyingSelectionChange
+            if shouldNotify {
+                notifyCompletionSelectionChanged()
+            }
+        }
         let normalized = normalizedRanges(from: ranges)
         guard normalized.count > 1 else {
             multiCursorSelectedRanges = nil
@@ -187,7 +219,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
                 location: edit.originalRange.location + delta,
                 length: edit.originalRange.length
             )
-            super.insertText(edit.replacement, replacementRange: effectiveRange)
+            insertTextAfterTextEdit(edit.replacement, replacementRange: effectiveRange)
             let finalSelection = NSRange(
                 location: edit.resultingSelection.location + delta,
                 length: edit.resultingSelection.length
@@ -196,7 +228,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             delta += (edit.replacement as NSString).length - edit.originalRange.length
         }
         undoManager?.endUndoGrouping()
-        setSelectedRanges(finalSelections, affinity: .downstream, stillSelecting: false)
+        setSelectedRangesAfterTextEdit(finalSelections, affinity: .downstream, stillSelecting: false)
     }
 
     private func editForCharacter(_ character: Character, at range: NSRange) -> MultiCursorEdit? {
@@ -240,10 +272,15 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     // MARK: - Text insertion overrides
 
+    override func didChangeText() {
+        super.didChangeText()
+        notifyCompletionChanged()
+    }
+
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard isEditable else { return }
         guard let text = Self.string(from: insertString) else {
-            super.insertText(insertString, replacementRange: replacementRange)
+            insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
             return
         }
 
@@ -267,17 +304,17 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         }
 
         if autoPairDisabled {
-            super.insertText(insertString, replacementRange: replacementRange)
+            insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
             return
         }
         guard text.count == 1, let character = text.first else {
-            super.insertText(insertString, replacementRange: replacementRange)
+            insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
             return
         }
 
         let range = effectiveReplacementRange(replacementRange)
         guard range.location != NSNotFound, NSMaxRange(range) <= (string as NSString).length else {
-            super.insertText(insertString, replacementRange: replacementRange)
+            insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
             return
         }
 
@@ -285,8 +322,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         if Self.closingDelimiters.contains(character),
            indentationMode == .bracketAware,
            let edit = IndentationHelper.closingDelimiterEdit(in: string, selectedRange: range, delimiter: character, mode: indentationMode) {
-            super.insertText(edit.replacement, replacementRange: edit.replacementRange)
-            setSelectedRange(NSRange(location: edit.replacementRange.location + edit.selectedLocationDelta, length: 0))
+            insertTextAfterTextEdit(edit.replacement, replacementRange: edit.replacementRange)
+            setSelectedRangeAfterTextEdit(NSRange(location: edit.replacementRange.location + edit.selectedLocationDelta, length: 0))
             return
         }
 
@@ -306,7 +343,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
 
-        super.insertText(insertString, replacementRange: replacementRange)
+        insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -314,6 +351,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             super.insertNewline(sender)
             return
         }
+        if routeCompletionKey(.acceptSelected) { return }
 
         if !hasMultipleSelections {
             insertNewlineSingleCursor(sender)
@@ -360,6 +398,122 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         applyMultiCursorEdits(edits)
     }
 
+    override func complete(_ sender: Any?) {
+        if let completionManualTriggerHandler {
+            completionManualTriggerHandler()
+        } else {
+            super.complete(sender)
+        }
+    }
+
+    override func insertTab(_ sender: Any?) {
+        if routeCompletionKey(.acceptTop) { return }
+        super.insertTab(sender)
+    }
+
+    override func moveUp(_ sender: Any?) {
+        if routeCompletionKey(.moveSelection(-1)) { return }
+        super.moveUp(sender)
+    }
+
+    override func moveDown(_ sender: Any?) {
+        if routeCompletionKey(.moveSelection(1)) { return }
+        super.moveDown(sender)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        if routeCompletionKey(.dismiss) { return }
+        super.cancelOperation(sender)
+    }
+
+    func completionAnchorRect() -> NSRect? {
+        let selection = selectedRange()
+        let nsLength = (string as NSString).length
+        guard selection.location != NSNotFound, selection.location <= nsLength else { return nil }
+
+        if let window {
+            var screenRect = firstRect(forCharacterRange: NSRange(location: selection.location, length: 0), actualRange: nil)
+            guard screenRect.origin.x.isFinite,
+                  screenRect.origin.y.isFinite,
+                  screenRect.height.isFinite,
+                  screenRect.height > 0 else { return nil }
+            screenRect.size.width = max(screenRect.width.isFinite ? screenRect.width : 0, 1)
+            let windowRect = window.convertFromScreen(screenRect)
+            var localRect = convert(windowRect, from: nil)
+            localRect.size.width = max(localRect.width, 1)
+            return localRect
+        }
+
+        return localInsertionRect(at: selection.location)
+    }
+
+    private func localInsertionRect(at location: Int) -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        layoutManager.ensureLayout(for: textContainer)
+        return fallbackInsertionRect(at: location, layoutManager: layoutManager, textContainer: textContainer)
+    }
+
+    func applyCompletionEdits(_ edits: [CompletionTextEdit], finalSelection: NSRange) {
+        let sorted = edits.sorted {
+            $0.range.location < $1.range.location ||
+                ($0.range.location == $1.range.location && $0.range.length < $1.range.length)
+        }
+
+        let wasSuppressingNotifications = suppressCompletionChangeNotifications
+        suppressCompletionChangeNotifications = true
+
+        undoManager?.beginUndoGrouping()
+        for edit in sorted.reversed() {
+            insertTextAfterTextEdit(edit.replacementText, replacementRange: edit.range)
+        }
+        undoManager?.endUndoGrouping()
+
+        setSelectedRangeAfterTextEdit(finalSelection)
+        suppressCompletionChangeNotifications = wasSuppressingNotifications
+        if !wasSuppressingNotifications {
+            notifyCompletionChanged()
+        }
+    }
+
+    private func fallbackInsertionRect(at location: Int, layoutManager: NSLayoutManager, textContainer: NSTextContainer) -> NSRect {
+        let nsString = string as NSString
+        let lineHeight = font.map { layoutManager.defaultLineHeight(for: $0) } ?? 1
+        let containerRect: NSRect
+
+        if nsString.length == 0 {
+            containerRect = NSRect(x: 0, y: 0, width: 1, height: lineHeight)
+        } else if location == nsString.length, previousCharacter(before: location) == "\n" {
+            let extra = layoutManager.extraLineFragmentRect
+            if !extra.isEmpty {
+                containerRect = NSRect(x: extra.minX, y: extra.minY, width: 1, height: max(extra.height, lineHeight))
+            } else {
+                let lineCount = nsString.components(separatedBy: "\n").count - 1
+                containerRect = NSRect(x: 0, y: CGFloat(lineCount) * lineHeight, width: 1, height: lineHeight)
+            }
+        } else if location == nsString.length {
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: location - 1)
+            let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            containerRect = NSRect(x: glyphRect.maxX, y: lineRect.minY, width: 1, height: lineRect.height)
+        } else {
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            containerRect = NSRect(
+                x: layoutManager.location(forGlyphAt: glyphIndex).x,
+                y: lineRect.minY,
+                width: 1,
+                height: lineRect.height
+            )
+        }
+
+        return NSRect(
+            x: textContainerOrigin.x + containerRect.minX,
+            y: textContainerOrigin.y + containerRect.minY,
+            width: max(containerRect.width, 1),
+            height: max(containerRect.height, lineHeight)
+        )
+    }
+
     private func indexAtPoint(_ point: NSPoint) -> Int {
         guard let lm = self.layoutManager,
               let container = self.textContainer else { return NSNotFound }
@@ -382,8 +536,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
         if let edit = IndentationHelper.newlineEdit(in: string, selectedRange: range, mode: indentationMode) {
-            super.insertText(edit.replacement, replacementRange: range)
-            setSelectedRange(NSRange(location: range.location + edit.selectedLocationDelta, length: 0))
+            insertTextAfterTextEdit(edit.replacement, replacementRange: range)
+            setSelectedRangeAfterTextEdit(NSRange(location: range.location + edit.selectedLocationDelta, length: 0))
         } else {
             super.insertNewline(sender)
         }
@@ -677,6 +831,41 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     // MARK: - Private helpers
 
+    private func notifyCompletionChanged() {
+        guard !suppressCompletionChangeNotifications else { return }
+        completionChangeHandler?()
+    }
+
+    private func notifyCompletionSelectionChanged() {
+        guard !suppressCompletionSelectionNotifications else { return }
+        completionSelectionChangeHandler?()
+    }
+
+    private func setSelectedRangeAfterTextEdit(_ range: NSRange) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        setSelectedRange(range)
+        suppressCompletionSelectionNotifications = wasSuppressing
+    }
+
+    private func setSelectedRangesAfterTextEdit(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        suppressCompletionSelectionNotifications = wasSuppressing
+    }
+
+    private func insertTextAfterTextEdit(_ insertString: Any, replacementRange: NSRange) {
+        let wasSuppressing = suppressCompletionSelectionNotifications
+        suppressCompletionSelectionNotifications = true
+        super.insertText(insertString, replacementRange: replacementRange)
+        suppressCompletionSelectionNotifications = wasSuppressing
+    }
+
+    private func routeCompletionKey(_ action: CompletionKeyAction) -> Bool {
+        completionKeyHandler?(action) ?? false
+    }
+
     private static func string(from insertString: Any) -> String? {
         if let string = insertString as? String { return string }
         if let attributed = insertString as? NSAttributedString { return attributed.string }
@@ -696,12 +885,12 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
         let selectedText = range.length > 0 ? current.substring(with: range) : ""
         let replacement = "\(opening)\(selectedText)\(closing)"
-        super.insertText(replacement, replacementRange: range)
+        insertTextAfterTextEdit(replacement, replacementRange: range)
 
         if range.length > 0 {
-            setSelectedRange(NSRange(location: range.location + 1, length: range.length))
+            setSelectedRangeAfterTextEdit(NSRange(location: range.location + 1, length: range.length))
         } else {
-            setSelectedRange(NSRange(location: range.location + 1, length: 0))
+            setSelectedRangeAfterTextEdit(NSRange(location: range.location + 1, length: 0))
         }
     }
 

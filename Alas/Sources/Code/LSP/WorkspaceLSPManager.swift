@@ -296,7 +296,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     func clientWhenReady(forFile fileURL: URL, worktreeRoot: URL, language: String, timeout: TimeInterval = 30) async -> LSPClient? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let c = client(forFile: fileURL, worktreeRoot: worktreeRoot, language: language) { return c }
+            if let c = openedClient(forFile: fileURL, worktreeRoot: worktreeRoot, language: language) { return c }
             try? await Task.sleep(nanoseconds: 50_000_000) // 50 ms
             if Task.isCancelled { return nil }
         }
@@ -311,6 +311,20 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = fileURL.lspURI
         guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return nil }
         return holders[key]?.client
+    }
+
+    /// Returns the client only after the specific file has completed the
+    /// initialize + didOpen path. Request/notification features should use
+    /// this instead of `client(forFile:)` so they never talk to a server that
+    /// is still starting or has not seen the document yet.
+    func openedClient(forFile fileURL: URL, worktreeRoot: URL, language: String) -> LSPClient? {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key],
+              holder.openedURIs.contains(uri) else {
+            return nil
+        }
+        return holder.client
     }
 
     /// True when `fileURL` has already been delivered to a live (non-dead)
