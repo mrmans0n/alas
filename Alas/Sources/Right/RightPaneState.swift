@@ -150,7 +150,17 @@ final class RightPaneState {
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
+            let previousBranch = self.currentBranch
             self.currentBranch = (try? await br) ?? self.currentBranch
+            if previousBranch != self.currentBranch {
+                // Branch changed (typically an in-worktree `git checkout`).
+                // The behind chips were probed against the OLD branch's base
+                // and upstream — clear them so the header doesn't render
+                // stale counts, then re-probe in the background.
+                self.behindBase = nil
+                self.behindUpstream = nil
+                Task { @MainActor in await self.refreshSyncStatus() }
+            }
             // Gate the Amend toggle: an unborn branch (no commits yet)
             // has nothing to amend. If the probe itself throws, default
             // to `true` so we never wrongly disable the control on a
