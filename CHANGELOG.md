@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-05-22
+
+### ✨ Features
+
+- redesign the Ghostty dead-key keyboard pipeline (#243).
+- flatten Cmd-K into a grouped worktree selector (#246).
+- add Kotlin LSP diagnostics support (#252).
+- show a right-pane nudge when a worktree is behind its upstream branch (#251).
+
+### 🐛 Fixes
+
+- shrink agent logos in the tab bar menu (#244).
+- resolve symlinks when opening files from the file tree (#245).
+- stabilize right sidebar tree chevrons (#247).
+- replace tab activity dots with stable tinted terminal icons (#248).
+- stabilize worktree row height when status badges appear (#249).
+- apply code font settings to diff panes (#250).
+
+### 🏗️ Internal
+
+- revise the documented system requirements.
+- clean up generated Homebrew cask stanza grouping.
+
 ## [0.3.9] - 2026-05-22
 
 ### ✨ Features
