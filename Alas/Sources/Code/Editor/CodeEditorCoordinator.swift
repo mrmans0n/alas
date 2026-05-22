@@ -39,6 +39,7 @@ final class CodeEditorCoordinator {
     /// publish again. Internal so tests can seed it.
     var lastDiagnosticsByURI: [String: [LSPDiagnostic]] = [:]
     let symbolsFeature = SymbolsFeature()
+    private var pullDiagnosticsTask: Task<Void, Never>?
     private var hover: HoverFeature?
     private var definition: DefinitionFeature?
     private var hoverHighlight: HoverHighlightFeature?
@@ -361,6 +362,8 @@ final class CodeEditorCoordinator {
     /// buffer is already bound, its layout manager and edit observer are torn
     /// down first so the text view stops rendering the old storage.
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
+        pullDiagnosticsTask?.cancel()
+        pullDiagnosticsTask = nil
         let isRebind = self.buffer != nil
         if let previous = self.buffer {
             if let token = editObserverToken {
@@ -415,6 +418,8 @@ final class CodeEditorCoordinator {
             hasPendingDidChange = false
         }
         pendingTextEdits.removeAll()
+        pullDiagnosticsTask?.cancel()
+        pullDiagnosticsTask = nil
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
         diagnosticsSetupTask?.cancel()
@@ -474,6 +479,7 @@ final class CodeEditorCoordinator {
         guard let buffer, let language = currentLanguage else { return }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         let text = buffer.storage.string
+        let theme = currentTheme
         Task {
             await appState.lsp.didChange(
                 worktreeRoot: buffer.worktreeRoot,
@@ -482,6 +488,11 @@ final class CodeEditorCoordinator {
                 text: text,
                 edits: edits
             )
+            if let theme,
+               let client = appState.lsp.client(forFile: url, worktreeRoot: buffer.worktreeRoot, language: language),
+               await client.supportsPullDiagnostics {
+                await self.performPullDiagnostics(client: client, uri: url.lspURI, theme: theme)
+            }
         }
     }
 
@@ -586,6 +597,9 @@ final class CodeEditorCoordinator {
                   let client else { return }
             await self.subscribeDiagnostics(for: client, theme: theme)
             await self.symbolsFeature.refresh(client: client, uri: url.lspURI)
+            if await client.supportsPullDiagnostics {
+                self.startPullDiagnosticsIfNeeded(for: client, uri: url.lspURI, theme: theme)
+            }
         }
     }
 
@@ -597,6 +611,36 @@ final class CodeEditorCoordinator {
                 await MainActor.run {
                     self?.processDiagnosticsBatch(batch, theme: theme)
                 }
+            }
+        }
+    }
+
+    private func performPullDiagnostics(client: LSPClient, uri: String, theme: Theme) async {
+        guard !Task.isCancelled else { return }
+        do {
+            if let diags = try await client.requestDiagnostics(uri: uri, previousResultId: nil) {
+                let batch = LSPPublishDiagnosticsParams(uri: uri, diagnostics: diags)
+                await MainActor.run {
+                    self.processDiagnosticsBatch(batch, theme: theme)
+                }
+            }
+        } catch {
+            // Best-effort.
+        }
+    }
+
+    private func startPullDiagnosticsIfNeeded(for client: LSPClient, uri: String, theme: Theme) {
+        pullDiagnosticsTask?.cancel()
+        pullDiagnosticsTask = Task { [weak self] in
+            guard let self else { return }
+            var first = true
+            while !Task.isCancelled {
+                if !first {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard !Task.isCancelled else { return }
+                }
+                first = false
+                await self.performPullDiagnostics(client: client, uri: uri, theme: theme)
             }
         }
     }
