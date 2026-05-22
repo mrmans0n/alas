@@ -117,6 +117,10 @@ extension AlasGhostty {
         /// Whether the surface currently has keyboard focus.
         private var isFocused: Bool = false
 
+        /// Temporarily non-nil while inside keyDown so insertText can accumulate
+        /// text without double-delivering it via both insertText and raw key events.
+        private var keyTextAccumulator: [String]?
+
         // MARK: - Init
 
         /// - Parameters:
