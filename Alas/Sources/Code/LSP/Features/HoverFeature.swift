@@ -84,12 +84,9 @@ final class HoverFeature {
             return
         }
         let markdown: String
-        if isPlain && !body.contains("`") {
-            if body.contains("\n") {
-                markdown = "```\n\(body)\n```"
-            } else {
-                markdown = "`\(body)`"
-            }
+        if isPlain {
+            let fence = longestBacktickRun(in: body)
+            markdown = "\(fence)\n\(body)\n\(fence)"
         } else {
             markdown = body
         }
@@ -98,6 +95,21 @@ final class HoverFeature {
             guard self.isCurrentRequest(currentRequestID, uri: uri, position: position, point: point) else { return }
             self.presentPopover(text: markdown, anchor: textRect, in: textView)
         }
+    }
+
+    private func longestBacktickRun(in text: String) -> String {
+        var longest = 0
+        var current = 0
+        for ch in text {
+            if ch == "`" {
+                current += 1
+                longest = max(longest, current)
+            } else {
+                current = 0
+            }
+        }
+        let count = max(3, longest + 1)
+        return String(repeating: "`", count: count)
     }
 
     private func isCurrentRequest(_ currentRequestID: UInt64, uri: String, position: LSPPosition, point: NSPoint) -> Bool {
