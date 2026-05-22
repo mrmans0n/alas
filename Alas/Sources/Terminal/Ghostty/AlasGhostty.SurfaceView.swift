@@ -119,7 +119,7 @@ extension AlasGhostty {
 
         /// Temporarily non-nil while inside keyDown so insertText can accumulate
         /// text without double-delivering it via both insertText and raw key events.
-        private var keyTextAccumulator: [String]?
+        var keyTextAccumulator: [String]?
 
         // MARK: - Init
 
