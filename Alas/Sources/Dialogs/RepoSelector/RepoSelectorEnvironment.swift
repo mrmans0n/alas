@@ -19,4 +19,7 @@ struct RepoSelectorEnvironment {
     var openNewProject: () -> Void
     /// Open `NewWorktreeDialog` for the given project.
     var openNewWorktree: (_ projectId: String) -> Void
+    /// The worktree currently focused in the app (`AppState.selectedWorktreeId`).
+    /// Used to mark the "current" worktree in the list.
+    var currentWorktreeId: () -> String?
 }

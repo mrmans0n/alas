@@ -1,9 +1,16 @@
+import AppKit
 import SwiftUI
 
 struct RepoSelectorDialog: View {
     @Bindable var appState: AppState
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
+    /// Screen-coords cursor position from the most recently accepted hover.
+    /// Used to ignore hovers that fire because the row scrolled under a
+    /// stationary cursor (rather than the cursor actually moving). Without
+    /// this guard, keyboard navigation fights with the scrolled-into-place
+    /// row claiming hover and snapping selection back.
+    @State private var lastHoverLocation: CGPoint?
 
     var body: some View {
         if appState.isRepoSelectorOpen {
@@ -13,15 +20,22 @@ struct RepoSelectorDialog: View {
                     .onTapGesture { close() }
 
                 VStack(spacing: 0) {
-                    if case .worktrees(let projectId) = appState.repoSelector.step {
-                        breadcrumb(projectId: projectId)
-                    }
                     inputRow
                     Divider().background(theme.color("line"))
                     rowList
                     footer
                 }
-                .frame(width: 480)
+                .onChange(of: appState.repoSelector.query) { _, _ in
+                    // After a query change, model.didSet has reset
+                    // selectedIndex to 0. In empty-query mode row 0 is a
+                    // header (RECENT/PROJECT), which isn't selectable —
+                    // snap forward to the nearest selectable row using the
+                    // fresh row list.
+                    let env = environment()
+                    let rows = appState.repoSelector.rows(environment: env)
+                    appState.repoSelector.setSelectedIndex(0, in: rows)
+                }
+                .frame(width: 720)
                 .frame(maxHeight: 520)
                 .background(theme.color("bg-1").opacity(0.92))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -38,6 +52,12 @@ struct RepoSelectorDialog: View {
             .transition(.opacity.combined(with: .offset(y: -6)))
             .onAppear {
                 appState.repoSelector.open()
+                // `open()` resets query to "" — but if it was already "",
+                // didSet skips and selectedIndex stays at 0, which lands on
+                // the RECENT or first project header (non-selectable). Snap
+                // forward so ↵ on first open activates the top worktree.
+                let rows = appState.repoSelector.rows(environment: environment())
+                appState.repoSelector.setSelectedIndex(0, in: rows)
                 requestInputFocus()
             }
             .onChange(of: appState.isRepoSelectorOpen) { _, isOpen in
@@ -53,7 +73,7 @@ struct RepoSelectorDialog: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-faint"))
-            TextField(placeholder, text: Bindable(appState.repoSelector).query)
+            TextField("Switch worktree…", text: Bindable(appState.repoSelector).query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
                 .font(.system(size: 14))
@@ -61,32 +81,6 @@ struct RepoSelectorDialog: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-    }
-
-    private var placeholder: String {
-        switch appState.repoSelector.step {
-        case .repos:
-            return "Switch repository…"
-        case .worktrees(let projectId):
-            let name = appState.projects.first(where: { $0.id == projectId })?.name ?? ""
-            return "Switch worktree in \(name)…"
-        }
-    }
-
-    private func breadcrumb(projectId: String) -> some View {
-        let name = appState.projects.first(where: { $0.id == projectId })?.name ?? ""
-        return HStack(spacing: 6) {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 10, weight: .semibold))
-            Text(name)
-                .font(.system(size: 12, weight: .medium))
-        }
-        .foregroundColor(theme.color("fg-dim"))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { popToRepos() }
     }
 
     private var rowList: some View {
@@ -108,7 +102,12 @@ struct RepoSelectorDialog: View {
                                 appState.repoSelector.setSelectedIndex(idx, in: rows)
                                 activate(rows: rows)
                             },
-                            onHover: { appState.repoSelector.setSelectedIndex(idx, in: rows) }
+                            onHover: {
+                                let current = NSEvent.mouseLocation
+                                if lastHoverLocation == current { return }
+                                lastHoverLocation = current
+                                appState.repoSelector.setSelectedIndex(idx, in: rows)
+                            }
                         )
                         .id(idx)
                     }
@@ -116,12 +115,12 @@ struct RepoSelectorDialog: View {
                 .padding(.vertical, 4)
             }
             .frame(minHeight: 200, maxHeight: 420)
-            // Scroll to the selected row when the keyboard moves selection.
-            // We watch `scrollToSelectionTick` (bumped by ↑/↓) instead of
-            // `selectedIndex` itself so hover-driven selection doesn't fight
-            // the user's scroll input.
             .onChange(of: appState.repoSelector.scrollToSelectionTick) { _, _ in
-                proxy.scrollTo(appState.repoSelector.selectedIndex, anchor: .center)
+                // anchor: nil scrolls just enough to make the row visible.
+                // .center would re-center on every arrow press, shifting the
+                // list under the cursor and triggering hover-induced
+                // selection bouncing.
+                proxy.scrollTo(appState.repoSelector.selectedIndex)
             }
         }
     }
@@ -130,7 +129,7 @@ struct RepoSelectorDialog: View {
         HStack(spacing: 12) {
             label("↑↓ navigate")
             label("↵ open")
-            label("esc \(escLabel)")
+            label("esc close")
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -146,13 +145,6 @@ struct RepoSelectorDialog: View {
         Text(s)
             .font(.system(size: 11))
             .foregroundColor(theme.color("fg-faint"))
-    }
-
-    private var escLabel: String {
-        switch appState.repoSelector.step {
-        case .repos: return "close"
-        case .worktrees: return "back"
-        }
     }
 
     // MARK: - Actions
@@ -174,16 +166,9 @@ struct RepoSelectorDialog: View {
         switch result {
         case .focused, .openedNewWorktree, .openedNewProject:
             appState.isRepoSelectorOpen = false
-        case .pushed:
-            requestInputFocus()
         case .noop:
             break
         }
-    }
-
-    private func popToRepos() {
-        appState.repoSelector.popToRepos()
-        requestInputFocus()
     }
 
     private func close() {
@@ -209,12 +194,7 @@ struct RepoSelectorDialog: View {
         let rows = model.rows(environment: env)
         switch press.key {
         case .escape:
-            switch model.step {
-            case .repos:
-                close()
-            case .worktrees:
-                popToRepos()
-            }
+            close()
             return .handled
         case .upArrow:
             model.moveSelectionUp(in: rows)

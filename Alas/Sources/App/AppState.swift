@@ -361,20 +361,23 @@ final class AppState {
                 guard let self else { return RepoSelectorRecents() }
                 return RepoSelectorRecents(
                     projectIds: self.config.recentProjectIds,
-                    worktreeIdsByProject: self.config.recentWorktreeIdsByProject
+                    worktreeIdsByProject: self.config.recentWorktreeIdsByProject,
+                    recentWorktreeRefs: self.config.recentWorktreeRefs
                 )
             },
             writeRecents: { [weak self] r in
                 guard let self else { return }
                 self.config.recentProjectIds = r.projectIds
                 self.config.recentWorktreeIdsByProject = r.worktreeIdsByProject
+                self.config.recentWorktreeRefs = r.recentWorktreeRefs
                 _ = self.saveConfig()
             },
             focusWorktree: { [weak self] id in
                 self?.selectedWorktreeId = id
             },
             openNewProject: openNewProject,
-            openNewWorktree: openNewWorktree
+            openNewWorktree: openNewWorktree,
+            currentWorktreeId: { [weak self] in self?.selectedWorktreeId }
         )
     }
 

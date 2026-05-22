@@ -4,11 +4,12 @@ import Foundation
 /// fuzzy-match positions (matching `FuzzyMatch.Result.indices`) for
 /// highlighting; empty when no query is active.
 enum RepoSelectorRow: Equatable {
-    case repo(ProjectConfig, indices: [Int])
-    case worktree(Worktree, indices: [Int])
+    case worktree(Worktree, indices: [Int], isCurrent: Bool)
     case action(Action)
     case emptyHint(EmptyHint)
-    case divider(label: String)
+    case recentHeader
+    case projectHeader(projectId: String)
+    case actionsHeader
 
     enum Action: Equatable {
         case newProject
@@ -16,14 +17,14 @@ enum RepoSelectorRow: Equatable {
     }
 
     enum EmptyHint: Equatable {
-        /// Step 1 with zero configured projects at all.
+        /// Zero configured projects.
         case noProjects
     }
 
     /// True when keyboard navigation should be able to land on this row.
     var isSelectable: Bool {
         switch self {
-        case .divider: return false
+        case .recentHeader, .projectHeader, .actionsHeader: return false
         default: return true
         }
     }
