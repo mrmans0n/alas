@@ -115,7 +115,7 @@ private struct TabButton: View {
     var body: some View {
         HStack(spacing: 6) {
             Icon(name: tab.iconName, size: 11,
-                 color: active ? theme.color("accent") : theme.color("fg-faint"))
+                 color: iconColor)
             Text(tab.title)
                 .font(.system(size: 11.5))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
@@ -124,10 +124,6 @@ private struct TabButton: View {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(theme.color("fg-faint"))
-            }
-            if let info = harnessInfo {
-                Circle().fill(stateColor(info.state)).frame(width: 6, height: 6)
-                    .opacity(info.state == .busy ? 0.85 : 1)
             }
             if showClose {
                 Button(action: onClose) {
@@ -165,6 +161,13 @@ private struct TabButton: View {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onActivate)
+    }
+
+    private var iconColor: Color {
+        if let info = harnessInfo, info.state != .idle {
+            return stateColor(info.state)
+        }
+        return active ? theme.color("accent") : theme.color("fg-faint")
     }
 
     private func stateColor(_ s: ActivityState) -> Color {
