@@ -1515,8 +1515,9 @@ final class AppState {
 
     /// Route a cmd-clicked URL from a Ghostty terminal surface. Mirrors `alas
     /// open` for files inside the session's worktree (resolving relatives
-    /// against the shell cwd), and returns false for anything else so the
-    /// caller can fall back to `NSWorkspace.shared.open`.
+    /// against the shell cwd first, then falling back to the worktree root),
+    /// and returns false for anything else so the caller can fall back to
+    /// `NSWorkspace.shared.open`.
     func routeTerminalOpenURL(rawURL: String, sessionId: String) -> Bool {
         guard let session = terminal.registry.session(for: sessionId),
               let worktree = worktree(withId: session.worktreeId) else { return false }
@@ -1529,32 +1530,39 @@ final class AppState {
         }
         guard !path.isEmpty else { return false }
 
-        let initialAbsoluteURL: URL
-        if (path as NSString).isAbsolutePath {
-            initialAbsoluteURL = URL(fileURLWithPath: path).standardizedFileURL
-        } else {
-            let base = session.surface.currentWorkingDirectory ?? worktree.path
-            initialAbsoluteURL = base.appendingPathComponent(path).standardizedFileURL
+        // Resolve a path against the shell cwd (if known) and fall back to the
+        // worktree root. This handles both cwd-relative links (the common
+        // terminal case) and repo-root-relative links (common in agent output).
+        func resolve(_ rawPath: String) -> URL {
+            if (rawPath as NSString).isAbsolutePath {
+                return URL(fileURLWithPath: rawPath).standardizedFileURL
+            }
+            let cwdBase = session.surface.currentWorkingDirectory ?? worktree.path
+            let cwdRelative = cwdBase.appendingPathComponent(rawPath).standardizedFileURL
+            let rootRelative = worktree.path.appendingPathComponent(rawPath).standardizedFileURL
+            if FileManager.default.fileExists(atPath: cwdRelative.path) {
+                return cwdRelative
+            }
+            if cwdRelative.path != rootRelative.path,
+               FileManager.default.fileExists(atPath: rootRelative.path) {
+                return rootRelative
+            }
+            return cwdRelative
         }
 
         let target: TerminalOpenTarget
-        if FileManager.default.fileExists(atPath: initialAbsoluteURL.path) {
-            target = TerminalOpenTarget(url: initialAbsoluteURL, revealLine: nil, revealCharacter: nil)
+        let resolved = resolve(path)
+        if FileManager.default.fileExists(atPath: resolved.path) {
+            target = TerminalOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
         } else if let parsed = Self.parseTerminalPathPosition(path) {
-            let url: URL
-            if (parsed.path as NSString).isAbsolutePath {
-                url = URL(fileURLWithPath: parsed.path).standardizedFileURL
-            } else {
-                let base = session.surface.currentWorkingDirectory ?? worktree.path
-                url = base.appendingPathComponent(parsed.path).standardizedFileURL
-            }
+            let resolvedParsed = resolve(parsed.path)
             target = TerminalOpenTarget(
-                url: url,
+                url: resolvedParsed,
                 revealLine: parsed.line - 1,
                 revealCharacter: (parsed.column ?? 1) - 1
             )
         } else {
-            target = TerminalOpenTarget(url: initialAbsoluteURL, revealLine: nil, revealCharacter: nil)
+            target = TerminalOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
         }
 
         var isDirectory: ObjCBool = false
