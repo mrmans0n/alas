@@ -1,4 +1,5 @@
 import AppKit
+import Markdown
 import SwiftUI
 
 @MainActor
@@ -6,15 +7,28 @@ final class HoverFeature {
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
     private let getURI: () -> String?
+    private let getTheme: () -> Theme
+    private let getMonoFontFamily: () -> String
+    private let getMonoFontSize: () -> Int
     private var debounce: Task<Void, Never>?
     private var popover: NSPopover?
     private var lastPosition: NSPoint?
     private var requestID: UInt64 = 0
 
-    init(textView: CodeTextView, getClient: @escaping () -> LSPClient?, getURI: @escaping () -> String?) {
+    init(
+        textView: CodeTextView,
+        getClient: @escaping () -> LSPClient?,
+        getURI: @escaping () -> String?,
+        getTheme: @escaping () -> Theme,
+        getMonoFontFamily: @escaping () -> String,
+        getMonoFontSize: @escaping () -> Int
+    ) {
         self.textView = textView
         self.getClient = getClient
         self.getURI = getURI
+        self.getTheme = getTheme
+        self.getMonoFontFamily = getMonoFontFamily
+        self.getMonoFontSize = getMonoFontSize
         textView.hoverHandler = { [weak self] p in self?.onMove(at: p) }
     }
 
@@ -81,16 +95,55 @@ final class HoverFeature {
     }
 
     private func presentPopover(text: String, anchor: NSRect, in view: NSView) {
+        let theme = getTheme()
+        let family = getMonoFontFamily()
+        let size = getMonoFontSize()
+
+        let document = Document(parsing: text)
+        let result = MarkdownRenderer().render(
+            document: document,
+            theme: theme,
+            monospacedFontFamily: family,
+            monospacedFontSize: size,
+            baseDirectory: URL(fileURLWithPath: "/")
+        )
+
         popover?.close()
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 360, height: 220)
         let host = NSHostingController(
-            rootView: HoverContentView(markdown: text)
+            rootView: HoverContentView(result: result, theme: theme)
         )
         popover.contentViewController = host
         popover.show(relativeTo: anchor, of: view, preferredEdge: .maxY)
         self.popover = popover
+
+        applyPopoverSize(for: result)
+    }
+
+    private func applyPopoverSize(for result: MarkdownRenderResult) {
+        guard let popover else { return }
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(containerSize: NSSize(width: 500, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        textContainer.lineFragmentPadding = 0
+        layoutManager.addTextContainer(textContainer)
+
+        let textStorage = NSTextStorage(attributedString: result.attributedString)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.glyphRange(for: textContainer)
+
+        var usedRect = layoutManager.usedRect(for: textContainer)
+        usedRect.size.width += 16 + 20
+        usedRect.size.height += 16 + 20
+
+        let minSize = NSSize(width: 360, height: 220)
+        let maxSize = NSSize(width: 500, height: 400)
+        let clamped = NSSize(
+            width: max(minSize.width, min(usedRect.size.width, maxSize.width)),
+            height: max(minSize.height, min(usedRect.size.height, maxSize.height))
+        )
+        popover.contentSize = clamped
     }
 
     private func closePopover() {
@@ -99,18 +152,51 @@ final class HoverFeature {
     }
 }
 
-private struct HoverContentView: View {
-    let markdown: String
-    var body: some View {
-        ScrollView {
-            Text(attributed)
-                .font(.system(size: 12, design: .default))
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+private struct HoverContentView: NSViewRepresentable {
+    let result: MarkdownRenderResult
+    let theme: Theme
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.drawsBackground = false
+        textView.isSelectable = true
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.isHorizontallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        scrollView.documentView = textView
+        scrollView.drawsBackground = true
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+
+        context.coordinator.textView = textView
+        textView.textStorage?.setAttributedString(result.attributedString)
+        scrollView.backgroundColor = NSColor(theme.color("bg-1"))
+        return scrollView
     }
-    private var attributed: AttributedString {
-        (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = context.coordinator.textView else { return }
+        textView.textStorage?.setAttributedString(result.attributedString)
+        nsView.backgroundColor = NSColor(theme.color("bg-1"))
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        weak var textView: NSTextView? {
+            didSet { textView?.delegate = self }
+        }
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            true
+        }
     }
 }
 
