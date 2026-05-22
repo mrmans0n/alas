@@ -121,26 +121,83 @@ struct RepoSelectorModelTests {
         #expect(!rows.contains(.recentHeader))
     }
 
-    @Test func emptyQueryRecentsLimitsToFive() {
+    @Test func emptyQueryRecentsLimitsToFiveAcrossMultipleProjects() {
+        // Two projects, each with several recents. Pumping the flat global
+        // recents list past 5 must still produce exactly 5 RECENT rows —
+        // this exercises the model's `recentLimit` independently of the
+        // per-project store cap.
         let model = RepoSelectorModel()
-        let wts: [Worktree] = (1...7).map { worktree("w\($0)", projectId: "p1", branch: "b\($0)") }
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let p1Wts: [Worktree] = (1...4).map {
+            worktree("p1-w\($0)", projectId: "p1", branch: "p1/b\($0)")
+        }
+        let p2Wts: [Worktree] = (1...4).map {
+            worktree("p2-w\($0)", projectId: "p2", branch: "p2/b\($0)")
+        }
         var r = RepoSelectorRecents()
         r.bumpProject("p1")
-        // bump in reverse so w1 ends up most recent
-        for w in wts.reversed() { r.bumpWorktree(w.id, in: "p1") }
-        // The store caps at 5 per project (see RepoSelectorRecents.worktreeCapPerProject)
-        // and the model caps at 5 across the whole RECENT section. Either bound is
-        // enough to keep this test honest; with one project both bounds apply.
+        r.bumpProject("p2")
+        // Interleaved bumps across projects so the flat list is genuinely
+        // cross-project. Final order (newest first):
+        //   p2-w4, p1-w4, p2-w3, p1-w3, p2-w2, p1-w2, p2-w1, p1-w1
+        for i in 1...4 {
+            r.bumpWorktree("p1-w\(i)", in: "p1")
+            r.bumpWorktree("p2-w\(i)", in: "p2")
+        }
         let e = env(
-            projects: [project("p1")],
-            worktrees: ["p1": wts],
+            projects: [p1, p2],
+            worktrees: ["p1": p1Wts, "p2": p2Wts],
             recents: r
         )
         let rows = model.rows(environment: e)
+        // Take the RECENT section: everything between `.recentHeader` and
+        // the first `.projectHeader`.
+        guard rows.first == .recentHeader else {
+            Issue.record("expected RECENT header at row 0, got \(rows.first as Any)")
+            return
+        }
         let recentWorktrees: [Worktree] = rows
-            .prefix(while: { $0 != .projectHeader(projectId: "p1") })
+            .dropFirst()
+            .prefix(while: { row in
+                if case .projectHeader = row { return false }
+                return true
+            })
             .compactMap { if case .worktree(let w, _, _) = $0 { return w } else { return nil } }
+        // Exactly the global cap — neither bucketed by project nor over-long.
         #expect(recentWorktrees.count == 5)
+        // Order is strict global recency, not project-bucketed.
+        #expect(recentWorktrees.map(\.id) == ["p2-w4", "p1-w4", "p2-w3", "p1-w3", "p2-w2"])
+    }
+
+    @Test func emptyQueryRecentSectionIsGloballyOrderedNotProjectBucketed() {
+        // Spec example: A/w1 → A/w2 → B/w3 → A/w4 ⇒ [w4, w3, w2, w1].
+        let model = RepoSelectorModel()
+        let pA = project("A")
+        let pB = project("B")
+        let aW1 = worktree("w1", projectId: "A", branch: "A/w1")
+        let aW2 = worktree("w2", projectId: "A", branch: "A/w2")
+        let aW4 = worktree("w4", projectId: "A", branch: "A/w4")
+        let bW3 = worktree("w3", projectId: "B", branch: "B/w3")
+        var r = RepoSelectorRecents()
+        r.bumpWorktree("w1", in: "A")
+        r.bumpWorktree("w2", in: "A")
+        r.bumpWorktree("w3", in: "B")
+        r.bumpWorktree("w4", in: "A")
+        let e = env(
+            projects: [pA, pB],
+            worktrees: ["A": [aW1, aW2, aW4], "B": [bW3]],
+            recents: r
+        )
+        let rows = model.rows(environment: e)
+        let recentIds: [String] = rows
+            .dropFirst()  // skip .recentHeader
+            .prefix(while: { row in
+                if case .projectHeader = row { return false }
+                return true
+            })
+            .compactMap { if case .worktree(let w, _, _) = $0 { return w.id } else { return nil } }
+        #expect(recentIds == ["w4", "w3", "w2", "w1"])
     }
 
     @Test func emptyQueryProjectSectionOrdersByRecencyThenAlpha() {

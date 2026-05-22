@@ -115,27 +115,25 @@ final class RepoSelectorModel {
         recents: RepoSelectorRecents,
         currentId: String?
     ) -> [RepoSelectorRow] {
-        // Build per-project recent slices, then interleave by the order they
-        // appear in `recents.projectIds` (most-recently-touched project first).
-        // We dedupe by worktree id and stop at `recentLimit`.
-        let validProjectIds = Set(projects.map(\.id))
-        let projectOrderIds = recents.liveProjectIds(validProjectIds: validProjectIds)
-        var seen = Set<String>()
-        var output: [(Worktree, Bool)] = []
-        outer: for projectId in projectOrderIds {
-            let wts = worktreesByProject[projectId] ?? []
-            let validIds = Set(wts.map(\.id))
-            let recentIds = recents.liveWorktreeIds(in: projectId, validWorktreeIds: validIds)
-            let byId = Dictionary(uniqueKeysWithValues: wts.map { ($0.id, $0) })
-            for id in recentIds {
-                if seen.contains(id) { continue }
-                guard let w = byId[id] else { continue }
-                seen.insert(id)
-                output.append((w, w.id == currentId))
-                if output.count >= Self.recentLimit { break outer }
-            }
+        // Consume the flat global recency list directly so the RECENT
+        // section is strict cross-project recency rather than per-project
+        // drain order.
+        let visibleByProject: [String: Set<String>] = worktreesByProject.mapValues {
+            Set($0.map(\.id))
         }
-        return output.map { .worktree($0.0, indices: [], isCurrent: $0.1) }
+        let worktreeByPair: [String: [String: Worktree]] = worktreesByProject.mapValues {
+            Dictionary(uniqueKeysWithValues: $0.map { ($0.id, $0) })
+        }
+        let refs = recents.liveRecentWorktreeRefs(
+            projectsWithVisibleWorktrees: visibleByProject
+        )
+        var output: [RepoSelectorRow] = []
+        for ref in refs {
+            guard let w = worktreeByPair[ref.projectId]?[ref.worktreeId] else { continue }
+            output.append(.worktree(w, indices: [], isCurrent: w.id == currentId))
+            if output.count >= Self.recentLimit { break }
+        }
+        return output
     }
 
     /// Projects ordered by the recency of their most-recently-touched

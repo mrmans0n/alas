@@ -33,6 +33,7 @@ struct AppConfig: Codable, Equatable {
     var files: Files
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
+    var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
     var sidebarChromeOverrides: [String: SidebarChromeOverride] = [:]
     var shortcutOverrides: [String: ShortcutBinding?] = [:]
 
@@ -213,6 +214,7 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true),
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
+        recentWorktreeRefs: [],
         sidebarChromeOverrides: SidebarChromeOverride.bundledDefaults,
         shortcutOverrides: [:]
     )
@@ -248,7 +250,7 @@ extension AppConfig {
              general, worktrees, terminal, harness, code, markdown, changes,
              agents,
              files,
-             recentProjectIds, recentWorktreeIdsByProject,
+             recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              sidebarChromeOverrides,
              shortcutOverrides
     }
@@ -351,6 +353,8 @@ extension AppConfig {
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
+        recentWorktreeRefs =
+            (try? c.decode([RepoSelectorRecents.RecentWorktreeRef].self, forKey: .recentWorktreeRefs)) ?? []
         sidebarChromeOverrides =
             (try? c.decode([String: SidebarChromeOverride].self, forKey: .sidebarChromeOverrides)) ?? [:]
         shortcutOverrides =

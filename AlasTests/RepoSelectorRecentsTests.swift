@@ -52,4 +52,67 @@ struct RepoSelectorRecentsTests {
         let r = RepoSelectorRecents()
         #expect(r.liveWorktreeIds(in: "missing", validWorktreeIds: ["w1"]) == [])
     }
+
+    // MARK: - Flat global recents (recentWorktreeRefs)
+
+    @Test func bumpWorktreeUpdatesRecentWorktreeRefsAcrossProjects() {
+        var r = RepoSelectorRecents()
+        r.bumpWorktree("w1", in: "A")
+        r.bumpWorktree("w2", in: "A")
+        r.bumpWorktree("w3", in: "B")
+        r.bumpWorktree("w4", in: "A")
+        // Newest first; cross-project order is preserved (NOT bucketed by project).
+        #expect(r.recentWorktreeRefs == [
+            .init(projectId: "A", worktreeId: "w4"),
+            .init(projectId: "B", worktreeId: "w3"),
+            .init(projectId: "A", worktreeId: "w2"),
+            .init(projectId: "A", worktreeId: "w1"),
+        ])
+    }
+
+    @Test func bumpWorktreeDedupesByProjectAndWorktreePair() {
+        var r = RepoSelectorRecents()
+        r.bumpWorktree("w1", in: "A")
+        r.bumpWorktree("w1", in: "B")  // different project; both entries kept
+        r.bumpWorktree("w1", in: "A")  // moves A/w1 back to the front
+        #expect(r.recentWorktreeRefs == [
+            .init(projectId: "A", worktreeId: "w1"),
+            .init(projectId: "B", worktreeId: "w1"),
+        ])
+    }
+
+    @Test func bumpWorktreeCapsRecentWorktreeRefsAtFive() {
+        var r = RepoSelectorRecents()
+        for i in 1...7 {
+            r.bumpWorktree("w\(i)", in: "A")
+        }
+        #expect(r.recentWorktreeRefs.count == RepoSelectorRecents.recentWorktreeRefCap)
+        #expect(r.recentWorktreeRefs.map(\.worktreeId) == ["w7", "w6", "w5", "w4", "w3"])
+    }
+
+    @Test func liveRecentWorktreeRefsFiltersDanglingByPair() {
+        var r = RepoSelectorRecents()
+        r.bumpWorktree("w1", in: "A")
+        r.bumpWorktree("w2", in: "B")
+        r.bumpWorktree("w3", in: "A")
+        // B/w2 visible; A/w1 not visible (dropped); A/w3 visible.
+        let live = r.liveRecentWorktreeRefs(projectsWithVisibleWorktrees: [
+            "A": ["w3"],
+            "B": ["w2"],
+        ])
+        #expect(live == [
+            .init(projectId: "A", worktreeId: "w3"),
+            .init(projectId: "B", worktreeId: "w2"),
+        ])
+    }
+
+    @Test func liveRecentWorktreeRefsDropsRefsForUnknownProject() {
+        var r = RepoSelectorRecents()
+        r.bumpWorktree("w1", in: "A")
+        r.bumpWorktree("w2", in: "missing")
+        let live = r.liveRecentWorktreeRefs(projectsWithVisibleWorktrees: [
+            "A": ["w1"],
+        ])
+        #expect(live == [.init(projectId: "A", worktreeId: "w1")])
+    }
 }

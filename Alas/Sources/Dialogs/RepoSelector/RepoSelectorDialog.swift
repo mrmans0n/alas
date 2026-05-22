@@ -18,6 +18,16 @@ struct RepoSelectorDialog: View {
                     rowList
                     footer
                 }
+                .onChange(of: appState.repoSelector.query) { _, _ in
+                    // After a query change, model.didSet has reset
+                    // selectedIndex to 0. In empty-query mode row 0 is a
+                    // header (RECENT/PROJECT), which isn't selectable —
+                    // snap forward to the nearest selectable row using the
+                    // fresh row list.
+                    let env = environment()
+                    let rows = appState.repoSelector.rows(environment: env)
+                    appState.repoSelector.setSelectedIndex(0, in: rows)
+                }
                 .frame(width: 720)
                 .frame(maxHeight: 520)
                 .background(theme.color("bg-1").opacity(0.92))
