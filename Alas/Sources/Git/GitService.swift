@@ -776,14 +776,28 @@ extension GitService {
             }
         }
 
-        // Step 2: If no upstream, try the base branch (if it resolves locally).
+        // Step 2: If no upstream, try the base branch. Prefer `origin/<base>`
+        // over local `<base>` — the remote-tracking ref is usually current
+        // after a fetch, while the local branch can be stale (especially in
+        // worktrees that never check out the base branch directly). This also
+        // matches the ref the rebase affordance targets via `resolveBaseRef`,
+        // so the Commits section stays consistent with what the user just
+        // rebased onto.
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
-            let verify = try await Process.git(
-                ["rev-parse", "--verify", "--quiet", base],
+            let origin = try await Process.git(
+                ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
                 cwd: worktree
             )
-            if verify.exitCode == 0 { baseName = base }
+            if origin.exitCode == 0 {
+                baseName = "origin/\(base)"
+            } else {
+                let local = try await Process.git(
+                    ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
+                    cwd: worktree
+                )
+                if local.exitCode == 0 { baseName = base }
+            }
         }
 
         // Step 3: If neither resolves, bail out.
@@ -937,5 +951,129 @@ extension GitService {
             ))
         }
         return commits
+    }
+}
+
+extension GitService {
+    /// One probe of HEAD's behind-count against an arbitrary ref. Used both
+    /// for "behind base" (origin/main) and "behind upstream" (origin/<branch>).
+    struct BehindStatus: Equatable, Sendable {
+        let ref: String      // e.g. "origin/main" or "origin/my-feature"
+        let sha: String      // SHA of ref at probe time
+        let count: Int       // git rev-list --count HEAD..<ref>
+        let probedAt: Date
+    }
+
+    /// Errors emitted by `behindStatus`. Either git invocation can fail
+    /// (e.g. ref disappeared between resolution and the probe).
+    enum BehindStatusError: Error, Equatable, Sendable {
+        case revParseFailed(stderr: String)
+        case revListFailed(stderr: String)
+    }
+
+    /// Resolves the base ref to compare against for a given worktree.
+    /// Returns nil when neither `origin/<base>` nor local `<base>` exists.
+    /// `remote == nil` means "no fetch path; use the local ref as-is".
+    func resolveBaseRef(
+        worktreePath: URL,
+        baseBranch: String
+    ) async throws -> (remote: String?, baseRef: String)? {
+        guard !baseBranch.isEmpty else { return nil }
+
+        // Prefer origin/<base>.
+        let originRef = "refs/remotes/origin/\(baseBranch)"
+        let originCheck = try await Process.git(
+            ["show-ref", "--verify", "--quiet", originRef],
+            cwd: worktreePath
+        )
+        if originCheck.exitCode == 0 {
+            return (remote: "origin", baseRef: "origin/\(baseBranch)")
+        }
+
+        // Fall back to local <base>.
+        let localCheck = try await Process.git(
+            ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
+            cwd: worktreePath
+        )
+        if localCheck.exitCode == 0 {
+            return (remote: nil, baseRef: baseBranch)
+        }
+
+        return nil
+    }
+
+    /// Resolves the upstream tracking ref (e.g. `origin/my-feature`) of the
+    /// current branch, or nil when none is configured. Used to detect when
+    /// the local HEAD is behind a ref that someone else (or another machine)
+    /// pushed to.
+    func resolveUpstreamRef(worktreePath: URL) async throws -> (remote: String, ref: String)? {
+        let result = try await Process.git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { return nil }
+        let name = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != "@{u}" else { return nil }
+        // `name` is "<remote>/<branch>"; take the first segment as remote.
+        guard let slash = name.firstIndex(of: "/") else { return nil }
+        let remote = String(name[..<slash])
+        return (remote: remote, ref: name)
+    }
+
+    /// Computes behind-count of HEAD relative to `ref`, plus the resolved
+    /// SHA of `ref`. `probedAt` is stamped to `Date()` at call time.
+    /// Throws `BehindStatusError` when either git invocation exits non-zero;
+    /// callers catch and treat as a transient probe failure.
+    func behindStatus(
+        worktreePath: URL,
+        ref: String
+    ) async throws -> BehindStatus {
+        let shaResult = try await Process.git(
+            ["rev-parse", ref],
+            cwd: worktreePath
+        )
+        guard shaResult.exitCode == 0 else {
+            throw BehindStatusError.revParseFailed(stderr: shaResult.stderr)
+        }
+        let sha = shaResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let countResult = try await Process.git(
+            ["rev-list", "--count", "HEAD..\(ref)"],
+            cwd: worktreePath
+        )
+        guard countResult.exitCode == 0,
+              let behind = Int(countResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        else {
+            throw BehindStatusError.revListFailed(stderr: countResult.stderr)
+        }
+
+        return BehindStatus(
+            ref: ref,
+            sha: sha,
+            count: behind,
+            probedAt: Date()
+        )
+    }
+
+    /// Runs `git fetch <remote> <branch>` and returns the completion time.
+    /// Throws if the subprocess exits non-zero so callers can log.
+    @discardableResult
+    func fetchRef(
+        worktreePath: URL,
+        remote: String,
+        branch: String
+    ) async throws -> Date {
+        let result = try await Process.git(
+            ["fetch", remote, branch],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.fetchRef",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr]
+            )
+        }
+        return Date()
     }
 }

@@ -79,6 +79,8 @@ struct ChangesTabView: View {
                     comparisonRef: rps.comparisonRef,
                     hasMoreOlder: rps.hasMoreOlder,
                     isLoadingOlder: rps.isLoadingOlder,
+                    behindBase: rps.showBehindBaseChip ? rps.behindBase : nil,
+                    behindUpstream: rps.showBehindUpstreamChip ? rps.behindUpstream : nil,
                     expanded: $rps.commitsExpanded,
                     onSelect: onSelectCommit,
                     onCopySHA: copyCommitSHA,
