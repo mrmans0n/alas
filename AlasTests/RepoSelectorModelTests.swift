@@ -4,7 +4,7 @@ import Foundation
 
 @MainActor
 struct RepoSelectorModelTests {
-    // MARK: - Helpers
+    // MARK: - Fixtures
 
     private func project(_ id: String, name: String? = nil) -> ProjectConfig {
         ProjectConfig(
@@ -33,7 +33,8 @@ struct RepoSelectorModelTests {
     private func env(
         projects: [ProjectConfig] = [],
         worktrees: [String: [Worktree]] = [:],
-        recents: RepoSelectorRecents = RepoSelectorRecents()
+        recents: RepoSelectorRecents = RepoSelectorRecents(),
+        currentWorktreeId: String? = nil
     ) -> RepoSelectorEnvironment {
         var recentsBox = recents
         return RepoSelectorEnvironment(
@@ -43,158 +44,281 @@ struct RepoSelectorModelTests {
             writeRecents: { recentsBox = $0 },
             focusWorktree: { _ in },
             openNewProject: { },
-            openNewWorktree: { _ in }
+            openNewWorktree: { _ in },
+            currentWorktreeId: { currentWorktreeId }
         )
     }
 
-    // MARK: - Empty query
+    // MARK: - Empty-projects state
 
-    @Test func emptyQueryNoRecentsListsProjectsInOrder() {
+    @Test func emptyProjectsShowsNoProjectsHint() {
         let model = RepoSelectorModel()
-        let e = env(projects: [project("a"), project("b"), project("c")])
-        let rows = model.rows(environment: e)
-        #expect(rows == [
-            .repo(project("a"), indices: []),
-            .repo(project("b"), indices: []),
-            .repo(project("c"), indices: []),
+        let e = env(projects: [])
+        #expect(model.rows(environment: e) == [.emptyHint(.noProjects)])
+    }
+
+    // MARK: - Empty-query state
+
+    @Test func emptyQueryNoRecentsSingleProjectListsHeaderWorktreesActionThenAddProject() {
+        let model = RepoSelectorModel()
+        let w1 = worktree("w1", projectId: "p1")
+        let e = env(
+            projects: [project("p1")],
+            worktrees: ["p1": [w1]]
+        )
+        #expect(model.rows(environment: e) == [
+            .projectHeader(projectId: "p1"),
+            .worktree(w1, indices: [], isCurrent: false),
+            .action(.newWorktreeForRepo(projectId: "p1")),
+            .actionsHeader,
+            .action(.newProject)
         ])
     }
 
-    @Test func emptyQueryWithRecentsPutsRecentsFirstWithDivider() {
+    @Test func emptyQueryWithRecentsPutsRecentHeaderAndRecentRowsFirst() {
         let model = RepoSelectorModel()
+        let pAlas = project("p-alas", name: "alas")
+        let pAcme = project("p-acme", name: "acme")
+        let alasMain = worktree("alas-main", projectId: "p-alas", branch: "main")
+        let alasFeat = worktree("alas-feat", projectId: "p-alas", branch: "feat")
+        let acmeMain = worktree("acme-main", projectId: "p-acme", branch: "main")
         var r = RepoSelectorRecents()
-        r.bumpProject("b")
-        r.bumpProject("c")  // most recent: c, then b
+        r.bumpWorktree("alas-main", in: "p-alas")  // older
+        r.bumpWorktree("acme-main", in: "p-acme")  // newer → first
+        r.bumpProject("p-alas")
+        r.bumpProject("p-acme")  // newest project
         let e = env(
-            projects: [project("a"), project("b"), project("c")],
+            projects: [pAlas, pAcme],
+            worktrees: [
+                "p-alas": [alasMain, alasFeat],
+                "p-acme": [acmeMain]
+            ],
+            recents: r
+        )
+
+        let rows = model.rows(environment: e)
+        // RECENT header + the two recent worktrees (newest first)
+        #expect(rows.prefix(3) == [
+            .recentHeader,
+            .worktree(acmeMain, indices: [], isCurrent: false),
+            .worktree(alasMain, indices: [], isCurrent: false)
+        ])
+        // Then projects in recency order: acme first, then alas
+        let acmeIdx = rows.firstIndex(of: .projectHeader(projectId: "p-acme"))
+        let alasIdx = rows.firstIndex(of: .projectHeader(projectId: "p-alas"))
+        #expect(acmeIdx != nil && alasIdx != nil && acmeIdx! < alasIdx!)
+        // Trailing actions header + add-project action.
+        #expect(rows.suffix(2) == [.actionsHeader, .action(.newProject)])
+    }
+
+    @Test func emptyQueryWithNoRecentsOmitsRecentHeader() {
+        let model = RepoSelectorModel()
+        let e = env(
+            projects: [project("p1")],
+            worktrees: ["p1": [worktree("w1", projectId: "p1")]]
+        )
+        let rows = model.rows(environment: e)
+        #expect(!rows.contains(.recentHeader))
+    }
+
+    @Test func emptyQueryRecentsLimitsToFive() {
+        let model = RepoSelectorModel()
+        let wts: [Worktree] = (1...7).map { worktree("w\($0)", projectId: "p1", branch: "b\($0)") }
+        var r = RepoSelectorRecents()
+        r.bumpProject("p1")
+        // bump in reverse so w1 ends up most recent
+        for w in wts.reversed() { r.bumpWorktree(w.id, in: "p1") }
+        // The store caps at 5 per project (see RepoSelectorRecents.worktreeCapPerProject)
+        // and the model caps at 5 across the whole RECENT section. Either bound is
+        // enough to keep this test honest; with one project both bounds apply.
+        let e = env(
+            projects: [project("p1")],
+            worktrees: ["p1": wts],
             recents: r
         )
         let rows = model.rows(environment: e)
-        #expect(rows == [
-            .repo(project("c"), indices: []),
-            .repo(project("b"), indices: []),
-            .divider(label: "All repositories"),
-            .repo(project("a"), indices: []),
-        ])
+        let recentWorktrees: [Worktree] = rows
+            .prefix(while: { $0 != .projectHeader(projectId: "p1") })
+            .compactMap { if case .worktree(let w, _, _) = $0 { return w } else { return nil } }
+        #expect(recentWorktrees.count == 5)
     }
 
-    @Test func emptyQueryDropsDanglingRecents() {
+    @Test func emptyQueryProjectSectionOrdersByRecencyThenAlpha() {
         let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let wa = worktree("wa", projectId: "p1", branch: "a")
+        let wb = worktree("wb", projectId: "p1", branch: "b")
+        let wc = worktree("wc", projectId: "p1", branch: "c")
         var r = RepoSelectorRecents()
-        r.bumpProject("missing")
-        r.bumpProject("a")
-        let e = env(projects: [project("a")], recents: r)
+        r.bumpWorktree("wb", in: "p1")  // wb is the only recency hit
+        let e = env(
+            projects: [p1],
+            worktrees: ["p1": [wa, wb, wc]],
+            recents: r
+        )
         let rows = model.rows(environment: e)
-        #expect(rows == [.repo(project("a"), indices: [])])
+        // Inside p1's section: wb (recent) first, then wa, wc (alphabetical).
+        let inSection: [Worktree] = rows
+            .drop(while: { $0 != .projectHeader(projectId: "p1") })
+            .dropFirst()
+            .prefix(while: { row in
+                if case .action(.newWorktreeForRepo) = row { return false }
+                return true
+            })
+            .compactMap { if case .worktree(let w, _, _) = $0 { return w } else { return nil } }
+        #expect(inSection == [wb, wa, wc])
     }
 
-    @Test func emptyQueryEmptyProjectsShowsNoProjectsHint() {
+    @Test func emptyQueryProjectWithZeroWorktreesStillShowsHeaderAndNewWorktreeAction() {
         let model = RepoSelectorModel()
-        let e = env(projects: [])
+        let e = env(
+            projects: [project("p1")],
+            worktrees: ["p1": []]
+        )
         let rows = model.rows(environment: e)
-        #expect(rows == [.emptyHint(.noProjects)])
+        #expect(rows.contains(.projectHeader(projectId: "p1")))
+        #expect(rows.contains(.action(.newWorktreeForRepo(projectId: "p1"))))
     }
 
-    // MARK: - Non-empty query
-
-    @Test func nonEmptyQueryFiltersAndRanks() {
+    @Test func isCurrentSetForCurrentWorktreeInBothRecentAndProjectSections() {
         let model = RepoSelectorModel()
-        model.query = "ala"
-        let e = env(projects: [
-            project("p1", name: "alas"),
-            project("p2", name: "other"),
-            project("p3", name: "alacrity"),
-        ])
+        let p1 = project("p1")
+        let w1 = worktree("w1", projectId: "p1")
+        var r = RepoSelectorRecents()
+        r.bumpProject("p1")
+        r.bumpWorktree("w1", in: "p1")
+        let e = env(
+            projects: [p1],
+            worktrees: ["p1": [w1]],
+            recents: r,
+            currentWorktreeId: "w1"
+        )
         let rows = model.rows(environment: e)
-        // Both "alas" and "alacrity" match; ordering relies on FuzzyMatch
-        // (shorter target ranks higher because the span penalty is smaller).
-        // We only assert containment + that "other" was dropped.
-        let names: [String] = rows.compactMap {
-            if case .repo(let p, _) = $0 { return p.name } else { return nil }
+        let currentMarks = rows.compactMap { row -> Bool? in
+            if case .worktree(_, _, let isCurrent) = row { return isCurrent } else { return nil }
         }
-        #expect(names.contains("alas"))
-        #expect(names.contains("alacrity"))
-        #expect(!names.contains("other"))
-        #expect(!rows.contains { if case .divider = $0 { return true } else { return false } })
+        // Two .worktree rows (one in Recent, one in the project section); both flagged.
+        #expect(currentMarks == [true, true])
     }
 
-    @Test func nonEmptyQueryIncludesFuzzyIndices() {
+    // MARK: - Filter mode
+
+    @Test func filterModeProducesFlatFuzzyRankedWorktrees() {
         let model = RepoSelectorModel()
-        model.query = "al"
-        let e = env(projects: [project("p1", name: "alas")])
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let main = worktree("w1", projectId: "p1", branch: "main")
+        let checkout = worktree("w2", projectId: "p2", branch: "feat/checkout")
+        let check = worktree("w3", projectId: "p2", branch: "fix/check-flake")
+        let e = env(
+            projects: [p1, p2],
+            worktrees: ["p1": [main], "p2": [checkout, check]]
+        )
+        model.query = "check"
         let rows = model.rows(environment: e)
-        guard case .repo(_, let indices) = rows.first else {
-            Issue.record("expected first row to be a repo")
+        // Headers and action rows are absent in filter mode.
+        #expect(!rows.contains(where: {
+            if case .recentHeader = $0 { return true }
+            if case .projectHeader = $0 { return true }
+            if case .actionsHeader = $0 { return true }
+            if case .action = $0 { return true }
+            return false
+        }))
+        let branches: [String] = rows.compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.branch } else { return nil }
+        }
+        #expect(branches.contains("feat/checkout"))
+        #expect(branches.contains("fix/check-flake"))
+        #expect(!branches.contains("main"))
+    }
+
+    @Test func filterModeAttachesFuzzyMatchIndices() {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let main = worktree("w1", projectId: "p1", branch: "main")
+        let e = env(projects: [p1], worktrees: ["p1": [main]])
+        model.query = "ma"
+        let rows = model.rows(environment: e)
+        guard case .worktree(_, let indices, _) = rows.first else {
+            Issue.record("expected first row to be a worktree")
             return
         }
         #expect(indices == [0, 1])
     }
 
+    @Test func filterModePropagatesCurrentFlag() {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let main = worktree("w1", projectId: "p1", branch: "main")
+        let e = env(
+            projects: [p1],
+            worktrees: ["p1": [main]],
+            currentWorktreeId: "w1"
+        )
+        model.query = "ma"
+        let rows = model.rows(environment: e)
+        guard case .worktree(_, _, let isCurrent) = rows.first else {
+            Issue.record("expected first row to be a worktree")
+            return
+        }
+        #expect(isCurrent == true)
+    }
+
     // MARK: - Selection movement
 
-    @Test func moveSelectionDownSkipsDivider() {
+    @Test func moveSelectionDownSkipsAllHeaderKinds() {
         let model = RepoSelectorModel()
+        let w1 = worktree("w1", projectId: "p1")
         let rows: [RepoSelectorRow] = [
-            .repo(project("a"), indices: []),
-            .divider(label: "All repositories"),
-            .repo(project("b"), indices: []),
-        ]
-        model.moveSelectionDown(in: rows)  // 0 -> 2 (skip divider at 1)
-        #expect(model.selectedIndex == 2)
-    }
-
-    @Test func moveSelectionUpSkipsDivider() {
-        let model = RepoSelectorModel()
-        let rows: [RepoSelectorRow] = [
-            .repo(project("a"), indices: []),
-            .divider(label: "All repositories"),
-            .repo(project("b"), indices: []),
-        ]
-        model.setSelectedIndex(2, in: rows)
-        model.moveSelectionUp(in: rows)
-        #expect(model.selectedIndex == 0)
-    }
-
-    @Test func moveSelectionDownClampsAtBottom() {
-        let model = RepoSelectorModel()
-        let rows: [RepoSelectorRow] = [
-            .repo(project("a"), indices: []),
-            .repo(project("b"), indices: []),
+            .recentHeader,
+            .worktree(w1, indices: [], isCurrent: false),
+            .projectHeader(projectId: "p1"),
+            .worktree(w1, indices: [], isCurrent: false),
+            .actionsHeader,
+            .action(.newProject)
         ]
         model.setSelectedIndex(1, in: rows)
         model.moveSelectionDown(in: rows)
+        #expect(model.selectedIndex == 3)  // skipped projectHeader at 2
+        model.moveSelectionDown(in: rows)
+        #expect(model.selectedIndex == 5)  // skipped actionsHeader at 4
+    }
+
+    @Test func moveSelectionUpSkipsAllHeaderKinds() {
+        let model = RepoSelectorModel()
+        let w1 = worktree("w1", projectId: "p1")
+        let rows: [RepoSelectorRow] = [
+            .recentHeader,
+            .worktree(w1, indices: [], isCurrent: false),
+            .projectHeader(projectId: "p1"),
+            .worktree(w1, indices: [], isCurrent: false),
+            .actionsHeader,
+            .action(.newProject)
+        ]
+        model.setSelectedIndex(5, in: rows)
+        model.moveSelectionUp(in: rows)
+        #expect(model.selectedIndex == 3)
+        model.moveSelectionUp(in: rows)
         #expect(model.selectedIndex == 1)
     }
 
-    @Test func moveSelectionUpClampsAtTop() {
+    @Test func setSelectedIndexSnapsAwayFromAnyHeader() {
         let model = RepoSelectorModel()
+        let w1 = worktree("w1", projectId: "p1")
         let rows: [RepoSelectorRow] = [
-            .repo(project("a"), indices: []),
-            .repo(project("b"), indices: []),
+            .recentHeader,
+            .worktree(w1, indices: [], isCurrent: false)
         ]
-        model.moveSelectionUp(in: rows)
-        #expect(model.selectedIndex == 0)
-    }
-
-    @Test func setSelectedIndexSnapsAwayFromDivider() {
-        let model = RepoSelectorModel()
-        let rows: [RepoSelectorRow] = [
-            .repo(project("a"), indices: []),
-            .divider(label: "All repositories"),
-            .repo(project("b"), indices: []),
-        ]
-        model.setSelectedIndex(1, in: rows)  // divider; snap to next selectable
-        #expect(model.selectedIndex == 2)
+        model.setSelectedIndex(0, in: rows)
+        #expect(model.selectedIndex == 1)
     }
 
     @Test func changingQueryResetsSelectionToZero() {
-        // Without this reset, a user could move selection down then type a
-        // filter that shrinks the list and inadvertently activate the
-        // trailing "+ New worktree…" action.
         let model = RepoSelectorModel()
+        let w1 = worktree("w1", projectId: "p1")
         let rows: [RepoSelectorRow] = [
-            .repo(project("a"), indices: []),
-            .repo(project("b"), indices: []),
+            .worktree(w1, indices: [], isCurrent: false),
+            .worktree(w1, indices: [], isCurrent: false)
         ]
         model.setSelectedIndex(1, in: rows)
         #expect(model.selectedIndex == 1)
@@ -202,129 +326,27 @@ struct RepoSelectorModelTests {
         #expect(model.selectedIndex == 0)
     }
 
-    // MARK: - Push / pop
-
-    @Test func pushRepoSwitchesStepAndResetsQuery() {
-        let model = RepoSelectorModel()
-        model.query = "ala"
-        model.pushRepo(projectId: "p1")
-        #expect(model.step == .worktrees(projectId: "p1"))
-        #expect(model.query == "")
-        #expect(model.selectedIndex == 0)
-    }
-
-    @Test func popToReposRestoresQueryAndStep() {
-        let model = RepoSelectorModel()
-        model.query = "ala"
-        let e = env(projects: [project("p1", name: "alas"), project("p2", name: "other")])
-        _ = model.rows(environment: e)
-        model.setSelectedIndex(0, in: model.rows(environment: e))
-        model.pushRepo(projectId: "p1")
-        model.popToRepos()
-        #expect(model.step == .repos)
-        #expect(model.query == "ala")
-        #expect(model.selectedIndex == 0)
-    }
-
-    // MARK: - Step 2 rows
-
-    @Test func step2EmptyQueryListsRecentsThenRestThenAction() {
-        let model = RepoSelectorModel()
-        var r = RepoSelectorRecents()
-        r.bumpWorktree("w3", in: "p1")
-        r.bumpWorktree("w1", in: "p1")  // most recent
-        let wts = [
-            worktree("w1", projectId: "p1"),
-            worktree("w2", projectId: "p1"),
-            worktree("w3", projectId: "p1"),
-        ]
-        let e = env(
-            projects: [project("p1")],
-            worktrees: ["p1": wts],
-            recents: r
-        )
-        model.pushRepo(projectId: "p1")
-        let rows = model.rows(environment: e)
-        #expect(rows == [
-            .worktree(wts[0], indices: []),                                    // w1 (most recent)
-            .worktree(wts[2], indices: []),                                    // w3 (next recent)
-            .worktree(wts[1], indices: []),                                    // w2 (rest, sidebar order)
-            .divider(label: ""),
-            .action(.newWorktreeForRepo(projectId: "p1")),
-        ])
-    }
-
-    @Test func step2NonEmptyQueryFiltersAndKeepsActionRow() {
-        let model = RepoSelectorModel()
-        let wts = [
-            worktree("w1", projectId: "p1", branch: "main"),
-            worktree("w2", projectId: "p1", branch: "feature/login"),
-            worktree("w3", projectId: "p1", branch: "feature/repo-selector"),
-        ]
-        let e = env(projects: [project("p1")], worktrees: ["p1": wts])
-        model.pushRepo(projectId: "p1")
-        model.query = "feat"
-        let rows = model.rows(environment: e)
-        let branches: [String] = rows.compactMap {
-            if case .worktree(let w, _) = $0 { return w.branch } else { return nil }
-        }
-        #expect(branches.contains("feature/login"))
-        #expect(branches.contains("feature/repo-selector"))
-        #expect(!branches.contains("main"))
-        // The action row remains at the bottom regardless of query.
-        #expect(rows.last == .action(.newWorktreeForRepo(projectId: "p1")))
-    }
-
-    @Test func step2NoMatchesOmitsDividerSoActionRowIsTheDefault() {
-        // When the filter excludes every worktree, the divider would otherwise
-        // land at row 0 (because the leading list is empty) and swallow the
-        // default selection. The action row must remain the only thing in the
-        // list so Return on selectedIndex == 0 still creates a new worktree.
-        let model = RepoSelectorModel()
-        let wts = [worktree("w1", projectId: "p1", branch: "main")]
-        let e = env(projects: [project("p1")], worktrees: ["p1": wts])
-        model.pushRepo(projectId: "p1")
-        model.query = "nope"
-        let rows = model.rows(environment: e)
-        #expect(rows == [.action(.newWorktreeForRepo(projectId: "p1"))])
-    }
-
     // MARK: - Activation
 
-    @Test func activateProjectWithMultipleWorktreesPushesNoFocusNoRecents() {
-        let model = RepoSelectorModel()
-        var focused: String? = nil
-        var writtenRecents: RepoSelectorRecents? = nil
-        let wts = [
-            worktree("w1", projectId: "p1"),
-            worktree("w2", projectId: "p1"),
-        ]
-        var e = env(projects: [project("p1")], worktrees: ["p1": wts])
-        e.focusWorktree = { focused = $0 }
-        e.writeRecents = { writtenRecents = $0 }
-
-        let rows = model.rows(environment: e)
-        model.setSelectedIndex(0, in: rows)
-        let result = model.activate(rows: rows, environment: e)
-
-        #expect(result == .pushed(projectId: "p1"))
-        #expect(model.step == .worktrees(projectId: "p1"))
-        #expect(focused == nil)
-        #expect(writtenRecents == nil)
-    }
-
-    @Test func activateProjectWithOneWorktreeFocusesClosesAndBumpsRecents() {
+    @Test func activateWorktreeFocusesClosesAndBumpsRecents() {
         let model = RepoSelectorModel()
         model.isOpen = true
         var focused: String? = nil
         var writtenRecents: RepoSelectorRecents? = nil
-        let wts = [worktree("w1", projectId: "p1")]
-        var e = env(projects: [project("p1")], worktrees: ["p1": wts])
+        let w1 = worktree("w1", projectId: "p1")
+        var e = env(projects: [project("p1")], worktrees: ["p1": [w1]])
         e.focusWorktree = { focused = $0 }
         e.writeRecents = { writtenRecents = $0 }
 
         let rows = model.rows(environment: e)
-        model.setSelectedIndex(0, in: rows)
+        // First selectable row is the worktree (under the projectHeader).
+        guard let widx = rows.firstIndex(where: {
+            if case .worktree = $0 { return true } else { return false }
+        }) else {
+            Issue.record("expected a worktree row")
+            return
+        }
+        model.setSelectedIndex(widx, in: rows)
         let result = model.activate(rows: rows, environment: e)
 
         #expect(result == .focused(worktreeId: "w1"))
@@ -334,82 +356,61 @@ struct RepoSelectorModelTests {
         #expect(writtenRecents?.worktreeIdsByProject["p1"] == ["w1"])
     }
 
-    @Test func activateProjectWithZeroWorktreesOpensNewWorktreeFlow() {
+    @Test func activateNewWorktreeForRepoDelegatesAndCloses() {
         let model = RepoSelectorModel()
         model.isOpen = true
-        var focused: String? = nil
-        var writtenRecents: RepoSelectorRecents? = nil
         var openedFor: String? = nil
-        var e = env(projects: [project("p1")], worktrees: ["p1": []])
-        e.focusWorktree = { focused = $0 }
-        e.writeRecents = { writtenRecents = $0 }
+        var e = env(projects: [project("p1")], worktrees: ["p1": [worktree("w1", projectId: "p1")]])
         e.openNewWorktree = { openedFor = $0 }
 
         let rows = model.rows(environment: e)
-        model.setSelectedIndex(0, in: rows)
+        guard let aidx = rows.firstIndex(where: {
+            if case .action(.newWorktreeForRepo) = $0 { return true } else { return false }
+        }) else {
+            Issue.record("expected a newWorktreeForRepo action")
+            return
+        }
+        model.setSelectedIndex(aidx, in: rows)
         let result = model.activate(rows: rows, environment: e)
 
         #expect(result == .openedNewWorktree(projectId: "p1"))
         #expect(openedFor == "p1")
         #expect(model.isOpen == false)
-        #expect(focused == nil)
-        #expect(writtenRecents == nil)
     }
 
-    @Test func activateWorktreeRowFocusesAndBumpsBothRecents() {
+    @Test func activateNewProjectDelegatesAndCloses() {
         let model = RepoSelectorModel()
         model.isOpen = true
-        var focused: String? = nil
-        var writtenRecents: RepoSelectorRecents? = nil
-        let wts = [worktree("w1", projectId: "p1"), worktree("w2", projectId: "p1")]
-        var e = env(projects: [project("p1")], worktrees: ["p1": wts])
-        e.focusWorktree = { focused = $0 }
-        e.writeRecents = { writtenRecents = $0 }
+        var opened = false
+        var e = env(projects: [project("p1")], worktrees: ["p1": [worktree("w1", projectId: "p1")]])
+        e.openNewProject = { opened = true }
 
-        model.pushRepo(projectId: "p1")
         let rows = model.rows(environment: e)
-        // index 1 is w2 in this list (w1 first since no recents)
-        model.setSelectedIndex(1, in: rows)
+        guard let idx = rows.firstIndex(of: .action(.newProject)) else {
+            Issue.record("expected a newProject action")
+            return
+        }
+        model.setSelectedIndex(idx, in: rows)
         let result = model.activate(rows: rows, environment: e)
 
-        #expect(result == .focused(worktreeId: "w2"))
-        #expect(focused == "w2")
-        #expect(model.isOpen == false)
-        #expect(writtenRecents?.projectIds == ["p1"])
-        #expect(writtenRecents?.worktreeIdsByProject["p1"] == ["w2"])
-    }
-
-    @Test func activateNewWorktreeActionDelegatesAndCloses() {
-        let model = RepoSelectorModel()
-        model.isOpen = true
-        var openedFor: String? = nil
-        var e = env(projects: [project("p1")], worktrees: ["p1": [worktree("w1", projectId: "p1"), worktree("w2", projectId: "p1")]])
-        e.openNewWorktree = { openedFor = $0 }
-
-        model.pushRepo(projectId: "p1")
-        let rows = model.rows(environment: e)
-        // last row is the action
-        model.setSelectedIndex(rows.count - 1, in: rows)
-        let result = model.activate(rows: rows, environment: e)
-
-        #expect(result == .openedNewWorktree(projectId: "p1"))
-        #expect(openedFor == "p1")
+        #expect(result == .openedNewProject)
+        #expect(opened)
         #expect(model.isOpen == false)
     }
 
     @Test func activateNoProjectsHintDelegatesToNewProject() {
         let model = RepoSelectorModel()
         model.isOpen = true
-        var openedNewProject = false
+        var opened = false
         var e = env(projects: [])
-        e.openNewProject = { openedNewProject = true }
+        e.openNewProject = { opened = true }
 
         let rows = model.rows(environment: e)
         model.setSelectedIndex(0, in: rows)
         let result = model.activate(rows: rows, environment: e)
 
         #expect(result == .openedNewProject)
-        #expect(openedNewProject)
+        #expect(opened)
         #expect(model.isOpen == false)
     }
 }

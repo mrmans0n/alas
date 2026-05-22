@@ -7,20 +7,13 @@ import Observation
 @Observable
 @MainActor
 final class RepoSelectorModel {
-    enum Step: Equatable {
-        case repos
-        case worktrees(projectId: String)
-    }
+    private static let recentLimit = 5
 
     var isOpen: Bool = false
-    private(set) var step: Step = .repos
     var query: String = "" {
         didSet {
             // Reset selection so a shrinking filter never strands the cursor
-            // on a stale row (especially the trailing `+ New worktree…`).
-            // Also bump the scroll tick — the list may have been scrolled
-            // down via keyboard nav before the filter changed, and we need
-            // the view to snap back to the new top.
+            // on a stale row. Bump the scroll tick so the view snaps back.
             if query != oldValue {
                 selectedIndex = 0
                 scrollToSelectionTick &+= 1
@@ -28,22 +21,14 @@ final class RepoSelectorModel {
         }
     }
     private(set) var selectedIndex: Int = 0
-    /// Bumped by keyboard navigation (Up/Down). The view scrolls the
-    /// selected row into view on changes to this — not on `selectedIndex`
-    /// itself — so hover-driven selection doesn't fight the user's scroll.
+    /// Bumped by keyboard navigation. The view scrolls the selected row into
+    /// view on changes to this — not on `selectedIndex` itself — so
+    /// hover-driven selection doesn't fight the user's scroll.
     private(set) var scrollToSelectionTick: Int = 0
 
-    // Snapshot of step-1 state preserved across a push so popToRepos can
-    // restore both the query and (where possible) the selection.
-    private var savedReposQuery: String = ""
-    private var savedReposSelectedIndex: Int = 0
-
     func open() {
-        step = .repos
         query = ""
         selectedIndex = 0
-        savedReposQuery = ""
-        savedReposSelectedIndex = 0
         isOpen = true
     }
 
@@ -51,158 +36,159 @@ final class RepoSelectorModel {
         isOpen = false
     }
 
-    /// Compute the rows for the current step. Pure — does not mutate `self`.
-    /// Callers re-invoke whenever inputs (query, step, projects, recents)
-    /// change.
+    // MARK: - Row generation
+
+    /// Compute the rows for the current query state. Pure — does not mutate
+    /// `self`. Callers re-invoke whenever inputs (query, projects, recents,
+    /// worktrees, currentWorktreeId) change.
     func rows(environment env: RepoSelectorEnvironment) -> [RepoSelectorRow] {
-        switch step {
-        case .repos:
-            return repoRows(environment: env)
-        case .worktrees(let projectId):
-            return worktreeRows(projectId: projectId, environment: env)
-        }
-    }
-
-    // MARK: - Step 1 rows
-
-    private func repoRows(environment env: RepoSelectorEnvironment) -> [RepoSelectorRow] {
         let projects = env.projects()
         guard !projects.isEmpty else { return [.emptyHint(.noProjects)] }
-
         if query.isEmpty {
-            return emptyQueryRepoRows(projects: projects, environment: env)
+            return emptyQueryRows(projects: projects, environment: env)
         } else {
-            return filteredRepoRows(projects: projects)
+            return filteredRows(projects: projects, environment: env)
         }
     }
 
-    private func emptyQueryRepoRows(
+    private func emptyQueryRows(
         projects: [ProjectConfig],
         environment env: RepoSelectorEnvironment
     ) -> [RepoSelectorRow] {
-        let validIds = Set(projects.map(\.id))
-        let recentIds = env.readRecents().liveProjectIds(validProjectIds: validIds)
-        let projectsById = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        let currentId = env.currentWorktreeId()
+        let worktreesByProject = Dictionary(
+            uniqueKeysWithValues: projects.map { ($0.id, env.visibleWorktrees($0.id)) }
+        )
+        let recents = env.readRecents()
 
-        let recentRows: [RepoSelectorRow] = recentIds.compactMap { id in
-            projectsById[id].map { .repo($0, indices: []) }
-        }
-        let recentSet = Set(recentIds)
-        let rest = projects
-            .filter { !recentSet.contains($0.id) }
-            .map { RepoSelectorRow.repo($0, indices: []) }
+        var rows: [RepoSelectorRow] = []
 
-        if recentRows.isEmpty { return rest }
-        if rest.isEmpty { return recentRows }
-        return recentRows + [.divider(label: "All repositories")] + rest
-    }
+        // RECENT section: flatten all per-project recents, dedupe, take 5.
+        let recentRows = recentSectionRows(
+            projects: projects,
+            worktreesByProject: worktreesByProject,
+            recents: recents,
+            currentId: currentId
+        )
+        if !recentRows.isEmpty {
+            rows.append(.recentHeader)
+            rows.append(contentsOf: recentRows)
+        }
 
-    private func filteredRepoRows(projects: [ProjectConfig]) -> [RepoSelectorRow] {
-        struct Scored {
-            let project: ProjectConfig
-            let result: FuzzyMatch.Result
-        }
-        let scored: [Scored] = projects.compactMap { p in
-            guard let r = FuzzyMatch.score(query: query, target: p.name) else { return nil }
-            return Scored(project: p, result: r)
-        }
-        return scored
-            .sorted { a, b in
-                if a.result.score != b.result.score { return a.result.score > b.result.score }
-                return a.project.name.localizedCaseInsensitiveCompare(b.project.name) == .orderedAscending
+        // Project sections, ordered by recency of their most-recently-touched
+        // worktree (alpha as the tie-breaker / no-recents fallback).
+        let projectOrder = orderedProjects(
+            projects: projects,
+            worktreesByProject: worktreesByProject,
+            recents: recents
+        )
+        for project in projectOrder {
+            rows.append(.projectHeader(projectId: project.id))
+            let worktrees = worktreesByProject[project.id] ?? []
+            let validIds = Set(worktrees.map(\.id))
+            let recentIds = recents.liveWorktreeIds(in: project.id, validWorktreeIds: validIds)
+            let recentSet = Set(recentIds)
+            let byId = Dictionary(uniqueKeysWithValues: worktrees.map { ($0.id, $0) })
+            for id in recentIds {
+                guard let w = byId[id] else { continue }
+                rows.append(.worktree(w, indices: [], isCurrent: w.id == currentId))
             }
-            .map { .repo($0.project, indices: $0.result.indices) }
-    }
-
-    // MARK: - Step transitions
-
-    func pushRepo(projectId: String) {
-        savedReposQuery = query
-        savedReposSelectedIndex = selectedIndex
-        step = .worktrees(projectId: projectId)
-        query = ""
-        selectedIndex = 0
-        // Reset the scroll position too — without this, the freshly-pushed
-        // worktree list could remain scrolled to wherever the repo list was.
-        scrollToSelectionTick &+= 1
-    }
-
-    func popToRepos() {
-        step = .repos
-        query = savedReposQuery
-        selectedIndex = savedReposSelectedIndex
-        scrollToSelectionTick &+= 1
-    }
-
-    // MARK: - Step 2 rows
-
-    private func worktreeRows(
-        projectId: String,
-        environment env: RepoSelectorEnvironment
-    ) -> [RepoSelectorRow] {
-        let worktrees = env.visibleWorktrees(projectId)
-
-        let listed: [RepoSelectorRow]
-        if query.isEmpty {
-            listed = emptyQueryWorktreeRows(
-                projectId: projectId,
-                worktrees: worktrees,
-                environment: env
-            )
-        } else {
-            listed = filteredWorktreeRows(worktrees: worktrees)
+            let rest = worktrees
+                .filter { !recentSet.contains($0.id) }
+                .sorted { a, b in
+                    a.branch.localizedCaseInsensitiveCompare(b.branch) == .orderedAscending
+                }
+            for w in rest {
+                rows.append(.worktree(w, indices: [], isCurrent: w.id == currentId))
+            }
+            rows.append(.action(.newWorktreeForRepo(projectId: project.id)))
         }
 
-        var rows = listed
-        // Only separate the worktree list from the action with a divider
-        // when there's something above it. Otherwise the divider would land
-        // at row 0 and swallow the default selection.
-        if !listed.isEmpty {
-            rows.append(.divider(label: ""))
-        }
-        rows.append(.action(.newWorktreeForRepo(projectId: projectId)))
+        rows.append(.actionsHeader)
+        rows.append(.action(.newProject))
         return rows
     }
 
-    private func emptyQueryWorktreeRows(
-        projectId: String,
-        worktrees: [Worktree],
-        environment env: RepoSelectorEnvironment
+    private func recentSectionRows(
+        projects: [ProjectConfig],
+        worktreesByProject: [String: [Worktree]],
+        recents: RepoSelectorRecents,
+        currentId: String?
     ) -> [RepoSelectorRow] {
-        let validIds = Set(worktrees.map(\.id))
-        let recentIds = env.readRecents().liveWorktreeIds(in: projectId, validWorktreeIds: validIds)
-        let byId = Dictionary(uniqueKeysWithValues: worktrees.map { ($0.id, $0) })
-        let recentRows: [RepoSelectorRow] = recentIds.compactMap {
-            byId[$0].map { .worktree($0, indices: []) }
+        // Build per-project recent slices, then interleave by the order they
+        // appear in `recents.projectIds` (most-recently-touched project first).
+        // We dedupe by worktree id and stop at `recentLimit`.
+        let validProjectIds = Set(projects.map(\.id))
+        let projectOrderIds = recents.liveProjectIds(validProjectIds: validProjectIds)
+        var seen = Set<String>()
+        var output: [(Worktree, Bool)] = []
+        outer: for projectId in projectOrderIds {
+            let wts = worktreesByProject[projectId] ?? []
+            let validIds = Set(wts.map(\.id))
+            let recentIds = recents.liveWorktreeIds(in: projectId, validWorktreeIds: validIds)
+            let byId = Dictionary(uniqueKeysWithValues: wts.map { ($0.id, $0) })
+            for id in recentIds {
+                if seen.contains(id) { continue }
+                guard let w = byId[id] else { continue }
+                seen.insert(id)
+                output.append((w, w.id == currentId))
+                if output.count >= Self.recentLimit { break outer }
+            }
         }
-        let recentSet = Set(recentIds)
-        let rest = worktrees
-            .filter { !recentSet.contains($0.id) }
-            .map { RepoSelectorRow.worktree($0, indices: []) }
-        return recentRows + rest
+        return output.map { .worktree($0.0, indices: [], isCurrent: $0.1) }
     }
 
-    private func filteredWorktreeRows(worktrees: [Worktree]) -> [RepoSelectorRow] {
+    /// Projects ordered by the recency of their most-recently-touched
+    /// worktree. Projects with no recents fall back to alpha order on name.
+    private func orderedProjects(
+        projects: [ProjectConfig],
+        worktreesByProject: [String: [Worktree]],
+        recents: RepoSelectorRecents
+    ) -> [ProjectConfig] {
+        // Build a "most-recent index" per project: lower = more recent.
+        // Projects with no recents get .max so they sort to the back.
+        let validProjectIds = Set(projects.map(\.id))
+        let recentProjectIds = recents.liveProjectIds(validProjectIds: validProjectIds)
+        let projectRecencyIndex: [String: Int] = Dictionary(
+            uniqueKeysWithValues: recentProjectIds.enumerated().map { ($0.element, $0.offset) }
+        )
+        return projects.sorted { a, b in
+            let ai = projectRecencyIndex[a.id] ?? Int.max
+            let bi = projectRecencyIndex[b.id] ?? Int.max
+            if ai != bi { return ai < bi }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    private func filteredRows(
+        projects: [ProjectConfig],
+        environment env: RepoSelectorEnvironment
+    ) -> [RepoSelectorRow] {
         struct Scored {
             let worktree: Worktree
             let result: FuzzyMatch.Result
         }
-        let scored: [Scored] = worktrees.compactMap { w in
-            guard let r = FuzzyMatch.score(query: query, target: w.branch) else { return nil }
-            return Scored(worktree: w, result: r)
+        let currentId = env.currentWorktreeId()
+        var scored: [Scored] = []
+        for project in projects {
+            for w in env.visibleWorktrees(project.id) {
+                if let r = FuzzyMatch.score(query: query, target: w.branch) {
+                    scored.append(Scored(worktree: w, result: r))
+                }
+            }
         }
         return scored
             .sorted { a, b in
                 if a.result.score != b.result.score { return a.result.score > b.result.score }
-                return a.worktree.branch.localizedCaseInsensitiveCompare(b.worktree.branch) == .orderedAscending
+                return a.worktree.branch.localizedCaseInsensitiveCompare(b.worktree.branch)
+                    == .orderedAscending
             }
-            .map { .worktree($0.worktree, indices: $0.result.indices) }
+            .map { .worktree($0.worktree, indices: $0.result.indices, isCurrent: $0.worktree.id == currentId) }
     }
 
     // MARK: - Activation
 
     enum Activation: Equatable {
-        case pushed(projectId: String)
         case focused(worktreeId: String)
         case openedNewWorktree(projectId: String)
         case openedNewProject
@@ -213,52 +199,23 @@ final class RepoSelectorModel {
     func activate(rows: [RepoSelectorRow], environment env: RepoSelectorEnvironment) -> Activation {
         guard !rows.isEmpty else { return .noop }
         let safeIndex = max(0, min(rows.count - 1, selectedIndex))
-        let row = rows[safeIndex]
-
-        switch row {
-        case .repo(let project, _):
-            return activateRepo(project, environment: env)
-
-        case .worktree(let worktree, _):
+        switch rows[safeIndex] {
+        case .worktree(let worktree, _, _):
             return focus(worktree: worktree, environment: env)
-
         case .action(.newWorktreeForRepo(let projectId)):
             env.openNewWorktree(projectId)
             close()
             return .openedNewWorktree(projectId: projectId)
-
         case .action(.newProject):
             env.openNewProject()
             close()
             return .openedNewProject
-
         case .emptyHint(.noProjects):
             env.openNewProject()
             close()
             return .openedNewProject
-
-        case .divider:
+        case .recentHeader, .projectHeader, .actionsHeader:
             return .noop
-        }
-    }
-
-    private func activateRepo(
-        _ project: ProjectConfig,
-        environment env: RepoSelectorEnvironment
-    ) -> Activation {
-        let wts = env.visibleWorktrees(project.id)
-        switch wts.count {
-        case 0:
-            // Activation on a repo with no open worktrees has nowhere to
-            // navigate, so jump straight to creating one.
-            env.openNewWorktree(project.id)
-            close()
-            return .openedNewWorktree(projectId: project.id)
-        case 1:
-            return focus(worktree: wts[0], environment: env)
-        default:
-            pushRepo(projectId: project.id)
-            return .pushed(projectId: project.id)
         }
     }
 
@@ -278,23 +235,21 @@ final class RepoSelectorModel {
     // MARK: - Selection
 
     func moveSelectionDown(in rows: [RepoSelectorRow]) {
-        let next = nextSelectable(from: selectedIndex, step: 1, in: rows)
-        if let next {
+        if let next = scan(from: selectedIndex, step: 1, in: rows) {
             selectedIndex = next
             scrollToSelectionTick &+= 1
         }
     }
 
     func moveSelectionUp(in rows: [RepoSelectorRow]) {
-        let prev = nextSelectable(from: selectedIndex, step: -1, in: rows)
-        if let prev {
+        if let prev = scan(from: selectedIndex, step: -1, in: rows) {
             selectedIndex = prev
             scrollToSelectionTick &+= 1
         }
     }
 
     /// Set selection directly, snapping forward (then backward) to the
-    /// nearest selectable row if the target is a divider. Used on hover.
+    /// nearest selectable row if the target is a header. Used on hover.
     func setSelectedIndex(_ index: Int, in rows: [RepoSelectorRow]) {
         guard !rows.isEmpty else {
             selectedIndex = 0
@@ -305,7 +260,6 @@ final class RepoSelectorModel {
             selectedIndex = clamped
             return
         }
-        // Try forward first, then backward.
         if let fwd = scan(from: clamped, step: 1, in: rows) {
             selectedIndex = fwd
         } else if let back = scan(from: clamped, step: -1, in: rows) {
@@ -313,23 +267,6 @@ final class RepoSelectorModel {
         } else {
             selectedIndex = clamped
         }
-    }
-
-    /// Resets selection to the first selectable row. Called after recomputes.
-    func resetSelectionToFirstSelectable(in rows: [RepoSelectorRow]) {
-        if let idx = scan(from: -1, step: 1, in: rows) {
-            selectedIndex = idx
-        } else {
-            selectedIndex = 0
-        }
-    }
-
-    private func nextSelectable(
-        from index: Int,
-        step: Int,
-        in rows: [RepoSelectorRow]
-    ) -> Int? {
-        scan(from: index, step: step, in: rows)
     }
 
     private func scan(from index: Int, step: Int, in rows: [RepoSelectorRow]) -> Int? {

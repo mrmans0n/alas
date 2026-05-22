@@ -374,7 +374,8 @@ final class AppState {
                 self?.selectedWorktreeId = id
             },
             openNewProject: openNewProject,
-            openNewWorktree: openNewWorktree
+            openNewWorktree: openNewWorktree,
+            currentWorktreeId: { [weak self] in self?.selectedWorktreeId }
         )
     }
 

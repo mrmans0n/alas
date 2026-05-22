@@ -13,15 +13,12 @@ struct RepoSelectorDialog: View {
                     .onTapGesture { close() }
 
                 VStack(spacing: 0) {
-                    if case .worktrees(let projectId) = appState.repoSelector.step {
-                        breadcrumb(projectId: projectId)
-                    }
                     inputRow
                     Divider().background(theme.color("line"))
                     rowList
                     footer
                 }
-                .frame(width: 480)
+                .frame(width: 720)
                 .frame(maxHeight: 520)
                 .background(theme.color("bg-1").opacity(0.92))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -53,7 +50,7 @@ struct RepoSelectorDialog: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-faint"))
-            TextField(placeholder, text: Bindable(appState.repoSelector).query)
+            TextField("Switch worktree…", text: Bindable(appState.repoSelector).query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
                 .font(.system(size: 14))
@@ -61,32 +58,6 @@ struct RepoSelectorDialog: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-    }
-
-    private var placeholder: String {
-        switch appState.repoSelector.step {
-        case .repos:
-            return "Switch repository…"
-        case .worktrees(let projectId):
-            let name = appState.projects.first(where: { $0.id == projectId })?.name ?? ""
-            return "Switch worktree in \(name)…"
-        }
-    }
-
-    private func breadcrumb(projectId: String) -> some View {
-        let name = appState.projects.first(where: { $0.id == projectId })?.name ?? ""
-        return HStack(spacing: 6) {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 10, weight: .semibold))
-            Text(name)
-                .font(.system(size: 12, weight: .medium))
-        }
-        .foregroundColor(theme.color("fg-dim"))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { popToRepos() }
     }
 
     private var rowList: some View {
@@ -116,10 +87,6 @@ struct RepoSelectorDialog: View {
                 .padding(.vertical, 4)
             }
             .frame(minHeight: 200, maxHeight: 420)
-            // Scroll to the selected row when the keyboard moves selection.
-            // We watch `scrollToSelectionTick` (bumped by ↑/↓) instead of
-            // `selectedIndex` itself so hover-driven selection doesn't fight
-            // the user's scroll input.
             .onChange(of: appState.repoSelector.scrollToSelectionTick) { _, _ in
                 proxy.scrollTo(appState.repoSelector.selectedIndex, anchor: .center)
             }
@@ -130,7 +97,7 @@ struct RepoSelectorDialog: View {
         HStack(spacing: 12) {
             label("↑↓ navigate")
             label("↵ open")
-            label("esc \(escLabel)")
+            label("esc close")
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -146,13 +113,6 @@ struct RepoSelectorDialog: View {
         Text(s)
             .font(.system(size: 11))
             .foregroundColor(theme.color("fg-faint"))
-    }
-
-    private var escLabel: String {
-        switch appState.repoSelector.step {
-        case .repos: return "close"
-        case .worktrees: return "back"
-        }
     }
 
     // MARK: - Actions
@@ -174,16 +134,9 @@ struct RepoSelectorDialog: View {
         switch result {
         case .focused, .openedNewWorktree, .openedNewProject:
             appState.isRepoSelectorOpen = false
-        case .pushed:
-            requestInputFocus()
         case .noop:
             break
         }
-    }
-
-    private func popToRepos() {
-        appState.repoSelector.popToRepos()
-        requestInputFocus()
     }
 
     private func close() {
@@ -209,12 +162,7 @@ struct RepoSelectorDialog: View {
         let rows = model.rows(environment: env)
         switch press.key {
         case .escape:
-            switch model.step {
-            case .repos:
-                close()
-            case .worktrees:
-                popToRepos()
-            }
+            close()
             return .handled
         case .upArrow:
             model.moveSelectionUp(in: rows)
