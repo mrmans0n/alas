@@ -28,7 +28,13 @@ final class RightPaneStore {
             // sticky activeTab choice.
             if existing.baseBranch != baseBranch {
                 existing.baseBranch = baseBranch
-                Task { @MainActor in await existing.refresh() }
+                // Clear the prior probe so the chip doesn't show a stale
+                // count against the OLD base while the new probe runs.
+                existing.behindBase = nil
+                Task { @MainActor in
+                    await existing.refresh()
+                    await existing.refreshSyncStatus()
+                }
             }
             result = existing
         } else {
