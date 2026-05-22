@@ -52,6 +52,12 @@ struct RepoSelectorDialog: View {
             .transition(.opacity.combined(with: .offset(y: -6)))
             .onAppear {
                 appState.repoSelector.open()
+                // `open()` resets query to "" — but if it was already "",
+                // didSet skips and selectedIndex stays at 0, which lands on
+                // the RECENT or first project header (non-selectable). Snap
+                // forward so ↵ on first open activates the top worktree.
+                let rows = appState.repoSelector.rows(environment: environment())
+                appState.repoSelector.setSelectedIndex(0, in: rows)
                 requestInputFocus()
             }
             .onChange(of: appState.isRepoSelectorOpen) { _, isOpen in
