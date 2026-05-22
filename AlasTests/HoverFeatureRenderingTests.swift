@@ -5,7 +5,6 @@ import Markdown
 
 @MainActor
 struct HoverFeatureRenderingTests {
-
     @Test func rendersMarkdownProseWithThemeForeground() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let document = Document(parsing: "Hello, world.")
