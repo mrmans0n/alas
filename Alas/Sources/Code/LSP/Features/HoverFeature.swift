@@ -83,7 +83,16 @@ final class HoverFeature {
             closePopover()
             return
         }
-        let markdown = isPlain && !body.contains("`") ? "`\(body)`" : body
+        let markdown: String
+        if isPlain && !body.contains("`") {
+            if body.contains("\n") {
+                markdown = "```\n\(body)\n```"
+            } else {
+                markdown = "`\(body)`"
+            }
+        } else {
+            markdown = body
+        }
         let textRect = textView.firstRect(for: position) ?? CGRect(origin: point, size: .zero)
         await MainActor.run {
             guard self.isCurrentRequest(currentRequestID, uri: uri, position: position, point: point) else { return }
