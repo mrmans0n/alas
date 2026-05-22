@@ -110,7 +110,10 @@ final class CodeEditorCoordinator {
                 }
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
-            }
+            },
+            getTheme: { [weak self] in self?.currentTheme ?? (try? ThemeStore().current) ?? (try? Theme.loadBundled(id: "cool-slate")) ?? Theme(id: "fallback", name: "Fallback", tokens: [:]) },
+            getMonoFontFamily: { [weak self] in self?.currentFontFamily ?? self?.appState.config.code.fontFamily ?? "SF Mono" },
+            getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 }
         )
         definition = DefinitionFeature(
             textView: textView,
