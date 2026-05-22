@@ -188,5 +188,4 @@ struct GitServiceBehindStatusTests {
         let after = try await svc.behindStatus(worktreePath: consumer, ref: "origin/main")
         #expect(after.count == 1)
     }
-
 }

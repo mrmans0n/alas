@@ -48,6 +48,11 @@ final class RightPaneState {
     /// Empty when HEAD is detached or unborn.
     var currentBranch: String
 
+    /// Live HEAD SHA, refreshed on each `refresh()`. Detects rebase, reset,
+    /// amend, fast-forward, etc. so the behind chips update even when the
+    /// branch name hasn't changed.
+    var currentHeadSHA: String = ""
+
     /// `true` once `refresh()` has decided the initial `activeTab`. After
     /// that, the user's tab choice is sticky and refreshes leave it alone.
     private var didInitDefaultTab: Bool = false
@@ -152,8 +157,11 @@ final class RightPaneState {
             self.comparisonRef = ref
             let previousBranch = self.currentBranch
             self.currentBranch = (try? await br) ?? self.currentBranch
-            if previousBranch != self.currentBranch {
-                // Branch changed (typically an in-worktree `git checkout`).
+            let previousHeadSHA = self.currentHeadSHA
+            let headSHA = (try? await self.git.revParseHEAD(worktreePath: self.worktree.path)) ?? self.currentHeadSHA
+            self.currentHeadSHA = headSHA
+            if previousBranch != self.currentBranch || previousHeadSHA != self.currentHeadSHA {
+                // Branch or HEAD changed (checkout, rebase, reset, amend, …).
                 // The behind chips were probed against the OLD branch's base
                 // and upstream — clear them so the header doesn't render
                 // stale counts, then re-probe in the background.
