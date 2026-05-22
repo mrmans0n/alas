@@ -206,7 +206,7 @@ enum LSPMarkup: Decodable, Sendable {
                     _ = try? arr.decode(JSONValue.self)  // skip unknown
                 }
             }
-            self = .plain(pieces.joined(separator: "\n\n"))
+            self = .markupContent(kind: "markdown", value: pieces.joined(separator: "\n\n"))
             return
         }
         // 3. Object form. `MarkupContent` is `{kind, value}`; legacy
