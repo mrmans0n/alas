@@ -178,7 +178,7 @@ private struct HoverContentView: NSViewRepresentable {
         textView.drawsBackground = false
         textView.isSelectable = true
         textView.textContainerInset = NSSize(width: 8, height: 8)
-        textView.isHorizontallyResizable = true
+        textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -224,7 +224,7 @@ enum HoverFeatureTesting {
         textView.drawsBackground = false
         textView.isSelectable = true
         textView.textContainerInset = NSSize(width: 8, height: 8)
-        textView.isHorizontallyResizable = true
+        textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
