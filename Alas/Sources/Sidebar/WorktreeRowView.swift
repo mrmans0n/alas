@@ -101,6 +101,7 @@ struct WorktreeRowView: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    .frame(minHeight: 18)
                 }
             }
             .padding(.leading, 32)
