@@ -34,6 +34,20 @@ final class RightPaneState {
     var hasMoreOlder: Bool = true
     var isLoadingOlder: Bool = false
 
+    // Sync-nudge state. All fields are in-memory only; nothing is
+    // persisted to AppConfig. Two independent conditions:
+    //   - behindBase: HEAD is behind the trunk base (origin/main).
+    //   - behindUpstream: HEAD is behind its own remote tracking branch
+    //     (someone else pushed to it, or you pushed from elsewhere).
+    var behindBase: GitService.BehindStatus? = nil
+    var behindUpstream: GitService.BehindStatus? = nil
+
+    /// Live branch name, refreshed on each `refresh()`. The `worktree.branch`
+    /// snapshot captured at construction goes stale after a `git checkout`
+    /// inside the same worktree, so the chip predicates read this instead.
+    /// Empty when HEAD is detached or unborn.
+    var currentBranch: String
+
     /// `true` once `refresh()` has decided the initial `activeTab`. After
     /// that, the user's tab choice is sticky and refreshes leave it alone.
     private var didInitDefaultTab: Bool = false
@@ -54,9 +68,36 @@ final class RightPaneState {
     private let watcher: WorktreeWatcher
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-state")
 
+    @ObservationIgnored
+    private var syncStatusTimer: Task<Void, Never>? = nil
+
+    /// Refresh interval for `syncStatusTimer`. 5 minutes per design;
+    /// constant in v1.
+    @ObservationIgnored
+    private let syncStatusInterval: UInt64 = 5 * 60 * 1_000_000_000 // ns
+
+    /// True iff the "behind base" chip should be shown.
+    var showBehindBaseChip: Bool {
+        guard let s = behindBase else { return false }
+        guard s.count > 0 else { return false }
+        guard !currentBranch.isEmpty else { return false } // detached HEAD
+        guard currentBranch != baseBranch else { return false }
+        return true
+    }
+
+    /// True iff the "behind upstream" chip should be shown. Independent of
+    /// `showBehindBaseChip` — both can be true simultaneously.
+    var showBehindUpstreamChip: Bool {
+        guard let s = behindUpstream else { return false }
+        guard s.count > 0 else { return false }
+        guard !currentBranch.isEmpty else { return false } // detached HEAD
+        return true
+    }
+
     init(worktree: Worktree, baseBranch: String) {
         self.worktree = worktree
         self.baseBranch = baseBranch
+        self.currentBranch = worktree.branch
         self.watcher = WorktreeWatcher(path: worktree.path)
         watcher.onChange = { [weak self] in
             Task { @MainActor in await self?.refresh() }
@@ -66,9 +107,26 @@ final class RightPaneState {
     func start() {
         watcher.start()
         Task { @MainActor in await self.refresh() }
+        Task { @MainActor in await self.refreshSyncStatus() }
+        syncStatusTimer?.cancel()
+        syncStatusTimer = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: self?.syncStatusInterval ?? 0)
+                } catch {
+                    return // cancelled
+                }
+                guard let self else { return }
+                await self.refreshSyncStatus()
+            }
+        }
     }
 
-    func stop() { watcher.stop() }
+    func stop() {
+        watcher.stop()
+        syncStatusTimer?.cancel()
+        syncStatusTimer = nil
+    }
 
     @MainActor
     func refresh() async {
@@ -84,6 +142,7 @@ final class RightPaneState {
             self.isLoadingOlder = false
             async let s = git.status(worktreePath: worktree.path)
             async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch)
+            async let br = git.currentBranch(worktreePath: worktree.path)
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
@@ -91,6 +150,17 @@ final class RightPaneState {
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
+            let previousBranch = self.currentBranch
+            self.currentBranch = (try? await br) ?? self.currentBranch
+            if previousBranch != self.currentBranch {
+                // Branch changed (typically an in-worktree `git checkout`).
+                // The behind chips were probed against the OLD branch's base
+                // and upstream — clear them so the header doesn't render
+                // stale counts, then re-probe in the background.
+                self.behindBase = nil
+                self.behindUpstream = nil
+                Task { @MainActor in await self.refreshSyncStatus() }
+            }
             // Gate the Amend toggle: an unborn branch (no commits yet)
             // has nothing to amend. If the probe itself throws, default
             // to `true` so we never wrongly disable the control on a
@@ -652,6 +722,83 @@ final class RightPaneState {
                 self.composer.clearAmendPrefillIfUnchanged()
                 self.composer.amendWarning = false
             }
+        }
+    }
+
+    /// Probes the worktree's "behind" status against the trunk base AND
+    /// against the branch's own upstream tracking ref (when one exists).
+    /// Fetches each resolvable remote ref when the last probe was older
+    /// than 30s. Errors are logged but never surfaced; chips reflect the
+    /// last successful probe (or stay hidden if none has succeeded yet).
+    @MainActor
+    func refreshSyncStatus() async {
+        await refreshBehindBase()
+        await refreshBehindUpstream()
+    }
+
+    @MainActor
+    private func refreshBehindBase() async {
+        do {
+            guard let resolved = try await git.resolveBaseRef(
+                worktreePath: worktree.path,
+                baseBranch: baseBranch
+            ) else {
+                behindBase = nil
+                return
+            }
+            if let remote = resolved.remote {
+                let last = behindBase?.probedAt ?? .distantPast
+                if Date().timeIntervalSince(last) > 30 {
+                    do {
+                        try await git.fetchRef(
+                            worktreePath: worktree.path,
+                            remote: remote,
+                            branch: baseBranch
+                        )
+                    } catch {
+                        logger.error("base fetch failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+            }
+            self.behindBase = try await git.behindStatus(
+                worktreePath: worktree.path,
+                ref: resolved.baseRef
+            )
+        } catch {
+            logger.error("behind-base probe failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @MainActor
+    private func refreshBehindUpstream() async {
+        do {
+            guard let upstream = try await git.resolveUpstreamRef(
+                worktreePath: worktree.path
+            ) else {
+                behindUpstream = nil
+                return
+            }
+            // Upstream ref looks like "origin/<branch>"; the local branch name
+            // is what we fetch.
+            let branchName = String(upstream.ref.dropFirst(upstream.remote.count + 1))
+            let last = behindUpstream?.probedAt ?? .distantPast
+            if Date().timeIntervalSince(last) > 30 {
+                do {
+                    try await git.fetchRef(
+                        worktreePath: worktree.path,
+                        remote: upstream.remote,
+                        branch: branchName
+                    )
+                } catch {
+                    logger.error("upstream fetch failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            self.behindUpstream = try await git.behindStatus(
+                worktreePath: worktree.path,
+                ref: upstream.ref
+            )
+        } catch {
+            logger.error("behind-upstream probe failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 

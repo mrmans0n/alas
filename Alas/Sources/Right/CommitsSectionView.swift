@@ -1,11 +1,32 @@
 import SwiftUI
 
+/// Small pill shown in the Commits section header trailing slot when the
+/// worktree is behind a tracked ref (base trunk or its own upstream).
+/// Purely informative.
+struct BehindChip: View {
+    let text: String
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundColor(theme.color("accent"))
+            .lineLimit(1)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(theme.color("accent").opacity(0.12))
+            .clipShape(Capsule())
+    }
+}
+
 struct CommitsSectionView: View {
     let commits: [CommitInfo]
     let olderCommits: [CommitInfo]
     let comparisonRef: String?
     let hasMoreOlder: Bool
     let isLoadingOlder: Bool
+    let behindBase: GitService.BehindStatus?
+    let behindUpstream: GitService.BehindStatus?
     @Binding var expanded: Bool
     let onSelect: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
@@ -21,14 +42,22 @@ struct CommitsSectionView: View {
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
             ) {
-                if let comparisonRef {
-                    HStack(spacing: 4) {
-                        Icon(name: "branch", size: 10, color: theme.color("fg-faint"))
-                        Text(comparisonRef)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundColor(theme.color("fg-faint"))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                HStack(spacing: 6) {
+                    if let s = behindBase {
+                        BehindChip(text: "\(s.count) behind \(s.ref)")
+                    }
+                    if let s = behindUpstream {
+                        BehindChip(text: "\(s.count) behind \(s.ref)")
+                    }
+                    if let comparisonRef {
+                        HStack(spacing: 4) {
+                            Icon(name: "branch", size: 10, color: theme.color("fg-faint"))
+                            Text(comparisonRef)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(theme.color("fg-faint"))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
             }
