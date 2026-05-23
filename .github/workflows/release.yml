@@ -16,11 +16,14 @@ jobs:
     # main HEAD requirement). Submodule + zig@0.15 are required for the
     # Ghostty xcframework build.
     runs-on: macos-26
-    # Four notarytool --wait --timeout 30m calls in this job (one .app and
-    # one DMG per arch). Worst-case notary time alone is 120 min if Apple's
-    # queue is slow on all four submissions. 150 min leaves ~30 min headroom
-    # for build/package/upload even when every notary call hits its timeout.
-    timeout-minutes: 150
+    # Each matrix leg has two notarytool --wait --timeout 30m calls (one .app
+    # and one DMG). Worst-case notary time alone is 60 min if Apple's queue is
+    # slow on both submissions. 90 min leaves headroom for build/package/upload.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v6
@@ -41,33 +44,25 @@ jobs:
           shasum scripts/build-ghostty.sh >> .ghostty-pin
 
       - name: Restore Ghostty cache
-        # Split restore + save (Option B): the combined `actions/cache@v5` only
-        # saves at end-of-job on success. This job runs up to 150 min through
-        # four notarytool --wait calls — any failure or timeout there would
-        # discard the freshly-built arm64+x86_64 xcframeworks and force the
-        # next run to cold-build both. With explicit restore + save, the
-        # cross-arch shared cache is persisted immediately after both builds
-        # complete, before notary work starts.
+        # Split restore + save: the combined `actions/cache@v5` only saves at
+        # end-of-job on success. With explicit restore + save, the cache is
+        # persisted immediately after the Ghostty build completes, before
+        # notary work starts.
+        #
+        # Each matrix leg gets its own arch-qualified cache key so two runners
+        # don't race on saving the same immutable key.
         #
         # restore-keys gives us a warm cache when .ghostty-pin changes (new
         # submodule SHA or build-ghostty.sh edit): we fall back to the most
         # recent prior cache, and build-ghostty.sh's in-script fingerprint
-        # table (~/Library/Caches/Alas/GhosttyKit/${arch}/ keeps the last 5
-        # entries) can fast-path the build if any prior fingerprint matches.
-        #
-        # `.build/ghostty` is intentionally NOT cached here — it's the per-arch
-        # zig worktree and gets wiped between the arm64 and x86_64 passes, so
-        # whatever ends up in it at job-end is single-arch and useless to the
-        # opposite arch's next run. build-ghostty.sh repopulates it from
-        # ~/Library/Caches/Alas/GhosttyKit/${arch}/ via APFS clonefile when
-        # fingerprints match.
+        # table can fast-path the build if any prior fingerprint matches.
         id: ghostty-cache
         uses: actions/cache/restore@v5
         with:
-          path: ~/Library/Caches/Alas/GhosttyKit
-          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+          path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
+          key: ghostty-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.ghostty-pin') }}
           restore-keys: |
-            ghostty-${{ runner.os }}-
+            ghostty-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Generate project
         run: xcodegen
@@ -75,86 +70,32 @@ jobs:
       - name: Compute version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      # --- arm64 pass -------------------------------------------------------
-      - name: Build Ghostty xcframework (arm64)
+      - name: Build Ghostty xcframework (${{ matrix.arch }})
         env:
-          ALAS_GHOSTTY_TARGET_ARCH: arm64
-        run: ./scripts/build-ghostty.sh
-
-      - name: Build release app (arm64)
-        run: |
-          xcodebuild -project Alas.xcodeproj -scheme Alas \
-            -configuration Release \
-            -derivedDataPath build \
-            -destination 'platform=macOS,arch=arm64' \
-            -quiet build
-
-      - name: Sign + notarize + staple .app (arm64)
-        env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD:   ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_SIGNING_IDENTITY:       ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          MACOS_NOTARY_APPLE_ID:        ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-          MACOS_NOTARY_APP_PASSWORD:    ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
-          MACOS_NOTARY_TEAM_ID:         ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-        run: ./scripts/sign-and-notarize.sh build/Build/Products/Release/Alas.app
-
-      - name: Package .app — arm64 (zip + DMG)
-        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app "Alas-${VERSION}-arm64"
-
-      - name: Notarize + staple DMG (arm64)
-        env:
-          MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-          MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
-          MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-        run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-arm64.dmg"
-
-      # --- x86_64 pass ------------------------------------------------------
-      - name: Reset ghostty worktree + signing keychain for x86_64 pass
-        # Wipe the per-arch ghostty worktree dir + the Alas.app build product
-        # from the arm64 pass so the x86_64 xcodebuild writes a fresh Alas.app
-        # at the same DerivedData path. (Intermediate object files at
-        # build/Build/Intermediates.noindex/ are intentionally left alone —
-        # xcodebuild rebuilds arch-specific objects on its own.) The shared
-        # Ghostty cache at ~/Library/Caches/Alas/GhosttyKit is *not* wiped —
-        # the x86_64 build will hit it on subsequent CI runs.
-        # The signing keychain MUST also be wiped: sign-and-notarize.sh creates
-        # a keychain at a fixed path ($RUNNER_TEMP/signing.keychain-db) and
-        # `security create-keychain` errors when that file already exists, so
-        # the second pass would fail without this. cleanup-signing-keychain.sh
-        # is idempotent — calling it mid-run is safe; the final `if: always()`
-        # cleanup step at job end still runs against the x86_64 keychain.
-        run: |
-          rm -rf .build/ghostty
-          rm -rf build/Build/Products/Release/Alas.app
-          ./scripts/cleanup-signing-keychain.sh
-
-      - name: Build Ghostty xcframework (x86_64)
-        env:
-          ALAS_GHOSTTY_TARGET_ARCH: x86_64
+          ALAS_GHOSTTY_TARGET_ARCH: ${{ matrix.arch }}
         run: ./scripts/build-ghostty.sh
 
       - name: Save Ghostty cache
-        # Save the moment both arches are built, BEFORE the rest of the job
-        # (xcodebuild + four notarytool calls) has a chance to fail. If we
-        # waited until end-of-job, a notary timeout would throw away ~25 min
-        # of cold zig work on each arch. `cache-hit != 'true'` skips a no-op
-        # save when restore already hit the exact primary key.
+        # Save immediately after the Ghostty build completes, BEFORE the rest
+        # of the job (xcodebuild + notarytool) has a chance to fail. If we
+        # waited until end-of-job, a notary timeout would throw away ~12 min
+        # of cold zig work. `cache-hit != 'true'` skips a no-op save when
+        # restore already hit the exact primary key.
         if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: ~/Library/Caches/Alas/GhosttyKit
+          path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
-      - name: Build release app (x86_64)
+      - name: Build release app (${{ matrix.arch }})
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -configuration Release \
             -derivedDataPath build \
-            -destination 'platform=macOS,arch=x86_64' \
+            -destination 'platform=macOS,arch=${{ matrix.arch }}' \
             -quiet build
 
-      - name: Sign + notarize + staple .app (x86_64)
+      - name: Sign + notarize + staple .app (${{ matrix.arch }})
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD:   ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -164,19 +105,45 @@ jobs:
           MACOS_NOTARY_TEAM_ID:         ${{ secrets.MACOS_NOTARY_TEAM_ID }}
         run: ./scripts/sign-and-notarize.sh build/Build/Products/Release/Alas.app
 
-      - name: Package .app — x86_64 (zip + DMG)
-        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app "Alas-${VERSION}-x86_64"
+      - name: Package .app — ${{ matrix.arch }} (zip + DMG)
+        run: ./scripts/package-app.sh build/Build/Products/Release/Alas.app "Alas-${VERSION}-${{ matrix.arch }}"
 
-      - name: Notarize + staple DMG (x86_64)
+      - name: Notarize + staple DMG (${{ matrix.arch }})
         env:
           MACOS_NOTARY_APPLE_ID:     ${{ secrets.MACOS_NOTARY_APPLE_ID }}
           MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
           MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-        run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-x86_64.dmg"
+        run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-${{ matrix.arch }}.dmg"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: alas-macos-${{ matrix.arch }}
+          path: |
+            build/Build/Products/Release/Alas-*-${{ matrix.arch }}.app.zip
+            build/Build/Products/Release/Alas-*-${{ matrix.arch }}.dmg
 
       - name: Cleanup signing keychain
         if: always()
         run: ./scripts/cleanup-signing-keychain.sh
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: macos-app
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (for CHANGELOG.md)
+        uses: actions/checkout@v6
+
+      - name: Compute version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: alas-macos-*
 
       - name: Extract release notes
         run: |
@@ -190,20 +157,18 @@ jobs:
             exit 1
           }
 
-      - name: Upload macOS artifacts to release
+      - name: Upload release artifacts
         uses: softprops/action-gh-release@v3
         with:
           body_path: ${{ runner.temp }}/release-notes.md
           files: |
-            build/Build/Products/Release/Alas-*-arm64.app.zip
-            build/Build/Products/Release/Alas-*-arm64.dmg
-            build/Build/Products/Release/Alas-*-x86_64.app.zip
-            build/Build/Products/Release/Alas-*-x86_64.dmg
+            release-artifacts/**/Alas-*.app.zip
+            release-artifacts/**/Alas-*.dmg
 
   update-homebrew:
     name: Update Homebrew Cask
     runs-on: ubuntu-latest
-    needs: macos-app
+    needs: publish
     # Skip prereleases — those should ship a DMG for manual testing but
     # must not bump the cask that brew users follow. Tag-push releases are
     # stable by construction.
