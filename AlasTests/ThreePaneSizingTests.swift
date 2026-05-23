@@ -20,6 +20,7 @@ struct ThreePaneSizingTests {
             availableWidth: 1_200,
             preferredSidebarWidth: 244,
             preferredRightWidth: 320,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -44,6 +45,7 @@ struct ThreePaneSizingTests {
             availableWidth: 900,
             preferredSidebarWidth: preferredSidebarWidth,
             preferredRightWidth: preferredRightWidth,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -64,6 +66,7 @@ struct ThreePaneSizingTests {
             availableWidth: 1_200,
             preferredSidebarWidth: 100,
             preferredRightWidth: 100,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -80,6 +83,7 @@ struct ThreePaneSizingTests {
             availableWidth: availableWidth,
             preferredSidebarWidth: 200,
             preferredRightWidth: 240,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -95,6 +99,7 @@ struct ThreePaneSizingTests {
             availableWidth: 840,
             preferredSidebarWidth: 244,
             preferredRightWidth: 320,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -110,6 +115,7 @@ struct ThreePaneSizingTests {
             availableWidth: 1_200,
             preferredSidebarWidth: 244,
             preferredRightWidth: 320,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: false,
             configuration: config
         )
@@ -125,6 +131,7 @@ struct ThreePaneSizingTests {
             availableWidth: 580,
             preferredSidebarWidth: 244,
             preferredRightWidth: 320,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: false,
             configuration: config
         )
@@ -141,6 +148,7 @@ struct ThreePaneSizingTests {
             availableWidth: availableWidth,
             preferredSidebarWidth: 244,
             preferredRightWidth: 320,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: false,
             configuration: config
         )
@@ -158,6 +166,7 @@ struct ThreePaneSizingTests {
             availableWidth: availableWidth,
             preferredSidebarWidth: 244,
             preferredRightWidth: 320,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: false,
             configuration: config
         )
@@ -174,6 +183,7 @@ struct ThreePaneSizingTests {
             availableWidth: 120,
             preferredSidebarWidth: 244,
             preferredRightWidth: 320,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -190,6 +200,7 @@ struct ThreePaneSizingTests {
             availableWidth: .nan,
             preferredSidebarWidth: .infinity,
             preferredRightWidth: -.infinity,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -208,6 +219,7 @@ struct ThreePaneSizingTests {
             availableWidth: 1_800,
             preferredSidebarWidth: 900,
             preferredRightWidth: 900,
+            sidebarPreferredVisible: true,
             rightPreferredVisible: true,
             configuration: config
         )
@@ -215,5 +227,59 @@ struct ThreePaneSizingTests {
         #expect(isApproximatelyEqual(result.sidebarWidth, 420))
         #expect(isApproximatelyEqual(result.rightWidth, 560))
         #expect(isApproximatelyEqual(result.centerWidth, 808))
+    }
+
+    @Test func hiddenSidebarReducesToCenterRight() {
+        let result = ThreePaneSizing.calculate(
+            availableWidth: 1_200,
+            preferredSidebarWidth: 244,
+            preferredRightWidth: 320,
+            sidebarPreferredVisible: false,
+            rightPreferredVisible: true,
+            configuration: config
+        )
+
+        #expect(result.sidebarVisible == false)
+        #expect(isApproximatelyEqual(result.sidebarWidth, 0))
+        #expect(result.rightVisible == true)
+        #expect(isApproximatelyEqual(result.rightWidth, 320))
+        #expect(isApproximatelyEqual(result.centerWidth, 874))
+        // 1200 - 320 - 6 (single divider between center & right) = 874
+    }
+
+    @Test func hiddenSidebarAndHiddenRightYieldCenterOnly() {
+        let result = ThreePaneSizing.calculate(
+            availableWidth: 1_000,
+            preferredSidebarWidth: 244,
+            preferredRightWidth: 320,
+            sidebarPreferredVisible: false,
+            rightPreferredVisible: false,
+            configuration: config
+        )
+
+        #expect(result.sidebarVisible == false)
+        #expect(result.rightVisible == false)
+        #expect(isApproximatelyEqual(result.sidebarWidth, 0))
+        #expect(isApproximatelyEqual(result.rightWidth, 0))
+        #expect(isApproximatelyEqual(result.centerWidth, 1_000))
+    }
+
+    @Test func hiddenSidebarNarrowWindowCollapsesRight() {
+        // centerMin + rightMin + divider = 400 + 240 + 6 = 646.
+        // 600 < 646 — the right pane must collapse, center keeps remainder.
+        let result = ThreePaneSizing.calculate(
+            availableWidth: 600,
+            preferredSidebarWidth: 244,
+            preferredRightWidth: 320,
+            sidebarPreferredVisible: false,
+            rightPreferredVisible: true,
+            configuration: config
+        )
+
+        #expect(result.sidebarVisible == false)
+        #expect(result.rightVisible == false)
+        #expect(isApproximatelyEqual(result.sidebarWidth, 0))
+        #expect(isApproximatelyEqual(result.rightWidth, 0))
+        #expect(isApproximatelyEqual(result.centerWidth, 600))
     }
 }

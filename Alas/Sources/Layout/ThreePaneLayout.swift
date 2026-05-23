@@ -22,6 +22,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 availableWidth: Double(proxy.size.width),
                 preferredSidebarWidth: sidebarWidth,
                 preferredRightWidth: rightWidth,
+                sidebarPreferredVisible: true,
                 rightPreferredVisible: rightVisible,
                 configuration: ThreePaneSizing.Configuration(
                     sidebarMin: sidebarMin,
