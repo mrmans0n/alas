@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-05-23
+
+### ✨ Features
+
+- parallelize macOS release builds for arm64 and x86_64 (#261).
+- hide the left sidebar with Cmd-B (#263).
+
+### 🏗️ Internal
+
+- verify the published Homebrew cask during release.
+- rename Advanced settings to Debug and move it last in the settings sidebar (#262).
+
 ## [0.3.11] - 2026-05-23
 
 ### ✨ Features
