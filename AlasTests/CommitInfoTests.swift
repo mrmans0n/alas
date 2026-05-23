@@ -41,10 +41,37 @@ struct CommitInfoTests {
     }
 
     @Test func recognisesAllExpectedTypes() {
-        for type in ["feat", "fix", "chore", "refactor", "perf", "docs", "test", "ci", "build"] {
+        for type in [
+            "feat", "fix", "chore", "refactor", "perf", "docs", "test", "ci", "build",
+            "style", "revert", "tune",
+        ] {
             let (tag, _) = CommitInfo.parseConventional(subject: "\(type): something")
             #expect(tag == type, "expected \(type) to be recognised")
         }
+    }
+
+    @Test func extractsTunePrefix() {
+        let (tag, stripped) = CommitInfo.parseConventional(subject: "tune: adjust animation timing")
+        #expect(tag == "tune")
+        #expect(stripped == "adjust animation timing")
+    }
+
+    @Test func extractsStylePrefix() {
+        let (tag, stripped) = CommitInfo.parseConventional(subject: "style: fix indentation")
+        #expect(tag == "style")
+        #expect(stripped == "fix indentation")
+    }
+
+    @Test func extractsRevertPrefix() {
+        let (tag, stripped) = CommitInfo.parseConventional(subject: "revert: undo feature flag")
+        #expect(tag == "revert")
+        #expect(stripped == "undo feature flag")
+    }
+
+    @Test func extractsScopedTunePrefix() {
+        let (tag, stripped) = CommitInfo.parseConventional(subject: "tune(sidebar): tweak row spacing")
+        #expect(tag == "tune")
+        #expect(stripped == "tweak row spacing")
     }
 
     @Test func initialsEmpty() {
