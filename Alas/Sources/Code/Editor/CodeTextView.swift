@@ -31,6 +31,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var completionManualTriggerHandler: (() -> Void)?
     var completionChangeHandler: (() -> Void)?
     var completionSelectionChangeHandler: (() -> Void)?
+    var escapeHandler: (() -> Bool)?
     var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
     var indentationMode: IndentationMode = .plain
 
@@ -422,6 +423,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func cancelOperation(_ sender: Any?) {
+        if escapeHandler?() == true { return }
         if routeCompletionKey(.dismiss) { return }
         super.cancelOperation(sender)
     }
@@ -935,5 +937,56 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             cursor -= 1
         }
         return backslashCount % 2 == 1
+    }
+}
+
+extension CodeTextView {
+    /// Returns the contiguous identifier-like range covering the character at
+    /// `point`, or nil if the point is outside the text or not over an
+    /// identifier character (`[A-Za-z0-9_]`). Used by hover and ⌘-underline.
+    func symbolRange(at point: NSPoint) -> NSRange? {
+        guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
+        let containerPoint = NSPoint(
+            x: point.x - textContainerInset.width,
+            y: point.y - textContainerInset.height
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        let nsString = storage.string as NSString
+        guard charIndex < nsString.length else { return nil }
+        let range = nsString.rangeOfWord(at: charIndex)
+        return range.length == 0 ? nil : range
+    }
+
+    /// Returns the bounding rect (in view coordinates, including
+    /// `textContainerInset`) of the first character of `range`. Used to anchor
+    /// the hover popover under a token.
+    func symbolAnchorRect(for range: NSRange) -> NSRect? {
+        guard range.length > 0, let layoutManager, let textContainer else { return nil }
+        let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        return rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+    }
+}
+
+extension NSString {
+    /// Returns the contiguous identifier-like range covering `index`, or an
+    /// empty range if the character at `index` is not part of an identifier.
+    func rangeOfWord(at index: Int) -> NSRange {
+        guard index < length else { return NSRange(location: index, length: 0) }
+        let isWordChar: (unichar) -> Bool = { c in
+            (c >= 0x41 && c <= 0x5A) ||           // A-Z
+            (c >= 0x61 && c <= 0x7A) ||           // a-z
+            (c >= 0x30 && c <= 0x39) ||           // 0-9
+             c == 0x5F                             // _
+        }
+        guard isWordChar(character(at: index)) else {
+            return NSRange(location: index, length: 0)
+        }
+        var start = index
+        while start > 0 && isWordChar(character(at: start - 1)) { start -= 1 }
+        var end = index
+        while end < length && isWordChar(character(at: end)) { end += 1 }
+        return NSRange(location: start, length: end - start)
     }
 }

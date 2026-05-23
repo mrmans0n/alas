@@ -27,21 +27,25 @@ final class HoverHighlightFeature {
         self.textView = textView
         self.getClient = getClient
         self.getURI = getURI
+        // Chain all three handlers so coexisting features (HoverFeature's
+        // ⌥-peek) keep receiving their events. Coordinator constructs
+        // HoverFeature first, then this feature — without chaining we'd
+        // silently replace the prior closures.
+        let priorFlags = textView.flagsChangedHandler
         textView.flagsChangedHandler = { [weak self] event in
+            priorFlags?(event)
             self?.onFlagsChanged(event)
         }
+        let priorExit = textView.mouseExitedHandler
         textView.mouseExitedHandler = { [weak self] in
+            priorExit?()
             guard let self else { return }
             self.cancelInFlight()
             self.clearUnderline()
         }
-        // Reuse the existing hover handler — feature multiplexes hover and
-        // command-hover through the same closure. The popover-based
-        // `HoverFeature` already lives on `hoverHandler`, so install a
-        // chained closure that calls both.
-        let prior = textView.hoverHandler
+        let priorHover = textView.hoverHandler
         textView.hoverHandler = { [weak self] p in
-            prior?(p)
+            priorHover?(p)
             self?.onMove(at: p)
         }
     }
@@ -152,27 +156,5 @@ final class HoverHighlightFeature {
     private func cancelInFlight() {
         inFlight?.cancel()
         inFlight = nil
-    }
-}
-
-private extension NSString {
-    /// Returns the contiguous identifier-like range covering `index`, or an
-    /// empty range if the character at `index` is not part of an identifier.
-    func rangeOfWord(at index: Int) -> NSRange {
-        guard index < length else { return NSRange(location: index, length: 0) }
-        let isWordChar: (unichar) -> Bool = { c in
-            (c >= 0x41 && c <= 0x5A) ||           // A-Z
-            (c >= 0x61 && c <= 0x7A) ||           // a-z
-            (c >= 0x30 && c <= 0x39) ||           // 0-9
-             c == 0x5F                             // _
-        }
-        guard isWordChar(character(at: index)) else {
-            return NSRange(location: index, length: 0)
-        }
-        var start = index
-        while start > 0 && isWordChar(character(at: start - 1)) { start -= 1 }
-        var end = index
-        while end < length && isWordChar(character(at: end)) { end += 1 }
-        return NSRange(location: start, length: end - start)
     }
 }
