@@ -282,4 +282,23 @@ struct ThreePaneSizingTests {
         #expect(isApproximatelyEqual(result.rightWidth, 0))
         #expect(isApproximatelyEqual(result.centerWidth, 600))
     }
+
+    @Test func hiddenSidebarMediumWindowShrinksRightBelowPreferred() {
+        // centerMin + rightMin + divider = 400 + 240 + 6 = 646 ≤ 700 < 726 = preferredRight + centerMin + divider.
+        // Right is visible but shrunk below preferred to keep center at its min.
+        let result = ThreePaneSizing.calculate(
+            availableWidth: 700,
+            preferredSidebarWidth: 244,
+            preferredRightWidth: 320,
+            sidebarPreferredVisible: false,
+            rightPreferredVisible: true,
+            configuration: config
+        )
+
+        #expect(result.sidebarVisible == false)
+        #expect(result.rightVisible == true)
+        #expect(isApproximatelyEqual(result.sidebarWidth, 0))
+        #expect(isApproximatelyEqual(result.rightWidth, 294))   // 700 - 6 - 400 = 294
+        #expect(isApproximatelyEqual(result.centerWidth, 400))  // hits centerMin
+    }
 }

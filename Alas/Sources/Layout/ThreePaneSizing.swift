@@ -193,8 +193,8 @@ enum ThreePaneSizing {
 
         let usableWidth = max(0, availableWidth - dividerWidth)
 
-        // If center + right minimums cannot fit, collapse right entirely
-        // (mirroring how calculateTwoPane handles the sidebar+center case).
+        // Unlike calculateTwoPane, the right pane is optional: collapse it entirely
+        // rather than proportionally shrinking both panes below their minimums.
         guard usableWidth >= centerMin + rightMin else {
             return Result(
                 sidebarWidth: 0,
