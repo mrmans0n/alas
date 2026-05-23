@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-05-23
+
+### ✨ Features
+
+- add LSP-backed editor autocomplete (#257).
+- add a breathing opacity animation to terminal tab icons for activity state (#258).
+- redesign LSP hover with a dwell trigger and shared overlay panel (#259).
+- refresh behind chips when HEAD changes (#255).
+- expand the conventional commit detector verbs (#260).
+
+### 🐛 Fixes
+
+- resolve terminal Cmd-click links against the current working directory and worktree root (#254).
+
+### 🏗️ Internal
+
+- optimize Ghostty cache usage in the release workflow (#253).
+
 ## [0.3.10] - 2026-05-22
 
 ### ✨ Features
