@@ -248,3 +248,45 @@ jobs:
           git add Casks/alas.rb
           git commit -m "Update alas cask to ${VERSION}"
           git push
+
+      - name: Verify tap commit reached GitHub
+        working-directory: homebrew-tap
+        run: |
+          expected_sha="$(git rev-parse HEAD)"
+          for attempt in {1..30}; do
+            remote_sha="$(git ls-remote https://github.com/mrmans0n/homebrew-tap.git refs/heads/main | cut -f1)"
+            if [ "$remote_sha" = "$expected_sha" ]; then
+              echo "homebrew-tap main is at $expected_sha"
+              exit 0
+            fi
+            echo "Waiting for homebrew-tap main to reach $expected_sha (attempt $attempt, saw ${remote_sha:-none})"
+            sleep 5
+          done
+          echo "::error::homebrew-tap main did not reach $expected_sha"
+          exit 1
+
+  verify-homebrew:
+    name: Verify Homebrew Cask
+    runs-on: macos-26
+    needs: update-homebrew
+    if: github.event_name == 'push' || github.event.release.prerelease == false
+    steps:
+      - name: Get version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Tap and validate published cask
+        run: |
+          brew update
+          brew tap mrmans0n/tap https://github.com/mrmans0n/homebrew-tap.git
+          tap_dir="$(brew --repo mrmans0n/tap)"
+          git -C "$tap_dir" fetch origin main
+          git -C "$tap_dir" reset --hard origin/main
+
+          cask_version="$(brew cat --cask mrmans0n/tap/alas | awk '/^[[:space:]]*version / { gsub(/"/, "", $2); print $2; exit }')"
+          if [ "$cask_version" != "$VERSION" ]; then
+            echo "::error::Expected Homebrew cask version $VERSION, got ${cask_version:-none}"
+            exit 1
+          fi
+
+          brew audit --cask mrmans0n/tap/alas
+          brew fetch --cask mrmans0n/tap/alas --force --verbose
