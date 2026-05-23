@@ -4,6 +4,7 @@ struct SidebarHeaderView: View {
     let onSettings: () -> Void
     let onAddProject: () -> Void
     let onSearch: () -> Void
+    let onHideSidebar: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -13,6 +14,7 @@ struct SidebarHeaderView: View {
                 ToolbarBtn(icon: "search", action: onSearch)
                 ToolbarBtn(icon: "folder-plus", action: onAddProject)
                 ToolbarBtn(icon: "gear", action: onSettings)
+                ToolbarBtn(icon: "sidebar.left", action: onHideSidebar)
             }
         }
         .padding(.horizontal, 12)

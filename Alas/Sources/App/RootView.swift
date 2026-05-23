@@ -48,6 +48,10 @@ struct RootView: View {
                                 onNewWorktree: { projectId in
                                     newWorktreePresetProjectId = projectId
                                     showNewWorktree = true
+                                },
+                                onHideSidebar: {
+                                    state.config.sidebarVisible = false
+                                    state.saveConfig()
                                 }
                             )
                         },
