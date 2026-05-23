@@ -315,4 +315,135 @@ struct LSPTextDocumentIdentifier: Codable, Hashable, Sendable {
 struct LSPTextEdit: Codable, Hashable, Sendable {
     let range: LSPRange
     let newText: String
+
+    init(range: LSPRange, newText: String) {
+        self.range = range
+        self.newText = newText
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.newText = try container.decode(String.self, forKey: .newText)
+        if let range = try container.decodeIfPresent(LSPRange.self, forKey: .range) {
+            self.range = range
+        } else if let replace = try container.decodeIfPresent(LSPRange.self, forKey: .replace) {
+            self.range = replace
+        } else {
+            self.range = try container.decode(LSPRange.self, forKey: .insert)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(range, forKey: .range)
+        try container.encode(newText, forKey: .newText)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case range
+        case newText
+        case insert
+        case replace
+    }
+}
+
+// MARK: - Completion
+
+struct LSPCompletionParams: Codable, Hashable, Sendable {
+    let textDocument: LSPTextDocumentIdentifier
+    let position: LSPPosition
+    let context: LSPCompletionContext?
+}
+
+struct LSPCompletionContext: Codable, Hashable, Sendable {
+    let triggerKind: LSPCompletionTriggerKind
+    let triggerCharacter: String?
+}
+
+enum LSPCompletionTriggerKind: Int, Codable, Hashable, Sendable {
+    case invoked = 1
+    case triggerCharacter = 2
+    case triggerForIncompleteCompletions = 3
+}
+
+enum LSPInsertTextFormat: Int, Codable, Hashable, Sendable {
+    case plainText = 1
+    case snippet = 2
+}
+
+struct LSPCompletionItem: Decodable, Sendable {
+    let label: String
+    let kind: Int?
+    let detail: String?
+    let documentation: LSPMarkup?
+    let sortText: String?
+    let filterText: String?
+    let insertText: String?
+    let insertTextFormat: LSPInsertTextFormat?
+    let textEdit: LSPTextEdit?
+    let additionalTextEdits: [LSPTextEdit]?
+
+    init(
+        label: String,
+        kind: Int?,
+        detail: String?,
+        documentation: LSPMarkup?,
+        sortText: String?,
+        filterText: String?,
+        insertText: String?,
+        insertTextFormat: LSPInsertTextFormat?,
+        textEdit: LSPTextEdit?,
+        additionalTextEdits: [LSPTextEdit]?
+    ) {
+        self.label = label
+        self.kind = kind
+        self.detail = detail
+        self.documentation = documentation
+        self.sortText = sortText
+        self.filterText = filterText
+        self.insertText = insertText
+        self.insertTextFormat = insertTextFormat
+        self.textEdit = textEdit
+        self.additionalTextEdits = additionalTextEdits
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case kind
+        case detail
+        case documentation
+        case sortText
+        case filterText
+        case insertText
+        case insertTextFormat
+        case textEdit
+        case additionalTextEdits
+    }
+}
+
+struct LSPCompletionResult: Decodable, Sendable {
+    let isIncomplete: Bool
+    let items: [LSPCompletionItem]
+
+    init(isIncomplete: Bool, items: [LSPCompletionItem]) {
+        self.isIncomplete = isIncomplete
+        self.items = items
+    }
+
+    init(from decoder: Decoder) throws {
+        if let items = try? [LSPCompletionItem](from: decoder) {
+            self.isIncomplete = false
+            self.items = items
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.isIncomplete = try container.decodeIfPresent(Bool.self, forKey: .isIncomplete) ?? false
+        self.items = try container.decode([LSPCompletionItem].self, forKey: .items)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case isIncomplete
+        case items
+    }
 }
