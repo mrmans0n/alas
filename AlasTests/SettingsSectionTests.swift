@@ -10,8 +10,10 @@ struct SettingsSectionTests {
         #expect(labels.contains("Appearance"))
     }
 
-    @Test func sidebarSectionsAreSortedAlphabetically() {
+    @Test func sidebarSectionsAreSortedAlphabeticallyExceptDebugLast() {
         let labels = SettingsSection.allCases.map(\.label)
-        #expect(labels == labels.sorted())
+        let mainLabels = labels.filter { $0 != "Debug" }
+        #expect(mainLabels == mainLabels.sorted())
+        #expect(labels.last == "Debug")
     }
 }
