@@ -30,6 +30,7 @@ struct RootView: View {
                             get: { state.config.rightPaneWidth },
                             set: { state.config.rightPaneWidth = $0 }
                         ),
+                        sidebarVisible: state.config.sidebarVisible,
                         rightVisible: state.config.rightPaneVisible,
                         onWidthsChanged: { state.saveConfig() },
                         sidebar: {
