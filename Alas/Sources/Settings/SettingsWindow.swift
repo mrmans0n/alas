@@ -3,7 +3,7 @@ import SwiftUI
 struct SettingsWindow: View {
     @Bindable var state: AppState
     @State private var section: SettingsSection = .agents
-    @State private var showsAdvanced = AdvancedSettingsVisibility.isEnabled()
+    @State private var showsDebug = AdvancedSettingsVisibility.isEnabled()
 
     var body: some View {
         let theme = state.themeStore.current
@@ -27,10 +27,10 @@ struct SettingsWindow: View {
             .overlay(Divider().opacity(0.5), alignment: .bottom)
 
             HStack(spacing: 0) {
-                SettingsNavView(selection: $section, showsAdvanced: showsAdvanced)
+                SettingsNavView(selection: $section, showsDebug: showsDebug)
                 Group {
                     switch section {
-                    case .advanced:   AdvancedPane(state: state)
+                    case .debug:      AdvancedPane(state: state)
                     case .agents:     AgentsPane(state: state) { section = $0 }
                     case .appearance: AppearancePane(state: state)
                     case .changes:    ChangesPane(state: state)
@@ -63,8 +63,8 @@ struct SettingsWindow: View {
         .environment(\.theme, theme)
         .ignoresSafeArea()
         .onAppear {
-            showsAdvanced = AdvancedSettingsVisibility.isEnabled()
-            if !showsAdvanced, section == .advanced {
+            showsDebug = AdvancedSettingsVisibility.isEnabled()
+            if !showsDebug, section == .debug {
                 section = .agents
             }
             state.rescanAgents()
