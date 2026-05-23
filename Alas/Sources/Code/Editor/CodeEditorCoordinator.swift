@@ -41,6 +41,7 @@ final class CodeEditorCoordinator {
     let symbolsFeature = SymbolsFeature()
     private var pullDiagnosticsTask: Task<Void, Never>?
     private var hover: HoverFeature?
+    private var hoverObservers: [NSObjectProtocol] = []
     private var definition: DefinitionFeature?
     private var hoverHighlight: HoverHighlightFeature?
     private var completion: CompletionFeature?
@@ -126,6 +127,7 @@ final class CodeEditorCoordinator {
             getMonoFontFamily: { [weak self] in self?.currentFontFamily ?? self?.appState.config.code.fontFamily ?? "SF Mono" },
             getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 }
         )
+        installHoverObservers(textView: textView)
         definition = DefinitionFeature(
             textView: textView,
             getClient: { [weak self] in
@@ -457,6 +459,8 @@ final class CodeEditorCoordinator {
             buffer.storage.removeLayoutManager(layoutManager)
         }
         layoutManager = nil
+        clearHoverObservers()
+        hover?.tearDown()
         hover = nil
         definition = nil
         hoverHighlight = nil
@@ -483,6 +487,63 @@ final class CodeEditorCoordinator {
             object: self,
             userInfo: ["tabId": tabId as Any]
         )
+    }
+
+    // MARK: - Hover observers
+
+    private func installHoverObservers(textView: CodeTextView) {
+        clearHoverObservers()
+        let nc = NotificationCenter.default
+
+        if let clipView = textView.enclosingScrollView?.contentView {
+            clipView.postsBoundsChangedNotifications = true
+            let token = nc.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.hover?.notifyScrolled()
+            }
+            hoverObservers.append(token)
+        }
+
+        let selectionToken = nc.addObserver(
+            forName: NSTextView.didChangeSelectionNotification,
+            object: textView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.hover?.notifyCaretChanged()
+        }
+        hoverObservers.append(selectionToken)
+
+        // Subscribe with object: nil because attach(...) runs from
+        // makeNSView before the text view is inserted into a window, so
+        // textView.window is often nil here and never gets retried. The
+        // handler filters to the text view's current window at fire time.
+        let resizeToken = nc.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let window = note.object as? NSWindow,
+                  window === self.textView?.window else { return }
+            self.hover?.notifyWindowResized()
+        }
+        hoverObservers.append(resizeToken)
+
+        textView.escapeHandler = { [weak self] in
+            self?.hover?.handleEscape() ?? false
+        }
+    }
+
+    private func clearHoverObservers() {
+        let nc = NotificationCenter.default
+        for token in hoverObservers {
+            nc.removeObserver(token)
+        }
+        hoverObservers.removeAll()
+        textView?.escapeHandler = nil
     }
 
     // MARK: - Edit propagation (highlight + didChange debouncer)

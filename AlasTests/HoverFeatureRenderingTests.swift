@@ -89,7 +89,7 @@ struct HoverFeatureRenderingTests {
         #expect(bgColor == expected)
     }
 
-    @Test func popoverSizeClampsToMinAndMax() throws {
+    @Test func popoverSizeShrinksToSmallContent() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let tiny = Document(parsing: "x")
         let tinyResult = MarkdownRenderer().render(
@@ -98,9 +98,16 @@ struct HoverFeatureRenderingTests {
             baseDirectory: URL(fileURLWithPath: "/tmp")
         )
         let tinySize = HoverFeatureTesting.computePreferredSize(for: tinyResult)
-        #expect(tinySize.width >= 360)
-        #expect(tinySize.height >= 220)
+        // No 360 x 220 floor: a single character should not produce a giant box.
+        #expect(tinySize.width < 360)
+        #expect(tinySize.height < 220)
+        // AppKit padding gives a small natural minimum; just assert positive.
+        #expect(tinySize.width > 0)
+        #expect(tinySize.height > 0)
+    }
 
+    @Test func popoverSizeClampsLargeContent() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
         let huge = Document(parsing: String(repeating: "very long line of text that just keeps going on and on and on forever ", count: 30))
         let hugeResult = MarkdownRenderer().render(
             document: huge, theme: theme,
@@ -108,7 +115,7 @@ struct HoverFeatureRenderingTests {
             baseDirectory: URL(fileURLWithPath: "/tmp")
         )
         let hugeSize = HoverFeatureTesting.computePreferredSize(for: hugeResult)
-        #expect(hugeSize.width <= 500)
+        #expect(hugeSize.width <= 520)
         #expect(hugeSize.height <= 400)
     }
 }

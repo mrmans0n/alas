@@ -4,9 +4,9 @@ import Testing
 
 @MainActor
 @Suite(.serialized)
-struct CompletionWindowControllerTests {
+struct HoverWindowControllerTests {
     @Test func isVisibleStartsFalse() {
-        let controller = CompletionWindowController()
+        let controller = HoverWindowController()
         #expect(controller.isVisible == false)
     }
 }
