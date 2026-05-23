@@ -3,6 +3,7 @@ import SwiftUI
 struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     @Binding var sidebarWidth: Double
     @Binding var rightWidth: Double
+    let sidebarVisible: Bool
     let rightVisible: Bool
     let onWidthsChanged: () -> Void
     @ViewBuilder let sidebar: () -> Sidebar
@@ -22,6 +23,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 availableWidth: Double(proxy.size.width),
                 preferredSidebarWidth: sidebarWidth,
                 preferredRightWidth: rightWidth,
+                sidebarPreferredVisible: sidebarVisible,
                 rightPreferredVisible: rightVisible,
                 configuration: ThreePaneSizing.Configuration(
                     sidebarMin: sidebarMin,
@@ -34,15 +36,17 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
             )
 
             HStack(spacing: 0) {
-                sidebar()
-                    .frame(width: CGFloat(sizing.sidebarWidth))
-                    .frame(maxHeight: .infinity)
-                DragHandle(axis: .horizontal) { delta in
-                    sidebarWidth = DragHandle.clamp(
-                        value: sidebarWidth + Double(delta),
-                        min: sidebarMin, max: sidebarMax
-                    )
-                    onWidthsChanged()
+                if sizing.sidebarVisible {
+                    sidebar()
+                        .frame(width: CGFloat(sizing.sidebarWidth))
+                        .frame(maxHeight: .infinity)
+                    DragHandle(axis: .horizontal) { delta in
+                        sidebarWidth = DragHandle.clamp(
+                            value: sidebarWidth + Double(delta),
+                            min: sidebarMin, max: sidebarMax
+                        )
+                        onWidthsChanged()
+                    }
                 }
                 center()
                     .frame(width: CGFloat(sizing.centerWidth))

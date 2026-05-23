@@ -30,6 +30,7 @@ struct RootView: View {
                             get: { state.config.rightPaneWidth },
                             set: { state.config.rightPaneWidth = $0 }
                         ),
+                        sidebarVisible: state.config.sidebarVisible,
                         rightVisible: state.config.rightPaneVisible,
                         onWidthsChanged: { state.saveConfig() },
                         sidebar: {
@@ -47,6 +48,10 @@ struct RootView: View {
                                 onNewWorktree: { projectId in
                                     newWorktreePresetProjectId = projectId
                                     showNewWorktree = true
+                                },
+                                onHideSidebar: {
+                                    state.config.sidebarVisible = false
+                                    state.saveConfig()
                                 }
                             )
                         },
@@ -310,7 +315,11 @@ private struct RootBaseHandlers: ViewModifier {
     let openSettings: () -> Void
 
     func body(content: Content) -> some View {
-        let a = content
+        let aSidebar = content
+            .onReceive(NotificationCenter.default.publisher(for: .alasToggleSidebar)) { _ in
+                state.toggleSidebarVisibility()
+            }
+        let a = aSidebar
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
                 state.toggleRightPaneVisibility()
             }
@@ -462,6 +471,7 @@ private struct RootPaneHandlers: ViewModifier {
 }
 
 extension Notification.Name {
+    static let alasToggleSidebar     = Notification.Name("AlasToggleSidebar")
     static let alasToggleRightPane   = Notification.Name("AlasToggleRightPane")
     static let alasCreateProject     = Notification.Name("AlasCreateProject")
     static let alasNewWorktree       = Notification.Name("AlasNewWorktree")

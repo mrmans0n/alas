@@ -15,7 +15,8 @@ struct SidebarHeaderViewTests {
         let view = SidebarHeaderView(
             onSettings: {},
             onAddProject: {},
-            onSearch: {}
+            onSearch: {},
+            onHideSidebar: {}
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)

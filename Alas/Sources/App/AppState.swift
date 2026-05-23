@@ -309,6 +309,11 @@ final class AppState {
         _ = saveConfig()
     }
 
+    func toggleSidebarVisibility() {
+        config.sidebarVisible.toggle()
+        _ = saveConfig()
+    }
+
     /// Tear down tabs, terminals, harness state, and editor buffers for any
     /// worktree IDs that existed in `beforeIds` but are absent after a refresh.
     /// Also re-points selection if the selected worktree was removed.

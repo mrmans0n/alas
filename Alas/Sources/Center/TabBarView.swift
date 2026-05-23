@@ -20,6 +20,8 @@ struct TabBarView: View {
     let onLaunchAgent: (String) -> Void
     let onRevealRightSidebar: () -> Void
     let rightSidebarHidden: Bool
+    let onRevealSidebar: () -> Void
+    let sidebarHidden: Bool
     let onMove: (TabID, TabID) -> Void
     @Environment(\.theme) var theme
 
@@ -31,6 +33,13 @@ struct TabBarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            if sidebarHidden {
+                TrafficLights()
+                    .padding(.leading, 12)
+                    .padding(.trailing, 10)
+                ToolbarIconButton(iconName: "sidebar.left", tooltip: "Show sidebar", action: onRevealSidebar)
+                    .padding(.trailing, 8)
+            }
             ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
                 TabButton(
                     tab: tab,
@@ -98,6 +107,7 @@ struct TabBarView: View {
         .frame(height: 34)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .windowDragHandle()
     }
 }
 

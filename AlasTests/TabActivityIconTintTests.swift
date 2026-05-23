@@ -70,6 +70,8 @@ struct TabActivityIconTintTests {
             onLaunchAgent: { _ in },
             onRevealRightSidebar: { },
             rightSidebarHidden: false,
+            onRevealSidebar: { },
+            sidebarHidden: false,
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())

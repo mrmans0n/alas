@@ -14,6 +14,7 @@ enum ThreePaneSizing {
         var sidebarWidth: Double
         var centerWidth: Double
         var rightWidth: Double
+        var sidebarVisible: Bool
         var rightVisible: Bool
     }
 
@@ -21,6 +22,7 @@ enum ThreePaneSizing {
         availableWidth rawAvailableWidth: Double,
         preferredSidebarWidth rawPreferredSidebarWidth: Double,
         preferredRightWidth rawPreferredRightWidth: Double,
+        sidebarPreferredVisible: Bool,
         rightPreferredVisible: Bool,
         configuration: Configuration
     ) -> Result {
@@ -42,6 +44,17 @@ enum ThreePaneSizing {
             min: rightMin,
             max: rightMax
         )
+
+        guard sidebarPreferredVisible else {
+            return calculateCenterRight(
+                availableWidth: availableWidth,
+                preferredRightWidth: preferredRightWidth,
+                rightPreferredVisible: rightPreferredVisible,
+                rightMin: rightMin,
+                centerMin: centerMin,
+                dividerWidth: dividerWidth
+            )
+        }
 
         guard rightPreferredVisible else {
             return calculateTwoPane(
@@ -75,6 +88,7 @@ enum ThreePaneSizing {
                 sidebarWidth: preferredSidebarWidth,
                 centerWidth: max(0, preferredCenterWidth),
                 rightWidth: preferredRightWidth,
+                sidebarVisible: true,
                 rightVisible: true
             )
         }
@@ -119,6 +133,7 @@ enum ThreePaneSizing {
             sidebarWidth: sidebarWidth,
             centerWidth: centerWidth,
             rightWidth: rightWidth,
+            sidebarVisible: true,
             rightVisible: true
         )
     }
@@ -153,7 +168,56 @@ enum ThreePaneSizing {
             sidebarWidth: clampedSidebarWidth,
             centerWidth: max(0, usableWidth - clampedSidebarWidth),
             rightWidth: 0,
+            sidebarVisible: true,
             rightVisible: false
+        )
+    }
+
+    private static func calculateCenterRight(
+        availableWidth: Double,
+        preferredRightWidth: Double,
+        rightPreferredVisible: Bool,
+        rightMin: Double,
+        centerMin: Double,
+        dividerWidth: Double
+    ) -> Result {
+        guard rightPreferredVisible else {
+            return Result(
+                sidebarWidth: 0,
+                centerWidth: availableWidth,
+                rightWidth: 0,
+                sidebarVisible: false,
+                rightVisible: false
+            )
+        }
+
+        let usableWidth = max(0, availableWidth - dividerWidth)
+
+        // Unlike calculateTwoPane, the right pane is optional: collapse it entirely
+        // rather than proportionally shrinking both panes below their minimums.
+        guard usableWidth >= centerMin + rightMin else {
+            return Result(
+                sidebarWidth: 0,
+                centerWidth: availableWidth,
+                rightWidth: 0,
+                sidebarVisible: false,
+                rightVisible: false
+            )
+        }
+
+        let rightWidth: Double
+        if usableWidth >= preferredRightWidth + centerMin {
+            rightWidth = preferredRightWidth
+        } else {
+            rightWidth = max(rightMin, usableWidth - centerMin)
+        }
+        let centerWidth = max(0, usableWidth - rightWidth)
+        return Result(
+            sidebarWidth: 0,
+            centerWidth: centerWidth,
+            rightWidth: rightWidth,
+            sidebarVisible: false,
+            rightVisible: true
         )
     }
 

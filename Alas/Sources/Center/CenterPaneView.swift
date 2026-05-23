@@ -63,6 +63,11 @@ struct CenterPaneView: View {
                     state.saveConfig()
                 },
                 rightSidebarHidden: !state.config.rightPaneVisible,
+                onRevealSidebar: {
+                    state.config.sidebarVisible = true
+                    state.saveConfig()
+                },
+                sidebarHidden: !state.config.sidebarVisible,
                 onMove: { draggedId, destinationId in
                     state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
                 }
