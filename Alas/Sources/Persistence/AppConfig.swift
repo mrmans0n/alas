@@ -21,6 +21,7 @@ struct AppConfig: Codable, Equatable {
     var sidebarWidth: Double
     var rightPaneWidth: Double
     var rightPaneVisible: Bool
+    var sidebarVisible: Bool
     var commitDetailSplitRatio: Double
     var general: General
     var worktrees: Worktrees
@@ -162,6 +163,7 @@ struct AppConfig: Codable, Equatable {
         sidebarWidth: 244,
         rightPaneWidth: 320,
         rightPaneVisible: true,
+        sidebarVisible: true,
         commitDetailSplitRatio: 0.32,
         general: General(
             launchAtLogin: false, closeToTray: true, confirmQuit: true,
@@ -245,7 +247,7 @@ extension AppConfig {
 extension AppConfig {
     enum CodingKeys: String, CodingKey {
         case themeId, accent, density, matchSystemTheme,
-             sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible,
+             sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible, sidebarVisible,
              commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown, changes,
              agents,
@@ -271,6 +273,7 @@ extension AppConfig {
         sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)
         rightPaneWidth = try c.decode(Double.self, forKey: .rightPaneWidth)
         rightPaneVisible = try c.decode(Bool.self, forKey: .rightPaneVisible)
+        sidebarVisible = (try? c.decode(Bool.self, forKey: .sidebarVisible)) ?? true
         commitDetailSplitRatio = (try? c.decode(Double.self, forKey: .commitDetailSplitRatio)) ?? 0.32
         general = try c.decode(General.self, forKey: .general)
         worktrees = try c.decode(Worktrees.self, forKey: .worktrees)
