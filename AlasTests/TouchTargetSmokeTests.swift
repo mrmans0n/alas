@@ -61,6 +61,8 @@ struct TouchTargetSmokeTests {
             onLaunchAgent: { _ in },
             onRevealRightSidebar: { },
             rightSidebarHidden: false,
+            onRevealSidebar: { },
+            sidebarHidden: false,
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())
@@ -90,6 +92,8 @@ struct TouchTargetSmokeTests {
             onLaunchAgent: { _ in },
             onRevealRightSidebar: { },
             rightSidebarHidden: false,
+            onRevealSidebar: { },
+            sidebarHidden: false,
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())
@@ -129,6 +133,8 @@ struct TouchTargetSmokeTests {
             onLaunchAgent: { _ in },
             onRevealRightSidebar: { },
             rightSidebarHidden: true,
+            onRevealSidebar: { },
+            sidebarHidden: false,
             onMove: { _, _ in }
         )
         .environment(\.theme, currentTheme())
