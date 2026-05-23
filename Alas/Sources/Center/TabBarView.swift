@@ -107,6 +107,7 @@ struct TabBarView: View {
         .frame(height: 34)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .windowDragHandle()
     }
 }
 
