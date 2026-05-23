@@ -13,7 +13,7 @@ enum ShortcutGroup: String, CaseIterable, Sendable {
 
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
-    case searchFiles, switchRepository, findAndReplace, toggleRightPane,
+    case searchFiles, switchRepository, findAndReplace, toggleSidebar, toggleRightPane,
          createProject, newWorktree, newTerminalTab, launchAgentTerminal,
          increaseFontSize, decreaseFontSize, resetFontSize
     // Code editor
@@ -25,7 +25,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
 
     var group: ShortcutGroup {
         switch self {
-        case .searchFiles, .switchRepository, .findAndReplace, .toggleRightPane,
+        case .searchFiles, .switchRepository, .findAndReplace, .toggleSidebar, .toggleRightPane,
              .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
@@ -43,6 +43,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .searchFiles:              return "Search Files"
         case .switchRepository:         return "Switch Repository"
         case .findAndReplace:           return "Find and Replace"
+        case .toggleSidebar:            return "Toggle Sidebar"
         case .toggleRightPane:          return "Toggle Right Sidebar"
         case .createProject:            return "Create Project"
         case .newWorktree:              return "New Worktree"
@@ -96,6 +97,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .searchFiles:              return .init(key: "p",          modifiers: [.command])
         case .switchRepository:         return .init(key: "k",          modifiers: [.command])
         case .findAndReplace:           return .init(key: "f",          modifiers: [.command, .option])
+        case .toggleSidebar:            return .init(key: "b",          modifiers: [.command])
         case .toggleRightPane:          return .init(key: "b",          modifiers: [.command, .option])
         case .createProject:            return .init(key: "n",          modifiers: [.command, .shift])
         case .newWorktree:              return .init(key: "n",          modifiers: [.command, .option])
