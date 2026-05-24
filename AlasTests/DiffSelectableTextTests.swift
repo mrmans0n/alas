@@ -171,19 +171,23 @@ struct Foo {
         #expect(controller.view != nil)
     }
 
-    @Test func hunkViewHostsNativeSelectableTextView() {
+    @Test func hunkViewHostsNativeSelectableTextView() throws {
         let view = HunkView(hunk: sampleHunk(), fileExtension: "swift")
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 300)
         controller.view.layoutSubtreeIfNeeded()
 
-        let textViews = allSubviews(of: controller.view).compactMap { $0 as? NSTextView }
-        #expect(textViews.contains(where: { textView in
-            textView.isSelectable &&
-            !textView.isEditable &&
-            textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk())
-        }))
+        let containerViews = allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }
+        #expect(containerViews.count == 1)
+        let containerView = try #require(containerViews.first)
+
+        let textViews = allSubviews(of: containerView).compactMap { $0 as? NSTextView }
+        #expect(textViews.count == 1)
+        let textView = try #require(textViews.first)
+        #expect(textView.isSelectable)
+        #expect(!textView.isEditable)
+        #expect(textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
     }
 
     @Test func hunkViewWithActionsRendersWithoutCrashing() {
