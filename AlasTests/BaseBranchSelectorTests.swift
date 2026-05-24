@@ -2,6 +2,16 @@ import Testing
 @testable import Alas
 
 struct BaseBranchSelectorTests {
+    @Test func isSelectedUsesCurrentRefWhenAvailable() {
+        #expect(BaseBranchSelector.isSelected(row: "origin/feature", baseBranch: "main", currentRef: "origin/feature"))
+        #expect(!BaseBranchSelector.isSelected(row: "main", baseBranch: "main", currentRef: "origin/feature"))
+    }
+
+    @Test func isSelectedFallsBackToBaseBranch() {
+        #expect(BaseBranchSelector.isSelected(row: "main", baseBranch: "main", currentRef: nil))
+        #expect(!BaseBranchSelector.isSelected(row: "origin/feature", baseBranch: "main", currentRef: nil))
+    }
+
     @Test func smartListOrdersMainlinesFirst() {
         let branches = ["feature/x", "main", "origin/main", "develop"]
         let result = BaseBranchSelector.smartList(

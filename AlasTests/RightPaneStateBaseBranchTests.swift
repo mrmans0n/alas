@@ -91,6 +91,18 @@ struct RightPaneStateBaseBranchTests {
         #expect(state.recentBaseBranches == ["develop", "trunk"])
     }
 
+    @Test func selectBaseBranchClearsBehindBase() async throws {
+        let tmp = try await createTestRepoWithBranches()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let wt = makeWorktree(at: tmp, branch: "feature")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.behindBase = GitService.BehindStatus(ref: "origin/main", sha: "abc", count: 2, probedAt: Date())
+
+        state.selectBaseBranch("develop")
+
+        #expect(state.behindBase == nil)
+    }
+
     @Test func selectBaseBranchTriggersRefresh() async throws {
         let tmp = try await createTestRepoWithBranches()
         defer { try? FileManager.default.removeItem(at: tmp) }

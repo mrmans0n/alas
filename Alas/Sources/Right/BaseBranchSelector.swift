@@ -73,7 +73,7 @@ struct BaseBranchSelector: View {
                 Image(systemName: "checkmark")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
-                    .opacity(name == baseBranch ? 1 : 0)
+                    .opacity(Self.isSelected(row: name, baseBranch: baseBranch, currentRef: currentRef) ? 1 : 0)
                 Text(name)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(theme.color("fg"))
@@ -90,6 +90,10 @@ struct BaseBranchSelector: View {
 }
 
 extension BaseBranchSelector {
+    static func isSelected(row name: String, baseBranch: String, currentRef: String?) -> Bool {
+        name == (currentRef ?? baseBranch)
+    }
+
     static func smartList(
         branches: [String],
         currentRef: String?,

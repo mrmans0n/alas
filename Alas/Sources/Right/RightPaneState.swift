@@ -169,6 +169,7 @@ final class RightPaneState {
     func selectBaseBranch(_ branch: String) {
         baseBranch = branch
         userOverrodeBaseBranch = true
+        behindBase = nil
         recentBaseBranches.removeAll { $0 == branch }
         recentBaseBranches.append(branch)
         if recentBaseBranches.count > 3 {
