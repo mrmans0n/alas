@@ -109,6 +109,40 @@ struct ProjectsManagerProjectOrderingTests {
         #expect(mgr.projects.map(\.id) == ["B", "C", "D", "A"])
     }
 
+    // MARK: - moveProjectToEnd(id:)
+
+    @Test func moveToEndMovesFirstProjectToEnd() {
+        let mgr = ProjectsManager(persistedProjects: makeProjects(["A", "B", "C"]))
+
+        mgr.moveProjectToEnd(id: "A")
+
+        #expect(mgr.projects.map(\.id) == ["B", "C", "A"])
+    }
+
+    @Test func moveToEndMovesMiddleProjectToEnd() {
+        let mgr = ProjectsManager(persistedProjects: makeProjects(["A", "B", "C", "D"]))
+
+        mgr.moveProjectToEnd(id: "B")
+
+        #expect(mgr.projects.map(\.id) == ["A", "C", "D", "B"])
+    }
+
+    @Test func moveToEndAlreadyLastIsNoOp() {
+        let mgr = ProjectsManager(persistedProjects: makeProjects(["A", "B", "C"]))
+
+        mgr.moveProjectToEnd(id: "C")
+
+        #expect(mgr.projects.map(\.id) == ["A", "B", "C"])
+    }
+
+    @Test func moveToEndUnknownIdIsNoOp() {
+        let mgr = ProjectsManager(persistedProjects: makeProjects(["A", "B"]))
+
+        mgr.moveProjectToEnd(id: "Z")
+
+        #expect(mgr.projects.map(\.id) == ["A", "B"])
+    }
+
     // MARK: - persistence roundtrip
 
     @Test func projectOrderIsDeterminedByArrayPosition() {

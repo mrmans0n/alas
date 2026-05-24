@@ -132,6 +132,15 @@ struct SidebarView: View {
                                 }
                             )
                         }
+                        Color.clear
+                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .contentShape(Rectangle())
+                            .dropDestination(for: ProjectDragId.self) { items, _ in
+                                guard let draggedId = items.first?.id else { return false }
+                                state.projectsManager.moveProjectToEnd(id: draggedId)
+                                state.saveProjects()
+                                return true
+                            }
                     }
                     .padding(.top, 8)
                 }
