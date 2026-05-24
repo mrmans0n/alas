@@ -161,6 +161,7 @@ final class RightPaneState {
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
+            _ = await mergeRefresh
             self.changes = entries
             self.fileTree = tree
             self.commits = commits
@@ -196,7 +197,6 @@ final class RightPaneState {
                 }
                 didInitDefaultTab = true
             }
-            _ = await mergeRefresh
         } catch {
             // Surface failures via os.Logger so they're visible in Console.app
             // and the unified log. The previous `print` here silently kept
