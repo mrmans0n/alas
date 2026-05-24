@@ -89,7 +89,7 @@ struct DiffTabView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(theme.color("bg-2"))
             }
-            ScrollView([.horizontal, .vertical]) {
+            ScrollView(.vertical) {
                 if !loaded {
                     ProgressView().padding()
                 } else if diff.hunks.isEmpty {
@@ -111,7 +111,9 @@ struct DiffTabView: View {
                     .padding(.vertical, 8)
                 }
             }
+            .defaultScrollAnchor(.topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
         .task(id: loadKey) { await load() }
         .alert(
@@ -325,6 +327,7 @@ struct HunkView: View {
     var onStage:   (() -> Void)? = nil
     var onDiscard: (() -> Void)? = nil
     @Environment(\.theme) var theme
+    @State private var bodyViewportWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -341,19 +344,42 @@ struct HunkView: View {
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.color("bg-2"))
             .overlay(Divider().opacity(0.5), alignment: .top)
             .overlay(Divider().opacity(0.5), alignment: .bottom)
-            DiffSelectableTextView(
-                hunk: hunk,
-                fileExtension: fileExtension,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                theme: theme
+            ScrollView(.horizontal) {
+                DiffSelectableTextView(
+                    hunk: hunk,
+                    fileExtension: fileExtension,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    theme: theme
+                )
+                .frame(minWidth: bodyViewportWidth, alignment: .leading)
+            }
+            .defaultScrollAnchor(.topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: HunkBodyViewportWidthPreferenceKey.self, value: proxy.size.width)
+                }
             )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onPreferenceChange(HunkBodyViewportWidthPreferenceKey.self) { width in
+            bodyViewportWidth = width
         }
     }
 
     /// The hunk header (@@…@@) is rendered slightly smaller than diff content.
     private var headerFontSize: CGFloat { (codeFontSize * 0.85).rounded() }
+}
+
+private struct HunkBodyViewportWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }

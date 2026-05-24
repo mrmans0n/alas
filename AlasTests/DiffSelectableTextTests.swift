@@ -147,6 +147,16 @@ struct Foo {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
 
+    private func ancestorSubviews(of view: NSView) -> [NSView] {
+        var result: [NSView] = []
+        var current = view.superview
+        while let view = current {
+            result.append(view)
+            current = view.superview
+        }
+        return result
+    }
+
     private func measuredLineFragmentHeight(in textView: NSTextView) throws -> CGFloat {
         let layoutManager = try #require(textView.layoutManager)
         let textContainer = try #require(textView.textContainer)
@@ -189,6 +199,52 @@ struct Foo {
         #expect(textView.isSelectable)
         #expect(!textView.isEditable)
         #expect(textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
+    }
+
+    @Test func hunkHeaderActionsRemainInViewportForLongLines() throws {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,1 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(
+                    kind: .add,
+                    text: String(repeating: "let value = veryLongExpression + ", count: 80),
+                    oldNumber: nil,
+                    newNumber: 1
+                ),
+            ]
+        )
+        let view = HunkView(
+            hunk: hunk,
+            fileExtension: "swift",
+            onStage: {},
+            onDiscard: {}
+        )
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 180)
+        controller.view.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let container = try #require(
+            allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }.first
+        )
+        #expect(ancestorSubviews(of: container).contains { $0 is NSScrollView })
+    }
+
+    @Test func hunkBodyFillsViewportForShortLines() throws {
+        let view = HunkView(hunk: sampleHunk(), fileExtension: "swift")
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 180)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let container = try #require(
+            allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }.first
+        )
+        #expect(container.bounds.width >= 490)
     }
 
     @Test func hunkViewWithActionsRendersWithoutCrashing() {
@@ -240,6 +296,34 @@ struct Foo {
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
+    }
+
+    @Test func commitDiffViewPinsShortDiffToTopOfViewport() throws {
+        let diff = ParsedDiff(hunks: [sampleHunk()])
+        let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp"),
+            sha: "abc1234",
+            file: sampleFile(),
+            path: "Sources/App.swift",
+            diff: diff,
+            loading: false,
+            error: nil,
+            onOpenFile: nil
+        )
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let container = try #require(
+            allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }.first
+        )
+        let containerRect = container.convert(container.bounds, to: controller.view)
+        let distanceFromTop = controller.view.isFlipped
+            ? containerRect.minY
+            : controller.view.bounds.maxY - containerRect.maxY
+
+        #expect(distanceFromTop < 140)
     }
 
     @Test func commitDiffViewEmptyHunksRendersWithoutCrashing() {
