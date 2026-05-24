@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct TabBarView: View {
@@ -232,7 +231,7 @@ private struct AgentSparkleMenu: View {
                             // SwiftUI frame sizing on custom icon views; it draws the
                             // backing NSImage at its native pixel size. Hand it an
                             // NSImage copy whose .size is clamped to 16pt.
-                            Image(nsImage: menuIconImage(for: agent))
+                            Image(nsImage: AgentLogoView.menuImage(for: agent))
                         }
                     }
                 }
@@ -246,18 +245,5 @@ private struct AgentSparkleMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(agents.isEmpty ? "No enabled agents" : "Launch agent")
-    }
-
-    private func menuIconImage(for agent: AgentDefinition) -> NSImage {
-        if let asset = agent.builtinLogoAssetName,
-           let source = NSImage(named: asset) {
-            let copy = source.copy() as? NSImage ?? source
-            copy.size = NSSize(width: 16, height: 16)
-            return copy
-        }
-        let fallback = NSImage(systemSymbolName: "sparkle", accessibilityDescription: nil)
-            ?? NSImage()
-        fallback.size = NSSize(width: 16, height: 16)
-        return fallback
     }
 }

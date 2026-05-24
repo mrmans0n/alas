@@ -22,3 +22,23 @@ struct AgentLogoView: View {
         }
     }
 }
+
+extension AgentLogoView {
+    /// Returns an `NSImage` copy clamped to `size`.
+    /// SwiftUI `Menu` / `Picker` (`.menu` style) renders items as `NSMenuItem`s
+    /// and ignores SwiftUI frame sizing on custom icon views, drawing the
+    /// backing `NSImage` at its native pixel size. Pass this clamped copy
+    /// to `Image(nsImage:)` so the icon appears at the intended point size.
+    static func menuImage(for agent: AgentDefinition, size: CGFloat = 16) -> NSImage {
+        if let asset = agent.builtinLogoAssetName,
+           let source = NSImage(named: asset) {
+            let copy = source.copy() as? NSImage ?? source
+            copy.size = NSSize(width: size, height: size)
+            return copy
+        }
+        let fallback = NSImage(systemSymbolName: "sparkle", accessibilityDescription: nil)
+            ?? NSImage()
+        fallback.size = NSSize(width: size, height: size)
+        return fallback
+    }
+}

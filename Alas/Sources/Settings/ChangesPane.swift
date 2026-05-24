@@ -52,7 +52,7 @@ struct ChangesPane: View {
                 Label {
                     Text(agent.displayName)
                 } icon: {
-                    AgentLogoView(agent: agent, size: 14)
+                    Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
                 }
                 .tag(agent.id)
             }
