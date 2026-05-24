@@ -25,12 +25,16 @@ final class RightPaneStore {
             // change, leave the state's baseBranch alone so a user-picked
             // override survives across renders.
             if existing.lastConfigBaseBranch != baseBranch {
+                let clearedUserOverride = existing.userOverrodeBaseBranch
+                let baseChanged = existing.baseBranch != baseBranch
                 existing.lastConfigBaseBranch = baseBranch
                 existing.userOverrodeBaseBranch = false
-                if existing.baseBranch != baseBranch {
+                if baseChanged {
                     existing.baseBranch = baseBranch
+                }
+                if baseChanged || clearedUserOverride {
                     // Clear the prior probe so the chip doesn't show a stale
-                    // count against the OLD base while the new probe runs.
+                    // count while comparison semantics are changing.
                     existing.behindBase = nil
                     Task { @MainActor in
                         await existing.refresh()

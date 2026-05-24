@@ -138,4 +138,23 @@ struct RightPaneStateBaseBranchTests {
 
         #expect(state.comparisonRef == "origin/feature")
     }
+
+    @Test func storeRefreshesWhenConfigMatchesClearedOverride() async throws {
+        let (repo, root) = try await createTestRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let wt = makeWorktree(at: repo, branch: "feature")
+        let store = RightPaneStore()
+        let state = store.state(for: wt, baseBranch: "main")
+
+        state.selectBaseBranch("develop")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(state.baseBranch == "develop")
+        #expect(state.userOverrodeBaseBranch)
+
+        _ = store.state(for: wt, baseBranch: "develop")
+        try await Task.sleep(for: .milliseconds(600))
+
+        #expect(!state.userOverrodeBaseBranch)
+        #expect(state.comparisonRef == "origin/feature")
+    }
 }
