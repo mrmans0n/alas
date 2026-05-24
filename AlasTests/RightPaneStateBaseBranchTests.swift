@@ -35,6 +35,10 @@ struct RightPaneStateBaseBranchTests {
         try "trunk content\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "."], cwd: tmp)
         _ = try await Process.git(["commit", "-q", "-m", "trunk commit"], cwd: tmp)
+        _ = try await Process.git(["checkout", "-q", "-b", "staging"], cwd: tmp)
+        try "staging content\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "-m", "staging commit"], cwd: tmp)
         _ = try await Process.git(["checkout", "-q", "main"], cwd: tmp)
         return tmp
     }
@@ -67,16 +71,26 @@ struct RightPaneStateBaseBranchTests {
     }
 
     @Test func selectBaseBranchTriggersRefresh() async throws {
-        let tmp = try await createTestRepoWithCommits()
+        let tmp = try await createTestRepoWithBranches()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let wt = makeWorktree(at: tmp, branch: "feature")
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         await state.refresh()
-        let before = state.commits.count
-        state.selectBaseBranch("develop")
-        // After refresh, commits may differ; we just verify refresh was
-        // triggered by checking that loading eventually settles.
+        state.selectBaseBranch("trunk")
         try await Task.sleep(nanoseconds: 1_000_000_000)
         #expect(!state.loading)
+    }
+
+    @Test func selectBaseBranchCapsRecentAtThree() async throws {
+        let tmp = try await createTestRepoWithBranches()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let wt = makeWorktree(at: tmp, branch: "feature")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.selectBaseBranch("develop")
+        state.selectBaseBranch("trunk")
+        state.selectBaseBranch("staging")
+        #expect(state.recentBaseBranches == ["develop", "trunk", "staging"])
+        state.selectBaseBranch("main")
+        #expect(state.recentBaseBranches == ["trunk", "staging", "main"])
     }
 }

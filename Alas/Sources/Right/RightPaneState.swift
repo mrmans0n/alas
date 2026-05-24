@@ -156,12 +156,13 @@ final class RightPaneState {
         if !recentBaseBranches.contains(branch) {
             recentBaseBranches.append(branch)
             if recentBaseBranches.count > 3 {
-                recentBaseBranches.removeFirst(recentBaseBranches.count - 3)
+                recentBaseBranches = Array(recentBaseBranches.suffix(3))
             }
         }
         Task { @MainActor in
-            await refresh()
-            await refreshSyncStatus()
+            async let r = refresh()
+            async let s = refreshSyncStatus()
+            _ = await (r, s)
         }
     }
 
