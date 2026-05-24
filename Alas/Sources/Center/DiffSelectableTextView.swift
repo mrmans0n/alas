@@ -27,6 +27,8 @@ final class DiffSelectableTextContainerView: NSView {
 
     private let textView: NSTextView
     private var lineMetadata: [DiffSelectableTextBuilder.LineMetadata] = []
+    private var rowRects: [NSRect] = []
+    private var measuredTextHeight: CGFloat = 0
     private var theme: Theme?
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
 
@@ -99,6 +101,7 @@ final class DiffSelectableTextContainerView: NSView {
         )
         lineMetadata = result.lines
         textView.textStorage?.setAttributedString(result.attributedString)
+        updateMeasuredRowGeometry()
         needsDisplay = true
         invalidateIntrinsicContentSize()
         needsLayout = true
@@ -111,7 +114,7 @@ final class DiffSelectableTextContainerView: NSView {
             x: textX,
             y: verticalInset,
             width: max(0, bounds.width - textX - horizontalPadding),
-            height: max(0, CGFloat(lineMetadata.count) * rowHeight)
+            height: measuredTextHeight
         )
         textView.textContainer?.containerSize = NSSize(
             width: Self.unwrappedTextContainerWidth,
@@ -123,11 +126,13 @@ final class DiffSelectableTextContainerView: NSView {
         super.draw(dirtyRect)
         guard let theme else { return }
         for (index, line) in lineMetadata.enumerated() {
+            guard rowRects.indices.contains(index) else { continue }
+            let measuredRect = rowRects[index]
             let rect = NSRect(
                 x: 0,
-                y: verticalInset + CGFloat(index) * rowHeight,
+                y: verticalInset + measuredRect.minY,
                 width: bounds.width,
-                height: rowHeight
+                height: measuredRect.height
             )
             rowBackgroundColor(for: line.kind, theme: theme).setFill()
             rect.fill()
@@ -135,17 +140,64 @@ final class DiffSelectableTextContainerView: NSView {
         }
     }
 
-    private var lineHeight: CGFloat {
-        (font.ascender - font.descender + font.leading) * CenterTypography.lineHeightMultiple
-    }
-
-    private var rowHeight: CGFloat {
-        ceil(lineHeight)
-    }
-
     private var totalHeight: CGFloat {
         guard !lineMetadata.isEmpty else { return 0 }
-        return CGFloat(lineMetadata.count) * rowHeight + verticalInset * 2
+        return measuredTextHeight + verticalInset * 2
+    }
+
+    private func updateMeasuredRowGeometry() {
+        guard
+            !lineMetadata.isEmpty,
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else {
+            rowRects = []
+            measuredTextHeight = 0
+            return
+        }
+
+        textContainer.containerSize = NSSize(
+            width: Self.unwrappedTextContainerWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        layoutManager.ensureLayout(for: textContainer)
+
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var measuredRows: [NSRect] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
+            measuredRows.append(lineFragmentRect)
+        }
+
+        while measuredRows.count < lineMetadata.count {
+            measuredRows.append(measuredTrailingRowRect(after: measuredRows, layoutManager: layoutManager))
+        }
+
+        rowRects = Array(measuredRows.prefix(lineMetadata.count))
+        measuredTextHeight = rowRects.last?.maxY ?? 0
+    }
+
+    private func measuredTrailingRowRect(after measuredRows: [NSRect], layoutManager: NSLayoutManager) -> NSRect {
+        let extraLineRect = layoutManager.extraLineFragmentRect
+        let rowHeight: CGFloat
+        let width: CGFloat
+
+        if extraLineRect.height > 0 {
+            rowHeight = extraLineRect.height
+            width = extraLineRect.width
+        } else if let previousRow = measuredRows.last {
+            rowHeight = previousRow.height
+            width = previousRow.width
+        } else {
+            rowHeight = layoutManager.defaultLineHeight(for: font)
+            width = Self.unwrappedTextContainerWidth
+        }
+
+        return NSRect(
+            x: 0,
+            y: measuredRows.last?.maxY ?? 0,
+            width: width,
+            height: rowHeight
+        )
     }
 
     private func drawMarker(
@@ -165,7 +217,7 @@ final class DiffSelectableTextContainerView: NSView {
             x: horizontalPadding,
             y: rowRect.minY,
             width: gutterWidth,
-            height: lineHeight
+            height: rowRect.height
         )
         (marker as NSString).draw(in: markerRect, withAttributes: attributes)
     }

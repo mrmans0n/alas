@@ -92,7 +92,7 @@ struct Foo {
         #expect(textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
     }
 
-    @Test func diffSelectableTextViewUsesNativeLineHeightForRows() {
+    @Test func diffSelectableTextViewUsesMeasuredAppKitLineFragmentsForRows() throws {
         let font = CenterTypography.resolveCodeFont(family: "", size: 13)
         let container = DiffSelectableTextContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 300))
         container.update(
@@ -101,10 +101,14 @@ struct Foo {
             font: font,
             theme: currentTheme()
         )
+        container.layoutSubtreeIfNeeded()
 
-        let lineHeight = ceil((font.ascender - font.descender + font.leading) * CenterTypography.lineHeightMultiple)
-        let expectedHeight = CGFloat(sampleHunk().lines.count) * lineHeight + CenterTypography.rowVerticalPadding * 2
-        #expect(container.intrinsicContentSize.height == expectedHeight)
+        let textView = try #require(allSubviews(of: container).compactMap { $0 as? NSTextView }.first)
+        let measuredTextHeight = try measuredLineFragmentHeight(in: textView)
+        let expectedHeight = measuredTextHeight + CenterTypography.rowVerticalPadding * 2
+
+        #expect(abs(textView.frame.height - measuredTextHeight) < 0.001)
+        #expect(abs(container.intrinsicContentSize.height - expectedHeight) < 0.001)
     }
 
     @Test func diffSelectableTextViewDisablesLongLineWrapping() throws {
@@ -140,6 +144,21 @@ struct Foo {
 
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func measuredLineFragmentHeight(in textView: NSTextView) throws -> CGFloat {
+        let layoutManager = try #require(textView.layoutManager)
+        let textContainer = try #require(textView.textContainer)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var measuredRect = NSRect.null
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
+            measuredRect = measuredRect.union(lineFragmentRect)
+        }
+
+        #expect(!measuredRect.isNull)
+        return measuredRect.height
     }
 
     // MARK: HunkView standalone
