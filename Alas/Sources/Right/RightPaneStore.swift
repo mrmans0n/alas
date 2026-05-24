@@ -48,6 +48,27 @@ final class RightPaneStore {
                     }
                 }
             }
+            new.openConflict = { [weak self] path in
+                guard let app = self?.appState else { return }
+                // Plan 1 fallback: route conflicted files through the same unified
+                // diff view used elsewhere. Plan 2 will replace this with the new
+                // three-column merge editor.
+                let existing = app.tabs.tabs(forWorktree: id).first { tab in
+                    if case .diff(let s) = tab { return s.relativePath == path && s.staged == false } else { return false }
+                }
+                if let existing {
+                    app.tabs.activate(worktreeId: id, tabId: existing.id)
+                } else {
+                    let title = (path as NSString).lastPathComponent
+                    let tab = app.tabs.appendDiff(
+                        worktreeId: id,
+                        title: title,
+                        relativePath: path,
+                        staged: false
+                    )
+                    app.tabs.activate(worktreeId: id, tabId: tab.id)
+                }
+            }
             states[id] = new
             result = new
         }
