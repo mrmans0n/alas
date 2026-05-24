@@ -167,4 +167,20 @@ struct CommitsAheadTests {
         #expect(comparisonRef == "origin/main")
         #expect(commits.count == 1)
     }
+
+    @Test func ignoreUpstreamSkipsUpstreamResolution() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        try "1\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feat: ahead"], cwd: worktree)
+
+        let svc = GitService()
+        // With upstream resolution (default), upstream wins.
+        let (_, refDefault) = try await svc.commitsAhead(at: worktree, baseBranch: "nonexistent")
+        #expect(refDefault == "origin/main")
+
+        // With ignoreUpstream, upstream is skipped; nonexistent base returns nil.
+        let (_, refIgnored) = try await svc.commitsAhead(at: worktree, baseBranch: "nonexistent", ignoreUpstream: true)
+        #expect(refIgnored == nil)
+    }
 }

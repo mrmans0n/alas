@@ -775,19 +775,21 @@ extension GitService {
     ///
     /// One `git log` invocation parses subject + author + ISO date +
     /// per-commit numstat in a single pass to avoid N round-trips.
-    func commitsAhead(at worktree: URL, baseBranch: String? = nil) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
+    func commitsAhead(at worktree: URL, baseBranch: String? = nil, ignoreUpstream: Bool = false) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
         // Step 1: Resolve upstream first. `--symbolic-full-name @{u}` returns
         // `refs/remotes/origin/main`; `--abbrev-ref @{u}` returns
         // `origin/main`. Use the abbreviated form for display.
-        let up = try await Process.git(
-            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd: worktree
-        )
         var upstreamName: String? = nil
-        if up.exitCode == 0 {
-            let candidate = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !candidate.isEmpty && candidate != "@{u}" {
-                upstreamName = candidate
+        if !ignoreUpstream {
+            let up = try await Process.git(
+                ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                cwd: worktree
+            )
+            if up.exitCode == 0 {
+                let candidate = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty && candidate != "@{u}" {
+                    upstreamName = candidate
+                }
             }
         }
 
