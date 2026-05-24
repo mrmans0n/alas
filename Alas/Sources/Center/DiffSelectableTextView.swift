@@ -169,18 +169,24 @@ final class DiffSelectableTextContainerView: NSView {
         )
         layoutManager.ensureLayout(for: textContainer)
 
-        let glyphRange = layoutManager.glyphRange(for: textContainer)
         var measuredRows: [NSRect] = []
-        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
-            measuredRows.append(lineFragmentRect)
+        for line in lineMetadata {
+            var measuredRow = NSRect.null
+            if line.range.length > 0 {
+                let glyphRange = layoutManager.glyphRange(forCharacterRange: line.range, actualCharacterRange: nil)
+                layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
+                    measuredRow = measuredRow.union(lineFragmentRect)
+                }
+            }
+            measuredRows.append(
+                measuredRow.isNull
+                    ? measuredTrailingRowRect(after: measuredRows, layoutManager: layoutManager)
+                    : measuredRow
+            )
         }
 
-        while measuredRows.count < lineMetadata.count {
-            measuredRows.append(measuredTrailingRowRect(after: measuredRows, layoutManager: layoutManager))
-        }
-
-        rowRects = Array(measuredRows.prefix(lineMetadata.count))
-        measuredTextHeight = rowRects.last?.maxY ?? 0
+        rowRects = measuredRows
+        measuredTextHeight = rowRects.map(\.maxY).max() ?? 0
         measuredTextWidth = ceil(layoutManager.usedRect(for: textContainer).width)
     }
 

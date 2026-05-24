@@ -143,6 +143,39 @@ struct Foo {
         #expect(textView.frame.width > container.frame.width)
     }
 
+    @Test func diffSelectableTextViewPreservesWrappedFragmentHeightForHugeLine() throws {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,1 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(
+                    kind: .add,
+                    text: String(repeating: "x", count: 160_000),
+                    oldNumber: nil,
+                    newNumber: 1
+                ),
+            ]
+        )
+        let container = DiffSelectableTextContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 300))
+        container.update(
+            hunk: hunk,
+            fileExtension: "txt",
+            font: font,
+            theme: currentTheme()
+        )
+        container.layoutSubtreeIfNeeded()
+
+        let textView = try #require(allSubviews(of: container).compactMap { $0 as? NSTextView }.first)
+        let measuredTextHeight = try measuredLineFragmentHeight(in: textView)
+        let expectedHeight = measuredTextHeight + CenterTypography.rowVerticalPadding * 2
+
+        #expect(measuredTextHeight > layoutManagerLineHeight(font: font))
+        #expect(abs(textView.frame.height - measuredTextHeight) < 0.001)
+        #expect(abs(container.intrinsicContentSize.height - expectedHeight) < 0.001)
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
@@ -170,6 +203,10 @@ struct Foo {
 
         #expect(!measuredRect.isNull)
         return measuredRect.height
+    }
+
+    private func layoutManagerLineHeight(font: NSFont) -> CGFloat {
+        NSLayoutManager().defaultLineHeight(for: font)
     }
 
     // MARK: HunkView standalone
