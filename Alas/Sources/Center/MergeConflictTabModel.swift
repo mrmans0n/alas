@@ -18,9 +18,11 @@ final class MergeConflictTabModel {
     var resultText: String = ""
     /// Set when `load()` fails. Cleared on successful (re)load.
     private(set) var loadError: String?
-    /// Per-conflict-ordinal one-line annotation populated by the agent.
-    /// Cached for the lifetime of the model (cleared on `load()`).
-    private(set) var annotations: [Int: String] = [:]
+    /// Per-conflict-block one-line annotation populated by the agent.
+    /// Keyed by a stable identity derived from the conflict's three sides
+    /// (NOT by ordinal — ordinals shift when prior conflicts are resolved).
+    /// Cleared on `load()`.
+    private(set) var annotations: [String: String] = [:]
     /// Conflict count at the moment `load()` last succeeded. Used by the
     /// minimap to show progress (resolved vs total). Cleared (set to 0)
     /// on `load()` failure.
@@ -234,10 +236,23 @@ final class MergeConflictTabModel {
         )
     }
 
-    /// Records a one-line agent annotation for the conflict at `ordinal`.
-    /// Called by `MergeConflictTabView` after a successful `MergeAgent.explainConflict` round-trip.
-    func setAnnotation(_ text: String, forConflictOrdinal ordinal: Int) {
-        annotations[ordinal] = text
+    /// Deterministic stable identity for a `ConflictBlock`. Used as the key
+    /// for `annotations` so cached explanations follow the block when other
+    /// conflicts get resolved and the ordinal numbering shifts.
+    static func annotationKey(for block: ConflictBlock) -> String {
+        "\(block.local)\n<<<<<<<<\n\(block.base ?? "")\n========\n\(block.remote)"
+    }
+
+    /// Records a one-line agent annotation for `block`. Called by
+    /// `MergeConflictTabView` after a successful `MergeAgent.explainConflict`
+    /// round-trip.
+    func setAnnotation(_ text: String, for block: ConflictBlock) {
+        annotations[Self.annotationKey(for: block)] = text
+    }
+
+    /// Returns the cached annotation for `block`, or nil if not cached.
+    func annotation(for block: ConflictBlock) -> String? {
+        annotations[Self.annotationKey(for: block)]
     }
 
     // MARK: - Agent assist
@@ -257,7 +272,7 @@ final class MergeConflictTabModel {
                 language: language
             )
             if !sentence.isEmpty {
-                setAnnotation(sentence, forConflictOrdinal: ordinal)
+                setAnnotation(sentence, for: block)
             }
         } catch {
             logger.error("explain failed: \(error.localizedDescription, privacy: .public)")

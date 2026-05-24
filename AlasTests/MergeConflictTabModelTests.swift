@@ -303,8 +303,63 @@ struct MergeConflictTabModelTests {
             gitService: GitService()
         )
         #expect(model.annotations.isEmpty)
-        model.setAnnotation("LOCAL renamed; REMOTE changed default.", forConflictOrdinal: 0)
-        #expect(model.annotations[0] == "LOCAL renamed; REMOTE changed default.")
+        let block = ConflictBlock(
+            local: "ours\n", base: nil, remote: "theirs\n",
+            localLabel: "HEAD", remoteLabel: "feature",
+            lineRangeInMerged: 0 ... 4
+        )
+        model.setAnnotation("LOCAL renamed; REMOTE changed default.", for: block)
+        #expect(model.annotation(for: block) == "LOCAL renamed; REMOTE changed default.")
+    }
+
+    @Test func annotationKeyedByBlockContentSurvivesResolution() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        // Two conflicts with distinguishable sides.
+        model.resultText = """
+        head
+        <<<<<<< HEAD
+        a-ours
+        =======
+        a-theirs
+        >>>>>>> feature
+        middle
+        <<<<<<< HEAD
+        b-ours
+        =======
+        b-theirs
+        >>>>>>> feature
+        tail
+
+        """
+        model.reparse()
+        #expect(model.conflictCount == 2)
+
+        // Manually cache an annotation for the SECOND conflict (block "b").
+        let blocks = model.regions.compactMap { (r: ConflictRegion) -> ConflictBlock? in
+            if case .conflict(let b) = r { return b } else { return nil }
+        }
+        #expect(blocks.count == 2)
+        model.setAnnotation("about b", for: blocks[1])
+        #expect(model.annotation(for: blocks[1]) == "about b")
+
+        // Now resolve the FIRST conflict. After reparse the only remaining
+        // conflict is the "b" block, now at ordinal 0. Its annotation must
+        // still resolve to "about b" — not the empty string the OLD ordinal 1
+        // index would have produced under the old [Int: String] scheme.
+        // (Navigate to ordinal 0 via previousConflict from reparse's default.)
+        model.previousConflict() // ensure we're at ordinal 0
+        model.acceptLocal()
+        #expect(model.conflictCount == 1)
+
+        let remaining = model.regions.compactMap { (r: ConflictRegion) -> ConflictBlock? in
+            if case .conflict(let b) = r { return b } else { return nil }
+        }
+        #expect(remaining.count == 1)
+        #expect(model.annotation(for: remaining[0]) == "about b")
     }
 
     @Test func applyAgentProposalReplacesResultTextAndReparses() {

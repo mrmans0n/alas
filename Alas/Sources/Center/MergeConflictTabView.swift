@@ -27,7 +27,7 @@ struct MergeConflictTabView: View {
                 MergeConflictToolbar(
                     conflictCount: model.conflictCount,
                     currentConflictIndex: model.currentConflictIndex,
-                    currentAnnotation: model.annotations[model.currentConflictIndex ?? -1],
+                    currentAnnotation: currentBlockAnnotation,
                     // Binaries can't be resolved through the 3-column editor
                     // (they're handled via the right-pane Use ours / Use theirs
                     // context menu). Keep the resolve button disabled for them.
@@ -178,7 +178,8 @@ struct MergeConflictTabView: View {
         .onChange(of: model.currentConflictIndex) { _, newIndex in
             guard let agent = resolvedAgent,
                   let ord = newIndex,
-                  model.annotations[ord] == nil
+                  let block = currentConflictBlock(at: ord),
+                  model.annotation(for: block) == nil
             else { return }
             Task {
                 await model.explainCurrentConflict(using: agent, language: fileLanguage)
@@ -187,7 +188,8 @@ struct MergeConflictTabView: View {
         .onChange(of: model.conflictedFile?.relativePath) { _, _ in
             guard let agent = resolvedAgent,
                   let ord = model.currentConflictIndex,
-                  model.annotations[ord] == nil
+                  let block = currentConflictBlock(at: ord),
+                  model.annotation(for: block) == nil
             else { return }
             Task {
                 await model.explainCurrentConflict(using: agent, language: fileLanguage)
@@ -226,6 +228,28 @@ struct MergeConflictTabView: View {
     private var fileLanguage: String? {
         let ext = fileExtension
         return ext.isEmpty ? nil : ext
+    }
+
+    /// Annotation for the conflict the cursor is currently on, looked up by
+    /// block-content identity (not ordinal) so it survives resolutions that
+    /// renumber later conflicts.
+    private var currentBlockAnnotation: String? {
+        guard let ord = model.currentConflictIndex,
+              let block = currentConflictBlock(at: ord)
+        else { return nil }
+        return model.annotation(for: block)
+    }
+
+    /// Returns the `ConflictBlock` for the Nth unresolved conflict, or nil.
+    private func currentConflictBlock(at ordinal: Int) -> ConflictBlock? {
+        var seen = 0
+        for region in model.regions {
+            if case .conflict(let block) = region {
+                if seen == ordinal { return block }
+                seen += 1
+            }
+        }
+        return nil
     }
 
     /// Writes the BASE-toggle back through TabsManager so the preference
