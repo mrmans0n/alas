@@ -95,6 +95,7 @@ private struct PaneLeafView: View {
                     .onAppear {
                         wireCwdHandler(session: session)
                         wireOpenURLHandler(session: session)
+                        wireTitleHandler(session: session, leafId: leaf.id)
                     }
             } else {
                 Color.clear
@@ -133,6 +134,14 @@ private struct PaneLeafView: View {
         session.surface.openURLHandler = { [weak state, sessionId = session.id] rawURL in
             guard let state else { return false }
             return state.routeTerminalOpenURL(rawURL: rawURL, sessionId: sessionId)
+        }
+    }
+
+    private func wireTitleHandler(session: TerminalSession, leafId: String) {
+        session.surface.titleHandler = { [weak state] title in
+            guard let state, !title.isEmpty else { return }
+            guard state.config.terminal.syncTabTitleWithTerminalTitle else { return }
+            state.tabs.setTerminalRuntimeTitle(leafId: leafId, title: title)
         }
     }
 }
