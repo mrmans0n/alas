@@ -26,6 +26,7 @@ struct MergeConflictTabView: View {
             MergeConflictToolbar(
                 conflictCount: model.conflictCount,
                 currentConflictIndex: model.currentConflictIndex,
+                isLoaded: model.conflictedFile != nil,
                 showBase: showBaseBinding,
                 onPrevious: { model.previousConflict() },
                 onNext: { model.nextConflict() },
@@ -47,6 +48,11 @@ struct MergeConflictTabView: View {
                 }
             )
             content
+        }
+        // Trigger initial load from the always-rendered root so the first
+        // open (when content shows the spinner) still kicks off the work.
+        .task(id: tabState.relativePath) {
+            await model.load()
         }
     }
 
@@ -131,9 +137,6 @@ struct MergeConflictTabView: View {
                     while (model.currentConflictIndex ?? 0) > idx { model.previousConflict() }
                 }
             )
-        }
-        .task(id: tabState.relativePath) {
-            await model.load()
         }
     }
 
