@@ -31,6 +31,7 @@ struct CommitsSectionView: View {
     let onSelect: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
     let onLoadOlder: () -> Void
+    let rps: RightPaneState
 
     @Environment(\.theme) private var theme
 
@@ -82,7 +83,8 @@ struct CommitsSectionView: View {
                     commit: commit,
                     isLast: idx == commits.count - 1 && olderCommits.isEmpty,
                     onSelect: { onSelect(commit) },
-                    onCopySHA: { onCopySHA(commit) }
+                    onCopySHA: { onCopySHA(commit) },
+                    onCherryPick: { rps.runCherryPick(sha: commit.sha) }
                 )
             }
         } else if olderCommits.isEmpty {
@@ -103,7 +105,8 @@ struct CommitsSectionView: View {
                     isLast: idx == olderCommits.count - 1,
                     isHistorical: comparisonRef != nil,
                     onSelect: { onSelect(commit) },
-                    onCopySHA: { onCopySHA(commit) }
+                    onCopySHA: { onCopySHA(commit) },
+                    onCherryPick: { rps.runCherryPick(sha: commit.sha) }
                 )
             }
         }

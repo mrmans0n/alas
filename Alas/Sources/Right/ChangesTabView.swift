@@ -163,7 +163,8 @@ struct ChangesTabView: View {
                 expanded: $rps.commitsExpanded,
                 onSelect: onSelectCommit,
                 onCopySHA: copyCommitSHA,
-                onLoadOlder: { Task { @MainActor in await rps.loadOlder() } }
+                onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
+                rps: rps
             )
         }
     }
