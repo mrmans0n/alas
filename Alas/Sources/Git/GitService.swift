@@ -1145,6 +1145,12 @@ extension GitService {
             return .rebase(plan: plan)
         }
 
+        let rebaseApplyDir = gitDir.appendingPathComponent("rebase-apply")
+        if FileManager.default.fileExists(atPath: rebaseApplyDir.path) {
+            let plan = try await Self.readRebaseApplyPlan(rebaseApplyDir: rebaseApplyDir)
+            return .rebase(plan: plan)
+        }
+
         let cherryHead = gitDir.appendingPathComponent("CHERRY_PICK_HEAD")
         if FileManager.default.fileExists(atPath: cherryHead.path) {
             let sha = (try? String(contentsOf: cherryHead, encoding: .utf8))?
@@ -1251,6 +1257,54 @@ extension GitService {
         }
 
         return RebasePlan(ontoBranch: onto, sourceBranch: source, commits: commits)
+    }
+
+    /// Builds a RebasePlan from a `.git/rebase-apply` directory (apply-backend rebase).
+    /// Layout: `next` (current 1-based index), `last` (total), `0001`..`NNNN` (patch files),
+    /// `head-name` (source branch ref), `onto` (target SHA).
+    private static func readRebaseApplyPlan(rebaseApplyDir: URL) async throws -> RebasePlan {
+        func readFile(_ name: String) -> String? {
+            try? String(
+                contentsOf: rebaseApplyDir.appendingPathComponent(name),
+                encoding: .utf8
+            )
+        }
+
+        let nextInt = readFile("next").flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        let lastInt = readFile("last").flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        let ontoRef = readFile("onto")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headName = readFile("head-name")?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let source = headName.flatMap { ref -> String in
+            ref.hasPrefix("refs/heads/") ? String(ref.dropFirst("refs/heads/".count)) : ref
+        }
+
+        var commits: [RebasePlanCommit] = []
+        let range = lastInt >= 1 ? (1...lastInt) : (1...0)
+        for i in range {
+            let patchName = String(format: "%04d", i)
+            var summary = "commit \(i)"
+            if let patchContent = readFile(patchName) {
+                for line in patchContent.split(separator: "\n", omittingEmptySubsequences: false) {
+                    let lineStr = String(line)
+                    if lineStr.hasPrefix("Subject: ") {
+                        summary = String(lineStr.dropFirst("Subject: ".count)).trimmingCharacters(in: .whitespaces)
+                        break
+                    }
+                }
+            }
+            let state: RebasePlanCommit.State
+            if i < nextInt {
+                state = .done
+            } else if i == nextInt {
+                state = .current
+            } else {
+                state = .pending
+            }
+            commits.append(RebasePlanCommit(sha: "patch-\(i)", summary: summary, state: state))
+        }
+
+        return RebasePlan(ontoBranch: ontoRef, sourceBranch: source, commits: commits)
     }
 }
 

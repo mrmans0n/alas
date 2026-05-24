@@ -295,4 +295,23 @@ struct GitServiceMergeTests {
         let after = try await svc.mergeState(worktreePath: repo)
         #expect(after == nil)
     }
+
+    @Test func mergeStateDetectsRebaseApplyInProgress() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+
+        _ = try await Process.git(["checkout", "-q", "feature"], cwd: repo)
+        _ = try await Process.git(["-c", "rebase.backend=apply", "rebase", "main"], cwd: repo)
+
+        let svc = GitService()
+        let state = try await svc.mergeState(worktreePath: repo)
+        guard case .rebase(let plan) = state else {
+            Issue.record("expected .rebase via rebase-apply, got \(String(describing: state))")
+            return
+        }
+        #expect(plan.commits.count >= 1)
+        #expect(plan.commits.contains { $0.state == .current })
+    }
+
 }
