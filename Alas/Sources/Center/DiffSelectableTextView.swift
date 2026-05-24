@@ -135,6 +135,7 @@ final class DiffSelectableTextContainerView: NSView {
                 width: max(bounds.width, totalWidth),
                 height: measuredRect.height
             )
+            guard rect.intersects(dirtyRect) else { continue }
             rowBackgroundColor(for: line.kind, theme: theme).setFill()
             rect.fill()
             drawMarker(line.marker, in: rect, kind: line.kind, theme: theme)
