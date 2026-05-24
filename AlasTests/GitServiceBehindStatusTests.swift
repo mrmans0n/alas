@@ -33,6 +33,19 @@ struct GitServiceBehindStatusTests {
         #expect(resolved?.fetchBranch == "main")
     }
 
+    @Test func resolveBaseRefCanPreferLocalSimpleBranch() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let svc = GitService()
+        let resolved = try await svc.resolveBaseRef(worktreePath: repo, baseBranch: "main", preferLocal: true)
+        #expect(resolved?.remote == nil)
+        #expect(resolved?.baseRef == "main")
+        #expect(resolved?.fetchBranch == nil)
+    }
+
     @Test func resolveBaseRefSplitsRemoteQualifiedBranchForFetch() async throws {
         let (repo, remote) = try await makeRepoWithRemote()
         defer {

@@ -809,7 +809,8 @@ final class RightPaneState {
         do {
             guard let resolved = try await git.resolveBaseRef(
                 worktreePath: worktree.path,
-                baseBranch: baseBranch
+                baseBranch: baseBranch,
+                preferLocal: userOverrodeBaseBranch
             ) else {
                 behindBase = nil
                 return

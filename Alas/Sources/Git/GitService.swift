@@ -815,18 +815,27 @@ extension GitService {
                 }
             }
             if baseName == nil {
-                let origin = try await Process.git(
-                    ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
-                    cwd: worktree
-                )
-                if origin.exitCode == 0 {
-                    baseName = "origin/\(base)"
-                } else {
+                if ignoreUpstream {
                     let local = try await Process.git(
                         ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
                         cwd: worktree
                     )
                     if local.exitCode == 0 { baseName = base }
+                }
+                if baseName == nil {
+                    let origin = try await Process.git(
+                        ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
+                        cwd: worktree
+                    )
+                    if origin.exitCode == 0 {
+                        baseName = "origin/\(base)"
+                    } else if !ignoreUpstream {
+                        let local = try await Process.git(
+                            ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
+                            cwd: worktree
+                        )
+                        if local.exitCode == 0 { baseName = base }
+                    }
                 }
             }
         }
@@ -1030,7 +1039,8 @@ extension GitService {
     /// `remote == nil` means "no fetch path; use the local ref as-is".
     func resolveBaseRef(
         worktreePath: URL,
-        baseBranch: String
+        baseBranch: String,
+        preferLocal: Bool = false
     ) async throws -> (remote: String?, baseRef: String, fetchBranch: String?)? {
         guard !baseBranch.isEmpty else { return nil }
 
@@ -1054,7 +1064,17 @@ extension GitService {
             }
         }
 
-        // Prefer origin/<base>.
+        if preferLocal {
+            let localCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
+                cwd: worktreePath
+            )
+            if localCheck.exitCode == 0 {
+                return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
+            }
+        }
+
+        // Prefer origin/<base> for configured defaults.
         let originRef = "refs/remotes/origin/\(baseBranch)"
         let originCheck = try await Process.git(
             ["show-ref", "--verify", "--quiet", originRef],
@@ -1064,13 +1084,14 @@ extension GitService {
             return (remote: "origin", baseRef: "origin/\(baseBranch)", fetchBranch: baseBranch)
         }
 
-        // Fall back to local <base>.
-        let localCheck = try await Process.git(
-            ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
-            cwd: worktreePath
-        )
-        if localCheck.exitCode == 0 {
-            return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
+        if !preferLocal {
+            let localCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
+                cwd: worktreePath
+            )
+            if localCheck.exitCode == 0 {
+                return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
+            }
         }
 
         return nil

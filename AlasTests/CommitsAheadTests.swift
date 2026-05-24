@@ -202,4 +202,16 @@ struct CommitsAheadTests {
 
         #expect(comparisonRef == "team/main")
     }
+
+    @Test func explicitSimpleBasePrefersLocalBranchOverOrigin() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat: feature work"], cwd: worktree)
+
+        let svc = GitService()
+        let (_, comparisonRef) = try await svc.commitsAhead(at: worktree, baseBranch: "main", ignoreUpstream: true)
+
+        #expect(comparisonRef == "main")
+    }
 }
