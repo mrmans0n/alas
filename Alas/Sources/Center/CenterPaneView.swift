@@ -144,6 +144,8 @@ struct CenterPaneView: View {
                         ImagePreviewTabView(worktreePath: worktree.path,
                                             relativePath: s.relativePath)
                     case .mergeConflict:
+                        // Temporary placeholder — replaced by MergeConflictTabView
+                        // in the wiring task at the end of Plan 2.
                         EmptyView()
                     }
                 }
