@@ -23,11 +23,14 @@ struct Worktree: Identifiable, Equatable, Codable {
 struct ChangedFile: Identifiable, Equatable, Codable {
     var id: String { "\(stage.rawValue):\(path)" }
     let path: String
-    let status: String   // "A" | "M" | "D" | "R"
+    let status: String   // "A" | "M" | "D" | "R" | "U" (unmerged)
     let stage: ChangeStage
     let add: Int
     let del: Int
     let renameFrom: String?
+    /// Non-nil when this file is in a git unmerged (conflicted) state.
+    /// Nil for all clean changes. Defaulted for Codable back-compat.
+    var conflict: ConflictKind? = nil
 }
 
 enum ChangeStage: String, Codable {
@@ -61,4 +64,83 @@ struct FileTreeNode: Identifiable, Equatable, Codable {
     var isSubmodule: Bool = false
 
     enum Kind: String, Codable { case dir, file }
+}
+
+/// Classification of a git unmerged (conflicted) file. Mirrors git's
+/// porcelain=v2 `u XY` two-letter code where each letter is one of
+/// `D`eleted, `A`dded, `U`pdated on each side.
+enum ConflictKind: String, Codable, Equatable {
+    case bothModified       // UU
+    case bothAdded          // AA
+    case bothDeleted        // DD
+    case addedByUs          // AU
+    case addedByThem        // UA
+    case deletedByUs        // DU
+    case deletedByThem      // UD
+
+    /// Returns nil for `XY` pairs that don't represent a conflict.
+    static func fromPorcelainXY(_ xy: String) -> ConflictKind? {
+        switch xy {
+        case "UU": return .bothModified
+        case "AA": return .bothAdded
+        case "DD": return .bothDeleted
+        case "AU": return .addedByUs
+        case "UA": return .addedByThem
+        case "DU": return .deletedByUs
+        case "UD": return .deletedByThem
+        default:   return nil
+        }
+    }
+}
+
+/// The three sides of a conflicted file, plus the on-disk merged
+/// buffer with conflict markers. Loaded via `GitService.conflictedFile`.
+struct ConflictedFile: Equatable {
+    let relativePath: String
+    let kind: ConflictKind
+    let base: String?      // nil for `bothAdded` (no common ancestor)
+    let local: String?     // nil for `deletedByUs`
+    let remote: String?    // nil for `deletedByThem`
+    let merged: String     // the on-disk file with conflict markers
+    let isBinary: Bool
+}
+
+/// An in-progress conflict-producing operation. Detected by the presence
+/// of marker files inside `.git`: `MERGE_HEAD`, `rebase-merge/`, or
+/// `CHERRY_PICK_HEAD`.
+enum MergeOperation: Equatable {
+    /// Merging another branch into the current one.
+    /// - sourceBranch: the branch being merged in (read from MERGE_MSG / MERGE_HEAD ref)
+    case merge(sourceBranch: String?)
+
+    /// Rebase in progress. `plan` is the parsed contents of
+    /// `.git/rebase-merge/git-rebase-todo` plus `done`.
+    case rebase(plan: RebasePlan)
+
+    /// Cherry-picking a single commit. `sha` and the first line of the
+    /// commit message are exposed for the operation card.
+    case cherryPick(sha: String, summary: String)
+}
+
+struct RebasePlan: Equatable {
+    let ontoBranch: String?    // target ref, read from rebase-merge/onto
+    let sourceBranch: String?  // original branch, read from rebase-merge/head-name
+    let commits: [RebasePlanCommit]
+    var currentIndex: Int? {
+        commits.firstIndex(where: { $0.state == .current })
+    }
+}
+
+struct RebasePlanCommit: Equatable {
+    enum State: Equatable { case done, current, pending }
+    let sha: String          // short SHA as it appears in the todo file
+    let summary: String      // first line of commit message
+    let state: State
+}
+
+/// Outcome of running an operation that may produce conflicts.
+enum MergeResult: Equatable {
+    case clean
+    case conflict(files: [ChangedFile])
+    case error(message: String)
 }
