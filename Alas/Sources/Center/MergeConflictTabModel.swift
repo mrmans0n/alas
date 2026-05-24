@@ -63,12 +63,19 @@ final class MergeConflictTabModel {
     /// Call after any mutation of `resultText` (typed by user or via accept actions).
     func reparse() {
         regions = ConflictMarkerParser.parse(resultText)
-        if let idx = currentConflictIndex, conflictRegionIndex(forConflictOrdinal: idx) == nil {
-            // The current conflict was resolved; move to the next unresolved one
-            // (or nil when none remain).
-            currentConflictIndex = firstConflictIndex()
-        } else if currentConflictIndex == nil {
-            currentConflictIndex = firstConflictIndex()
+        let total = conflictCount
+        guard total > 0 else {
+            currentConflictIndex = nil
+            return
+        }
+        if let idx = currentConflictIndex {
+            // Clamp: if the resolved conflict was the last in the list (or beyond),
+            // step the cursor back to the new last instead of snapping to 0.
+            // Otherwise the ordinal still points to a valid conflict because
+            // every later conflict shifts down by one when one is removed.
+            currentConflictIndex = min(idx, total - 1)
+        } else {
+            currentConflictIndex = 0
         }
     }
 
@@ -94,14 +101,9 @@ final class MergeConflictTabModel {
     }
 
     /// Returns the ordinal (0-based) of the first unresolved conflict, or nil.
-    /// Marked `internal` (default) so Task 4's extension can call it.
+    /// Marked `internal` (default) so callers in the same target can use it.
     func firstConflictIndex() -> Int? {
-        var ord = 0
-        for r in regions where isConflict(r) {
-            return ord
-        }
-        _ = ord
-        return nil
+        regions.contains(where: isConflict) ? 0 : nil
     }
 
     // MARK: - Accept actions

@@ -172,6 +172,47 @@ struct MergeConflictTabModelTests {
         #expect(model.currentConflictIndex == 0) // clamped at first
     }
 
+    @Test func acceptingLastConflictAnchorsCursorToPreviousNotZero() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        // Three conflicts. User is at the third (last). Accept it.
+        // Cursor should land on the new last (ordinal 1), NOT on ordinal 0.
+        model.resultText = """
+        head
+        <<<<<<< HEAD
+        a-ours
+        =======
+        a-theirs
+        >>>>>>> feature
+        middle1
+        <<<<<<< HEAD
+        b-ours
+        =======
+        b-theirs
+        >>>>>>> feature
+        middle2
+        <<<<<<< HEAD
+        c-ours
+        =======
+        c-theirs
+        >>>>>>> feature
+        tail
+
+        """
+        model.reparse()
+        #expect(model.conflictCount == 3)
+        model.nextConflict()   // 0 → 1
+        model.nextConflict()   // 1 → 2 (last)
+        #expect(model.currentConflictIndex == 2)
+
+        model.acceptLocal()    // resolves the last; reparse runs
+        #expect(model.conflictCount == 2)
+        #expect(model.currentConflictIndex == 1)   // anchored at new last, not 0
+    }
+
     @Test func markFileResolvedStagesViaGitService() async throws {
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
