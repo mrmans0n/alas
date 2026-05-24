@@ -77,6 +77,7 @@ struct StatusBadge: View {
         case "A": return theme.color("add").opacity(0.18)
         case "D": return theme.color("del").opacity(0.18)
         case "R": return theme.color("info").opacity(0.18)
+        case "U": return theme.color("warn").opacity(0.20)
         default:  return theme.color("mod").opacity(0.20)
         }
     }
@@ -85,6 +86,7 @@ struct StatusBadge: View {
         case "A": return theme.color("add")
         case "D": return theme.color("del")
         case "R": return theme.color("info")
+        case "U": return theme.color("warn")
         default:  return theme.color("mod")
         }
     }
