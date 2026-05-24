@@ -34,7 +34,8 @@ Settings -> Changes keeps the current Tool row. The Prompt row becomes compact:
 
 - Row title: `Prompt`
 - Description: `Instructions sent to the CLI. The staged diff is appended on stdin.`
-- Right-aligned controls: `Edit` button followed by a status chip.
+- Controls: `Edit` button aligned to the settings control column, with a
+  right-aligned status chip.
 - Status chip text: `Default` when the stored prompt equals
   `AppConfig.defaultCommitPrompt`, otherwise `Custom`.
 

@@ -21,10 +21,10 @@ struct ChangesPane: View {
                     SettingsRow(name: "Prompt",
                                 desc: "Instructions sent to the CLI. The staged diff is appended on stdin.") {
                         HStack(spacing: 12) {
-                            Spacer()
                             AlasButton(title: "Edit", style: .normal) {
                                 openWindow(id: "commit-prompt-editor")
                             }
+                            Spacer()
                             PromptStatusChip(label: CommitPromptStatus.label(for: state.config.changes.prompt))
                         }
                         .frame(maxWidth: .infinity)
