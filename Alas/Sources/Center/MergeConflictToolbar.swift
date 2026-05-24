@@ -10,6 +10,11 @@ struct MergeConflictToolbar: View {
     let isLoaded: Bool
     let agentBusy: Bool
     let hasAgent: Bool
+    /// True while an unreviewed agent proposal is on screen. The toolbar
+    /// stays interactive at the edges of the overlay; this gate prevents
+    /// the user from kicking off a second agent run that would silently
+    /// clobber the pending proposal.
+    let hasPendingProposal: Bool
     @Binding var showBase: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -43,7 +48,7 @@ struct MergeConflictToolbar: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!isLoaded || !hasAgent || agentBusy)
+            .disabled(!isLoaded || !hasAgent || agentBusy || hasPendingProposal)
             .help(hasAgent
                 ? "Run the configured agent on the whole file and preview its proposal"
                 : "Configure an agent in Settings to enable this")

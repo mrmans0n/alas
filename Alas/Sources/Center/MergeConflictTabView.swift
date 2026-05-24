@@ -34,6 +34,7 @@ struct MergeConflictTabView: View {
                     isLoaded: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
                     agentBusy: model.agentBusy,
                     hasAgent: resolvedAgent != nil,
+                    hasPendingProposal: model.agentProposal != nil,
                     showBase: showBaseBinding,
                     onPrevious: { model.previousConflict() },
                     onNext: { model.nextConflict() },
