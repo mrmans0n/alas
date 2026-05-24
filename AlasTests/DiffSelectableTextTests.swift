@@ -71,6 +71,31 @@ struct Foo {
         #expect(result.lines.last?.range.location == (result.attributedString.string as NSString).length - 1)
     }
 
+    @Test func diffSelectableTextViewHostsCodeOnlyNativeTextView() {
+        let view = DiffSelectableTextView(
+            hunk: sampleHunk(),
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            theme: currentTheme()
+        )
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 300)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let textViews = allSubviews(of: controller.view).compactMap { $0 as? NSTextView }
+        #expect(textViews.contains(where: { textView in
+            textView.isSelectable &&
+            !textView.isEditable &&
+            textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk())
+        }))
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
     // MARK: HunkView standalone
 
     @Test func hunkViewRendersWithoutCrashing() {
