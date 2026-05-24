@@ -972,6 +972,18 @@ final class RightPaneState {
     }
 
     @MainActor
+    func keepDeleted(file: ChangedFile) {
+        Task { @MainActor in
+            do {
+                try await git.keepDeleted(worktreePath: worktree.path, relativePath: file.path)
+                await refresh()
+            } catch {
+                logger.error("keepDeleted failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
     func markResolved(file: ChangedFile) {
         Task { @MainActor in
             do {

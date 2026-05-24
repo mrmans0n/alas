@@ -5,6 +5,7 @@ struct ConflictsSection: View {
     let onSelect: (ChangedFile) -> Void
     let onUseOurs: (ChangedFile) -> Void
     let onUseTheirs: (ChangedFile) -> Void
+    let onKeepDeleted: (ChangedFile) -> Void
     let onMarkResolved: (ChangedFile) -> Void
 
     var body: some View {
@@ -48,11 +49,35 @@ struct ConflictsSection: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            menuItems(for: file)
+        }
+    }
+
+    @ViewBuilder
+    private func menuItems(for file: ChangedFile) -> some View {
+        switch file.conflict {
+        case .bothModified, .bothAdded:
             Button("Use ours") { onUseOurs(file) }
             Button("Use theirs") { onUseTheirs(file) }
-            Divider()
-            Button("Mark resolved") { onMarkResolved(file) }
+        case .addedByUs:
+            Button("Keep ours") { onUseOurs(file) }
+        case .addedByThem:
+            Button("Keep theirs") { onUseTheirs(file) }
+        case .deletedByUs:
+            // ours = deleted; theirs = modified
+            Button("Keep theirs") { onUseTheirs(file) }
+            Button("Keep deleted") { onKeepDeleted(file) }
+        case .deletedByThem:
+            // ours = modified; theirs = deleted
+            Button("Keep ours") { onUseOurs(file) }
+            Button("Keep deleted") { onKeepDeleted(file) }
+        case .bothDeleted:
+            Button("Keep deleted") { onKeepDeleted(file) }
+        case nil:
+            EmptyView()
         }
+        Divider()
+        Button("Mark resolved") { onMarkResolved(file) }
     }
 
     private func iconName(for kind: ConflictKind?) -> String {

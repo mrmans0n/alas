@@ -1440,6 +1440,17 @@ extension GitService {
         return max(parts.count - 1, 0)
     }
 }
+
+extension GitService {
+    /// Resolves a delete-side conflict by removing the file from worktree + index.
+    /// Used for `bothDeleted` / `deletedByUs` / `deletedByThem` resolutions
+    /// where "keep it deleted" is the user's intent.
+    func keepDeleted(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(["rm", "--", relativePath], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "rm", stderr: result.stderr)
+        }
+    }
 }
 
 enum ConflictedFileError: LocalizedError {

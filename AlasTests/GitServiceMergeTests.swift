@@ -345,4 +345,34 @@ struct GitServiceMergeTests {
         // be .clean (merge commit applied cleanly).
         #expect(result == .clean)
     }
+
+    @Test func keepDeletedRemovesFileAndStages() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try Self.writeFile(repo, "a.txt", "base\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try Self.writeFile(repo, "a.txt", "feature modification\n")
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        _ = try await Process.git(["rm", "-q", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "delete a"], cwd: repo)
+        // Merge feature → main: ours deleted, theirs modified → DU (deletedByUs)
+        let svc = GitService()
+        _ = try await svc.merge(worktreePath: repo, branch: "feature")
+
+        try await svc.keepDeleted(worktreePath: repo, relativePath: "a.txt")
+        // File must be gone from the worktree.
+        let exists = FileManager.default.fileExists(atPath: repo.appendingPathComponent("a.txt").path)
+        #expect(exists == false)
+        // The conflict is resolved: a.txt must no longer appear with a conflict flag.
+        // For a DU conflict, HEAD already had the file deleted; `git rm` removes
+        // the worktree copy and clears the index entry, so a.txt won't appear in
+        // `git status` at all (index and HEAD agree on "absent"). Either absent
+        // or present-without-conflict is acceptable.
+        let changes = try await svc.status(worktreePath: repo)
+        let entry = changes.first { $0.path == "a.txt" }
+        #expect(entry?.conflict == nil)
+    }
 }

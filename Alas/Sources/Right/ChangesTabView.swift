@@ -80,6 +80,7 @@ struct ChangesTabView: View {
                 onSelect: onSelect,
                 onUseOurs: { file in rps.useOurs(file: file) },
                 onUseTheirs: { file in rps.useTheirs(file: file) },
+                onKeepDeleted: { file in rps.keepDeleted(file: file) },
                 onMarkResolved: { file in rps.markResolved(file: file) }
             )
 
