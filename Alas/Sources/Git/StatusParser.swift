@@ -35,11 +35,25 @@ enum StatusParser {
                 result.append(ChangedFile(path: path, status: "A", stage: .unstaged, add: 0, del: 0, renameFrom: nil))
                 i += 1
             } else if line.hasPrefix("u ") {
-                // unmerged: surface as M for v1
+                // Porcelain v2 unmerged record:
+                //   u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
+                // 10 fields before <path> (record type + xy + sub + three
+                // modes + worktree mode + three blob hashes) → 11 total fields;
+                // maxSplits: 10 leaves <path> intact even when it contains spaces.
                 let tokens = line.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: true).map(String.init)
                 if tokens.count >= 11 {
+                    let xy = tokens[1]
                     let path = tokens[10]
-                    result.append(ChangedFile(path: path, status: "M", stage: .unstaged, add: 0, del: 0, renameFrom: nil))
+                    let kind = ConflictKind.fromPorcelainXY(xy) ?? .bothModified
+                    result.append(ChangedFile(
+                        path: path,
+                        status: "U",
+                        stage: .unstaged,
+                        add: 0,
+                        del: 0,
+                        renameFrom: nil,
+                        conflict: kind
+                    ))
                 }
                 i += 1
             } else {

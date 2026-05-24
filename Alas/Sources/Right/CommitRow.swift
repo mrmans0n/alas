@@ -6,10 +6,12 @@ struct CommitRow: View {
     var isHistorical: Bool = false
     let onSelect: () -> Void
     let onCopySHA: () -> Void
+    var onCherryPick: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
     @State private var shaHovering = false
+    @State private var pendingCherryPick = false
 
     var body: some View {
         Button(action: onSelect) {
@@ -30,6 +32,22 @@ struct CommitRow: View {
         .copyFeedbackOverlay(message: copyFeedback.message)
         .contextMenu {
             Button("Copy Commit SHA") { copySHA() }
+            if onCherryPick != nil {
+                Divider()
+                Button("Cherry-pick…") { pendingCherryPick = true }
+            }
+        }
+        .confirmationDialog(
+            "Cherry-pick commit?",
+            isPresented: $pendingCherryPick,
+            titleVisibility: .visible
+        ) {
+            Button("Cherry-pick \(String(commit.sha.prefix(7)))", role: .destructive) {
+                onCherryPick?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Apply this commit to the current branch.")
         }
     }
 

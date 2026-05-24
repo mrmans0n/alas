@@ -101,7 +101,8 @@ extension GitService {
                                           stage: entries[i].stage,
                                           add: c.add,
                                           del: c.del,
-                                          renameFrom: entries[i].renameFrom)
+                                          renameFrom: entries[i].renameFrom,
+                                          conflict: entries[i].conflict)
             } else if entries[i].add == 0 && entries[i].del == 0 {
                 // Numstat doesn't include unstaged untracked files, so they'd
                 // show 0/0 in the Changes pane and the totals would
@@ -118,7 +119,8 @@ extension GitService {
                                              stage: entries[i].stage,
                                              add: lines,
                                              del: 0,
-                                             renameFrom: entries[i].renameFrom)
+                                             renameFrom: entries[i].renameFrom,
+                                             conflict: entries[i].conflict)
                 }
             }
         }
@@ -1122,5 +1124,463 @@ extension GitService {
             )
         }
         return Date()
+    }
+}
+
+extension GitService {
+    /// Detects an in-progress merge / rebase / cherry-pick by inspecting
+    /// .git marker files. Returns nil when the worktree is idle.
+    func mergeState(worktreePath: URL) async throws -> MergeOperation? {
+        let gitDir = try await self.gitDir(worktreePath: worktreePath)
+
+        // Rebase first — both `MERGE_HEAD` and `rebase-merge` can coexist
+        // briefly during a `rebase -m`. Rebase is the more specific signal.
+        let rebaseMergeDir = gitDir.appendingPathComponent("rebase-merge")
+        if FileManager.default.fileExists(atPath: rebaseMergeDir.path) {
+            let plan = try await Self.readRebasePlan(
+                gitDir: gitDir,
+                rebaseMergeDir: rebaseMergeDir,
+                worktreePath: worktreePath
+            )
+            return .rebase(plan: plan)
+        }
+
+        // .git/rebase-apply is also used by `git am`, which writes an
+        // `applying` sentinel instead of `rebasing`. Treat only the
+        // rebase-shaped case as an in-progress rebase; an `am` conflict is
+        // out of scope for this UI (driving `rebase --continue` against an
+        // am state would error).
+        let rebaseApplyDir = gitDir.appendingPathComponent("rebase-apply")
+        let rebasingSentinel = rebaseApplyDir.appendingPathComponent("rebasing")
+        if FileManager.default.fileExists(atPath: rebaseApplyDir.path),
+           FileManager.default.fileExists(atPath: rebasingSentinel.path) {
+            let plan = try await Self.readRebaseApplyPlan(rebaseApplyDir: rebaseApplyDir)
+            return .rebase(plan: plan)
+        }
+
+        let cherryHead = gitDir.appendingPathComponent("CHERRY_PICK_HEAD")
+        if FileManager.default.fileExists(atPath: cherryHead.path) {
+            let sha = (try? String(contentsOf: cherryHead, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let summary = (try? await Process.git(
+                ["log", "-1", "--pretty=%s", sha],
+                cwd: worktreePath
+            ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? sha
+            return .cherryPick(sha: sha, summary: summary)
+        }
+
+        let mergeHead = gitDir.appendingPathComponent("MERGE_HEAD")
+        if FileManager.default.fileExists(atPath: mergeHead.path) {
+            // Try to read MERGE_MSG for the source-branch name (`merge branch 'X'`).
+            let mergeMsg = gitDir.appendingPathComponent("MERGE_MSG")
+            let msg = (try? String(contentsOf: mergeMsg, encoding: .utf8)) ?? ""
+            let source = Self.parseMergeMsgBranch(msg)
+            return .merge(sourceBranch: source)
+        }
+        return nil
+    }
+
+    /// Resolves the absolute `.git` directory for the given worktree
+    /// (handles linked worktrees, where `.git` is a file pointing into a
+    /// subdir of the main repo).
+    private func gitDir(worktreePath: URL) async throws -> URL {
+        let result = try await Process.git(
+            ["rev-parse", "--absolute-git-dir"],
+            cwd: worktreePath
+        )
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, !raw.isEmpty else {
+            throw OperationError.gitFailed(command: "rev-parse --absolute-git-dir", stderr: result.stderr)
+        }
+        return URL(fileURLWithPath: raw)
+    }
+
+    /// MERGE_MSG looks like:
+    ///   Merge branch 'feature/x'
+    /// or:
+    ///   Merge branch 'feature/x' into main
+    /// We only need the first quoted token.
+    static func parseMergeMsgBranch(_ msg: String) -> String? {
+        guard let openQuote = msg.firstIndex(of: "'") else { return nil }
+        let after = msg.index(after: openQuote)
+        guard let closeQuote = msg[after...].firstIndex(of: "'") else { return nil }
+        return String(msg[after ..< closeQuote])
+    }
+
+    /// Reads `rebase-merge/git-rebase-todo` (pending) plus `done` (already
+    /// applied) and `msgnum`/`end` (1-indexed current commit) to build a
+    /// RebasePlan with `done` / `current` / `pending` state per commit.
+    private static func readRebasePlan(
+        gitDir: URL,
+        rebaseMergeDir: URL,
+        worktreePath: URL
+    ) async throws -> RebasePlan {
+        func read(_ name: String) -> String? {
+            try? String(
+                contentsOf: rebaseMergeDir.appendingPathComponent(name),
+                encoding: .utf8
+            )
+        }
+        let todo = read("git-rebase-todo") ?? ""
+        let done = read("done") ?? ""
+        let ontoRef = read("onto")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headName = read("head-name")?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func parseLines(_ raw: String) -> [(String, String)] {
+            // Lines look like: "pick abcd123 commit subject"
+            raw.split(separator: "\n", omittingEmptySubsequences: true).compactMap { l in
+                let line = l.trimmingCharacters(in: .whitespaces)
+                guard !line.isEmpty, !line.hasPrefix("#") else { return nil }
+                let parts = line.split(
+                    separator: " ",
+                    maxSplits: 2,
+                    omittingEmptySubsequences: true
+                )
+                guard parts.count >= 3 else { return nil }
+                return (String(parts[1]), String(parts[2]))
+            }
+        }
+
+        let doneCommits = parseLines(done)
+        let todoCommits = parseLines(todo)
+
+        // `done` includes the *currently-conflicting* commit as its last
+        // entry. Mark it as .current; everything before is .done; todo is .pending.
+        var commits: [RebasePlanCommit] = []
+        if doneCommits.count >= 1 {
+            for (sha, summary) in doneCommits.dropLast() {
+                commits.append(RebasePlanCommit(sha: sha, summary: summary, state: .done))
+            }
+            let last = doneCommits.last!
+            commits.append(RebasePlanCommit(sha: last.0, summary: last.1, state: .current))
+        }
+        for (sha, summary) in todoCommits {
+            commits.append(RebasePlanCommit(sha: sha, summary: summary, state: .pending))
+        }
+
+        let onto = ontoRef
+        let source = headName.flatMap { ref -> String in
+            ref.hasPrefix("refs/heads/") ? String(ref.dropFirst("refs/heads/".count)) : ref
+        }
+
+        return RebasePlan(ontoBranch: onto, sourceBranch: source, commits: commits)
+    }
+
+    /// Builds a RebasePlan from a `.git/rebase-apply` directory (apply-backend rebase).
+    /// Layout: `next` (current 1-based index), `last` (total), `0001`..`NNNN` (patch files),
+    /// `head-name` (source branch ref), `onto` (target SHA).
+    private static func readRebaseApplyPlan(rebaseApplyDir: URL) async throws -> RebasePlan {
+        func readFile(_ name: String) -> String? {
+            try? String(
+                contentsOf: rebaseApplyDir.appendingPathComponent(name),
+                encoding: .utf8
+            )
+        }
+
+        let nextInt = readFile("next").flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        let lastInt = readFile("last").flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        let ontoRef = readFile("onto")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headName = readFile("head-name")?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let source = headName.flatMap { ref -> String in
+            ref.hasPrefix("refs/heads/") ? String(ref.dropFirst("refs/heads/".count)) : ref
+        }
+
+        var commits: [RebasePlanCommit] = []
+        // Guard the range: a missing or unparsable `last` would make
+        // `1...lastInt` trap (Range requires lowerBound <= upperBound).
+        // Return an empty plan in that case so the OperationCard still
+        // surfaces with Continue/Abort, just without a per-commit list.
+        guard lastInt >= 1 else {
+            return RebasePlan(ontoBranch: ontoRef, sourceBranch: source, commits: [])
+        }
+        for i in 1...lastInt {
+            let patchName = String(format: "%04d", i)
+            var summary = "commit \(i)"
+            if let patchContent = readFile(patchName) {
+                for line in patchContent.split(separator: "\n", omittingEmptySubsequences: false) {
+                    let lineStr = String(line)
+                    if lineStr.hasPrefix("Subject: ") {
+                        summary = String(lineStr.dropFirst("Subject: ".count)).trimmingCharacters(in: .whitespaces)
+                        break
+                    }
+                }
+            }
+            let state: RebasePlanCommit.State
+            if i < nextInt {
+                state = .done
+            } else if i == nextInt {
+                state = .current
+            } else {
+                state = .pending
+            }
+            commits.append(RebasePlanCommit(sha: "patch-\(i)", summary: summary, state: state))
+        }
+
+        return RebasePlan(ontoBranch: ontoRef, sourceBranch: source, commits: commits)
+    }
+}
+
+extension GitService {
+    /// Reads BASE / LOCAL / REMOTE for a conflicted file from index stages.
+    /// Stage indexes: 1 = common ancestor (base), 2 = ours (HEAD), 3 = theirs (incoming).
+    /// Returns nil for sides that don't exist (e.g., `bothAdded` has no base).
+    func conflictedFile(worktreePath: URL, relativePath: String) async throws -> ConflictedFile {
+        // Determine the conflict kind from current status (cheaper than
+        // calling status() and filtering — but this is what status() does
+        // anyway, so we just reuse it).
+        let allChanges = try await status(worktreePath: worktreePath)
+        guard let entry = allChanges.first(where: {
+            $0.path == relativePath && $0.conflict != nil
+        }), let kind = entry.conflict else {
+            throw ConflictedFileError.notConflicted(path: relativePath)
+        }
+
+        let base = try await readStageOrNil(worktreePath: worktreePath, stage: 1, path: relativePath)
+        let local = try await readStageOrNil(worktreePath: worktreePath, stage: 2, path: relativePath)
+        let remote = try await readStageOrNil(worktreePath: worktreePath, stage: 3, path: relativePath)
+
+        let absolute = worktreePath.appendingPathComponent(relativePath)
+        let mergedData = (try? Data(contentsOf: absolute)) ?? Data()
+        let isBinary = Self.looksBinary(mergedData)
+        let merged = isBinary ? "" : (String(data: mergedData, encoding: .utf8) ?? "")
+
+        return ConflictedFile(
+            relativePath: relativePath,
+            kind: kind,
+            base: base,
+            local: local,
+            remote: remote,
+            merged: merged,
+            isBinary: isBinary
+        )
+    }
+
+    /// `git show :N:path` returns the blob at index stage N. Returns nil
+    /// when the stage doesn't exist (git exits non-zero in that case).
+    private func readStageOrNil(worktreePath: URL, stage: Int, path: String) async throws -> String? {
+        let result = try await Process.git(
+            ["show", ":\(stage):\(path)"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { return nil }
+        return result.stdout
+    }
+
+    /// Same heuristic git uses: a NUL byte in the first 8KB → binary.
+    static func looksBinary(_ data: Data) -> Bool {
+        let probe = data.prefix(8192)
+        return probe.contains(0x00)
+    }
+}
+
+extension GitService {
+    /// Runs `git merge <branch>` with the zdiff3 conflict style so the
+    /// on-disk merged file includes the BASE section inline. Returns:
+    ///   - .clean   on a fast-forward or no-conflict merge
+    ///   - .conflict(files)   when the working tree is left in conflict
+    ///   - .error(message)    for any other non-zero exit
+    func merge(worktreePath: URL, branch: String) async throws -> MergeResult {
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "merge", branch, "--no-edit"],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
+    /// After running any conflict-producing operation, check the worktree
+    /// state and classify. Used by merge, rebase, cherry-pick, continue.
+    func classifyOperationResult(worktreePath: URL, exitCode: Int32, stderr: String) async throws -> MergeResult {
+        if exitCode == 0 {
+            return .clean
+        }
+        let changes = try await status(worktreePath: worktreePath)
+        let conflicted = changes.filter { $0.conflict != nil }
+        if !conflicted.isEmpty {
+            return .conflict(files: conflicted)
+        }
+        let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .error(message: msg.isEmpty ? "Operation failed with exit code \(exitCode)" : msg)
+    }
+}
+
+extension GitService {
+    func rebase(worktreePath: URL, onto: String) async throws -> MergeResult {
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "rebase", onto],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
+    func cherryPick(worktreePath: URL, sha: String) async throws -> MergeResult {
+        let parents = try await parentCount(worktreePath: worktreePath, sha: sha)
+        var args: [String] = ["-c", "merge.conflictStyle=zdiff3", "cherry-pick"]
+        if parents >= 2 {
+            // Merge commit: pick changes relative to the first parent (mainline).
+            // Selecting a different mainline is a follow-up if needed.
+            args.append(contentsOf: ["-m", "1"])
+        }
+        args.append(sha)
+        let result = try await Process.git(args, cwd: worktreePath)
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
+    /// Number of parent commits for `sha`. Returns 1 for a normal commit, 2+ for a merge.
+    private func parentCount(worktreePath: URL, sha: String) async throws -> Int {
+        let result = try await Process.git(
+            ["rev-list", "--parents", "-n", "1", sha],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { return 1 }  // be lenient — let cherry-pick surface the real error
+        // Output: "<sha> <parent1> <parent2> ..."
+        let parts = result.stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        // parents = parts.count - 1 (the first token is the commit itself)
+        return max(parts.count - 1, 0)
+    }
+}
+
+extension GitService {
+    /// Resolves a delete-side conflict by removing the file from worktree + index.
+    /// Used for `bothDeleted` / `deletedByUs` / `deletedByThem` resolutions
+    /// where "keep it deleted" is the user's intent.
+    func keepDeleted(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(["rm", "--", relativePath], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "rm", stderr: result.stderr)
+        }
+    }
+}
+
+enum ConflictedFileError: LocalizedError {
+    case notConflicted(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConflicted(let path):
+            return "File '\(path)' is not in a conflicted state."
+        }
+    }
+}
+
+extension GitService {
+    /// Resolves a conflict by accepting LOCAL/HEAD content (`git checkout --ours <path>`).
+    /// Caller is responsible for staging via `markResolved` afterwards.
+    func useOurs(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(
+            ["checkout", "--ours", "--", relativePath],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "checkout --ours", stderr: result.stderr)
+        }
+    }
+
+    /// Resolves a conflict by accepting REMOTE/incoming content (`git checkout --theirs <path>`).
+    func useTheirs(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(
+            ["checkout", "--theirs", "--", relativePath],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "checkout --theirs", stderr: result.stderr)
+        }
+    }
+
+    /// Stages a file (`git add <path>`). Used after the user marks a
+    /// conflict resolution complete.
+    func markResolved(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(["add", "--", relativePath], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(
+                command: "add",
+                stderr: result.stderr
+            )
+        }
+    }
+
+    /// `git merge --continue` / `git rebase --continue` / `git cherry-pick --continue`,
+    /// chosen by the operation kind. Returns the same MergeResult shape as
+    /// the initiating call — a rebase Continue may produce a new conflict
+    /// on the next commit.
+    func continueOperation(worktreePath: URL, op: MergeOperation) async throws -> MergeResult {
+        let subcommand: String
+        switch op {
+        case .merge:      subcommand = "merge"
+        case .rebase:     subcommand = "rebase"
+        case .cherryPick: subcommand = "cherry-pick"
+        }
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "-c", "core.editor=true", subcommand, "--continue"],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
+    /// `git <op> --abort`. Restores the worktree and clears in-progress state.
+    func abortOperation(worktreePath: URL, op: MergeOperation) async throws {
+        let subcommand: String
+        switch op {
+        case .merge:      subcommand = "merge"
+        case .rebase:     subcommand = "rebase"
+        case .cherryPick: subcommand = "cherry-pick"
+        }
+        let result = try await Process.git([subcommand, "--abort"], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "\(subcommand) --abort", stderr: result.stderr)
+        }
+    }
+
+    /// `git rebase --skip` / `git cherry-pick --skip`. Throws for `.merge`
+    /// (merge has no --skip).
+    func skipOperation(worktreePath: URL, op: MergeOperation) async throws -> MergeResult {
+        let subcommand: String
+        switch op {
+        case .rebase:     subcommand = "rebase"
+        case .cherryPick: subcommand = "cherry-pick"
+        case .merge:      throw OperationError.skipNotSupported
+        }
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "-c", "core.editor=true", subcommand, "--skip"],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+}
+
+enum OperationError: LocalizedError {
+    case gitFailed(command: String, stderr: String)
+    case skipNotSupported
+
+    var errorDescription: String? {
+        switch self {
+        case .gitFailed(let cmd, let stderr):
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return msg.isEmpty ? "git \(cmd) failed" : msg
+        case .skipNotSupported:
+            return "Skip is not supported for a merge."
+        }
     }
 }
