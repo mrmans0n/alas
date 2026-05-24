@@ -8,6 +8,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case diff(DiffTabState)
     case commit(CommitTabState)
     case imagePreview(ImagePreviewTabState)
+    case mergeConflict(MergeConflictTabState)
 
     var id: TabID {
         switch self {
@@ -16,6 +17,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff(let s):         return s.id
         case .commit(let s):       return s.id
         case .imagePreview(let s): return s.id
+        case .mergeConflict(let s): return s.id
         }
     }
 
@@ -26,6 +28,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff(let s):         return s.title
         case .commit(let s):       return s.title
         case .imagePreview(let s): return s.title
+        case .mergeConflict(let s): return s.title
         }
     }
 
@@ -36,6 +39,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff:         return "diff"
         case .commit:       return "commit"
         case .imagePreview: return "image"
+        case .mergeConflict: return "diff"
         }
     }
 
@@ -43,6 +47,7 @@ enum Tab: Codable, Equatable, Identifiable {
         switch self {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
         case .imagePreview(let s): return s.relativePath
+        case .mergeConflict(let s): return s.relativePath
         default:                   return nil
         }
     }

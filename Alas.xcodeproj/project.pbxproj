@@ -105,6 +105,7 @@
 		2DB9FB7D9A00E93375624914 /* AlasGhostty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */; };
 		2DE20AB5DAEF233BE008E5AA /* RepoSelectorRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5A64AEDC7F12F08DA8D2A5 /* RepoSelectorRow.swift */; };
 		2E1D743806714BE4CD88A240 /* ContentSearcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */; };
+		2EA0D9B6F711518ECBF14CF7 /* TabMergeConflictCodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14907D679267359B3FB8A848 /* TabMergeConflictCodingTests.swift */; };
 		2ED636DD3A179B95C061A9E6 /* InlineErrorStripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2345B9578E57D570FDB058B /* InlineErrorStripTests.swift */; };
 		2F110275F3EC46505EF4DA48 /* SettingsSaveNormalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346272D3AF9A7D78067C96F /* SettingsSaveNormalizationTests.swift */; };
 		2FAA421AF3C23D27A864FDCA /* AgentBuiltins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F451C90EC9036CA8A7A04C /* AgentBuiltins.swift */; };
@@ -165,6 +166,7 @@
 		45B3616A459480A78A5004E8 /* ImageDiffPair.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0934F7BB22E33263B63925B7 /* ImageDiffPair.swift */; };
 		467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F68A9692F85197ED9E16262 /* WorktreesPane.swift */; };
 		474DF7FE50CB6146644B2450 /* ImageDiffEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 638E94907851A6D0B4AB8F52 /* ImageDiffEndToEndTests.swift */; };
+		476CE4945CF013F76A96AFC6 /* MergeConflictTabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A69F4742D3C251A59F400B8 /* MergeConflictTabState.swift */; };
 		4781661414034F09EA02E0BC /* CommitsOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8673293AD419AA36F7DF02A9 /* CommitsOlderTests.swift */; };
 		48E0B43B698544C1C4524242 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */; };
 		48EFAD2DE1F112D72B5F9FAC /* AgentPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37987D5884297401F95478D3 /* AgentPathTests.swift */; };
@@ -577,6 +579,7 @@
 		1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandleTests.swift; sourceTree = "<group>"; };
 		137F79BD0DEB96B6F756ABD4 /* JSONHookSettingsFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONHookSettingsFile.swift; sourceTree = "<group>"; };
 		14087D57E96448EEF0B80BD9 /* TerminalTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTabView.swift; sourceTree = "<group>"; };
+		14907D679267359B3FB8A848 /* TabMergeConflictCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabMergeConflictCodingTests.swift; sourceTree = "<group>"; };
 		155B35EBCCE7F2CA1A0E5DE5 /* HarnessService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessService.swift; sourceTree = "<group>"; };
 		159FE807399835B0821E1CAB /* EnvBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvBuilder.swift; sourceTree = "<group>"; };
 		1688AB1B49758FAB5BF0AF2F /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
@@ -623,6 +626,7 @@
 		29313DDC46A0CCA2FA42CDE9 /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
 		295319DB8544C170DDD6328D /* PathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathsTests.swift; sourceTree = "<group>"; };
 		2975A1465CA308E9766521F2 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		2A69F4742D3C251A59F400B8 /* MergeConflictTabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictTabState.swift; sourceTree = "<group>"; };
 		2B142F2A747C7F2D96E8BAD1 /* SessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRegistry.swift; sourceTree = "<group>"; };
 		2B9E3F080F847EF069137844 /* ShortcutBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutBinding.swift; sourceTree = "<group>"; };
 		2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffOpenFileAvailabilityTests.swift; sourceTree = "<group>"; };
@@ -1259,6 +1263,7 @@
 				07BC4D03723CEB1B6C2F9D15 /* TabActivityIconTintTests.swift */,
 				C7DD2CA21EC45168D6E43564 /* TabActivityPulseTests.swift */,
 				9F650CFAC8E61B1EC99CD04A /* TabActivityPulseTransitionTests.swift */,
+				14907D679267359B3FB8A848 /* TabMergeConflictCodingTests.swift */,
 				70377E10CD6D08B225BDFABE /* TabsManagerBufferTests.swift */,
 				D6A9977C979705A40595FD5E /* TabsManagerTests.swift */,
 				4A777C0D1DB412458D46A628 /* TerminalCLIInjectionTests.swift */,
@@ -1523,6 +1528,7 @@
 				008E982C8526670670425AB8 /* EmptyTabView.swift */,
 				6B3F942D660C7ABA8542C77D /* ImageFileType.swift */,
 				12E1AD3C6506DA5E6BFF4864 /* ImagePreviewTabView.swift */,
+				2A69F4742D3C251A59F400B8 /* MergeConflictTabState.swift */,
 				B27595490B7D883CF5D9FFD5 /* Tab.swift */,
 				8CFED7F76987C01213CB68A9 /* TabActivityPulse.swift */,
 				BEC7CCBF8463A95EAAE9EBCE /* TabBarView.swift */,
@@ -2320,6 +2326,7 @@
 				6C9E804AB246E7BFF8906C17 /* MarkdownTabView.swift in Sources */,
 				A98F3436BE8AB680178B341C /* MarkdownViewMode.swift in Sources */,
 				F3EB289C9DA8B25FC26DAB58 /* MasonSnapshot.swift in Sources */,
+				476CE4945CF013F76A96AFC6 /* MergeConflictTabState.swift in Sources */,
 				32A4E1C6A5A43C8B9C47C3C9 /* MergeOperationState.swift in Sources */,
 				82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */,
 				02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */,
@@ -2622,6 +2629,7 @@
 				6DDB5FC604A28D699350C3BD /* TabActivityIconTintTests.swift in Sources */,
 				6A639AFB741004AA32C9D81A /* TabActivityPulseTests.swift in Sources */,
 				90F619F67402DB675E2614CC /* TabActivityPulseTransitionTests.swift in Sources */,
+				2EA0D9B6F711518ECBF14CF7 /* TabMergeConflictCodingTests.swift in Sources */,
 				0563F6A02BFFE6B5013D2190 /* TabsManagerBufferTests.swift in Sources */,
 				E822ADCC0B35087C38FB01A3 /* TabsManagerTests.swift in Sources */,
 				BEFFE99F341935C249CA4943 /* TerminalCLIInjectionTests.swift in Sources */,
