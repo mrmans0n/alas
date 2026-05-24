@@ -512,6 +512,53 @@ final class TabsManager {
         return tab
     }
 
+    /// Open a merge-conflict tab for `relativePath`, or activate the existing
+    /// one if it's already open. Returns the tab.
+    @discardableResult
+    func openMergeConflict(worktreeId: String, relativePath: String, title: String) -> Tab {
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .mergeConflict(let s) = $0 {
+                   return s.relativePath == relativePath
+               }
+               return false
+           }) {
+            let existing = file.tabs[idx]
+            file.activeTabId = existing.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return existing
+        }
+        let state = MergeConflictTabState(
+            worktreeId: worktreeId,
+            relativePath: relativePath,
+            title: title
+        )
+        let tab = Tab.mergeConflict(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    /// Mutate the `MergeConflictTabState` for `tabId` in `worktreeId`'s tab list,
+    /// in place. Used by the merge editor view to persist UI state like the
+    /// `showBase` toggle. Persists to disk.
+    @discardableResult
+    func updateMergeConflict(
+        worktreeId: String,
+        tabId: TabID,
+        _ transform: (inout MergeConflictTabState) -> Void
+    ) -> Bool {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .mergeConflict(var state) = file.tabs[idx]
+        else { return false }
+        transform(&state)
+        file.tabs[idx] = .mergeConflict(state)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return true
+    }
+
     /// Open or focus an image preview tab for `relativePath`.
     @discardableResult
     func openImagePreview(worktreeId: String, relativePath: String) -> Tab {

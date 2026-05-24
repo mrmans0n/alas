@@ -143,6 +143,12 @@ struct CenterPaneView: View {
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                             relativePath: s.relativePath)
+                    case .mergeConflict(let s):
+                        MergeConflictTabView(
+                            state: state,
+                            worktree: worktree,
+                            tabState: s
+                        )
                     }
                 }
             }
