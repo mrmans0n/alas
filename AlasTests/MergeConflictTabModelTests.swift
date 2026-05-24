@@ -233,4 +233,47 @@ struct MergeConflictTabModelTests {
         let entry = changes.first { $0.path == "a.txt" }
         #expect(entry?.conflict == nil)
     }
+
+    @Test func markFileResolvedDoesNotRecreateMissingFile() async throws {
+        // Build a deletedByUs (DU) conflict: feature modifies a.txt, main
+        // deletes it. After the merge, the working tree has a.txt (theirs'
+        // content). Then simulate the user choosing "Keep deleted" via the
+        // right-pane action (Plan 1) — which removes the file from disk
+        // BEFORE the user opens the merge editor. Now if Mark resolved
+        // writes resultText (empty for a non-existing file), it would
+        // recreate the file as a 0-byte addition. It must not.
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try Self.writeFile(repo, "a.txt", "base\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try Self.writeFile(repo, "a.txt", "feature modification\n")
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        _ = try await Process.git(["rm", "-q", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "delete a"], cwd: repo)
+        // Merge feature → main: ours deleted, theirs modified → DU.
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        // Simulate the user picking "Keep deleted" from the right pane:
+        // remove the on-disk file.
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("a.txt"))
+
+        // Now: open the merge editor for that path and click Mark resolved.
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        // load() will see the entry as still conflicted (until we stage).
+        await model.load()
+        try await model.markFileResolved()
+
+        // The file must NOT have been recreated.
+        let recreated = FileManager.default.fileExists(
+            atPath: repo.appendingPathComponent("a.txt").path
+        )
+        #expect(recreated == false)
+    }
 }

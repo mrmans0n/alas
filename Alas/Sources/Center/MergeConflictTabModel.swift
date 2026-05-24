@@ -191,14 +191,22 @@ final class MergeConflictTabModel {
     /// Writes `resultText` to disk and stages the file via `GitService.markResolved`.
     /// Throws if either step fails.
     ///
-    /// For binary conflicts `resultText` is intentionally empty (the editor
-    /// does not show binary bytes), so writing it would clobber whichever
-    /// side currently lives on disk. In that case we stage the file as-is
-    /// without writing — the on-disk file is whatever the user chose via
-    /// the Use ours / Use theirs context menu in the right pane.
+    /// The write step is skipped in two cases where `resultText` is
+    /// intentionally empty and writing would corrupt the resolution:
+    ///   - Binary conflicts: the editor does not show binary bytes. The
+    ///     on-disk file is whatever the user chose via the right-pane
+    ///     Use ours / Use theirs context menu.
+    ///   - Missing files: delete-side conflicts (e.g., `bothDeleted` from
+    ///     a rename/rename, or any path the user removed via Keep deleted)
+    ///     have no working-tree entry. Writing would recreate the file as
+    ///     a zero-byte addition and `git add` would stage it as an
+    ///     addition, undoing the deletion.
+    /// In both cases we simply stage whatever is currently in the index
+    /// (or the missing-file state) via `git add`.
     func markFileResolved() async throws {
-        if conflictedFile?.isBinary != true {
-            let absolute = worktreePath.appendingPathComponent(relativePath)
+        let absolute = worktreePath.appendingPathComponent(relativePath)
+        let exists = FileManager.default.fileExists(atPath: absolute.path)
+        if conflictedFile?.isBinary != true, exists {
             try resultText.write(to: absolute, atomically: true, encoding: .utf8)
         }
         try await gitService.markResolved(
