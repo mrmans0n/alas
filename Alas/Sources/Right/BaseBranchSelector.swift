@@ -123,6 +123,9 @@ extension BaseBranchSelector {
             append(name)
         }
 
+        // 4. Active comparison ref (so users can always re-select it)
+        if let currentRef { append(currentRef) }
+
         return out
     }
 }

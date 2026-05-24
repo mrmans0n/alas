@@ -1025,13 +1025,28 @@ extension GitService {
     }
 
     /// Resolves the base ref to compare against for a given worktree.
-    /// Returns nil when neither `origin/<base>` nor local `<base>` exists.
+    /// Returns nil when neither `origin/<base>`, `refs/remotes/<base>`, nor local `<base>` exists.
     /// `remote == nil` means "no fetch path; use the local ref as-is".
     func resolveBaseRef(
         worktreePath: URL,
         baseBranch: String
     ) async throws -> (remote: String?, baseRef: String)? {
         guard !baseBranch.isEmpty else { return nil }
+
+        // If baseBranch already contains a slash (e.g. "upstream/main"),
+        // try it as a direct remote-tracking ref first.
+        if baseBranch.contains("/") {
+            let directRef = "refs/remotes/\(baseBranch)"
+            let directCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", directRef],
+                cwd: worktreePath
+            )
+            if directCheck.exitCode == 0 {
+                let parts = baseBranch.split(separator: "/", maxSplits: 1)
+                let remote = parts.count > 1 ? String(parts[0]) : nil
+                return (remote: remote, baseRef: baseBranch)
+            }
+        }
 
         // Prefer origin/<base>.
         let originRef = "refs/remotes/origin/\(baseBranch)"
