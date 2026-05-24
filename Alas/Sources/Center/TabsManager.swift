@@ -512,6 +512,32 @@ final class TabsManager {
         return tab
     }
 
+    /// Open a merge-conflict tab for `relativePath`, or activate the existing
+    /// one if it's already open. Returns the tab.
+    @discardableResult
+    func openMergeConflict(worktreeId: String, relativePath: String, title: String) -> Tab {
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .mergeConflict(let s) = $0 {
+                   return s.relativePath == relativePath
+               }
+               return false
+           }) {
+            let existing = file.tabs[idx]
+            file.activeTabId = existing.id
+            byWorktree[worktreeId] = file
+            return existing
+        }
+        let state = MergeConflictTabState(
+            worktreeId: worktreeId,
+            relativePath: relativePath,
+            title: title
+        )
+        let tab = Tab.mergeConflict(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     /// Open or focus an image preview tab for `relativePath`.
     @discardableResult
     func openImagePreview(worktreeId: String, relativePath: String) -> Tab {
