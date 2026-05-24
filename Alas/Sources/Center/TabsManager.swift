@@ -43,6 +43,8 @@ final class TabsManager {
     /// completion handler only clears pendingExternalOpenTasks if its
     /// captured generation still matches the current one.
     private var pendingExternalOpenGen: [TabID: Int] = [:]
+    /// Runtime-only display titles for terminal pane leaves. Key = leafId.
+    var terminalRuntimeTitles: [String: String] = [:]
     private let lsp: WorkspaceLSPManager?
 
     init(bufferStore: EditorBufferStore = EditorBufferStore(), lsp: WorkspaceLSPManager? = nil) {
@@ -168,8 +170,30 @@ final class TabsManager {
         return tab
     }
 
-    // MARK: - Pane tree mutations
+    // MARK: - Terminal runtime titles
 
+    func setTerminalRuntimeTitle(leafId: String, title: String) {
+        guard !title.isEmpty else { return }
+        terminalRuntimeTitles[leafId] = title
+    }
+
+    func clearTerminalRuntimeTitles(forLeavesInTabId tabId: TabID) {
+        guard let file = byWorktree.values.first(where: { $0.tabs.contains(where: { $0.id == tabId }) }) else { return }
+        guard let tab = file.tabs.first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab else { return }
+        for leaf in state.root.leaves() {
+            terminalRuntimeTitles.removeValue(forKey: leaf.id)
+        }
+    }
+
+    /// Returns the runtime display title for a terminal tab's focused leaf, if any.
+    func displayTerminalTitle(for tab: Tab) -> String? {
+        guard case .terminal(let state) = tab else { return nil }
+        guard let leafId = state.root.find(leafId: state.focusedLeafId)?.leaf.id else { return nil }
+        return terminalRuntimeTitles[leafId]
+    }
+
+    // MARK: - Pane tree mutations
     @discardableResult
     func setFocusedLeaf(worktreeId: String, tabId: TabID, leafId: String) -> Tab? {
         guard var file = byWorktree[worktreeId],
@@ -570,8 +594,14 @@ final class TabsManager {
     func close(worktreeId: String, tabId: TabID) {
         guard var file = byWorktree[worktreeId] else { return }
         guard let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return }
+        let tab = file.tabs[idx]
         let wasActive = file.activeTabId == tabId
         file.tabs.remove(at: idx)
+        if case .terminal(let state) = tab {
+            for leaf in state.root.leaves() {
+                terminalRuntimeTitles.removeValue(forKey: leaf.id)
+            }
+        }
         if wasActive {
             if file.tabs.isEmpty {
                 file.activeTabId = nil
