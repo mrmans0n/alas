@@ -89,7 +89,7 @@ struct DiffTabView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(theme.color("bg-2"))
             }
-            ScrollView {
+            ScrollView([.horizontal, .vertical]) {
                 if !loaded {
                     ProgressView().padding()
                 } else if diff.hunks.isEmpty {

@@ -4,9 +4,8 @@ import AppKit
 @testable import Alas
 
 /// Smoke tests for the shared diff hunk renderer used by working-tree and
-/// commit diff panes. Text selection is exercised at runtime via
-/// `.textSelection(.enabled)` and is not inspectable in an `NSHostingController`;
-/// these tests guard rendering crashes with varied hunk shapes.
+/// commit diff panes. The native hunk body is inspectable in hosted views, while
+/// these tests also guard rendering crashes with varied hunk shapes.
 @Suite(.serialized)
 @MainActor
 struct DiffSelectableTextTests {
@@ -139,7 +138,9 @@ struct Foo {
         let textView = try #require(textViews.first)
         #expect(textView.isHorizontallyResizable)
         #expect(textView.textContainer?.widthTracksTextView == false)
-        #expect((textView.textContainer?.containerSize.width ?? 0) > textView.bounds.width * 100)
+        #expect((textView.textContainer?.containerSize.width ?? 0) > textView.bounds.width)
+        #expect(container.intrinsicContentSize.width > container.frame.width)
+        #expect(textView.frame.width > container.frame.width)
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {

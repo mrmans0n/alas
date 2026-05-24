@@ -117,7 +117,7 @@ struct CommitDiffView: View {
                 .foregroundColor(theme.color("fg-dim"))
                 .padding()
         } else {
-            ScrollView {
+            ScrollView([.horizontal, .vertical]) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
                         HunkView(hunk: hunk, fileExtension: (path as NSString).pathExtension, codeFontFamily: codeFontFamily, codeFontSize: codeFontSize)

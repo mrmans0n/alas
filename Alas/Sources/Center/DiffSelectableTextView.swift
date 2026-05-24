@@ -29,6 +29,7 @@ final class DiffSelectableTextContainerView: NSView {
     private var lineMetadata: [DiffSelectableTextBuilder.LineMetadata] = []
     private var rowRects: [NSRect] = []
     private var measuredTextHeight: CGFloat = 0
+    private var measuredTextWidth: CGFloat = 0
     private var theme: Theme?
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
 
@@ -82,7 +83,7 @@ final class DiffSelectableTextContainerView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: totalHeight)
+        NSSize(width: totalWidth, height: totalHeight)
     }
 
     func update(
@@ -113,7 +114,7 @@ final class DiffSelectableTextContainerView: NSView {
         textView.frame = NSRect(
             x: textX,
             y: verticalInset,
-            width: max(0, bounds.width - textX - horizontalPadding),
+            width: max(measuredTextWidth, bounds.width - textX - horizontalPadding),
             height: measuredTextHeight
         )
         textView.textContainer?.containerSize = NSSize(
@@ -131,7 +132,7 @@ final class DiffSelectableTextContainerView: NSView {
             let rect = NSRect(
                 x: 0,
                 y: verticalInset + measuredRect.minY,
-                width: bounds.width,
+                width: max(bounds.width, totalWidth),
                 height: measuredRect.height
             )
             rowBackgroundColor(for: line.kind, theme: theme).setFill()
@@ -145,6 +146,11 @@ final class DiffSelectableTextContainerView: NSView {
         return measuredTextHeight + verticalInset * 2
     }
 
+    private var totalWidth: CGFloat {
+        let textX = horizontalPadding + gutterWidth + 16
+        return textX + measuredTextWidth + horizontalPadding
+    }
+
     private func updateMeasuredRowGeometry() {
         guard
             !lineMetadata.isEmpty,
@@ -153,6 +159,7 @@ final class DiffSelectableTextContainerView: NSView {
         else {
             rowRects = []
             measuredTextHeight = 0
+            measuredTextWidth = 0
             return
         }
 
@@ -174,6 +181,7 @@ final class DiffSelectableTextContainerView: NSView {
 
         rowRects = Array(measuredRows.prefix(lineMetadata.count))
         measuredTextHeight = rowRects.last?.maxY ?? 0
+        measuredTextWidth = ceil(layoutManager.usedRect(for: textContainer).width)
     }
 
     private func measuredTrailingRowRect(after measuredRows: [NSRect], layoutManager: NSLayoutManager) -> NSRect {
