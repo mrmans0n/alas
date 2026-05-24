@@ -143,7 +143,7 @@ extension GitService {
             // — that's the normal case for an untracked file. Only treat exit
             // codes >= 2 as real failures.
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
-            return DiffParser.parse(result.stdout)
+            return await Self.parseOffMain(result.stdout)
         }
 
         // Two distinct views, never combine HEAD and worktree:
@@ -165,7 +165,17 @@ extension GitService {
         args.append("--")
         args.append(file)
         let result = try await Process.git(args, cwd: worktreePath)
-        return DiffParser.parse(result.stdout)
+        return await Self.parseOffMain(result.stdout)
+    }
+
+    /// Parses diff stdout on a detached executor so callers awaited from the
+    /// MainActor (SwiftUI `.task`) don't resume on main for tens of thousands
+    /// of lines of synchronous string work — that's the freeze users see on
+    /// large generated files / lockfiles even though the pane shows a loader.
+    private static func parseOffMain(_ stdout: String) async -> ParsedDiff {
+        await Task.detached(priority: .userInitiated) {
+            DiffParser.parse(stdout)
+        }.value
     }
 
     func diff(worktreePath: URL, sha: String, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
@@ -221,7 +231,10 @@ extension GitService {
                 userInfo: [NSLocalizedDescriptionKey: result.stderr]
             )
         }
-        return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
+        let stdout = result.stdout
+        return await Task.detached(priority: .userInitiated) {
+            DiffParser.parse(Self.sliceDiffForFile(stdout, file: file))
+        }.value
     }
 
     /// Given a multi-file `git diff` output and a target path, return only
