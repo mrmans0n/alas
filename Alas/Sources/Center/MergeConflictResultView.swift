@@ -10,6 +10,7 @@ struct MergeConflictResultView: NSViewRepresentable {
     let fileExtension: String
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    let showBase: Bool
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -81,8 +82,10 @@ struct MergeConflictResultView: NSViewRepresentable {
     }
 
     /// Applies a yellow background to each line range that falls inside a
-    /// `<<<<<<< ... >>>>>>>` block in `text`. Accepts any `NSMutableAttributedString`
-    /// (including `NSTextStorage`, which IS-A `NSMutableAttributedString`).
+    /// `<<<<<<< ... >>>>>>>` block in `text`. Also applies italic + muted
+    /// attributes to BASE lines when `showBase` is true.
+    /// Accepts any `NSMutableAttributedString` (including `NSTextStorage`,
+    /// which IS-A `NSMutableAttributedString`).
     private func applyConflictShading(
         to storage: NSMutableAttributedString,
         text: String,
@@ -91,7 +94,8 @@ struct MergeConflictResultView: NSViewRepresentable {
         let regions = ConflictMarkerParser.parse(text)
         let highlight = NSColor(theme.color("warn")).withAlphaComponent(0.18)
         storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
-        let lineRanges = Self.computeLineRanges(in: text as NSString)
+        let nsString = text as NSString
+        let lineRanges = Self.computeLineRanges(in: nsString)
         for region in regions {
             if case .conflict(let block) = region {
                 let lower = max(block.lineRangeInMerged.lowerBound, 0)
@@ -99,8 +103,48 @@ struct MergeConflictResultView: NSViewRepresentable {
                 guard upper >= lower, upper < lineRanges.count else { continue }
                 let start = lineRanges[lower].location
                 let end = NSMaxRange(lineRanges[upper])
-                let nsr = NSRange(location: start, length: end - start)
-                storage.addAttribute(.backgroundColor, value: highlight, range: nsr)
+                storage.addAttribute(.backgroundColor, value: highlight,
+                                     range: NSRange(location: start, length: end - start))
+
+                if showBase, block.base != nil {
+                    applyBaseStyling(in: storage,
+                                     fullText: nsString,
+                                     lineRanges: lineRanges,
+                                     conflictRange: lower ... upper,
+                                     theme: theme)
+                }
+            }
+        }
+    }
+
+    /// Walks the lines inside a conflict marker block and applies italic +
+    /// muted-color attributes to the lines that fall between `||||||| ` and
+    /// `=======` markers. Called only when `showBase == true`.
+    private func applyBaseStyling(
+        in storage: NSMutableAttributedString,
+        fullText: NSString,
+        lineRanges: [NSRange],
+        conflictRange: ClosedRange<Int>,
+        theme: Theme
+    ) {
+        var inBase = false
+        let italic = CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize)
+            .italicVariant()
+        let muted = NSColor(theme.color("fg-dim"))
+        for lineIdx in conflictRange {
+            let lineRange = lineRanges[lineIdx]
+            let lineText = fullText.substring(with: lineRange)
+            if lineText.hasPrefix("||||||| ") {
+                inBase = true
+                continue
+            }
+            if lineText.hasPrefix("=======") {
+                inBase = false
+                continue
+            }
+            if inBase {
+                storage.addAttribute(.font, value: italic, range: lineRange)
+                storage.addAttribute(.foregroundColor, value: muted, range: lineRange)
             }
         }
     }
@@ -120,5 +164,16 @@ struct MergeConflictResultView: NSViewRepresentable {
             if index >= nsString.length { break }
         }
         return ranges
+    }
+}
+
+private extension NSFont {
+    /// Returns the italic version of this font, falling back to self if the
+    /// font has no italic face.
+    func italicVariant() -> NSFont {
+        let descriptor = fontDescriptor.withSymbolicTraits(
+            fontDescriptor.symbolicTraits.union(.italic)
+        )
+        return NSFont(descriptor: descriptor, size: pointSize) ?? self
     }
 }

@@ -140,7 +140,8 @@ struct MergeConflictTabView: View {
                     ),
                     fileExtension: fileExtension,
                     codeFontFamily: state.config.code.fontFamily,
-                    codeFontSize: CGFloat(state.config.code.fontSize)
+                    codeFontSize: CGFloat(state.config.code.fontSize),
+                    showBase: tabState.showBase
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
