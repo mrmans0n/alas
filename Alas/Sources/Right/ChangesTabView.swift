@@ -77,7 +77,7 @@ struct ChangesTabView: View {
 
             ConflictsSection(
                 conflicts: conflicts,
-                onSelect: onSelect,
+                onSelect: { file in rps.openConflict?(file.path) },
                 onUseOurs: { file in rps.useOurs(file: file) },
                 onUseTheirs: { file in rps.useTheirs(file: file) },
                 onKeepDeleted: { file in rps.keepDeleted(file: file) },
