@@ -211,4 +211,63 @@ struct GitServiceMergeTests {
             return
         }
     }
+
+    @Test func markResolvedStagesFile() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        let svc = GitService()
+        _ = try await svc.merge(worktreePath: repo, branch: "feature")
+
+        // Pretend the user resolved by writing a distinct resolution so it
+        // appears in git status as staged (accepting "ours" verbatim would
+        // produce content identical to HEAD, which git omits from status).
+        try Self.writeFile(repo, "a.txt", "resolved\n")
+        try await svc.markResolved(worktreePath: repo, relativePath: "a.txt")
+
+        let changes = try await svc.status(worktreePath: repo)
+        let entry = changes.first { $0.path == "a.txt" }
+        // After `git add` the file is staged with no remaining conflict.
+        #expect(entry?.stage == .staged)
+        #expect(entry?.conflict == nil)
+    }
+
+    @Test func continueMergeCommitsAndClearsState() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        let svc = GitService()
+        _ = try await svc.merge(worktreePath: repo, branch: "feature")
+        try Self.writeFile(repo, "a.txt", "main change\n")
+        try await svc.markResolved(worktreePath: repo, relativePath: "a.txt")
+
+        let state = try await svc.mergeState(worktreePath: repo)
+        guard case .merge = state else { Issue.record("expected merge state"); return }
+
+        let result = try await svc.continueOperation(worktreePath: repo, op: state!)
+        #expect(result == .clean)
+        let after = try await svc.mergeState(worktreePath: repo)
+        #expect(after == nil)
+    }
+
+    @Test func abortMergeRestoresHead() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        let svc = GitService()
+        let headBefore = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await svc.merge(worktreePath: repo, branch: "feature")
+
+        let state = try await svc.mergeState(worktreePath: repo)
+        try await svc.abortOperation(worktreePath: repo, op: state!)
+
+        let headAfter = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(headBefore == headAfter)
+        let mergedFile = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(!mergedFile.contains("<<<<<<<"))
+        let after = try await svc.mergeState(worktreePath: repo)
+        #expect(after == nil)
+    }
 }

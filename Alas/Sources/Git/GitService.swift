@@ -1361,3 +1361,88 @@ enum ConflictedFileError: LocalizedError {
         }
     }
 }
+
+extension GitService {
+    /// Stages a file (`git add <path>`). Used after the user marks a
+    /// conflict resolution complete.
+    func markResolved(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(["add", "--", relativePath], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(
+                command: "add",
+                stderr: result.stderr
+            )
+        }
+    }
+
+    /// `git merge --continue` / `git rebase --continue` / `git cherry-pick --continue`,
+    /// chosen by the operation kind. Returns the same MergeResult shape as
+    /// the initiating call — a rebase Continue may produce a new conflict
+    /// on the next commit.
+    func continueOperation(worktreePath: URL, op: MergeOperation) async throws -> MergeResult {
+        let subcommand: String
+        switch op {
+        case .merge:      subcommand = "merge"
+        case .rebase:     subcommand = "rebase"
+        case .cherryPick: subcommand = "cherry-pick"
+        }
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "-c", "core.editor=true", subcommand, "--continue"],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
+    /// `git <op> --abort`. Restores the worktree and clears in-progress state.
+    func abortOperation(worktreePath: URL, op: MergeOperation) async throws {
+        let subcommand: String
+        switch op {
+        case .merge:      subcommand = "merge"
+        case .rebase:     subcommand = "rebase"
+        case .cherryPick: subcommand = "cherry-pick"
+        }
+        let result = try await Process.git([subcommand, "--abort"], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "\(subcommand) --abort", stderr: result.stderr)
+        }
+    }
+
+    /// `git rebase --skip` / `git cherry-pick --skip`. Throws for `.merge`
+    /// (merge has no --skip).
+    func skipOperation(worktreePath: URL, op: MergeOperation) async throws -> MergeResult {
+        let subcommand: String
+        switch op {
+        case .rebase:     subcommand = "rebase"
+        case .cherryPick: subcommand = "cherry-pick"
+        case .merge:      throw OperationError.skipNotSupported
+        }
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "-c", "core.editor=true", subcommand, "--skip"],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+}
+
+enum OperationError: LocalizedError {
+    case gitFailed(command: String, stderr: String)
+    case skipNotSupported
+
+    var errorDescription: String? {
+        switch self {
+        case .gitFailed(let cmd, let stderr):
+            let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return msg.isEmpty ? "git \(cmd) failed" : msg
+        case .skipNotSupported:
+            return "Skip is not supported for a merge."
+        }
+    }
+}
