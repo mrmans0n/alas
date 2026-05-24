@@ -115,17 +115,26 @@ enum MergeAgent {
     }
 
     static func parseResolveOutput(_ raw: String) -> String {
-        // Many agents wrap output in ```lang ... ``` fences. Strip them.
-        var text = raw
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        if let first = lines.first, first.trimmingCharacters(in: .whitespaces).hasPrefix("```"),
-           let lastIdx = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }),
-           lastIdx > 0 {
-            let inner = lines[(lines.index(after: lines.startIndex)) ..< lastIdx]
-            text = inner.joined(separator: "\n")
-            if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
-            return text
+        // Many agents wrap output in ```lang ... ``` fences. Strip them only
+        // when they're the entire wrapper — i.e., the FIRST and LAST non-empty
+        // lines are both fence markers. A file whose own content starts with
+        // a fence (e.g., a markdown source file that opens with ```swift) must
+        // pass through unchanged.
+        let allLines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let nonEmptyIndices = allLines.indices.filter {
+            !allLines[$0].trimmingCharacters(in: .whitespaces).isEmpty
         }
+        guard let firstNonEmpty = nonEmptyIndices.first,
+              let lastNonEmpty = nonEmptyIndices.last,
+              firstNonEmpty < lastNonEmpty,
+              allLines[firstNonEmpty].trimmingCharacters(in: .whitespaces).hasPrefix("```"),
+              allLines[lastNonEmpty].trimmingCharacters(in: .whitespaces).hasPrefix("```")
+        else {
+            return raw
+        }
+        let inner = allLines[(firstNonEmpty + 1) ..< lastNonEmpty]
+        var text = inner.joined(separator: "\n")
+        if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
         return text
     }
 }

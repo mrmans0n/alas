@@ -80,4 +80,28 @@ struct MergeAgentTests {
         let out = "let a = 1\nlet b = 2\n"
         #expect(MergeAgent.parseResolveOutput(out) == out)
     }
+
+    @Test func parseResolveOutputPreservesLegitFileStartingWithFence() {
+        // A markdown source file that starts with a code fence and never
+        // closes the WHOLE document with a fence. Current behavior was to
+        // strip; correct behavior is to pass through unchanged.
+        let out = """
+        ```swift
+        let a = 1
+        ```
+        Some prose after the code block.
+        """
+        let parsed = MergeAgent.parseResolveOutput(out)
+        #expect(parsed == out)
+    }
+
+    @Test func parseResolveOutputStripsOnlyWhenFencesAreFullWrappers() {
+        let out = """
+        ```swift
+        let a = 1
+        ```
+        """
+        let parsed = MergeAgent.parseResolveOutput(out)
+        #expect(parsed == "let a = 1\n")
+    }
 }
