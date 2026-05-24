@@ -1111,3 +1111,127 @@ extension GitService {
         return Date()
     }
 }
+
+extension GitService {
+    /// Detects an in-progress merge / rebase / cherry-pick by inspecting
+    /// .git marker files. Returns nil when the worktree is idle.
+    func mergeState(worktreePath: URL) async throws -> MergeOperation? {
+        let gitDir = try await self.gitDir(worktreePath: worktreePath)
+
+        // Rebase first — both `MERGE_HEAD` and `rebase-merge` can coexist
+        // briefly during a `rebase -m`. Rebase is the more specific signal.
+        let rebaseMergeDir = gitDir.appendingPathComponent("rebase-merge")
+        if FileManager.default.fileExists(atPath: rebaseMergeDir.path) {
+            let plan = try await Self.readRebasePlan(
+                gitDir: gitDir,
+                rebaseMergeDir: rebaseMergeDir,
+                worktreePath: worktreePath
+            )
+            return .rebase(plan: plan)
+        }
+
+        let cherryHead = gitDir.appendingPathComponent("CHERRY_PICK_HEAD")
+        if FileManager.default.fileExists(atPath: cherryHead.path) {
+            let sha = (try? String(contentsOf: cherryHead, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let summary = (try? await Process.git(
+                ["log", "-1", "--pretty=%s", sha],
+                cwd: worktreePath
+            ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? sha
+            return .cherryPick(sha: sha, summary: summary)
+        }
+
+        let mergeHead = gitDir.appendingPathComponent("MERGE_HEAD")
+        if FileManager.default.fileExists(atPath: mergeHead.path) {
+            // Try to read MERGE_MSG for the source-branch name (`merge branch 'X'`).
+            let mergeMsg = gitDir.appendingPathComponent("MERGE_MSG")
+            let msg = (try? String(contentsOf: mergeMsg, encoding: .utf8)) ?? ""
+            let source = Self.parseMergeMsgBranch(msg)
+            return .merge(sourceBranch: source)
+        }
+        return nil
+    }
+
+    /// Resolves the absolute `.git` directory for the given worktree
+    /// (handles linked worktrees, where `.git` is a file pointing into a
+    /// subdir of the main repo).
+    private func gitDir(worktreePath: URL) async throws -> URL {
+        let result = try await Process.git(
+            ["rev-parse", "--absolute-git-dir"],
+            cwd: worktreePath
+        )
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return URL(fileURLWithPath: raw)
+    }
+
+    /// MERGE_MSG looks like:
+    ///   Merge branch 'feature/x'
+    /// or:
+    ///   Merge branch 'feature/x' into main
+    /// We only need the first quoted token.
+    static func parseMergeMsgBranch(_ msg: String) -> String? {
+        guard let openQuote = msg.firstIndex(of: "'") else { return nil }
+        let after = msg.index(after: openQuote)
+        guard let closeQuote = msg[after...].firstIndex(of: "'") else { return nil }
+        return String(msg[after ..< closeQuote])
+    }
+
+    /// Reads `rebase-merge/git-rebase-todo` (pending) plus `done` (already
+    /// applied) and `msgnum`/`end` (1-indexed current commit) to build a
+    /// RebasePlan with `done` / `current` / `pending` state per commit.
+    private static func readRebasePlan(
+        gitDir: URL,
+        rebaseMergeDir: URL,
+        worktreePath: URL
+    ) async throws -> RebasePlan {
+        func read(_ name: String) -> String? {
+            try? String(
+                contentsOf: rebaseMergeDir.appendingPathComponent(name),
+                encoding: .utf8
+            )
+        }
+        let todo = read("git-rebase-todo") ?? ""
+        let done = read("done") ?? ""
+        let ontoRef = read("onto")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headName = read("head-name")?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func parseLines(_ raw: String) -> [(String, String)] {
+            // Lines look like: "pick abcd123 commit subject"
+            raw.split(separator: "\n", omittingEmptySubsequences: true).compactMap { l in
+                let line = l.trimmingCharacters(in: .whitespaces)
+                guard !line.isEmpty, !line.hasPrefix("#") else { return nil }
+                let parts = line.split(
+                    separator: " ",
+                    maxSplits: 2,
+                    omittingEmptySubsequences: true
+                )
+                guard parts.count >= 3 else { return nil }
+                return (String(parts[1]), String(parts[2]))
+            }
+        }
+
+        let doneCommits = parseLines(done)
+        let todoCommits = parseLines(todo)
+
+        // `done` includes the *currently-conflicting* commit as its last
+        // entry. Mark it as .current; everything before is .done; todo is .pending.
+        var commits: [RebasePlanCommit] = []
+        if doneCommits.count >= 1 {
+            for (sha, summary) in doneCommits.dropLast() {
+                commits.append(RebasePlanCommit(sha: sha, summary: summary, state: .done))
+            }
+            let last = doneCommits.last!
+            commits.append(RebasePlanCommit(sha: last.0, summary: last.1, state: .current))
+        }
+        for (sha, summary) in todoCommits {
+            commits.append(RebasePlanCommit(sha: sha, summary: summary, state: .pending))
+        }
+
+        let onto = ontoRef
+        let source = headName.flatMap { ref -> String in
+            ref.hasPrefix("refs/heads/") ? String(ref.dropFirst("refs/heads/".count)) : ref
+        }
+
+        return RebasePlan(ontoBranch: onto, sourceBranch: source, commits: commits)
+    }
+}
