@@ -2,7 +2,6 @@ import SwiftUI
 
 struct CommitPromptEditorWindow: View {
     @Bindable var state: AppState
-    @Environment(\.dismiss) private var dismiss
     @State private var draftPrompt = ""
 
     var body: some View {
@@ -58,12 +57,12 @@ struct CommitPromptEditorWindow: View {
             HStack(spacing: 8) {
                 Spacer()
                 AlasButton(title: "Cancel", style: .subtle) {
-                    dismiss()
+                    closeWindow()
                 }
                 AlasButton(title: "Save", style: .primary) {
                     state.config.changes.prompt = draftPrompt
                     state.saveConfig()
-                    dismiss()
+                    closeWindow()
                 }
             }
             .padding(.horizontal, 32)
@@ -71,7 +70,7 @@ struct CommitPromptEditorWindow: View {
             .background(theme.color("bg-2"))
             .overlay(Divider().opacity(0.5), alignment: .top)
         }
-        .frame(width: 720, height: 560)
+        .frame(minWidth: 720, minHeight: 560)
         .background(theme.color("bg-1"))
         .background(WindowConfigurator())
         .environment(\.theme, theme)
@@ -79,5 +78,9 @@ struct CommitPromptEditorWindow: View {
         .onAppear {
             draftPrompt = state.config.changes.prompt
         }
+    }
+
+    private func closeWindow() {
+        NSApp.keyWindow?.close()
     }
 }
