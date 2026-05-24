@@ -17,9 +17,51 @@ struct ChangesTabView: View {
         rps.changes.filter { $0.stage == .staged }.reduce(0) { $0 + $1.del }
     }
 
+    private var conflicts: [ChangedFile] {
+        rps.changes.filter { $0.conflict != nil }
+    }
+
+    private var nonConflictChanges: [ChangedFile] {
+        rps.changes.filter { $0.conflict == nil }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if let op = rps.mergeOp.current {
+                    OperationCard(
+                        operation: op,
+                        hasUnresolvedConflicts: !conflicts.isEmpty,
+                        onContinue: { rps.continueOperation() },
+                        onSkip: { rps.skipOperation() },
+                        onAbort: { rps.abortOperation() }
+                    )
+                }
+
+                ConflictsSection(
+                    conflicts: conflicts,
+                    onSelect: onSelect,
+                    onUseOurs: { file in
+                        Task {
+                            _ = try? await Process.git(
+                                ["checkout", "--ours", "--", file.path],
+                                cwd: rps.worktree.path
+                            )
+                            rps.markResolved(file: file)
+                        }
+                    },
+                    onUseTheirs: { file in
+                        Task {
+                            _ = try? await Process.git(
+                                ["checkout", "--theirs", "--", file.path],
+                                cwd: rps.worktree.path
+                            )
+                            rps.markResolved(file: file)
+                        }
+                    },
+                    onMarkResolved: { file in rps.markResolved(file: file) }
+                )
+
                 if stagedCount > 0 {
                     CommitComposerView(
                         state: rps.composer,
@@ -36,7 +78,7 @@ struct ChangesTabView: View {
                     )
                 }
                 WorkingTreeSectionView(
-                    changes: rps.changes,
+                    changes: nonConflictChanges,
                     expanded: $rps.workingTreeExpanded,
                     onSelect: onSelect,
                     onToggleStage: { rps.toggleStage($0) },
