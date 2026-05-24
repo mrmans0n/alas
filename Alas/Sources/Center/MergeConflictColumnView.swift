@@ -38,14 +38,20 @@ struct MergeConflictColumnView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        let attr = MergeConflictTextStorage.highlightedAttributedString(
-            text: text,
-            fileExtension: fileExtension,
-            fontFamily: codeFontFamily,
-            fontSize: codeFontSize,
-            theme: theme
-        )
-        textView.textStorage?.setAttributedString(attr)
+        // Avoid a full re-layout when the bound text hasn't changed (e.g., on
+        // theme/config-only updates). The background color is cheap to set
+        // unconditionally.
+        let current = textView.string
+        if current != text {
+            let attr = MergeConflictTextStorage.highlightedAttributedString(
+                text: text,
+                fileExtension: fileExtension,
+                fontFamily: codeFontFamily,
+                fontSize: codeFontSize,
+                theme: theme
+            )
+            textView.textStorage?.setAttributedString(attr)
+        }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
     }
 }
