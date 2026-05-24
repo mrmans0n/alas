@@ -71,7 +71,7 @@ struct CommitRow: View {
     }
 
     private var subjectLine: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let tag = commit.conventionalTag {
                 Text(tag)
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
