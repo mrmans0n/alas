@@ -119,12 +119,17 @@ extension BaseBranchSelector {
         if let upstream { append(upstream) }
 
         // 3. Recent (max 3, newest first)
-        for name in recent.prefix(3) {
+        for name in recent.reversed().prefix(3) {
             append(name)
         }
 
         // 4. Active comparison ref (so users can always re-select it)
         if let currentRef { append(currentRef) }
+
+        // 5. Remaining branches, so search can reach refs outside the smart shortlist.
+        for branch in branches {
+            append(branch)
+        }
 
         return out
     }

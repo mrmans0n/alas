@@ -56,7 +56,7 @@ struct BaseBranchSelectorTests {
             upstream: nil,
             recent: ["a", "a", "b"]
         )
-        #expect(result == ["main", "a", "b"])
+        #expect(result == ["main", "b", "a"])
     }
 
     @Test func smartListSkipsAbsentMainlines() {
@@ -78,7 +78,17 @@ struct BaseBranchSelectorTests {
             upstream: nil,
             recent: ["a", "b", "c", "d"]
         )
-        #expect(result == ["main", "a", "b", "c"])
+        #expect(result == ["main", "d", "c", "b", "a"])
+    }
+
+    @Test func smartListOrdersRecentNewestFirst() {
+        let result = BaseBranchSelector.smartList(
+            branches: ["main", "release/old", "release/current", "release/new"],
+            currentRef: "main",
+            upstream: nil,
+            recent: ["release/old", "release/current", "release/new"]
+        )
+        #expect(result.prefix(4) == ["main", "release/new", "release/current", "release/old"])
     }
 
     @Test func smartListHandlesEmptyInput() {
@@ -99,5 +109,15 @@ struct BaseBranchSelectorTests {
             recent: []
         )
         #expect(result == ["main", "origin/main", "release/2026.1"])
+    }
+
+    @Test func smartListKeepsNonSmartBranchesSearchable() {
+        let result = BaseBranchSelector.smartList(
+            branches: ["main", "release/2026.1", "hotfix/payment"],
+            currentRef: "main",
+            upstream: nil,
+            recent: []
+        )
+        #expect(result == ["main", "release/2026.1", "hotfix/payment"])
     }
 }
