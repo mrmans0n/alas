@@ -15,7 +15,6 @@ struct AppConfigAgentsCodingTests {
         {
           "themeId": "cool-slate",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
@@ -86,7 +85,6 @@ struct AppConfigAgentsCodingTests {
         {
           "themeId": "cool-slate",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
