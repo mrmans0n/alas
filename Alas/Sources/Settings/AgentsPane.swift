@@ -68,7 +68,7 @@ struct AgentsPane: View {
                             Text("Configure harness notifications and install hooks.")
                                 .font(.system(size: 11.5))
                                 .foregroundColor(theme.color("fg-dim"))
-                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .frame(width: 240, alignment: .leading)
                         .padding(.top, 4)
