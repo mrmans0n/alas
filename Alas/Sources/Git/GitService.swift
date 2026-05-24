@@ -1030,7 +1030,7 @@ extension GitService {
     func resolveBaseRef(
         worktreePath: URL,
         baseBranch: String
-    ) async throws -> (remote: String?, baseRef: String)? {
+    ) async throws -> (remote: String?, baseRef: String, fetchBranch: String?)? {
         guard !baseBranch.isEmpty else { return nil }
 
         // If baseBranch already contains a slash (e.g. "upstream/main"),
@@ -1042,9 +1042,8 @@ extension GitService {
                 cwd: worktreePath
             )
             if directCheck.exitCode == 0 {
-                let parts = baseBranch.split(separator: "/", maxSplits: 1)
-                let remote = parts.count > 1 ? String(parts[0]) : nil
-                return (remote: remote, baseRef: baseBranch)
+                let remoteBranch = try await splitRemoteQualifiedRef(baseBranch, worktreePath: worktreePath)
+                return (remote: remoteBranch.remote, baseRef: baseBranch, fetchBranch: remoteBranch.branch)
             }
         }
 
@@ -1055,7 +1054,7 @@ extension GitService {
             cwd: worktreePath
         )
         if originCheck.exitCode == 0 {
-            return (remote: "origin", baseRef: "origin/\(baseBranch)")
+            return (remote: "origin", baseRef: "origin/\(baseBranch)", fetchBranch: baseBranch)
         }
 
         // Fall back to local <base>.
@@ -1064,10 +1063,29 @@ extension GitService {
             cwd: worktreePath
         )
         if localCheck.exitCode == 0 {
-            return (remote: nil, baseRef: baseBranch)
+            return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
         }
 
         return nil
+    }
+
+    private func splitRemoteQualifiedRef(_ ref: String, worktreePath: URL) async throws -> (remote: String?, branch: String?) {
+        let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
+        if remotesResult.exitCode == 0 {
+            let remotes = remotesResult.stdout
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            if let remote = remotes
+                .filter({ ref.hasPrefix($0 + "/") })
+                .max(by: { $0.count < $1.count }) {
+                return (remote: remote, branch: String(ref.dropFirst(remote.count + 1)))
+            }
+        }
+
+        let parts = ref.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2 else { return (remote: nil, branch: nil) }
+        return (remote: String(parts[0]), branch: String(parts[1]))
     }
 
     /// Resolves the upstream tracking ref (e.g. `origin/my-feature`) of the

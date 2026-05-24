@@ -30,6 +30,20 @@ struct GitServiceBehindStatusTests {
         let resolved = try await svc.resolveBaseRef(worktreePath: repo, baseBranch: "main")
         #expect(resolved?.remote == "origin")
         #expect(resolved?.baseRef == "origin/main")
+        #expect(resolved?.fetchBranch == "main")
+    }
+
+    @Test func resolveBaseRefSplitsRemoteQualifiedBranchForFetch() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let svc = GitService()
+        let resolved = try await svc.resolveBaseRef(worktreePath: repo, baseBranch: "origin/main")
+        #expect(resolved?.remote == "origin")
+        #expect(resolved?.baseRef == "origin/main")
+        #expect(resolved?.fetchBranch == "main")
     }
 
     @Test func resolveBaseRefFallsBackToLocalBase() async throws {
@@ -46,6 +60,7 @@ struct GitServiceBehindStatusTests {
         let resolved = try await svc.resolveBaseRef(worktreePath: dir, baseBranch: "main")
         #expect(resolved?.remote == nil)
         #expect(resolved?.baseRef == "main")
+        #expect(resolved?.fetchBranch == nil)
     }
 
     @Test func resolveBaseRefReturnsNilWhenNoBaseExists() async throws {

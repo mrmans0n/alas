@@ -90,4 +90,14 @@ struct BaseBranchSelectorTests {
         )
         #expect(result.isEmpty)
     }
+
+    @Test func smartListIncludesCurrentRefWhenAbsentFromShortlist() {
+        let result = BaseBranchSelector.smartList(
+            branches: ["main", "origin/main"],
+            currentRef: "release/2026.1",
+            upstream: nil,
+            recent: []
+        )
+        #expect(result == ["main", "origin/main", "release/2026.1"])
+    }
 }

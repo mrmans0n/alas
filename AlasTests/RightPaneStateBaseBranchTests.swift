@@ -93,4 +93,17 @@ struct RightPaneStateBaseBranchTests {
         state.selectBaseBranch("main")
         #expect(state.recentBaseBranches == ["trunk", "staging", "main"])
     }
+
+    @Test func selectBaseBranchRefreshesExistingRecentRecency() async throws {
+        let tmp = try await createTestRepoWithBranches()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let wt = makeWorktree(at: tmp, branch: "feature")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.selectBaseBranch("develop")
+        state.selectBaseBranch("trunk")
+        state.selectBaseBranch("develop")
+        state.selectBaseBranch("staging")
+        state.selectBaseBranch("main")
+        #expect(state.recentBaseBranches == ["develop", "staging", "main"])
+    }
 }

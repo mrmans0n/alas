@@ -169,11 +169,10 @@ final class RightPaneState {
     func selectBaseBranch(_ branch: String) {
         baseBranch = branch
         userOverrodeBaseBranch = true
-        if !recentBaseBranches.contains(branch) {
-            recentBaseBranches.append(branch)
-            if recentBaseBranches.count > 3 {
-                recentBaseBranches = Array(recentBaseBranches.suffix(3))
-            }
+        recentBaseBranches.removeAll { $0 == branch }
+        recentBaseBranches.append(branch)
+        if recentBaseBranches.count > 3 {
+            recentBaseBranches = Array(recentBaseBranches.suffix(3))
         }
         Task { @MainActor in
             async let r = refresh()
@@ -821,7 +820,7 @@ final class RightPaneState {
                         try await git.fetchRef(
                             worktreePath: worktree.path,
                             remote: remote,
-                            branch: baseBranch
+                            branch: resolved.fetchBranch ?? baseBranch
                         )
                     } catch {
                         logger.error("base fetch failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
