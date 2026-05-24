@@ -78,6 +78,14 @@ final class ProjectsManager {
         reorderProject(fromIndex: fromIndex, toIndex: toIndex)
     }
 
+    func moveProjectToEnd(id: String) {
+        guard let fromIndex = projects.firstIndex(where: { $0.id == id }),
+              fromIndex != projects.count - 1
+        else { return }
+        let moving = projects.remove(at: fromIndex)
+        projects.append(moving)
+    }
+
     func worktrees(projectId: String) -> [Worktree] {
         worktreesByProject[projectId] ?? []
     }
