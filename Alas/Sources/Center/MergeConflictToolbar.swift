@@ -25,6 +25,8 @@ struct MergeConflictToolbar: View {
             Toggle("Show BASE", isOn: $showBase)
                 .toggleStyle(.button)
                 .controlSize(.small)
+                .disabled(true)
+                .help("BASE inline rendering arrives in a follow-up — toggle is wired for persistence only")
             Button(action: onMarkResolved) {
                 Text("Mark resolved")
                     .font(.system(size: 11))
