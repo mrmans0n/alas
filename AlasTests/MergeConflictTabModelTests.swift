@@ -306,4 +306,41 @@ struct MergeConflictTabModelTests {
         model.setAnnotation("LOCAL renamed; REMOTE changed default.", forConflictOrdinal: 0)
         #expect(model.annotations[0] == "LOCAL renamed; REMOTE changed default.")
     }
+
+    @Test func applyAgentProposalReplacesResultTextAndReparses() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        model.resultText = """
+        <<<<<<< HEAD
+        ours
+        =======
+        theirs
+        >>>>>>> feature
+
+        """
+        model.reparse()
+        #expect(model.conflictCount == 1)
+        model.setAgentProposalForTesting("merged content\n")
+        #expect(model.agentProposal == "merged content\n")
+        model.applyAgentProposal()
+        #expect(model.resultText == "merged content\n")
+        #expect(model.conflictCount == 0)
+        #expect(model.agentProposal == nil)
+    }
+
+    @Test func discardAgentProposalClearsProposalAndKeepsResultText() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        model.resultText = "before\n"
+        model.setAgentProposalForTesting("after\n")
+        model.discardAgentProposal()
+        #expect(model.agentProposal == nil)
+        #expect(model.resultText == "before\n")
+    }
 }

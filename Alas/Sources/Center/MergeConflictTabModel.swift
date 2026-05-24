@@ -26,6 +26,14 @@ final class MergeConflictTabModel {
     /// on `load()` failure.
     private(set) var initialConflictCount: Int = 0
 
+    /// Set while a `MergeAgent` request is in flight. Drives toolbar disabled-state.
+    private(set) var agentBusy: Bool = false
+
+    /// Agent's proposed full-file resolution, awaiting user Apply/Cancel.
+    /// Nil when no proposal is pending. Cleared by `applyAgentProposal` /
+    /// `discardAgentProposal`.
+    private(set) var agentProposal: String?
+
     let worktreePath: URL
     let relativePath: String
     private let gitService: GitService
@@ -230,5 +238,74 @@ final class MergeConflictTabModel {
     /// Called by `MergeConflictTabView` after a successful `MergeAgent.explainConflict` round-trip.
     func setAnnotation(_ text: String, forConflictOrdinal ordinal: Int) {
         annotations[ordinal] = text
+    }
+
+    // MARK: - Agent assist
+
+    /// Asks the agent to summarize the current conflict in one sentence and
+    /// caches the result in `annotations[currentConflictIndex]`. No-op if
+    /// there's no current conflict or no agent. Errors are silent (no UI).
+    func explainCurrentConflict(using agent: AgentDefinition, language: String?) async {
+        guard let ordinal = currentConflictIndex,
+              let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
+              case .conflict(let block) = regions[regionIdx]
+        else { return }
+        do {
+            let sentence = try await MergeAgent.explainConflict(
+                agent: agent,
+                block: block,
+                language: language
+            )
+            if !sentence.isEmpty {
+                setAnnotation(sentence, forConflictOrdinal: ordinal)
+            }
+        } catch {
+            logger.error("explain failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Asks the agent to propose a full-file resolution. On success, stashes
+    /// the proposal in `agentProposal` for the view to render as a diff
+    /// overlay. Errors leave `agentProposal` nil.
+    func requestAgentResolveFile(using agent: AgentDefinition, language: String?) async {
+        guard let file = conflictedFile else { return }
+        agentBusy = true
+        defer { agentBusy = false }
+        do {
+            let proposal = try await MergeAgent.resolveFile(
+                agent: agent,
+                filePath: relativePath,
+                local: file.local ?? "",
+                base: file.base,
+                remote: file.remote ?? "",
+                mergedWithMarkers: resultText,
+                language: language
+            )
+            agentProposal = proposal
+        } catch {
+            agentProposal = nil
+            logger.error("resolveFile failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Replaces `resultText` with the pending `agentProposal` and clears it.
+    /// No-op when there's no proposal.
+    func applyAgentProposal() {
+        guard let proposal = agentProposal else { return }
+        resultText = proposal
+        agentProposal = nil
+        reparse()
+    }
+
+    /// Discards the pending agent proposal without changing `resultText`.
+    func discardAgentProposal() {
+        agentProposal = nil
+    }
+
+    /// Test-only setter so unit tests can stage a proposal without invoking
+    /// a real agent. Marked `internal` (default) and named to make its
+    /// test-only intent obvious.
+    func setAgentProposalForTesting(_ proposal: String) {
+        agentProposal = proposal
     }
 }
