@@ -179,6 +179,7 @@
 		4E7279E8E76C7778BC686DF1 /* ProjectPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00809DCA566AAAADD7448659 /* ProjectPickerTests.swift */; };
 		4EC689B454508C1ED77C5FB4 /* RightPaneVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3EC1A61207050A2585288FB /* RightPaneVisibilityTests.swift */; };
 		4ECFD27396367A9A81D52A0D /* WorktreeRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C995611A6313FABE30508248 /* WorktreeRowView.swift */; };
+		5031D53ED872A86B7C253696 /* MergeConflictToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91B5694DB75F80C8D7B51E82 /* MergeConflictToolbar.swift */; };
 		512A41C0AB75B8D35424EBCD /* DeletingWorktreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDD799D0EC22F74A3DCB7F09 /* DeletingWorktreeView.swift */; };
 		51370BBBB2BDE992F6BA8B04 /* EventHolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25493E3B18A1AB94EA6985C3 /* EventHolder.swift */; };
 		513BF637E5FF0BF3883FB1CC /* GitNameValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDED937A8E8340D6E685A6E /* GitNameValidatorTests.swift */; };
@@ -827,6 +828,7 @@
 		90817EC3BAA727EF6D9FBD97 /* GitService+Discard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+Discard.swift"; sourceTree = "<group>"; };
 		910CB5077C8E89A778F1E896 /* ChangesTreeBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTreeBuilder.swift; sourceTree = "<group>"; };
 		9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMonoNerdFont-Regular.ttf"; sourceTree = "<group>"; };
+		91B5694DB75F80C8D7B51E82 /* MergeConflictToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictToolbar.swift; sourceTree = "<group>"; };
 		91C1705E68E97111E85D83F3 /* RightPaneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneState.swift; sourceTree = "<group>"; };
 		91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusParser.swift; sourceTree = "<group>"; };
 		9278ED5964A66871F5299F0C /* ImageDiffDifferenceComputerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffDifferenceComputerTests.swift; sourceTree = "<group>"; };
@@ -1535,6 +1537,7 @@
 				12E1AD3C6506DA5E6BFF4864 /* ImagePreviewTabView.swift */,
 				CF15D3E39502C1BA6618943B /* MergeConflictTabModel.swift */,
 				2A69F4742D3C251A59F400B8 /* MergeConflictTabState.swift */,
+				91B5694DB75F80C8D7B51E82 /* MergeConflictToolbar.swift */,
 				B27595490B7D883CF5D9FFD5 /* Tab.swift */,
 				8CFED7F76987C01213CB68A9 /* TabActivityPulse.swift */,
 				BEC7CCBF8463A95EAAE9EBCE /* TabBarView.swift */,
@@ -2334,6 +2337,7 @@
 				F3EB289C9DA8B25FC26DAB58 /* MasonSnapshot.swift in Sources */,
 				906EE12924284FF21B9BDEFF /* MergeConflictTabModel.swift in Sources */,
 				476CE4945CF013F76A96AFC6 /* MergeConflictTabState.swift in Sources */,
+				5031D53ED872A86B7C253696 /* MergeConflictToolbar.swift in Sources */,
 				32A4E1C6A5A43C8B9C47C3C9 /* MergeOperationState.swift in Sources */,
 				82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */,
 				02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */,
