@@ -14,7 +14,7 @@ struct SettingsRow<Control: View>: View {
                 if let desc {
                     Text(desc).font(.system(size: 11.5))
                         .foregroundColor(theme.color("fg-dim"))
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(width: 240, alignment: .leading)
