@@ -15,6 +15,16 @@ struct BaseBranchSelectorTests {
         #expect(result[2] == "develop")
     }
 
+    @Test func smartListDoesNotPromoteNestedBranchesNamedMain() {
+        let result = BaseBranchSelector.smartList(
+            branches: ["origin/release/main", "origin/main", "feature/main"],
+            currentRef: nil,
+            upstream: nil,
+            recent: []
+        )
+        #expect(result == ["origin/main", "origin/release/main", "feature/main"])
+    }
+
     @Test func smartListIncludesUpstreamWhenNotMainline() {
         let branches = ["main", "origin/feature-x"]
         let result = BaseBranchSelector.smartList(

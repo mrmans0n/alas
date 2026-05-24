@@ -109,7 +109,10 @@ extension BaseBranchSelector {
         for name in mainlineNames {
             if branches.contains(name) { append(name) }
             for branch in branches {
-                if branch.hasSuffix("/\(name)") && branch.contains("/") {
+                let parts = branch.split(separator: "/")
+                if parts.count == 2,
+                   parts[1] == name,
+                   !["feature", "release", "hotfix"].contains(parts[0]) {
                     append(branch)
                 }
             }

@@ -58,6 +58,27 @@ struct RightPaneStateBaseBranchTests {
         return tmp
     }
 
+    private func createTestRepoWithUpstream() async throws -> (worktree: URL, root: URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-base-branch-upstream-\(UUID().uuidString)")
+        let remote = root.appendingPathComponent("remote.git")
+        let worktree = root.appendingPathComponent("clone")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "--bare", "-b", "master"], cwd: remote)
+        _ = try await Process.git(["clone", "-q", remote.path, worktree.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: worktree)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: worktree)
+        try "base\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: worktree)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "master"], cwd: worktree)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: worktree)
+        try "feature\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feature work"], cwd: worktree)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "feature"], cwd: worktree)
+        return (worktree, root)
+    }
+
     @Test func selectBaseBranchAppendsToRecent() async throws {
         let tmp = try await createTestRepoWithBranches()
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -105,5 +126,16 @@ struct RightPaneStateBaseBranchTests {
         state.selectBaseBranch("staging")
         state.selectBaseBranch("main")
         #expect(state.recentBaseBranches == ["develop", "staging", "main"])
+    }
+
+    @Test func refreshUsesUpstreamWhenConfiguredBaseIsMissingAndNotOverridden() async throws {
+        let (repo, root) = try await createTestRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let wt = makeWorktree(at: repo, branch: "feature")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+
+        await state.refresh()
+
+        #expect(state.comparisonRef == "origin/feature")
     }
 }
