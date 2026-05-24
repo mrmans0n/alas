@@ -138,6 +138,8 @@ struct ConflictsSection: View {
         }
     }
 
+    /// Context menu for `textConflictRow` only. Delete-side and bothDeleted
+    /// rows render their own dedicated rows + menus and never reach here.
     @ViewBuilder
     private func menuItems(for file: ChangedFile) -> some View {
         switch file.conflict {
@@ -148,17 +150,7 @@ struct ConflictsSection: View {
             Button("Keep ours") { onUseOurs(file) }
         case .addedByThem:
             Button("Keep theirs") { onUseTheirs(file) }
-        case .deletedByUs:
-            // ours = deleted; theirs = modified
-            Button("Keep theirs") { onUseTheirs(file) }
-            Button("Keep deleted") { onKeepDeleted(file) }
-        case .deletedByThem:
-            // ours = modified; theirs = deleted
-            Button("Keep ours") { onUseOurs(file) }
-            Button("Keep deleted") { onKeepDeleted(file) }
-        case .bothDeleted:
-            Button("Keep deleted") { onKeepDeleted(file) }
-        case nil:
+        case .deletedByUs, .deletedByThem, .bothDeleted, nil:
             EmptyView()
         }
         Divider()
