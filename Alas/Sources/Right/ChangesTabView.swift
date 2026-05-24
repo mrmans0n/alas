@@ -78,24 +78,8 @@ struct ChangesTabView: View {
             ConflictsSection(
                 conflicts: conflicts,
                 onSelect: onSelect,
-                onUseOurs: { file in
-                    Task {
-                        _ = try? await Process.git(
-                            ["checkout", "--ours", "--", file.path],
-                            cwd: rps.worktree.path
-                        )
-                        rps.markResolved(file: file)
-                    }
-                },
-                onUseTheirs: { file in
-                    Task {
-                        _ = try? await Process.git(
-                            ["checkout", "--theirs", "--", file.path],
-                            cwd: rps.worktree.path
-                        )
-                        rps.markResolved(file: file)
-                    }
-                },
+                onUseOurs: { file in rps.useOurs(file: file) },
+                onUseTheirs: { file in rps.useTheirs(file: file) },
                 onMarkResolved: { file in rps.markResolved(file: file) }
             )
 

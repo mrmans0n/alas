@@ -1366,6 +1366,29 @@ enum ConflictedFileError: LocalizedError {
 }
 
 extension GitService {
+    /// Resolves a conflict by accepting LOCAL/HEAD content (`git checkout --ours <path>`).
+    /// Caller is responsible for staging via `markResolved` afterwards.
+    func useOurs(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(
+            ["checkout", "--ours", "--", relativePath],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "checkout --ours", stderr: result.stderr)
+        }
+    }
+
+    /// Resolves a conflict by accepting REMOTE/incoming content (`git checkout --theirs <path>`).
+    func useTheirs(worktreePath: URL, relativePath: String) async throws {
+        let result = try await Process.git(
+            ["checkout", "--theirs", "--", relativePath],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw OperationError.gitFailed(command: "checkout --theirs", stderr: result.stderr)
+        }
+    }
+
     /// Stages a file (`git add <path>`). Used after the user marks a
     /// conflict resolution complete.
     func markResolved(worktreePath: URL, relativePath: String) async throws {

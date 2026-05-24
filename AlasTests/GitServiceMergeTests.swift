@@ -250,6 +250,30 @@ struct GitServiceMergeTests {
         #expect(after == nil)
     }
 
+    @Test func useOursAcceptsHeadContent() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        let svc = GitService()
+        _ = try await svc.merge(worktreePath: repo, branch: "feature")
+
+        try await svc.useOurs(worktreePath: repo, relativePath: "a.txt")
+        let content = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(content == "main change\n")
+    }
+
+    @Test func useTheirsAcceptsIncomingContent() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        let svc = GitService()
+        _ = try await svc.merge(worktreePath: repo, branch: "feature")
+
+        try await svc.useTheirs(worktreePath: repo, relativePath: "a.txt")
+        let content = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(content == "feature change\n")
+    }
+
     @Test func abortMergeRestoresHead() async throws {
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

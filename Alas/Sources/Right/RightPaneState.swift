@@ -946,6 +946,32 @@ final class RightPaneState {
     }
 
     @MainActor
+    func useOurs(file: ChangedFile) {
+        Task { @MainActor in
+            do {
+                try await git.useOurs(worktreePath: worktree.path, relativePath: file.path)
+                try await git.markResolved(worktreePath: worktree.path, relativePath: file.path)
+                await refresh()
+            } catch {
+                logger.error("useOurs failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func useTheirs(file: ChangedFile) {
+        Task { @MainActor in
+            do {
+                try await git.useTheirs(worktreePath: worktree.path, relativePath: file.path)
+                try await git.markResolved(worktreePath: worktree.path, relativePath: file.path)
+                await refresh()
+            } catch {
+                logger.error("useTheirs failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
     func markResolved(file: ChangedFile) {
         Task { @MainActor in
             do {
