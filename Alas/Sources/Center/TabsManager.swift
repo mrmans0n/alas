@@ -526,6 +526,7 @@ final class TabsManager {
             let existing = file.tabs[idx]
             file.activeTabId = existing.id
             byWorktree[worktreeId] = file
+            persist(worktreeId)
             return existing
         }
         let state = MergeConflictTabState(
