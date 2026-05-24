@@ -164,6 +164,7 @@ struct MergeConflictTabView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             MergeConflictMinimap(
                 conflictCount: model.conflictCount,
+                resolvedCount: max(model.initialConflictCount - model.conflictCount, 0),
                 currentConflictIndex: model.currentConflictIndex,
                 onJump: { idx in
                     // Clamp via repeated next/previous — the model's clamping
