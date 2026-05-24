@@ -189,8 +189,23 @@ struct DiffTabView: View {
 
         do {
             let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
-            let loadedTotalAdd = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count
-            let loadedTotalDel = loadedDiff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count
+            // Single off-main pass instead of two `.flatMap.filter.count`
+            // allocations on MainActor — for big diffs each pass copies the
+            // full line array, which would stall the UI right after parse.
+            let (loadedTotalAdd, loadedTotalDel) = await Task.detached(priority: .userInitiated) {
+                var add = 0
+                var del = 0
+                for hunk in loadedDiff.hunks {
+                    for line in hunk.lines {
+                        switch line.kind {
+                        case .add: add += 1
+                        case .delete: del += 1
+                        case .context: break
+                        }
+                    }
+                }
+                return (add, del)
+            }.value
             let tracked = (try? await Process.git(
                 ["ls-files", "--error-unmatch", "--", relativePath],
                 cwd: worktreePath
