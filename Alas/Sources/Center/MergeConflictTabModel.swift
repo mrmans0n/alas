@@ -190,9 +190,17 @@ final class MergeConflictTabModel {
 
     /// Writes `resultText` to disk and stages the file via `GitService.markResolved`.
     /// Throws if either step fails.
+    ///
+    /// For binary conflicts `resultText` is intentionally empty (the editor
+    /// does not show binary bytes), so writing it would clobber whichever
+    /// side currently lives on disk. In that case we stage the file as-is
+    /// without writing — the on-disk file is whatever the user chose via
+    /// the Use ours / Use theirs context menu in the right pane.
     func markFileResolved() async throws {
-        let absolute = worktreePath.appendingPathComponent(relativePath)
-        try resultText.write(to: absolute, atomically: true, encoding: .utf8)
+        if conflictedFile?.isBinary != true {
+            let absolute = worktreePath.appendingPathComponent(relativePath)
+            try resultText.write(to: absolute, atomically: true, encoding: .utf8)
+        }
         try await gitService.markResolved(
             worktreePath: worktreePath,
             relativePath: relativePath

@@ -26,7 +26,10 @@ struct MergeConflictTabView: View {
             MergeConflictToolbar(
                 conflictCount: model.conflictCount,
                 currentConflictIndex: model.currentConflictIndex,
-                isLoaded: model.conflictedFile != nil,
+                // Binaries can't be resolved through the 3-column editor
+                // (they're handled via the right-pane Use ours / Use theirs
+                // context menu). Keep the resolve button disabled for them.
+                isLoaded: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
                 showBase: showBaseBinding,
                 onPrevious: { model.previousConflict() },
                 onNext: { model.nextConflict() },
@@ -49,9 +52,12 @@ struct MergeConflictTabView: View {
             )
             content
         }
-        // Trigger initial load from the always-rendered root so the first
-        // open (when content shows the spinner) still kicks off the work.
-        .task(id: tabState.relativePath) {
+        // Trigger a fresh load every time the view appears, not just on
+        // first mount. `TabsManager.openMergeConflict` re-uses an existing
+        // tab for the same path, so re-focusing after a second conflict on
+        // the same file must re-read the three sides to avoid showing stale
+        // resultText/regions from the prior conflict.
+        .task {
             await model.load()
         }
     }
