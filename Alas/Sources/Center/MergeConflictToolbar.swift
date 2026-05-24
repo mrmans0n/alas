@@ -3,6 +3,10 @@ import SwiftUI
 struct MergeConflictToolbar: View {
     let conflictCount: Int
     let currentConflictIndex: Int?
+    /// True only after the conflicted file has been loaded successfully.
+    /// Gates `Mark resolved` so it can't fire on an empty initial buffer
+    /// and clobber the on-disk file with empty contents.
+    let isLoaded: Bool
     @Binding var showBase: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -33,7 +37,7 @@ struct MergeConflictToolbar: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.green)
-            .disabled(conflictCount > 0)
+            .disabled(!isLoaded || conflictCount > 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
