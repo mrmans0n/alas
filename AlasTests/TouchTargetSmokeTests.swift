@@ -63,7 +63,8 @@ struct TouchTargetSmokeTests {
             rightSidebarHidden: false,
             onRevealSidebar: { },
             sidebarHidden: false,
-            onMove: { _, _ in }
+            onMove: { _, _ in },
+            titleLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
@@ -94,7 +95,8 @@ struct TouchTargetSmokeTests {
             rightSidebarHidden: false,
             onRevealSidebar: { },
             sidebarHidden: false,
-            onMove: { _, _ in }
+            onMove: { _, _ in },
+            titleLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
@@ -135,7 +137,8 @@ struct TouchTargetSmokeTests {
             rightSidebarHidden: true,
             onRevealSidebar: { },
             sidebarHidden: false,
-            onMove: { _, _ in }
+            onMove: { _, _ in },
+            titleLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
@@ -176,7 +179,8 @@ struct TouchTargetSmokeTests {
             rightSidebarHidden: false,
             onRevealSidebar: { },
             sidebarHidden: true,
-            onMove: { _, _ in }
+            onMove: { _, _ in },
+            titleLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)

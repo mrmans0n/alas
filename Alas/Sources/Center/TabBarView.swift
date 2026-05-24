@@ -22,6 +22,7 @@ struct TabBarView: View {
     let onRevealSidebar: () -> Void
     let sidebarHidden: Bool
     let onMove: (TabID, TabID) -> Void
+    let titleLookup: (TabID) -> String?
     @Environment(\.theme) var theme
 
     private var isTerminalActive: Bool {
@@ -41,6 +42,7 @@ struct TabBarView: View {
             }
             ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
                 TabButton(
+                    titleLookup: titleLookup,
                     tab: tab,
                     active: tab.id == activeId,
                     showClose: tabs.count > 1,
@@ -111,6 +113,7 @@ struct TabBarView: View {
 }
 
 private struct TabButton: View {
+    let titleLookup: (TabID) -> String?
     let tab: Tab
     let active: Bool
     let showClose: Bool
@@ -126,7 +129,8 @@ private struct TabButton: View {
             Icon(name: tab.iconName, size: 11,
                  color: iconColor)
                 .modifier(TabActivityPulse(activityState: harnessInfo?.state))
-            Text(tab.title)
+            let displayTitle = titleLookup(tab.id) ?? tab.title
+            Text(displayTitle)
                 .font(.system(size: 11.5))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
                 .lineLimit(1)

@@ -564,3 +564,52 @@ struct TabsManagerPaneTests {
                 "lastCwd should be preserved across session replacement")
     }
 }
+
+// MARK: - Terminal runtime titles
+
+@MainActor
+struct TabsManagerRuntimeTitleTests {
+    @Test func setTerminalRuntimeTitleStoresTitle() {
+        let mgr = TabsManager()
+        mgr.setTerminalRuntimeTitle(leafId: "leaf1", title: "vim foo")
+        #expect(mgr.terminalRuntimeTitles["leaf1"] == "vim foo")
+    }
+
+    @Test func setTerminalRuntimeTitleIgnoresEmptyTitle() {
+        let mgr = TabsManager()
+        mgr.setTerminalRuntimeTitle(leafId: "leaf1", title: "vim foo")
+        mgr.setTerminalRuntimeTitle(leafId: "leaf1", title: "")
+        #expect(mgr.terminalRuntimeTitles["leaf1"] == "vim foo")
+    }
+
+    @Test func closingTerminalTabCleansUpRuntimeTitles() {
+        let worktreeId = "wt"
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "bash", sessionId: "s1")
+        guard case .terminal(let state) = tab else {
+            Issue.record("Expected terminal tab")
+            return
+        }
+        let leafId = state.focusedLeafId
+        mgr.setTerminalRuntimeTitle(leafId: leafId, title: "vim foo")
+        mgr.close(worktreeId: worktreeId, tabId: tab.id)
+        #expect(mgr.terminalRuntimeTitles[leafId] == nil)
+    }
+
+    @Test func displayTerminalTitleReturnsFocusedLeafTitle() {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "bash", sessionId: "s1")
+        guard case .terminal(let state) = tab else {
+            Issue.record("Expected terminal tab")
+            return
+        }
+        mgr.setTerminalRuntimeTitle(leafId: state.focusedLeafId, title: "vim foo")
+        #expect(mgr.displayTerminalTitle(for: tab) == "vim foo")
+    }
+
+    @Test func displayTerminalTitleReturnsNilForNonTerminalTab() {
+        let mgr = TabsManager()
+        let tab = mgr.appendEditor(worktreeId: "wt", title: "README.md", relativePath: "README.md")
+        #expect(mgr.displayTerminalTitle(for: tab) == nil)
+    }
+}
