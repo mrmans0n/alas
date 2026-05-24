@@ -41,7 +41,6 @@ struct AppConfigSidebarChromeOverridesTests {
         {
             "themeId": "cool-slate",
             "accent": "teal",
-            "density": "comfortable",
             "matchSystemTheme": false,
             "sidebarMaterial": "appKitSidebar",
             "sidebarWidth": 244,

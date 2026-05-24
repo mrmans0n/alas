@@ -15,7 +15,6 @@ struct SidebarChromeOverride: Codable, Equatable {
 struct AppConfig: Codable, Equatable {
     var themeId: String
     var accent: String
-    var density: String          // compact | comfortable | spacious
     var matchSystemTheme: Bool
     var sidebarMaterial: SidebarMaterialChoice
     var sidebarWidth: Double
@@ -157,7 +156,6 @@ struct AppConfig: Codable, Equatable {
     static let defaults = AppConfig(
         themeId: "cool-slate",
         accent: "teal",
-        density: "comfortable",
         matchSystemTheme: false,
         sidebarMaterial: .appKitSidebar,
         sidebarWidth: 244,
@@ -246,7 +244,7 @@ extension AppConfig {
 
 extension AppConfig {
     enum CodingKeys: String, CodingKey {
-        case themeId, accent, density, matchSystemTheme,
+        case themeId, accent, matchSystemTheme,
              sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible, sidebarVisible,
              commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown, changes,
@@ -267,7 +265,6 @@ extension AppConfig {
         // collapses to the dark default.
         themeId = (rawThemeId == "warm-amber" || rawThemeId == "neutral") ? "cool-slate" : rawThemeId
         accent = try c.decode(String.self, forKey: .accent)
-        density = try c.decode(String.self, forKey: .density)
         matchSystemTheme = try c.decode(Bool.self, forKey: .matchSystemTheme)
         sidebarMaterial = (try? c.decode(SidebarMaterialChoice.self, forKey: .sidebarMaterial)) ?? .appKitFullScreenUI
         sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)

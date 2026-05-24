@@ -35,7 +35,6 @@ struct AppConfigTests {
         {
           "themeId": "cool-slate",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
@@ -72,7 +71,6 @@ struct AppConfigTests {
         {
           "themeId": "cool-slate",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
@@ -118,7 +116,6 @@ struct AppConfigTests {
         {
           "themeId": "warm-amber",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
@@ -154,7 +151,6 @@ struct AppConfigTests {
         {
           "themeId": "neutral",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
@@ -205,7 +201,6 @@ struct AppConfigTests {
         {
           "themeId": "cool-slate",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
@@ -242,7 +237,6 @@ struct AppConfigTests {
         {
           "themeId": "cool-slate",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,

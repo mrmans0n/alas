@@ -21,7 +21,7 @@ struct AppearancePane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Appearance").font(.system(size: 18, weight: .semibold))
-                Text("Themes, density, window chrome, and display defaults.")
+                Text("Themes, window chrome, and display defaults.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
@@ -142,15 +142,6 @@ struct AppearancePane: View {
                     SettingsRow(name: "Text contrast",
                                 desc: "Pulls sidebar text toward maximum contrast.") {
                         AlasSlider(value: chromeBinding(\.textContrast), range: 0...1, step: 0.05)
-                    }
-                }
-                SettingsGroup(title: "Layout") {
-                    SettingsRow(name: "Density") {
-                        Seg(value: bind(\.density), options: [
-                            ("compact", "compact"),
-                            ("comfortable", "comfortable"),
-                            ("spacious", "spacious"),
-                        ])
                     }
                 }
                 SettingsGroup(title: "Markdown") {
