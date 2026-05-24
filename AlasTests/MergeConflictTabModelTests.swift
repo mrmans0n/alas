@@ -76,4 +76,120 @@ struct MergeConflictTabModelTests {
         #expect(model.conflictedFile == nil)
         #expect(model.loadError != nil)
     }
+
+    @Test func acceptLocalReplacesMarkerBlockWithLocalContent() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+
+        model.acceptLocal()
+        #expect(!model.resultText.contains("<<<<<<<"))
+        #expect(model.resultText.contains("main line"))
+        #expect(model.conflictCount == 0)
+        #expect(model.currentConflictIndex == nil)
+    }
+
+    @Test func acceptRemoteReplacesMarkerBlockWithRemoteContent() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+
+        model.acceptRemote()
+        #expect(!model.resultText.contains("<<<<<<<"))
+        #expect(model.resultText.contains("feature line"))
+    }
+
+    @Test func acceptBothPreservesBothSides() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+
+        model.acceptBoth()
+        #expect(!model.resultText.contains("<<<<<<<"))
+        #expect(model.resultText.contains("main line"))
+        #expect(model.resultText.contains("feature line"))
+    }
+
+    @Test func nextAndPreviousNavigateConflicts() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        // Bypass load() and inject a synthetic two-conflict resultText.
+        model.resultText = """
+        head
+        <<<<<<< HEAD
+        a-ours
+        =======
+        a-theirs
+        >>>>>>> feature
+        middle
+        <<<<<<< HEAD
+        b-ours
+        =======
+        b-theirs
+        >>>>>>> feature
+        tail
+
+        """
+        model.reparse()
+        #expect(model.conflictCount == 2)
+        #expect(model.currentConflictIndex == 0)
+
+        model.nextConflict()
+        #expect(model.currentConflictIndex == 1)
+        model.nextConflict()
+        #expect(model.currentConflictIndex == 1) // clamped at last
+
+        model.previousConflict()
+        #expect(model.currentConflictIndex == 0)
+        model.previousConflict()
+        #expect(model.currentConflictIndex == 0) // clamped at first
+    }
+
+    @Test func markFileResolvedStagesViaGitService() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        model.acceptLocal()
+        try await model.markFileResolved()
+
+        // After mark-resolved, status no longer lists a.txt as conflicted.
+        let changes = try await GitService().status(worktreePath: repo)
+        let entry = changes.first { $0.path == "a.txt" }
+        #expect(entry?.conflict == nil)
+    }
 }

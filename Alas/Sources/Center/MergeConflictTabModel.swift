@@ -103,4 +103,97 @@ final class MergeConflictTabModel {
         _ = ord
         return nil
     }
+
+    // MARK: - Accept actions
+
+    /// Replaces the current conflict's marker block with LOCAL content.
+    func acceptLocal() {
+        guard let ordinal = currentConflictIndex,
+              let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
+              case .conflict(let block) = regions[regionIdx]
+        else { return }
+        replaceCurrentConflictBlock(with: block.local)
+    }
+
+    /// Replaces the current conflict's marker block with REMOTE content.
+    func acceptRemote() {
+        guard let ordinal = currentConflictIndex,
+              let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
+              case .conflict(let block) = regions[regionIdx]
+        else { return }
+        replaceCurrentConflictBlock(with: block.remote)
+    }
+
+    /// Replaces the current conflict's marker block with LOCAL followed by REMOTE.
+    func acceptBoth() {
+        guard let ordinal = currentConflictIndex,
+              let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
+              case .conflict(let block) = regions[regionIdx]
+        else { return }
+        replaceCurrentConflictBlock(with: block.local + block.remote)
+    }
+
+    /// Replaces the current conflict region in `resultText` with `replacement`
+    /// (which should already include any trailing newlines required). Updates
+    /// regions + currentConflictIndex.
+    private func replaceCurrentConflictBlock(with replacement: String) {
+        guard let ordinal = currentConflictIndex,
+              let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
+              case .conflict(let block) = regions[regionIdx]
+        else { return }
+
+        // Find the substring range of the marker block in resultText.
+        // We use the 0-indexed line range stored on the ConflictBlock:
+        //   lineRangeInMerged covers the `<<<<<<<` line through `>>>>>>>` line inclusive.
+        let lines = resultText.split(separator: "\n", omittingEmptySubsequences: false)
+        let lower = block.lineRangeInMerged.lowerBound
+        let upper = block.lineRangeInMerged.upperBound
+        guard upper < lines.count else { return }
+
+        // Rebuild resultText with the marker-block lines replaced by `replacement`.
+        var head = lines[0..<lower].map(String.init).joined(separator: "\n")
+        if !head.isEmpty { head += "\n" }
+        let tail = lines[(upper + 1)..<lines.count].map(String.init).joined(separator: "\n")
+        let trimmedReplacement = replacement.hasSuffix("\n") ? replacement : replacement + "\n"
+        resultText = head + trimmedReplacement + tail
+
+        reparse()
+    }
+
+    // MARK: - Navigation
+
+    /// Jumps to the next unresolved conflict, clamping at the last one.
+    func nextConflict() {
+        let total = conflictCount
+        guard total > 0 else {
+            currentConflictIndex = nil
+            return
+        }
+        let current = currentConflictIndex ?? -1
+        currentConflictIndex = min(current + 1, total - 1)
+    }
+
+    /// Jumps to the previous unresolved conflict, clamping at the first one.
+    func previousConflict() {
+        let total = conflictCount
+        guard total > 0 else {
+            currentConflictIndex = nil
+            return
+        }
+        let current = currentConflictIndex ?? total
+        currentConflictIndex = max(current - 1, 0)
+    }
+
+    // MARK: - Resolve
+
+    /// Writes `resultText` to disk and stages the file via `GitService.markResolved`.
+    /// Throws if either step fails.
+    func markFileResolved() async throws {
+        let absolute = worktreePath.appendingPathComponent(relativePath)
+        try resultText.write(to: absolute, atomically: true, encoding: .utf8)
+        try await gitService.markResolved(
+            worktreePath: worktreePath,
+            relativePath: relativePath
+        )
+    }
 }
