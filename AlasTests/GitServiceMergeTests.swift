@@ -140,4 +140,45 @@ struct GitServiceMergeTests {
         let file = try await svc.conflictedFile(worktreePath: repo, relativePath: "a.bin")
         #expect(file.isBinary == true)
     }
+
+    @Test func mergeReturnsCleanWhenNoConflict() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try Self.writeFile(repo, "a.txt", "base\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try Self.writeFile(repo, "b.txt", "new\n")
+        _ = try await Process.git(["add", "b.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add b"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+
+        let svc = GitService()
+        let result = try await svc.merge(worktreePath: repo, branch: "feature")
+        #expect(result == .clean)
+    }
+
+    @Test func mergeReturnsConflictWhenConflicting() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+
+        let svc = GitService()
+        let result = try await svc.merge(worktreePath: repo, branch: "feature")
+        guard case .conflict(let files) = result else {
+            Issue.record("expected .conflict, got \(result)")
+            return
+        }
+        #expect(files.contains(where: { $0.path == "a.txt" && $0.conflict == .bothModified }))
+    }
+
+    @Test func mergeWritesZdiff3MarkersWithBaseSection() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        let svc = GitService()
+        _ = try await svc.merge(worktreePath: repo, branch: "feature")
+        let merged = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(merged.contains("|||||||"))  // zdiff3 base marker
+    }
 }

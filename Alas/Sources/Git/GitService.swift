@@ -1291,6 +1291,40 @@ extension GitService {
     }
 }
 
+extension GitService {
+    /// Runs `git merge <branch>` with the zdiff3 conflict style so the
+    /// on-disk merged file includes the BASE section inline. Returns:
+    ///   - .clean   on a fast-forward or no-conflict merge
+    ///   - .conflict(files)   when the working tree is left in conflict
+    ///   - .error(message)    for any other non-zero exit
+    func merge(worktreePath: URL, branch: String) async throws -> MergeResult {
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "merge", branch, "--no-edit"],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
+    /// After running any conflict-producing operation, check the worktree
+    /// state and classify. Used by merge, rebase, cherry-pick, continue.
+    func classifyOperationResult(worktreePath: URL, exitCode: Int32, stderr: String) async throws -> MergeResult {
+        if exitCode == 0 {
+            return .clean
+        }
+        let changes = try await status(worktreePath: worktreePath)
+        let conflicted = changes.filter { $0.conflict != nil }
+        if !conflicted.isEmpty {
+            return .conflict(files: conflicted)
+        }
+        let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .error(message: msg.isEmpty ? "Operation failed with exit code \(exitCode)" : msg)
+    }
+}
+
 enum ConflictedFileError: LocalizedError {
     case notConflicted(path: String)
 
