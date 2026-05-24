@@ -22,38 +22,57 @@ struct MergeConflictTabView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            MergeConflictToolbar(
-                conflictCount: model.conflictCount,
-                currentConflictIndex: model.currentConflictIndex,
-                // Binaries can't be resolved through the 3-column editor
-                // (they're handled via the right-pane Use ours / Use theirs
-                // context menu). Keep the resolve button disabled for them.
-                isLoaded: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
-                agentBusy: model.agentBusy,
-                hasAgent: false,                 // wired in Task 6
-                showBase: showBaseBinding,
-                onPrevious: { model.previousConflict() },
-                onNext: { model.nextConflict() },
-                onAcceptLocal: { model.acceptLocal() },
-                onAcceptRemote: { model.acceptRemote() },
-                onAcceptBoth: { model.acceptBoth() },
-                onAcceptAndNext: {
-                    model.acceptLocal()
-                    model.nextConflict()
-                },
-                onAskAgentResolve: {},           // wired in Task 6
-                onMarkResolved: {
-                    Task {
-                        try? await model.markFileResolved()
-                        // The WorktreeWatcher on RightPaneState picks up the
-                        // .git/index change from `git add` and refreshes the
-                        // Conflicts section automatically — no explicit call
-                        // is needed here.
+        ZStack {
+            VStack(spacing: 0) {
+                MergeConflictToolbar(
+                    conflictCount: model.conflictCount,
+                    currentConflictIndex: model.currentConflictIndex,
+                    // Binaries can't be resolved through the 3-column editor
+                    // (they're handled via the right-pane Use ours / Use theirs
+                    // context menu). Keep the resolve button disabled for them.
+                    isLoaded: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
+                    agentBusy: model.agentBusy,
+                    hasAgent: resolvedAgent != nil,
+                    showBase: showBaseBinding,
+                    onPrevious: { model.previousConflict() },
+                    onNext: { model.nextConflict() },
+                    onAcceptLocal: { model.acceptLocal() },
+                    onAcceptRemote: { model.acceptRemote() },
+                    onAcceptBoth: { model.acceptBoth() },
+                    onAcceptAndNext: {
+                        model.acceptLocal()
+                        model.nextConflict()
+                    },
+                    onAskAgentResolve: {
+                        guard let agent = resolvedAgent else { return }
+                        Task {
+                            await model.requestAgentResolveFile(using: agent, language: fileLanguage)
+                        }
+                    },
+                    onMarkResolved: {
+                        Task {
+                            try? await model.markFileResolved()
+                            // The WorktreeWatcher on RightPaneState picks up the
+                            // .git/index change from `git add` and refreshes the
+                            // Conflicts section automatically — no explicit call
+                            // is needed here.
+                        }
                     }
-                }
-            )
-            content
+                )
+                content
+            }
+            if let proposal = model.agentProposal {
+                MergeConflictAgentProposalView(
+                    currentText: model.resultText,
+                    proposedText: proposal,
+                    fileExtension: fileExtension,
+                    codeFontFamily: state.config.code.fontFamily,
+                    codeFontSize: CGFloat(state.config.code.fontSize),
+                    onApply: { model.applyAgentProposal() },
+                    onCancel: { model.discardAgentProposal() }
+                )
+                .transition(.opacity)
+            }
         }
         // Trigger a fresh load every time the view appears, not just on
         // first mount. `TabsManager.openMergeConflict` re-uses an existing
@@ -162,6 +181,24 @@ struct MergeConflictTabView: View {
 
     private var fileExtension: String {
         (tabState.relativePath as NSString).pathExtension
+    }
+
+    /// Resolves the agent to use for merge-conflict assistance. Prefers the
+    /// user's pinned tool from Settings → Changes → AI tool, then falls back
+    /// to any enabled agent. Returns nil only when no agents are configured.
+    private var resolvedAgent: AgentDefinition? {
+        let id = state.config.changes.aiToolId
+        if !id.isEmpty, id != "none", let agent = state.agent(id: id) {
+            return agent
+        }
+        return state.agentRegistry.enabled().first
+    }
+
+    /// Best-effort language label for the agent prompts. Returns nil for
+    /// extension-less paths so the prompts omit the language hint.
+    private var fileLanguage: String? {
+        let ext = fileExtension
+        return ext.isEmpty ? nil : ext
     }
 
     /// Writes the BASE-toggle back through TabsManager so the preference
