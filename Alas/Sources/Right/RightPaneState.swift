@@ -10,6 +10,9 @@ enum RightPaneTab: String { case changes, files }
 final class RightPaneState {
     let worktree: Worktree
     var changes: [ChangedFile] = []
+    /// Per-worktree in-progress merge / rebase / cherry-pick state.
+    /// Refreshed alongside `changes` from `refresh()`.
+    let mergeOp: MergeOperationState
     var composer = CommitComposerState()
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
@@ -69,6 +72,11 @@ final class RightPaneState {
     /// that construct `RightPaneState` directly.
     var closeDiffTabs: (([String]) -> Void)? = nil
 
+    /// Injected by `RightPaneStore` to open the conflict resolution UI for a
+    /// given file. In Plan 1, this routes to the existing unified DiffTabView.
+    /// In Plan 2, it will route to the new 3-column merge editor.
+    var openConflict: ((String) -> Void)? = nil
+
     private let git = GitService()
     private let watcher: WorktreeWatcher
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-state")
@@ -103,6 +111,7 @@ final class RightPaneState {
         self.worktree = worktree
         self.baseBranch = baseBranch
         self.currentBranch = worktree.branch
+        self.mergeOp = MergeOperationState(worktreePath: worktree.path, gitService: GitService())
         self.watcher = WorktreeWatcher(path: worktree.path)
         watcher.onChange = { [weak self] in
             Task { @MainActor in await self?.refresh() }
@@ -148,6 +157,7 @@ final class RightPaneState {
             async let s = git.status(worktreePath: worktree.path)
             async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch)
             async let br = git.currentBranch(worktreePath: worktree.path)
+            async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
@@ -186,6 +196,7 @@ final class RightPaneState {
                 }
                 didInitDefaultTab = true
             }
+            _ = await mergeRefresh
         } catch {
             // Surface failures via os.Logger so they're visible in Console.app
             // and the unified log. The previous `print` here silently kept
@@ -847,6 +858,117 @@ final class RightPaneState {
         } catch {
             logger.error("loadOlder failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             self.hasMoreOlder = false
+        }
+    }
+
+    // MARK: - Merge / rebase / cherry-pick operations
+
+    /// Runs `git merge <branch>`, refreshes state, and auto-opens the first
+    /// conflicted file (via `openConflict`) when the result is a conflict.
+    @MainActor
+    func runMerge(branch: String) {
+        Task { @MainActor in
+            do {
+                let result = try await git.merge(worktreePath: worktree.path, branch: branch)
+                await refresh()
+                handleOperationResult(result)
+            } catch {
+                logger.error("merge failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func runRebase(onto: String) {
+        Task { @MainActor in
+            do {
+                let result = try await git.rebase(worktreePath: worktree.path, onto: onto)
+                await refresh()
+                handleOperationResult(result)
+            } catch {
+                logger.error("rebase failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func runCherryPick(sha: String) {
+        Task { @MainActor in
+            do {
+                let result = try await git.cherryPick(worktreePath: worktree.path, sha: sha)
+                await refresh()
+                handleOperationResult(result)
+            } catch {
+                logger.error("cherry-pick failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func continueOperation() {
+        Task { @MainActor in
+            guard let op = mergeOp.current else { return }
+            do {
+                let result = try await git.continueOperation(worktreePath: worktree.path, op: op)
+                await refresh()
+                handleOperationResult(result)
+            } catch {
+                logger.error("continue failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func abortOperation() {
+        Task { @MainActor in
+            guard let op = mergeOp.current else { return }
+            do {
+                try await git.abortOperation(worktreePath: worktree.path, op: op)
+                await refresh()
+            } catch {
+                logger.error("abort failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func skipOperation() {
+        Task { @MainActor in
+            guard let op = mergeOp.current else { return }
+            do {
+                let result = try await git.skipOperation(worktreePath: worktree.path, op: op)
+                await refresh()
+                handleOperationResult(result)
+            } catch {
+                logger.error("skip failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func markResolved(file: ChangedFile) {
+        Task { @MainActor in
+            do {
+                try await git.markResolved(worktreePath: worktree.path, relativePath: file.path)
+                await refresh()
+            } catch {
+                logger.error("markResolved failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// On `.conflict`, auto-open the first conflicted file via the injected
+    /// `openConflict` closure. On `.clean`/`.error`, do nothing (refresh already
+    /// updated the operation card; `.error` is logged but not surfaced for v1).
+    private func handleOperationResult(_ result: MergeResult) {
+        switch result {
+        case .clean:
+            return
+        case .conflict(let files):
+            guard let first = files.first else { return }
+            openConflict?(first.path)
+        case .error(let message):
+            logger.error("operation returned error: \(message, privacy: .public)")
         }
     }
 }
