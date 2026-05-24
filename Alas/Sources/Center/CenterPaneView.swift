@@ -143,10 +143,12 @@ struct CenterPaneView: View {
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                             relativePath: s.relativePath)
-                    case .mergeConflict:
-                        // Temporary placeholder — replaced by MergeConflictTabView
-                        // in the wiring task at the end of Plan 2.
-                        EmptyView()
+                    case .mergeConflict(let s):
+                        MergeConflictTabView(
+                            state: state,
+                            worktree: worktree,
+                            tabState: s
+                        )
                     }
                 }
             }
