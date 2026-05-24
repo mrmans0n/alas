@@ -3,6 +3,7 @@ import SwiftUI
 struct MergeConflictToolbar: View {
     let conflictCount: Int
     let currentConflictIndex: Int?
+    let currentAnnotation: String?
     /// True only after the conflicted file has been loaded successfully.
     /// Gates `Mark resolved` so it can't fire on an empty initial buffer
     /// and clobber the on-disk file with empty contents.
@@ -65,9 +66,18 @@ struct MergeConflictToolbar: View {
     }
 
     private var counter: some View {
-        Text(counterText)
-            .font(.system(size: 11))
-            .foregroundColor(theme.color("fg-dim"))
+        VStack(alignment: .leading, spacing: 1) {
+            Text(counterText)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            if let annotation = currentAnnotation, !annotation.isEmpty {
+                Text("✦ \(annotation)")
+                    .font(.system(size: 10).italic())
+                    .foregroundColor(theme.color("fg-subtle"))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+        }
     }
 
     private var counterText: String {

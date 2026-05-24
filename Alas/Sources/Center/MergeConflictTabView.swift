@@ -27,6 +27,7 @@ struct MergeConflictTabView: View {
                 MergeConflictToolbar(
                     conflictCount: model.conflictCount,
                     currentConflictIndex: model.currentConflictIndex,
+                    currentAnnotation: model.annotations[model.currentConflictIndex ?? -1],
                     // Binaries can't be resolved through the 3-column editor
                     // (they're handled via the right-pane Use ours / Use theirs
                     // context menu). Keep the resolve button disabled for them.
@@ -165,6 +166,24 @@ struct MergeConflictTabView: View {
                     while (model.currentConflictIndex ?? 0) > idx { model.previousConflict() }
                 }
             )
+        }
+        .onChange(of: model.currentConflictIndex) { _, newIndex in
+            guard let agent = resolvedAgent,
+                  let ord = newIndex,
+                  model.annotations[ord] == nil
+            else { return }
+            Task {
+                await model.explainCurrentConflict(using: agent, language: fileLanguage)
+            }
+        }
+        .onChange(of: model.conflictedFile?.relativePath) { _, _ in
+            guard let agent = resolvedAgent,
+                  let ord = model.currentConflictIndex,
+                  model.annotations[ord] == nil
+            else { return }
+            Task {
+                await model.explainCurrentConflict(using: agent, language: fileLanguage)
+            }
         }
     }
 
