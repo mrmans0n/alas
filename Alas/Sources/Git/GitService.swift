@@ -1145,8 +1145,15 @@ extension GitService {
             return .rebase(plan: plan)
         }
 
+        // .git/rebase-apply is also used by `git am`, which writes an
+        // `applying` sentinel instead of `rebasing`. Treat only the
+        // rebase-shaped case as an in-progress rebase; an `am` conflict is
+        // out of scope for this UI (driving `rebase --continue` against an
+        // am state would error).
         let rebaseApplyDir = gitDir.appendingPathComponent("rebase-apply")
-        if FileManager.default.fileExists(atPath: rebaseApplyDir.path) {
+        let rebasingSentinel = rebaseApplyDir.appendingPathComponent("rebasing")
+        if FileManager.default.fileExists(atPath: rebaseApplyDir.path),
+           FileManager.default.fileExists(atPath: rebasingSentinel.path) {
             let plan = try await Self.readRebaseApplyPlan(rebaseApplyDir: rebaseApplyDir)
             return .rebase(plan: plan)
         }

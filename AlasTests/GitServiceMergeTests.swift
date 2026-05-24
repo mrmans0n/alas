@@ -314,6 +314,57 @@ struct GitServiceMergeTests {
         #expect(plan.commits.contains { $0.state == .current })
     }
 
+    @Test func mergeStateIgnoresGitAmInProgress() async throws {
+        // `git am` also uses .git/rebase-apply but writes an `applying`
+        // sentinel instead of `rebasing`. We must not classify it as a rebase
+        // (the UI would otherwise drive `rebase --continue/--abort`, which
+        // errors with "It looks like 'git am' is in progress").
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try Self.writeFile(repo, "a.txt", "base\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+
+        // Create a patch that conflicts with the current worktree so `git am`
+        // pauses with `.git/rebase-apply/` populated and the `applying` sentinel.
+        try Self.writeFile(repo, "a.txt", "in-worktree change\n")
+
+        let patch = """
+        From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+        From: t <t@e>
+        Date: Sun, 24 May 2026 21:56:13 +0200
+        Subject: patch
+
+        ---
+         a.txt | 2 +-
+         1 file changed, 1 insertion(+), 1 deletion(-)
+
+        diff --git a/a.txt b/a.txt
+        index 1111111..2222222 100644
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -1 +1 @@
+        -base
+        +patched
+        --
+        2.43.0
+
+        """
+        let patchURL = repo.appendingPathComponent("conflict.patch")
+        try patch.write(to: patchURL, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["am", "--3way", patchURL.path], cwd: repo)
+        // Confirm git am actually paused (rebase-apply dir exists, with `applying`).
+        let applyDir = repo.appendingPathComponent(".git/rebase-apply")
+        guard FileManager.default.fileExists(atPath: applyDir.path) else {
+            Issue.record("expected git am to leave .git/rebase-apply populated")
+            return
+        }
+
+        let svc = GitService()
+        let state = try await svc.mergeState(worktreePath: repo)
+        #expect(state == nil)
+    }
+
     @Test func cherryPickMergeCommitUsesFirstParentMainline() async throws {
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
