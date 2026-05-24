@@ -1556,47 +1556,61 @@ final class AppState {
             return cwdRelative
         }
 
-        let target: TerminalOpenTarget
-        let resolved = resolve(path)
-        if FileManager.default.fileExists(atPath: resolved.path) {
-            target = TerminalOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
-        } else if let parsed = Self.parseTerminalPathPosition(path) {
-            let resolvedParsed = resolve(parsed.path)
-            target = TerminalOpenTarget(
-                url: resolvedParsed,
-                revealLine: parsed.line - 1,
-                revealCharacter: (parsed.column ?? 1) - 1
+        func attemptOpen(_ candidatePath: String) -> Bool {
+            let target: TerminalOpenTarget
+            let resolved = resolve(candidatePath)
+            if FileManager.default.fileExists(atPath: resolved.path) {
+                target = TerminalOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
+            } else if let parsed = Self.parseTerminalPathPosition(candidatePath) {
+                let resolvedParsed = resolve(parsed.path)
+                target = TerminalOpenTarget(
+                    url: resolvedParsed,
+                    revealLine: parsed.line - 1,
+                    revealCharacter: (parsed.column ?? 1) - 1
+                )
+            } else {
+                return false
+            }
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue else { return false }
+
+            // Resolve symlinks on both sides before the containment check so that
+            // an in-tree symlink pointing outside the worktree (e.g.
+            // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
+            let resolvedTarget = target.url.resolvingSymlinksInPath().standardizedFileURL
+            let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
+            let rootComponents = resolvedRoot.pathComponents
+            let targetComponents = resolvedTarget.pathComponents
+            guard targetComponents.count > rootComponents.count,
+                  Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
+                return false
+            }
+            let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
+            guard !relativePath.isEmpty else { return false }
+
+            openFile(
+                relativePath: relativePath,
+                worktreeId: worktree.id,
+                revealLine: target.revealLine,
+                revealCharacter: target.revealCharacter
             )
-        } else {
-            target = TerminalOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return true
         }
 
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory),
-              !isDirectory.boolValue else { return false }
+        if attemptOpen(path) { return true }
 
-        // Resolve symlinks on both sides before the containment check so that
-        // an in-tree symlink pointing outside the worktree (e.g.
-        // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
-        let resolvedTarget = target.url.resolvingSymlinksInPath().standardizedFileURL
-        let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
-        let rootComponents = resolvedRoot.pathComponents
-        let targetComponents = resolvedTarget.pathComponents
-        guard targetComponents.count > rootComponents.count,
-              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
-            return false
+        // Trailing-period fallback: agents sometimes write paths like
+        // "src/foo.ts." where the final period is sentence punctuation that
+        // Ghostty includes in the link. Retry without it.
+        if path.hasSuffix(".") {
+            let trimmed = String(path.dropLast())
+            if !trimmed.isEmpty { return attemptOpen(trimmed) }
         }
-        let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
-        guard !relativePath.isEmpty else { return false }
 
-        openFile(
-            relativePath: relativePath,
-            worktreeId: worktree.id,
-            revealLine: target.revealLine,
-            revealCharacter: target.revealCharacter
-        )
-        NSApp.activate(ignoringOtherApps: true)
-        return true
+        return false
     }
 
     private struct TerminalOpenTarget {

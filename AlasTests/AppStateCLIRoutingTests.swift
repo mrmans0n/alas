@@ -300,6 +300,80 @@ struct AppStateCLIRoutingTests {
         #expect(handled == false)
     }
 
+    @Test func routeTerminalOpenURLStripsTrailingPeriodWhenFileIsMissing() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-trailing-dot")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let file = worktree.path.appendingPathComponent("hello.swift")
+        try "x\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        surface.setCurrentWorkingDirectory(worktree.path)
+        let session = TerminalSession(
+            id: "s1", worktreeId: worktree.id, projectId: project.id,
+            surface: surface, executable: "/bin/zsh", args: []
+        )
+        state.terminal.registry.register(session)
+
+        let handled = state.routeTerminalOpenURL(rawURL: "hello.swift.", sessionId: "s1")
+
+        #expect(handled == true)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 { return s.relativePath == "hello.swift" }
+            return false
+        })
+    }
+
+    @Test func routeTerminalOpenURLStripsTrailingPeriodWithPosition() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-trailing-dot-pos")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let file = worktree.path.appendingPathComponent("hello.swift")
+        try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        surface.setCurrentWorkingDirectory(worktree.path)
+        let session = TerminalSession(
+            id: "s1", worktreeId: worktree.id, projectId: project.id,
+            surface: surface, executable: "/bin/zsh", args: []
+        )
+        state.terminal.registry.register(session)
+
+        let handled = state.routeTerminalOpenURL(rawURL: "hello.swift:2.", sessionId: "s1")
+
+        #expect(handled == true)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 {
+                return s.relativePath == "hello.swift"
+                    && s.revealLine == 1
+                    && s.revealCharacter == 0
+            }
+            return false
+        })
+    }
+
+    @Test func routeTerminalOpenURLPrefersExactPathEndingWithPeriod() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-exact-dot")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        // Create a file whose name actually ends with a period.
+        let file = worktree.path.appendingPathComponent("Makefile.")
+        try "x\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        surface.setCurrentWorkingDirectory(worktree.path)
+        let session = TerminalSession(
+            id: "s1", worktreeId: worktree.id, projectId: project.id,
+            surface: surface, executable: "/bin/zsh", args: []
+        )
+        state.terminal.registry.register(session)
+
+        let handled = state.routeTerminalOpenURL(rawURL: "Makefile.", sessionId: "s1")
+
+        #expect(handled == true)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 { return s.relativePath == "Makefile." }
+            return false
+        })
+    }
+
     @Test func makeCLICommandRouterOpensExternalFileOnOriginatingWorktreeAndSelectsIt() async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "external")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
