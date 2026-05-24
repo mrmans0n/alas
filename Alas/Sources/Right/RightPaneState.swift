@@ -77,6 +77,14 @@ final class RightPaneState {
     /// In Plan 2, it will route to the new 3-column merge editor.
     var openConflict: ((String) -> Void)? = nil
 
+    /// In-memory ring buffer of recently selected base branches for this
+    /// worktree. Max 3 entries; newest at the end. Not persisted.
+    private(set) var recentBaseBranches: [String] = []
+
+    /// Branches available in this worktree, populated on-demand by
+    /// `fetchBranches()`. Used by the base-branch picker.
+    private(set) var availableBranches: [String] = []
+
     private let git = GitService()
     private let watcher: WorktreeWatcher
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-state")
@@ -140,6 +148,30 @@ final class RightPaneState {
         watcher.stop()
         syncStatusTimer?.cancel()
         syncStatusTimer = nil
+    }
+
+    /// Update the base branch, record it in the recent list, and refresh.
+    func selectBaseBranch(_ branch: String) {
+        baseBranch = branch
+        if !recentBaseBranches.contains(branch) {
+            recentBaseBranches.append(branch)
+            if recentBaseBranches.count > 3 {
+                recentBaseBranches.removeFirst(recentBaseBranches.count - 3)
+            }
+        }
+        Task { @MainActor in
+            await refresh()
+            await refreshSyncStatus()
+        }
+    }
+
+    /// Populate `availableBranches` from git. Best-effort; errors are logged.
+    func fetchBranches() async {
+        do {
+            availableBranches = try await git.branches(at: worktree.path)
+        } catch {
+            logger.error("branch list fetch failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     @MainActor
