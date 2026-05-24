@@ -15,7 +15,6 @@ struct SidebarChromeOverride: Codable, Equatable {
 struct AppConfig: Codable, Equatable {
     var themeId: String
     var accent: String
-    var density: String          // compact | comfortable | spacious
     var matchSystemTheme: Bool
     var sidebarMaterial: SidebarMaterialChoice
     var sidebarWidth: Double
@@ -72,6 +71,13 @@ struct AppConfig: Codable, Equatable {
         var cursorBlink: Bool
         var scrollbackLines: Int
         var bell: String                 // off | visual | sound
+        var syncTabTitleWithTerminalTitle: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case shell, workingDirectory, startupScript, worktreeCreateScript,
+                 inheritParentEnv, fontFamily, fontSize, cursorStyle, cursorBlink,
+                 scrollbackLines, bell, syncTabTitleWithTerminalTitle
+        }
     }
 
     struct Harness: Codable, Equatable {
@@ -157,7 +163,6 @@ struct AppConfig: Codable, Equatable {
     static let defaults = AppConfig(
         themeId: "cool-slate",
         accent: "teal",
-        density: "comfortable",
         matchSystemTheme: false,
         sidebarMaterial: .appKitSidebar,
         sidebarWidth: 244,
@@ -192,7 +197,8 @@ struct AppConfig: Codable, Equatable {
             cursorStyle: "beam",
             cursorBlink: true,
             scrollbackLines: 10000,
-            bell: "visual"
+            bell: "visual",
+            syncTabTitleWithTerminalTitle: false
         ),
         harness: Harness(notifyOnFinish: true, notifyOnAwaiting: true),
         code: Code(
@@ -246,7 +252,7 @@ extension AppConfig {
 
 extension AppConfig {
     enum CodingKeys: String, CodingKey {
-        case themeId, accent, density, matchSystemTheme,
+        case themeId, accent, matchSystemTheme,
              sidebarMaterial, sidebarWidth, rightPaneWidth, rightPaneVisible, sidebarVisible,
              commitDetailSplitRatio,
              general, worktrees, terminal, harness, code, markdown, changes,
@@ -267,7 +273,6 @@ extension AppConfig {
         // collapses to the dark default.
         themeId = (rawThemeId == "warm-amber" || rawThemeId == "neutral") ? "cool-slate" : rawThemeId
         accent = try c.decode(String.self, forKey: .accent)
-        density = try c.decode(String.self, forKey: .density)
         matchSystemTheme = try c.decode(Bool.self, forKey: .matchSystemTheme)
         sidebarMaterial = (try? c.decode(SidebarMaterialChoice.self, forKey: .sidebarMaterial)) ?? .appKitFullScreenUI
         sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)
@@ -277,7 +282,49 @@ extension AppConfig {
         commitDetailSplitRatio = (try? c.decode(Double.self, forKey: .commitDetailSplitRatio)) ?? 0.32
         general = try c.decode(General.self, forKey: .general)
         worktrees = try c.decode(Worktrees.self, forKey: .worktrees)
-        terminal = try c.decode(Terminal.self, forKey: .terminal)
+        if let termContainer = try? c.nestedContainer(keyedBy: AppConfig.Terminal.CodingKeys.self, forKey: .terminal) {
+            let shell = (try? termContainer.decode(String.self, forKey: .shell)) ?? "/bin/zsh"
+            let workingDirectory = (try? termContainer.decode(String.self, forKey: .workingDirectory)) ?? "worktreeRoot"
+            let startupScript = (try? termContainer.decode(String.self, forKey: .startupScript)) ?? ""
+            let worktreeCreateScript = (try? termContainer.decode(String.self, forKey: .worktreeCreateScript)) ?? ""
+            let inheritParentEnv = (try? termContainer.decode(Bool.self, forKey: .inheritParentEnv)) ?? true
+            let fontFamily = (try? termContainer.decode(String.self, forKey: .fontFamily)) ?? "JetBrains Mono"
+            let fontSize = (try? termContainer.decode(Int.self, forKey: .fontSize)) ?? 13
+            let cursorStyle = (try? termContainer.decode(String.self, forKey: .cursorStyle)) ?? "beam"
+            let cursorBlink = (try? termContainer.decode(Bool.self, forKey: .cursorBlink)) ?? true
+            let scrollbackLines = (try? termContainer.decode(Int.self, forKey: .scrollbackLines)) ?? 10000
+            let bell = (try? termContainer.decode(String.self, forKey: .bell)) ?? "visual"
+            let syncTabTitleWithTerminalTitle = (try? termContainer.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? false
+            terminal = Terminal(
+                shell: shell,
+                workingDirectory: workingDirectory,
+                startupScript: startupScript,
+                worktreeCreateScript: worktreeCreateScript,
+                inheritParentEnv: inheritParentEnv,
+                fontFamily: fontFamily,
+                fontSize: fontSize,
+                cursorStyle: cursorStyle,
+                cursorBlink: cursorBlink,
+                scrollbackLines: scrollbackLines,
+                bell: bell,
+                syncTabTitleWithTerminalTitle: syncTabTitleWithTerminalTitle
+            )
+        } else {
+            terminal = Terminal(
+                shell: "/bin/zsh",
+                workingDirectory: "worktreeRoot",
+                startupScript: "",
+                worktreeCreateScript: "",
+                inheritParentEnv: true,
+                fontFamily: "JetBrains Mono",
+                fontSize: 13,
+                cursorStyle: "beam",
+                cursorBlink: true,
+                scrollbackLines: 10000,
+                bell: "visual",
+                syncTabTitleWithTerminalTitle: false
+            )
+        }
         harness = try c.decode(Harness.self, forKey: .harness)
         if let codeContainer = try? c.nestedContainer(keyedBy: AppConfig.Code.CodingKeys.self, forKey: .code) {
             let fontFamily = (try? codeContainer.decode(String.self, forKey: .fontFamily)) ?? "SF Mono"

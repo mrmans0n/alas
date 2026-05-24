@@ -99,6 +99,10 @@ struct TerminalPane: View {
                             ("off","off"), ("visual","visual"), ("sound","sound")
                         ])
                     }
+                    SettingsRow(name: "Sync tab title with terminal title",
+                                desc: "When the terminal reports a title, update the tab label.") {
+                        AlasToggle(on: state.bind(\.terminal.syncTabTitleWithTerminalTitle))
+                    }
                 }
 
                 SettingsGroup(title: "Harness") {

@@ -70,6 +70,10 @@ struct CenterPaneView: View {
                 sidebarHidden: !state.config.sidebarVisible,
                 onMove: { draggedId, destinationId in
                     state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
+                },
+                titleLookup: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }) else { return nil }
+                    return state.tabs.displayTerminalTitle(for: tab)
                 }
             )
             Group {

@@ -223,5 +223,12 @@ struct AlasApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultSize(width: 880, height: 580)
+
+        Window("Commit Prompt", id: "commit-prompt-editor") {
+            CommitPromptEditorWindow(state: state)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 560)
     }
 }

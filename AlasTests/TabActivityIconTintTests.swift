@@ -72,7 +72,8 @@ struct TabActivityIconTintTests {
             rightSidebarHidden: false,
             onRevealSidebar: { },
             sidebarHidden: false,
-            onMove: { _, _ in }
+            onMove: { _, _ in },
+            titleLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
 

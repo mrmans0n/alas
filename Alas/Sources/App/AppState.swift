@@ -1288,6 +1288,7 @@ final class AppState {
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         _ = tabs.renameTerminal(worktreeId: worktreeId, tabId: tabId, title: field.stringValue)
+        tabs.clearTerminalRuntimeTitles(forLeavesInTabId: tabId)
     }
 
     func closeTab(worktreeId: String, tabId: TabID) {

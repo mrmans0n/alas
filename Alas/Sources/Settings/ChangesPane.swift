@@ -3,6 +3,7 @@ import SwiftUI
 struct ChangesPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ScrollView {
@@ -19,24 +20,16 @@ struct ChangesPane: View {
                     }
                     SettingsRow(name: "Prompt",
                                 desc: "Instructions sent to the CLI. The staged diff is appended on stdin.") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextEditor(text: state.bind(\.changes.prompt))
-                                .font(.system(size: 12, design: .monospaced))
-                                .frame(minHeight: 200, maxHeight: 320)
-                                .scrollContentBackground(.hidden)
-                                .background(theme.color("bg-2"))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(theme.color("line-soft"), lineWidth: 0.5)
-                                )
-                            HStack {
-                                Spacer()
-                                AlasButton(title: "Reset to default", style: .subtle) {
-                                    state.config.changes.prompt = AppConfig.defaultCommitPrompt
-                                    state.saveConfig()
-                                }
+                        HStack(spacing: 12) {
+                            AlasButton(title: "Edit", style: .normal) {
+                                openWindow(id: "commit-prompt-editor")
+                            }
+                            Spacer()
+                            if let chipLabel = CommitPromptStatus.chipLabel(for: state.config.changes.prompt) {
+                                PromptStatusChip(label: chipLabel)
                             }
                         }
+                        .frame(maxWidth: .infinity)
                     }
                 }
             }
@@ -52,7 +45,7 @@ struct ChangesPane: View {
                 Label {
                     Text(agent.displayName)
                 } icon: {
-                    AgentLogoView(agent: agent, size: 14)
+                    Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
                 }
                 .tag(agent.id)
             }
@@ -60,5 +53,24 @@ struct ChangesPane: View {
         }
         .pickerStyle(.menu)
         .frame(width: 240)
+    }
+}
+
+private struct PromptStatusChip: View {
+    let label: String
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(theme.color("fg-muted"))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(theme.color("bg-2"))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(theme.color("line-soft"), lineWidth: 0.5)
+            )
     }
 }

@@ -13,7 +13,6 @@ struct AppConfigChangesTests {
         {
           "themeId": "cool-slate",
           "accent": "teal",
-          "density": "comfortable",
           "matchSystemTheme": false,
           "sidebarWidth": 244,
           "rightPaneWidth": 320,
