@@ -146,9 +146,13 @@ struct ChangesTabView: View {
                 behindBase: rps.showBehindBaseChip ? rps.behindBase : nil,
                 behindUpstream: rps.showBehindUpstreamChip ? rps.behindUpstream : nil,
                 expanded: $rps.commitsExpanded,
+                baseBranch: $rps.baseBranch,
+                branches: rps.availableBranches,
                 onSelect: onSelectCommit,
                 onCopySHA: copyCommitSHA,
                 onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
+                onSelectBaseBranch: { branch in rps.selectBaseBranch(branch) },
+                onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
                 rps: rps
             )
         }
