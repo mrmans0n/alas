@@ -23,6 +23,8 @@ struct DiffSelectableTextView: NSViewRepresentable {
 }
 
 final class DiffSelectableTextContainerView: NSView {
+    private static let unwrappedTextContainerWidth: CGFloat = 1_000_000
+
     private let textView: NSTextView
     private var lineMetadata: [DiffSelectableTextBuilder.LineMetadata] = []
     private var theme: Theme?
@@ -30,15 +32,18 @@ final class DiffSelectableTextContainerView: NSView {
 
     private let gutterWidth: CGFloat = 58
     private let horizontalPadding: CGFloat = 14
-    private let rowVerticalPadding = CenterTypography.rowVerticalPadding
+    private let verticalInset = CenterTypography.rowVerticalPadding
 
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: 10, height: CGFloat.greatestFiniteMagnitude))
-        container.widthTracksTextView = true
+        let container = NSTextContainer(size: NSSize(
+            width: Self.unwrappedTextContainerWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        ))
+        container.widthTracksTextView = false
         container.heightTracksTextView = false
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
@@ -54,6 +59,11 @@ final class DiffSelectableTextContainerView: NSView {
         textView.drawsBackground = false
         textView.backgroundColor = .clear
         textView.textContainerInset = .zero
+        textView.isHorizontallyResizable = true
+        textView.maxSize = NSSize(
+            width: Self.unwrappedTextContainerWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         textView.allowsUndo = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -99,12 +109,12 @@ final class DiffSelectableTextContainerView: NSView {
         let textX = horizontalPadding + gutterWidth + 16
         textView.frame = NSRect(
             x: textX,
-            y: rowVerticalPadding,
+            y: verticalInset,
             width: max(0, bounds.width - textX - horizontalPadding),
-            height: max(0, totalHeight - rowVerticalPadding * 2)
+            height: max(0, CGFloat(lineMetadata.count) * rowHeight)
         )
         textView.textContainer?.containerSize = NSSize(
-            width: textView.bounds.width,
+            width: Self.unwrappedTextContainerWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
     }
@@ -115,7 +125,7 @@ final class DiffSelectableTextContainerView: NSView {
         for (index, line) in lineMetadata.enumerated() {
             let rect = NSRect(
                 x: 0,
-                y: CGFloat(index) * rowHeight,
+                y: verticalInset + CGFloat(index) * rowHeight,
                 width: bounds.width,
                 height: rowHeight
             )
@@ -130,12 +140,12 @@ final class DiffSelectableTextContainerView: NSView {
     }
 
     private var rowHeight: CGFloat {
-        ceil(lineHeight + rowVerticalPadding * 2)
+        ceil(lineHeight)
     }
 
     private var totalHeight: CGFloat {
         guard !lineMetadata.isEmpty else { return 0 }
-        return CGFloat(lineMetadata.count) * rowHeight
+        return CGFloat(lineMetadata.count) * rowHeight + verticalInset * 2
     }
 
     private func drawMarker(
@@ -153,7 +163,7 @@ final class DiffSelectableTextContainerView: NSView {
         ]
         let markerRect = NSRect(
             x: horizontalPadding,
-            y: rowRect.minY + rowVerticalPadding,
+            y: rowRect.minY,
             width: gutterWidth,
             height: lineHeight
         )

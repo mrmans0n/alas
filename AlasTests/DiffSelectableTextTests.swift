@@ -71,7 +71,7 @@ struct Foo {
         #expect(result.lines.last?.range.location == (result.attributedString.string as NSString).length - 1)
     }
 
-    @Test func diffSelectableTextViewHostsCodeOnlyNativeTextView() {
+    @Test func diffSelectableTextViewHostsCodeOnlyNativeTextView() throws {
         let view = DiffSelectableTextView(
             hunk: sampleHunk(),
             fileExtension: "swift",
@@ -85,11 +85,57 @@ struct Foo {
         controller.view.layoutSubtreeIfNeeded()
 
         let textViews = allSubviews(of: controller.view).compactMap { $0 as? NSTextView }
-        #expect(textViews.contains(where: { textView in
-            textView.isSelectable &&
-            !textView.isEditable &&
-            textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk())
-        }))
+        #expect(textViews.count == 1)
+        let textView = try #require(textViews.first)
+        #expect(textView.isSelectable)
+        #expect(!textView.isEditable)
+        #expect(textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
+    }
+
+    @Test func diffSelectableTextViewUsesNativeLineHeightForRows() {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let container = DiffSelectableTextContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 300))
+        container.update(
+            hunk: sampleHunk(),
+            fileExtension: "swift",
+            font: font,
+            theme: currentTheme()
+        )
+
+        let lineHeight = ceil((font.ascender - font.descender + font.leading) * CenterTypography.lineHeightMultiple)
+        let expectedHeight = CGFloat(sampleHunk().lines.count) * lineHeight + CenterTypography.rowVerticalPadding * 2
+        #expect(container.intrinsicContentSize.height == expectedHeight)
+    }
+
+    @Test func diffSelectableTextViewDisablesLongLineWrapping() throws {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,1 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(
+                    kind: .add,
+                    text: String(repeating: "let value = veryLongExpression + ", count: 80),
+                    oldNumber: nil,
+                    newNumber: 1
+                ),
+            ]
+        )
+        let container = DiffSelectableTextContainerView(frame: NSRect(x: 0, y: 0, width: 160, height: 200))
+        container.update(
+            hunk: hunk,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            theme: currentTheme()
+        )
+        container.layoutSubtreeIfNeeded()
+
+        let textViews = allSubviews(of: container).compactMap { $0 as? NSTextView }
+        #expect(textViews.count == 1)
+        let textView = try #require(textViews.first)
+        #expect(textView.isHorizontallyResizable)
+        #expect(textView.textContainer?.widthTracksTextView == false)
+        #expect((textView.textContainer?.containerSize.width ?? 0) > textView.bounds.width * 100)
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {
