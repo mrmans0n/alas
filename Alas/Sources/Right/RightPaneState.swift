@@ -85,6 +85,11 @@ final class RightPaneState {
     /// `fetchBranches()`. Used by the base-branch picker.
     private(set) var availableBranches: [String] = []
 
+    /// Upstream tracking ref of the current branch (e.g. `origin/main`),
+    /// resolved during `refreshSyncStatus()`. Used by the base-branch
+    /// picker to include the upstream in the smart shortlist.
+    private(set) var upstreamRef: String? = nil
+
     private let git = GitService()
     private let watcher: WorktreeWatcher
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-state")
@@ -828,8 +833,10 @@ final class RightPaneState {
                 worktreePath: worktree.path
             ) else {
                 behindUpstream = nil
+                upstreamRef = nil
                 return
             }
+            upstreamRef = upstream.ref
             // Upstream ref looks like "origin/<branch>"; the local branch name
             // is what we fetch.
             let branchName = String(upstream.ref.dropFirst(upstream.remote.count + 1))
