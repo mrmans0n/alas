@@ -505,6 +505,7 @@
 		F88FD8BE546E36A0E3BF2594 /* ProjectGitWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12F540ABB23DDB829E1629D /* ProjectGitWatcher.swift */; };
 		F9BE25DD2C3A008328978575 /* AgentAutoLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25C1AD69581AAE3D34624F23 /* AgentAutoLaunch.swift */; };
 		F9C3EA369FF29AC5D7BCA3C6 /* AgentHookSocketServerCLITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB19F036D793E5DFBBD3C675 /* AgentHookSocketServerCLITests.swift */; };
+		FAC5B044ADA2ECF467814CE4 /* ConflictsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 561094BA96058468F12002A1 /* ConflictsSection.swift */; };
 		FCE78F165C46577F64D9B9AD /* CenterSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */; };
 		FD797B47C5EE0F82796A3733 /* LSPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028348C468E45161F567110A /* LSPInstallerTests.swift */; };
 		FDB1BD021ED0D2C7247E42D5 /* RightPaneStateLoadOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C89163A30EA4D278E86959 /* RightPaneStateLoadOlderTests.swift */; };
@@ -712,6 +713,7 @@
 		541A75BBAF1CFF3EF89383C7 /* RepoSelectorDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorDialog.swift; sourceTree = "<group>"; };
 		542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeOperationState.swift; sourceTree = "<group>"; };
 		55DE02E1672044B68F9DE0B1 /* EditorFindController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFindController.swift; sourceTree = "<group>"; };
+		561094BA96058468F12002A1 /* ConflictsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictsSection.swift; sourceTree = "<group>"; };
 		563B664D082A9523260AA2EF /* RepoDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoDot.swift; sourceTree = "<group>"; };
 		56D1AC9E1E00C3C5C234382C /* TouchTargetSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchTargetSmokeTests.swift; sourceTree = "<group>"; };
 		576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsAheadTests.swift; sourceTree = "<group>"; };
@@ -1412,6 +1414,7 @@
 				C682FF74C86B77BDCF46CF25 /* ChangesTabView.swift */,
 				3DCEFADD952DB870B8BAB890 /* CommitRow.swift */,
 				6FFE12732C0D83715FC990A9 /* CommitsSectionView.swift */,
+				561094BA96058468F12002A1 /* ConflictsSection.swift */,
 				BD4A3B9B1103346242438940 /* FilesTabView.swift */,
 				F721FB733081A583D4053DDA /* FileTypeIconView.swift */,
 				542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */,
@@ -2198,6 +2201,7 @@
 				FFC747D542D806E6CF6FCD03 /* CompletionPopup.swift in Sources */,
 				412F8D73E3E5CD7F57CD799A /* CompletionWindowController.swift in Sources */,
 				C2EDB6A5E6149758C4A0051E /* ConflictMarkerParser.swift in Sources */,
+				FAC5B044ADA2ECF467814CE4 /* ConflictsSection.swift in Sources */,
 				A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */,
 				A77E7290FD589BC3227ADE27 /* ContentSearcher.swift in Sources */,
 				3FE3D85D5E833DE3A91FD444 /* CopilotInstaller.swift in Sources */,
