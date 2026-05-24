@@ -314,4 +314,35 @@ struct GitServiceMergeTests {
         #expect(plan.commits.contains { $0.state == .current })
     }
 
+    @Test func cherryPickMergeCommitUsesFirstParentMainline() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Build a merge commit on `feature`, then try to cherry-pick it onto `main`.
+        try Self.writeFile(repo, "a.txt", "base\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try Self.writeFile(repo, "b.txt", "from-feature\n")
+        _ = try await Process.git(["add", "b.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add b"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try Self.writeFile(repo, "c.txt", "from-main\n")
+        _ = try await Process.git(["add", "c.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add c"], cwd: repo)
+        // Create the merge commit on `feature` so it has 2 parents:
+        _ = try await Process.git(["checkout", "-q", "feature"], cwd: repo)
+        _ = try await Process.git(["-c", "core.editor=true", "merge", "main", "--no-ff"], cwd: repo)
+        let mergeSha = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Hard-reset main to before c.txt was added, then cherry-pick the merge commit.
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        _ = try await Process.git(["reset", "--hard", "HEAD~1"], cwd: repo)
+
+        let svc = GitService()
+        let result = try await svc.cherryPick(worktreePath: repo, sha: mergeSha)
+        // Without -m the cherry-pick would error with "is a merge but no -m option was given"
+        // and classifyOperationResult would map it to .error. With -m 1 the result should
+        // be .clean (merge commit applied cleanly).
+        #expect(result == .clean)
+    }
 }

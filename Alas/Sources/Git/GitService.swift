@@ -1409,16 +1409,37 @@ extension GitService {
     }
 
     func cherryPick(worktreePath: URL, sha: String) async throws -> MergeResult {
-        let result = try await Process.git(
-            ["-c", "merge.conflictStyle=zdiff3", "cherry-pick", sha],
-            cwd: worktreePath
-        )
+        let parents = try await parentCount(worktreePath: worktreePath, sha: sha)
+        var args: [String] = ["-c", "merge.conflictStyle=zdiff3", "cherry-pick"]
+        if parents >= 2 {
+            // Merge commit: pick changes relative to the first parent (mainline).
+            // Selecting a different mainline is a follow-up if needed.
+            args.append(contentsOf: ["-m", "1"])
+        }
+        args.append(sha)
+        let result = try await Process.git(args, cwd: worktreePath)
         return try await classifyOperationResult(
             worktreePath: worktreePath,
             exitCode: result.exitCode,
             stderr: result.stderr
         )
     }
+
+    /// Number of parent commits for `sha`. Returns 1 for a normal commit, 2+ for a merge.
+    private func parentCount(worktreePath: URL, sha: String) async throws -> Int {
+        let result = try await Process.git(
+            ["rev-list", "--parents", "-n", "1", sha],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { return 1 }  // be lenient — let cherry-pick surface the real error
+        // Output: "<sha> <parent1> <parent2> ..."
+        let parts = result.stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        // parents = parts.count - 1 (the first token is the commit itself)
+        return max(parts.count - 1, 0)
+    }
+}
 }
 
 enum ConflictedFileError: LocalizedError {
