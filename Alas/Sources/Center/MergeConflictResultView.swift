@@ -43,11 +43,11 @@ struct MergeConflictResultView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        // Only re-render the text storage when the bound text actually differs
-        // from what the user has typed. Otherwise we clobber the in-flight
-        // caret position on every external @State change.
+        // Re-render whenever text changed OR the showBase toggle changed since
+        // last render (italic/muted attrs would otherwise persist after toggle-off).
         let current = textView.string
-        if current != text {
+        let needsFullRender = current != text || context.coordinator.lastShowBase != showBase
+        if needsFullRender {
             let attr = MergeConflictTextStorage.highlightedAttributedString(
                 text: text,
                 fileExtension: fileExtension,
@@ -57,6 +57,7 @@ struct MergeConflictResultView: NSViewRepresentable {
             )
             applyConflictShading(to: attr, text: text, theme: theme)
             textView.textStorage?.setAttributedString(attr)
+            context.coordinator.lastShowBase = showBase
         } else {
             // Even when the string is unchanged, the conflict regions may have
             // shifted (a typed edit can resolve a marker). Re-apply shading.
@@ -74,6 +75,9 @@ struct MergeConflictResultView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         weak var textView: NSTextView?
         let text: Binding<String>
+        /// Tracks the `showBase` value from the last full re-render so we can
+        /// detect toggle changes and force a fresh attributed string build.
+        var lastShowBase: Bool = false
         init(_ text: Binding<String>) { self.text = text }
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
