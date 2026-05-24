@@ -140,4 +140,46 @@ struct ConflictMarkerParserTests {
         #expect(regions.count == 1)
         if case .text = regions[0] {} else { Issue.record("expected .text region for malformed conflict") }
     }
+
+    @Test func parsesEmptyLocalHalf() {
+        let input = "<<<<<<< HEAD\n=======\ntheirs\n>>>>>>> feature\n"
+        let regions = ConflictMarkerParser.parse(input)
+        guard case .conflict(let block) = regions[0] else {
+            Issue.record("expected conflict region"); return
+        }
+        #expect(block.local == "")
+        #expect(block.remote == "theirs\n")
+    }
+
+    @Test func parsesEmptyRemoteHalf() {
+        let input = "<<<<<<< HEAD\nours\n=======\n>>>>>>> feature\n"
+        let regions = ConflictMarkerParser.parse(input)
+        guard case .conflict(let block) = regions[0] else {
+            Issue.record("expected conflict region"); return
+        }
+        #expect(block.local == "ours\n")
+        #expect(block.remote == "")
+    }
+
+    @Test func parsesEmptyBaseInZdiff3() {
+        let input = "<<<<<<< HEAD\nours\n||||||| ancestor\n=======\ntheirs\n>>>>>>> feature\n"
+        let regions = ConflictMarkerParser.parse(input)
+        guard case .conflict(let block) = regions[0] else {
+            Issue.record("expected conflict region"); return
+        }
+        #expect(block.local == "ours\n")
+        #expect(block.base == "")
+        #expect(block.remote == "theirs\n")
+    }
+
+    @Test func parsesAllHalvesEmpty() {
+        let input = "<<<<<<< HEAD\n=======\n>>>>>>> feature\n"
+        let regions = ConflictMarkerParser.parse(input)
+        guard case .conflict(let block) = regions[0] else {
+            Issue.record("expected conflict region"); return
+        }
+        #expect(block.local == "")
+        #expect(block.base == nil)
+        #expect(block.remote == "")
+    }
 }

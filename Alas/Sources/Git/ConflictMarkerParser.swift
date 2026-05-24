@@ -82,17 +82,18 @@ enum ConflictMarkerParser {
                 flushText()
                 let localLabel = String(line.dropFirst(beginMarker.count))
                 let remoteLabel = String(lines[end].dropFirst(endMarker.count))
+
+                // Helper to extract a half: empty range → "", non-empty → text + "\n"
+                func extractHalf(_ range: Range<Int>) -> String {
+                    let slice = lines[range].map(String.init)
+                    return slice.isEmpty ? "" : slice.joined(separator: "\n") + "\n"
+                }
+
                 // Local half: lines (beginIndex+1) ..< (baseIndex ?? mid)
                 let localUpper = baseIndex ?? mid
-                let localText = lines[(beginIndex + 1) ..< localUpper]
-                    .map(String.init).joined(separator: "\n") + "\n"
-                let baseText: String? = {
-                    guard let b = baseIndex else { return nil }
-                    return lines[(b + 1) ..< mid]
-                        .map(String.init).joined(separator: "\n") + "\n"
-                }()
-                let remoteText = lines[(mid + 1) ..< end]
-                    .map(String.init).joined(separator: "\n") + "\n"
+                let localText = extractHalf((beginIndex + 1) ..< localUpper)
+                let baseText: String? = baseIndex.map { extractHalf(($0 + 1) ..< mid) }
+                let remoteText = extractHalf((mid + 1) ..< end)
                 let block = ConflictBlock(
                     local: localText,
                     base: baseText,
