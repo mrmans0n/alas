@@ -65,6 +65,16 @@ final class RightPaneState {
     /// without throwing away the rest of the cached state.
     var baseBranch: String
 
+    /// `true` once the user has explicitly picked a base branch via the
+    /// selector. Prevents `RightPaneStore` from snapping the branch back to
+    /// the global config default on the next render.
+    var userOverrodeBaseBranch: Bool = false
+
+    /// The last base branch value that came from `AppConfig` (not from the
+    /// selector). Used by `RightPaneStore` to distinguish a Settings change
+    /// (new config value) from a normal render (same config value).
+    var lastConfigBaseBranch: String = ""
+
     var pendingDiscard: PendingDiscard? = nil
 
     /// Injected by `RightPaneStore` after creation so `confirmDiscard` can
@@ -158,6 +168,7 @@ final class RightPaneState {
     /// Update the base branch, record it in the recent list, and refresh.
     func selectBaseBranch(_ branch: String) {
         baseBranch = branch
+        userOverrodeBaseBranch = true
         if !recentBaseBranches.contains(branch) {
             recentBaseBranches.append(branch)
             if recentBaseBranches.count > 3 {

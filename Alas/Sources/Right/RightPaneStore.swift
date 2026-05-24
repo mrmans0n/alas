@@ -20,25 +20,28 @@ final class RightPaneStore {
         let id = worktree.id
         let result: RightPaneState
         if let existing = states[id] {
-            // Keep the cached state in sync with the currently-configured
-            // base branch. If it changed (Settings → Worktrees → Base branch),
-            // update the field and trigger a refresh so commitsAhead runs
-            // against the new ref. We don't recreate the state because that
-            // would discard tab expansion / file-tree open-paths / the
-            // sticky activeTab choice.
-            if existing.baseBranch != baseBranch {
-                existing.baseBranch = baseBranch
-                // Clear the prior probe so the chip doesn't show a stale
-                // count against the OLD base while the new probe runs.
-                existing.behindBase = nil
-                Task { @MainActor in
-                    await existing.refresh()
-                    await existing.refreshSyncStatus()
+            // If the global config base branch changed (Settings → Worktrees),
+            // honor the new value and clear the user override. If it didn't
+            // change, leave the state's baseBranch alone so a user-picked
+            // override survives across renders.
+            if existing.lastConfigBaseBranch != baseBranch {
+                existing.lastConfigBaseBranch = baseBranch
+                existing.userOverrodeBaseBranch = false
+                if existing.baseBranch != baseBranch {
+                    existing.baseBranch = baseBranch
+                    // Clear the prior probe so the chip doesn't show a stale
+                    // count against the OLD base while the new probe runs.
+                    existing.behindBase = nil
+                    Task { @MainActor in
+                        await existing.refresh()
+                        await existing.refreshSyncStatus()
+                    }
                 }
             }
             result = existing
         } else {
             let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+            new.lastConfigBaseBranch = baseBranch
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
                 let pathSet = Set(paths)

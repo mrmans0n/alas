@@ -13,7 +13,10 @@ struct BaseBranchSelector: View {
     @State private var hovering = false
 
     var body: some View {
-        Button(action: { onOpen(); open.toggle() }) {
+        Button(action: {
+            onOpen()
+            open.toggle()
+        }) {
             HStack(spacing: 4) {
                 Icon(name: "branch", size: 10, color: hovering ? theme.color("accent") : theme.color("fg-faint"))
                 Text(currentRef ?? baseBranch)
