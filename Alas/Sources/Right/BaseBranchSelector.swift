@@ -33,7 +33,7 @@ struct BaseBranchSelector: View {
 extension BaseBranchSelector {
     static func smartList(
         branches: [String],
-        current: String?,
+        currentRef: String?,
         upstream: String?,
         recent: [String]
     ) -> [String] {

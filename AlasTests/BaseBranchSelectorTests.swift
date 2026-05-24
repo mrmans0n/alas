@@ -6,7 +6,7 @@ struct BaseBranchSelectorTests {
         let branches = ["feature/x", "main", "origin/main", "develop"]
         let result = BaseBranchSelector.smartList(
             branches: branches,
-            current: "origin/main",
+            currentRef: "origin/main",
             upstream: "origin/feature-x",
             recent: []
         )
@@ -19,7 +19,7 @@ struct BaseBranchSelectorTests {
         let branches = ["main", "origin/feature-x"]
         let result = BaseBranchSelector.smartList(
             branches: branches,
-            current: "origin/main",
+            currentRef: "origin/main",
             upstream: "origin/feature-x",
             recent: []
         )
@@ -30,29 +30,61 @@ struct BaseBranchSelectorTests {
         let branches = ["main", "origin/main"]
         let result = BaseBranchSelector.smartList(
             branches: branches,
-            current: "origin/main",
+            currentRef: "origin/main",
             upstream: "origin/main",
             recent: []
         )
-        #expect(result.filter { $0 == "origin/main" }.count == 1)
+        #expect(result == ["main", "origin/main"])
+    }
+
+    @Test func smartListDedupesRecentAgainstMainlines() {
+        let branches = ["main", "origin/main", "a"]
+        let result = BaseBranchSelector.smartList(
+            branches: branches,
+            currentRef: "origin/main",
+            upstream: "origin/main",
+            recent: ["main", "a"]
+        )
+        #expect(result == ["main", "origin/main", "a"])
+    }
+
+    @Test func smartListDedupesRecentInternally() {
+        let branches = ["main", "a"]
+        let result = BaseBranchSelector.smartList(
+            branches: branches,
+            currentRef: "main",
+            upstream: nil,
+            recent: ["a", "a", "b"]
+        )
+        #expect(result == ["main", "a", "b"])
+    }
+
+    @Test func smartListSkipsAbsentMainlines() {
+        let branches = ["main", "origin/main"]
+        let result = BaseBranchSelector.smartList(
+            branches: branches,
+            currentRef: "origin/main",
+            upstream: nil,
+            recent: []
+        )
+        #expect(result == ["main", "origin/main"])
     }
 
     @Test func smartListCapsRecentAtThree() {
         let branches = ["main", "a", "b", "c", "d"]
         let result = BaseBranchSelector.smartList(
             branches: branches,
-            current: "main",
+            currentRef: "main",
             upstream: nil,
             recent: ["a", "b", "c", "d"]
         )
-        let recentSection = result.drop(while: { $0 != "a" }).prefix(4)
-        #expect(recentSection.count == 3)
+        #expect(result == ["main", "a", "b", "c"])
     }
 
     @Test func smartListHandlesEmptyInput() {
         let result = BaseBranchSelector.smartList(
             branches: [],
-            current: nil,
+            currentRef: nil,
             upstream: nil,
             recent: []
         )
