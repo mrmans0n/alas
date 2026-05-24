@@ -82,7 +82,7 @@ struct StatusParserTests {
     }
 
     @Test func parsesUnmergedBothModified() throws {
-        let raw = "u UU N... 100644 100644 100644 100644 a b c d src/foo.rs\u{0}"
+        let raw = "u UU N... 100644 100644 100644 100644 a b c src/foo.rs\u{0}"
         let entries = try StatusParser.parse(raw)
         let entry = try #require(entries.first)
         #expect(entry.status == "U")
@@ -92,7 +92,7 @@ struct StatusParserTests {
     }
 
     @Test func parsesUnmergedPathWithSpaces() throws {
-        let raw = "u UU N... 100644 100644 100644 100644 a b c d dir/a b.txt\u{0}"
+        let raw = "u UU N... 100644 100644 100644 100644 a b c dir/a b.txt\u{0}"
         let entries = try StatusParser.parse(raw)
         let entry = try #require(entries.first)
         #expect(entry.status == "U")
@@ -102,28 +102,28 @@ struct StatusParserTests {
     }
 
     @Test func parsesUnmergedDeletedByThem() throws {
-        let raw = "u UD N... 100644 100644 000000 100644 a b 0 d src/foo.rs\u{0}"
+        let raw = "u UD N... 100644 100644 000000 100644 a b 0 src/foo.rs\u{0}"
         let entries = try StatusParser.parse(raw)
         let entry = try #require(entries.first)
         #expect(entry.conflict == .deletedByThem)
     }
 
     @Test func parsesUnmergedDeletedByUs() throws {
-        let raw = "u DU N... 100644 000000 100644 100644 a 0 c d src/foo.rs\u{0}"
+        let raw = "u DU N... 100644 000000 100644 100644 a 0 c src/foo.rs\u{0}"
         let entries = try StatusParser.parse(raw)
         let entry = try #require(entries.first)
         #expect(entry.conflict == .deletedByUs)
     }
 
     @Test func parsesUnmergedBothAdded() throws {
-        let raw = "u AA N... 000000 100644 100644 100644 0 b c d src/foo.rs\u{0}"
+        let raw = "u AA N... 000000 100644 100644 100644 0 b c src/foo.rs\u{0}"
         let entries = try StatusParser.parse(raw)
         let entry = try #require(entries.first)
         #expect(entry.conflict == .bothAdded)
     }
 
     @Test func parsesUnmergedBothDeleted() throws {
-        let raw = "u DD N... 100644 000000 000000 100644 a 0 0 d src/foo.rs\u{0}"
+        let raw = "u DD N... 100644 000000 000000 100644 a 0 0 src/foo.rs\u{0}"
         let entries = try StatusParser.parse(raw)
         let entry = try #require(entries.first)
         #expect(entry.conflict == .bothDeleted)

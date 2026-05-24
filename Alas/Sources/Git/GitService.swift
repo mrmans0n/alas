@@ -101,7 +101,8 @@ extension GitService {
                                           stage: entries[i].stage,
                                           add: c.add,
                                           del: c.del,
-                                          renameFrom: entries[i].renameFrom)
+                                          renameFrom: entries[i].renameFrom,
+                                          conflict: entries[i].conflict)
             } else if entries[i].add == 0 && entries[i].del == 0 {
                 // Numstat doesn't include unstaged untracked files, so they'd
                 // show 0/0 in the Changes pane and the totals would
@@ -118,7 +119,8 @@ extension GitService {
                                              stage: entries[i].stage,
                                              add: lines,
                                              del: 0,
-                                             renameFrom: entries[i].renameFrom)
+                                             renameFrom: entries[i].renameFrom,
+                                             conflict: entries[i].conflict)
                 }
             }
         }
@@ -1233,5 +1235,69 @@ extension GitService {
         }
 
         return RebasePlan(ontoBranch: onto, sourceBranch: source, commits: commits)
+    }
+}
+
+extension GitService {
+    /// Reads BASE / LOCAL / REMOTE for a conflicted file from index stages.
+    /// Stage indexes: 1 = common ancestor (base), 2 = ours (HEAD), 3 = theirs (incoming).
+    /// Returns nil for sides that don't exist (e.g., `bothAdded` has no base).
+    func conflictedFile(worktreePath: URL, relativePath: String) async throws -> ConflictedFile {
+        // Determine the conflict kind from current status (cheaper than
+        // calling status() and filtering — but this is what status() does
+        // anyway, so we just reuse it).
+        let allChanges = try await status(worktreePath: worktreePath)
+        guard let entry = allChanges.first(where: {
+            $0.path == relativePath && $0.conflict != nil
+        }), let kind = entry.conflict else {
+            throw ConflictedFileError.notConflicted(path: relativePath)
+        }
+
+        let base = try await readStageOrNil(worktreePath: worktreePath, stage: 1, path: relativePath)
+        let local = try await readStageOrNil(worktreePath: worktreePath, stage: 2, path: relativePath)
+        let remote = try await readStageOrNil(worktreePath: worktreePath, stage: 3, path: relativePath)
+
+        let absolute = worktreePath.appendingPathComponent(relativePath)
+        let mergedData = (try? Data(contentsOf: absolute)) ?? Data()
+        let isBinary = Self.looksBinary(mergedData)
+        let merged = isBinary ? "" : (String(data: mergedData, encoding: .utf8) ?? "")
+
+        return ConflictedFile(
+            relativePath: relativePath,
+            kind: kind,
+            base: base,
+            local: local,
+            remote: remote,
+            merged: merged,
+            isBinary: isBinary
+        )
+    }
+
+    /// `git show :N:path` returns the blob at index stage N. Returns nil
+    /// when the stage doesn't exist (git exits non-zero in that case).
+    private func readStageOrNil(worktreePath: URL, stage: Int, path: String) async throws -> String? {
+        let result = try await Process.git(
+            ["show", ":\(stage):\(path)"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { return nil }
+        return result.stdout
+    }
+
+    /// Same heuristic git uses: a NUL byte in the first 8KB → binary.
+    static func looksBinary(_ data: Data) -> Bool {
+        let probe = data.prefix(8192)
+        return probe.contains(0x00)
+    }
+}
+
+enum ConflictedFileError: LocalizedError {
+    case notConflicted(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConflicted(let path):
+            return "File '\(path)' is not in a conflicted state."
+        }
     }
 }

@@ -37,13 +37,13 @@ enum StatusParser {
             } else if line.hasPrefix("u ") {
                 // Porcelain v2 unmerged record:
                 //   u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
-                // 11 fields before <path> (one xy, one sub, three modes, one
-                // worktree mode, three blob hashes) → maxSplits: 11 leaves
-                // <path> intact even when it contains spaces.
-                let tokens = line.split(separator: " ", maxSplits: 11, omittingEmptySubsequences: true).map(String.init)
-                if tokens.count >= 12 {
+                // 10 fields before <path> (record type + xy + sub + three
+                // modes + worktree mode + three blob hashes) → 11 total fields;
+                // maxSplits: 10 leaves <path> intact even when it contains spaces.
+                let tokens = line.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: true).map(String.init)
+                if tokens.count >= 11 {
                     let xy = tokens[1]
-                    let path = tokens[11]
+                    let path = tokens[10]
                     let kind = ConflictKind.fromPorcelainXY(xy) ?? .bothModified
                     result.append(ChangedFile(
                         path: path,

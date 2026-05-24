@@ -101,4 +101,43 @@ struct GitServiceMergeTests {
         }
         #expect(sha.hasPrefix(featureSha.prefix(7)))
     }
+
+    @Test func conflictedFileReadsAllThreeSides() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let svc = GitService()
+        let file = try await svc.conflictedFile(worktreePath: repo, relativePath: "a.txt")
+        #expect(file.relativePath == "a.txt")
+        #expect(file.kind == .bothModified)
+        #expect(file.base == "base\n")
+        #expect(file.local == "main change\n")
+        #expect(file.remote == "feature change\n")
+        #expect(file.merged.contains("<<<<<<<"))
+        #expect(file.merged.contains(">>>>>>>"))
+        #expect(file.isBinary == false)
+    }
+
+    @Test func conflictedFileDetectsBinary() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Set up a conflicting binary file by writing different bytes on each branch.
+        let bin = Data([0x00, 0x01, 0x02, 0x03, 0x00, 0xFF])
+        try bin.write(to: repo.appendingPathComponent("a.bin"))
+        _ = try await Process.git(["add", "a.bin"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try Data([0x00, 0x01, 0x02, 0xAA, 0x00, 0xFF]).write(to: repo.appendingPathComponent("a.bin"))
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try Data([0x00, 0x01, 0x02, 0xBB, 0x00, 0xFF]).write(to: repo.appendingPathComponent("a.bin"))
+        _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let svc = GitService()
+        let file = try await svc.conflictedFile(worktreePath: repo, relativePath: "a.bin")
+        #expect(file.isBinary == true)
+    }
 }
