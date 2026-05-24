@@ -314,6 +314,31 @@ struct GitServiceMergeTests {
         #expect(plan.commits.contains { $0.state == .current })
     }
 
+    @Test func mergeStateDoesNotTrapOnEmptyRebaseApplyMetadata() async throws {
+        // Simulate a transient/incomplete .git/rebase-apply directory: the
+        // `rebasing` sentinel is present but `last` is missing/empty, so the
+        // commit count is unknown. `mergeState` must not crash — it should
+        // return .rebase with an empty plan instead.
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try Self.writeFile(repo, "a.txt", "x\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+
+        let applyDir = repo.appendingPathComponent(".git/rebase-apply")
+        try FileManager.default.createDirectory(at: applyDir, withIntermediateDirectories: true)
+        try "".write(to: applyDir.appendingPathComponent("rebasing"), atomically: true, encoding: .utf8)
+        // `next`/`last` deliberately omitted → parsed as 0.
+
+        let svc = GitService()
+        let state = try await svc.mergeState(worktreePath: repo)
+        guard case .rebase(let plan) = state else {
+            Issue.record("expected .rebase, got \(String(describing: state))")
+            return
+        }
+        #expect(plan.commits.isEmpty)
+    }
+
     @Test func mergeStateIgnoresGitAmInProgress() async throws {
         // `git am` also uses .git/rebase-apply but writes an `applying`
         // sentinel instead of `rebasing`. We must not classify it as a rebase

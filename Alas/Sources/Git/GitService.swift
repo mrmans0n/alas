@@ -1287,8 +1287,14 @@ extension GitService {
         }
 
         var commits: [RebasePlanCommit] = []
-        let range = lastInt >= 1 ? (1...lastInt) : (1...0)
-        for i in range {
+        // Guard the range: a missing or unparsable `last` would make
+        // `1...lastInt` trap (Range requires lowerBound <= upperBound).
+        // Return an empty plan in that case so the OperationCard still
+        // surfaces with Continue/Abort, just without a per-commit list.
+        guard lastInt >= 1 else {
+            return RebasePlan(ontoBranch: ontoRef, sourceBranch: source, commits: [])
+        }
+        for i in 1...lastInt {
             let patchName = String(format: "%04d", i)
             var summary = "commit \(i)"
             if let patchContent = readFile(patchName) {
