@@ -802,18 +802,31 @@ extension GitService {
         // rebased onto.
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
-            let origin = try await Process.git(
-                ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
-                cwd: worktree
-            )
-            if origin.exitCode == 0 {
-                baseName = "origin/\(base)"
-            } else {
-                let local = try await Process.git(
-                    ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
+            // If base already contains a slash (e.g. "upstream/main"),
+            // try it as a direct remote-tracking ref first.
+            if base.contains("/") {
+                let direct = try await Process.git(
+                    ["show-ref", "--verify", "--quiet", "refs/remotes/\(base)"],
                     cwd: worktree
                 )
-                if local.exitCode == 0 { baseName = base }
+                if direct.exitCode == 0 {
+                    baseName = base
+                }
+            }
+            if baseName == nil {
+                let origin = try await Process.git(
+                    ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
+                    cwd: worktree
+                )
+                if origin.exitCode == 0 {
+                    baseName = "origin/\(base)"
+                } else {
+                    let local = try await Process.git(
+                        ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
+                        cwd: worktree
+                    )
+                    if local.exitCode == 0 { baseName = base }
+                }
             }
         }
 

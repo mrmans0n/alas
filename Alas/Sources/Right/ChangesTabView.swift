@@ -157,8 +157,7 @@ struct ChangesTabView: View {
                 onCopySHA: copyCommitSHA,
                 onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
                 onSelectBaseBranch: { branch in
-                    let normalized = branch.hasPrefix("origin/") ? String(branch.dropFirst(7)) : branch
-                    rps.selectBaseBranch(normalized)
+                    rps.selectBaseBranch(branch)
                 },
                 onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
                 rps: rps

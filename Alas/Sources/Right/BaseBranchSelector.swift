@@ -105,11 +105,14 @@ extension BaseBranchSelector {
             out.append(name)
         }
 
-        // 1. Mainlines (local first, then its remote, in priority order)
+        // 1. Mainlines (local first, then every remote that carries it)
         for name in mainlineNames {
             if branches.contains(name) { append(name) }
-            let remote = "origin/\(name)"
-            if branches.contains(remote) { append(remote) }
+            for branch in branches {
+                if branch.hasSuffix("/\(name)") && branch.contains("/") {
+                    append(branch)
+                }
+            }
         }
 
         // 2. Upstream (if not already a mainline)
