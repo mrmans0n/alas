@@ -7,6 +7,8 @@ struct MergeConflictToolbar: View {
     /// Gates `Mark resolved` so it can't fire on an empty initial buffer
     /// and clobber the on-disk file with empty contents.
     let isLoaded: Bool
+    let agentBusy: Bool
+    let hasAgent: Bool
     @Binding var showBase: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -14,6 +16,7 @@ struct MergeConflictToolbar: View {
     let onAcceptRemote: () -> Void
     let onAcceptBoth: () -> Void
     let onAcceptAndNext: () -> Void
+    let onAskAgentResolve: () -> Void
     let onMarkResolved: () -> Void
 
     @Environment(\.theme) var theme
@@ -26,11 +29,27 @@ struct MergeConflictToolbar: View {
             Divider().frame(height: 18)
             acceptButtons
             Spacer()
+            Button(action: onAskAgentResolve) {
+                HStack(spacing: 4) {
+                    if agentBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
+                    Text("Ask agent to resolve")
+                        .font(.system(size: 11))
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!isLoaded || !hasAgent || agentBusy)
+            .help(hasAgent
+                ? "Run the configured agent on the whole file and preview its proposal"
+                : "Configure an agent in Settings to enable this")
             Toggle("Show BASE", isOn: $showBase)
                 .toggleStyle(.button)
                 .controlSize(.small)
-                .disabled(true)
-                .help("BASE inline rendering arrives in a follow-up — toggle is wired for persistence only")
+                .help("Show the common-ancestor BASE lines inside each conflict region")
             Button(action: onMarkResolved) {
                 Text("Mark resolved")
                     .font(.system(size: 11))

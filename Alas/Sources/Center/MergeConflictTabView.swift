@@ -30,6 +30,8 @@ struct MergeConflictTabView: View {
                 // (they're handled via the right-pane Use ours / Use theirs
                 // context menu). Keep the resolve button disabled for them.
                 isLoaded: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
+                agentBusy: model.agentBusy,
+                hasAgent: false,                 // wired in Task 6
                 showBase: showBaseBinding,
                 onPrevious: { model.previousConflict() },
                 onNext: { model.nextConflict() },
@@ -40,6 +42,7 @@ struct MergeConflictTabView: View {
                     model.acceptLocal()
                     model.nextConflict()
                 },
+                onAskAgentResolve: {},           // wired in Task 6
                 onMarkResolved: {
                     Task {
                         try? await model.markFileResolved()
