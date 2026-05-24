@@ -91,6 +91,11 @@ struct MergeConflictTabView: View {
             errorBanner(loadError)
         } else if model.conflictedFile == nil {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if model.conflictedFile?.isBinary == true {
+            MergeConflictBinaryView(
+                conflictedFile: model.conflictedFile!,
+                worktreePath: worktree.path
+            )
         } else {
             body3Columns
         }
