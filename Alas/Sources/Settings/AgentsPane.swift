@@ -105,7 +105,12 @@ struct AgentsPane: View {
         )) {
             Text("None").tag("none")
             ForEach(state.agentRegistry.enabled()) { agent in
-                Text(agent.displayName).tag(agent.id)
+                Label {
+                    Text(agent.displayName)
+                } icon: {
+                    AgentLogoView(agent: agent, size: 14)
+                }
+                .tag(agent.id)
             }
         }
         .pickerStyle(.menu)
