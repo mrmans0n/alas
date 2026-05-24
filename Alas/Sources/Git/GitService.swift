@@ -794,23 +794,24 @@ extension GitService {
         }
 
         // Step 2: If no upstream, try the base branch. Prefer `origin/<base>`
-        // over local `<base>` — the remote-tracking ref is usually current
-        // after a fetch, while the local branch can be stale (especially in
-        // worktrees that never check out the base branch directly). This also
-        // matches the ref the rebase affordance targets via `resolveBaseRef`,
-        // so the Commits section stays consistent with what the user just
-        // rebased onto.
+        // over local `<base>` for simple branch names. Slash-named bases are
+        // ambiguous, so resolve local refs first before treating them as
+        // remote-qualified refs.
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
-            // If base already contains a slash (e.g. "upstream/main"),
-            // try it as a direct remote-tracking ref first.
             if base.contains("/") {
-                let direct = try await Process.git(
-                    ["show-ref", "--verify", "--quiet", "refs/remotes/\(base)"],
+                let local = try await Process.git(
+                    ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
                     cwd: worktree
                 )
-                if direct.exitCode == 0 {
+                if local.exitCode == 0 {
                     baseName = base
+                } else {
+                    let direct = try await Process.git(
+                        ["show-ref", "--verify", "--quiet", "refs/remotes/\(base)"],
+                        cwd: worktree
+                    )
+                    if direct.exitCode == 0 { baseName = base }
                 }
             }
             if baseName == nil {
@@ -1033,9 +1034,15 @@ extension GitService {
     ) async throws -> (remote: String?, baseRef: String, fetchBranch: String?)? {
         guard !baseBranch.isEmpty else { return nil }
 
-        // If baseBranch already contains a slash (e.g. "upstream/main"),
-        // try it as a direct remote-tracking ref first.
         if baseBranch.contains("/") {
+            let localCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
+                cwd: worktreePath
+            )
+            if localCheck.exitCode == 0 {
+                return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
+            }
+
             let directRef = "refs/remotes/\(baseBranch)"
             let directCheck = try await Process.git(
                 ["show-ref", "--verify", "--quiet", directRef],
