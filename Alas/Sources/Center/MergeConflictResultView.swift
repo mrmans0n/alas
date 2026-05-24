@@ -1,0 +1,146 @@
+import AppKit
+import SwiftUI
+
+/// Editable RESULT column for the merge editor. Bound to the model's
+/// `resultText`. Reuses `MergeConflictTextStorage` for syntax highlighting
+/// and overlays yellow shading on conflict marker blocks so the user can
+/// see at a glance which regions still need resolution.
+struct MergeConflictResultView: NSViewRepresentable {
+    @Binding var text: String
+    let fileExtension: String
+    let codeFontFamily: String
+    let codeFontSize: CGFloat
+    @Environment(\.theme) var theme
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+
+        let textView = NSTextView()
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = true
+        textView.allowsUndo = true
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.autoresizingMask = [.width]
+        textView.drawsBackground = true
+        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.delegate = context.coordinator
+        scroll.documentView = textView
+        context.coordinator.textView = textView
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let textView = scroll.documentView as? NSTextView else { return }
+        // Only re-render the text storage when the bound text actually differs
+        // from what the user has typed. Otherwise we clobber the in-flight
+        // caret position on every external @State change.
+        let current = textView.string
+        if current != text {
+            let attr = MergeConflictTextStorage.highlightedAttributedString(
+                text: text,
+                fileExtension: fileExtension,
+                fontFamily: codeFontFamily,
+                fontSize: codeFontSize,
+                theme: theme
+            )
+            applyConflictShading(to: attr, text: text, theme: theme)
+            textView.textStorage?.setAttributedString(attr)
+        } else {
+            // Even when the string is unchanged, the conflict regions may have
+            // shifted (a typed edit can resolve a marker). Re-apply shading.
+            if let storage = textView.textStorage {
+                applyConflictShading(to: storage, text: text, theme: theme)
+            }
+        }
+        textView.backgroundColor = NSColor(theme.color("bg-1"))
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator($text)
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        weak var textView: NSTextView?
+        let text: Binding<String>
+        init(_ text: Binding<String>) { self.text = text }
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            text.wrappedValue = tv.string
+        }
+    }
+
+    /// Applies a yellow background to each line range that falls inside a
+    /// `<<<<<<< ... >>>>>>>` block in `text`.
+    private func applyConflictShading(
+        to storage: NSMutableAttributedString,
+        text: String,
+        theme: Theme
+    ) {
+        let regions = ConflictMarkerParser.parse(text)
+        let highlight = NSColor(theme.color("warn")).withAlphaComponent(0.18)
+        storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
+        let lineRanges = Self.computeLineRanges(in: text as NSString)
+        for region in regions {
+            if case .conflict(let block) = region {
+                let lower = max(block.lineRangeInMerged.lowerBound, 0)
+                let upper = min(block.lineRangeInMerged.upperBound, lineRanges.count - 1)
+                guard upper >= lower, upper < lineRanges.count else { continue }
+                let start = lineRanges[lower].location
+                let end = NSMaxRange(lineRanges[upper])
+                let nsr = NSRange(location: start, length: end - start)
+                storage.addAttribute(.backgroundColor, value: highlight, range: nsr)
+            }
+        }
+    }
+
+    /// NSTextStorage variant — same algorithm, applied to a live storage.
+    private func applyConflictShading(
+        to storage: NSTextStorage,
+        text: String,
+        theme: Theme
+    ) {
+        let regions = ConflictMarkerParser.parse(text)
+        let highlight = NSColor(theme.color("warn")).withAlphaComponent(0.18)
+        storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
+        let lineRanges = Self.computeLineRanges(in: text as NSString)
+        for region in regions {
+            if case .conflict(let block) = region {
+                let lower = max(block.lineRangeInMerged.lowerBound, 0)
+                let upper = min(block.lineRangeInMerged.upperBound, lineRanges.count - 1)
+                guard upper >= lower, upper < lineRanges.count else { continue }
+                let start = lineRanges[lower].location
+                let end = NSMaxRange(lineRanges[upper])
+                let nsr = NSRange(location: start, length: end - start)
+                storage.addAttribute(.backgroundColor, value: highlight, range: nsr)
+            }
+        }
+    }
+
+    /// NSRanges for each line (split on `\n`), preserving trailing-empty semantics.
+    private static func computeLineRanges(in nsString: NSString) -> [NSRange] {
+        var ranges: [NSRange] = []
+        var index = 0
+        while index <= nsString.length {
+            let lineRange = nsString.lineRange(for: NSRange(location: index, length: 0))
+            if lineRange.length == 0 {
+                ranges.append(NSRange(location: index, length: 0))
+                break
+            }
+            ranges.append(lineRange)
+            index = NSMaxRange(lineRange)
+            if index >= nsString.length { break }
+        }
+        return ranges
+    }
+}
