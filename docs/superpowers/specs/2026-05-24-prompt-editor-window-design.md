@@ -34,9 +34,9 @@ Settings -> Changes keeps the current Tool row. The Prompt row becomes compact:
 
 - Row title: `Prompt`
 - Description: `Instructions sent to the CLI. The staged diff is appended on stdin.`
-- Action: `Edit`
-- Right-aligned status chip: `Default` when the stored prompt equals
-  `AppConfig.defaultCommitPrompt`, otherwise `Custom`
+- Right-aligned controls: `Edit` button followed by a status chip.
+- Status chip text: `Default` when the stored prompt equals
+  `AppConfig.defaultCommitPrompt`, otherwise `Custom`.
 
 Pressing `Edit` opens a dedicated `Commit Prompt` window. The window uses the
 focused editor layout:
