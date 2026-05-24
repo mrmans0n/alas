@@ -13,7 +13,7 @@ struct ChangesPane: View {
                     .padding(.bottom, 12)
 
                 SettingsGroup(title: "Commit message") {
-                    SettingsRow(name: "Tool",
+                    SettingsRow(name: "Agent",
                                 desc: "Used by the sparkle button in the commit composer.") {
                         toolPicker
                     }
@@ -46,27 +46,19 @@ struct ChangesPane: View {
 
     private var toolPicker: some View {
         Picker("", selection: state.bind(\.changes.aiToolId)) {
-            ForEach(menuItems, id: \.id) { item in
-                Text(item.label).tag(item.id)
+            // `agent.isEnabled` is clamped against install detection in
+            // AgentRegistry, so every entry here is both enabled and installed.
+            ForEach(state.agentRegistry.agents.filter(\.isEnabled)) { agent in
+                Label {
+                    Text(agent.displayName)
+                } icon: {
+                    AgentLogoView(agent: agent, size: 14)
+                }
+                .tag(agent.id)
             }
+            Text("None").tag("none")
         }
         .pickerStyle(.menu)
         .frame(width: 240)
-    }
-
-    private struct MenuItem: Identifiable {
-        let id: String
-        let label: String
-    }
-
-    private var menuItems: [MenuItem] {
-        var items: [MenuItem] = []
-        // `agent.isEnabled` is clamped against install detection in
-        // AgentRegistry, so every entry here is both enabled and installed.
-        for agent in state.agentRegistry.agents where agent.isEnabled {
-            items.append(MenuItem(id: agent.id, label: agent.displayName))
-        }
-        items.append(MenuItem(id: "none", label: "None"))
-        return items
     }
 }
