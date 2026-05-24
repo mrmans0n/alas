@@ -181,4 +181,34 @@ struct GitServiceMergeTests {
         let merged = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
         #expect(merged.contains("|||||||"))  // zdiff3 base marker
     }
+
+    @Test func rebaseReturnsConflictOnConflict() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["checkout", "-q", "feature"], cwd: repo)
+
+        let svc = GitService()
+        let result = try await svc.rebase(worktreePath: repo, onto: "main")
+        guard case .conflict(let files) = result else {
+            Issue.record("expected .conflict, got \(result)")
+            return
+        }
+        #expect(files.contains(where: { $0.path == "a.txt" }))
+    }
+
+    @Test func cherryPickReturnsConflictOnConflict() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        let featureSha = try await Process.git(["rev-parse", "feature"], cwd: repo).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let svc = GitService()
+        let result = try await svc.cherryPick(worktreePath: repo, sha: featureSha)
+        guard case .conflict = result else {
+            Issue.record("expected .conflict, got \(result)")
+            return
+        }
+    }
 }

@@ -1325,6 +1325,32 @@ extension GitService {
     }
 }
 
+extension GitService {
+    func rebase(worktreePath: URL, onto: String) async throws -> MergeResult {
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "rebase", onto],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
+    func cherryPick(worktreePath: URL, sha: String) async throws -> MergeResult {
+        let result = try await Process.git(
+            ["-c", "merge.conflictStyle=zdiff3", "cherry-pick", sha],
+            cwd: worktreePath
+        )
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+}
+
 enum ConflictedFileError: LocalizedError {
     case notConflicted(path: String)
 
