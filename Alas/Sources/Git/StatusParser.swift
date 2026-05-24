@@ -35,6 +35,11 @@ enum StatusParser {
                 result.append(ChangedFile(path: path, status: "A", stage: .unstaged, add: 0, del: 0, renameFrom: nil))
                 i += 1
             } else if line.hasPrefix("u ") {
+                // Porcelain v2 unmerged record:
+                //   u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
+                // 11 fields before <path> (one xy, one sub, three modes, one
+                // worktree mode, three blob hashes) → maxSplits: 11 leaves
+                // <path> intact even when it contains spaces.
                 let tokens = line.split(separator: " ", maxSplits: 11, omittingEmptySubsequences: true).map(String.init)
                 if tokens.count >= 12 {
                     let xy = tokens[1]
