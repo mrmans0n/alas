@@ -34,10 +34,9 @@ Settings -> Changes keeps the current Tool row. The Prompt row becomes compact:
 
 - Row title: `Prompt`
 - Description: `Instructions sent to the CLI. The staged diff is appended on stdin.`
-- Controls: `Edit` button aligned to the settings control column, with a
-  right-aligned status chip.
-- Status chip text: `Default` when the stored prompt equals
-  `AppConfig.defaultCommitPrompt`, otherwise `Custom`.
+- Controls: `Edit` button aligned to the settings control column.
+- Status chip: hidden when the stored prompt equals
+  `AppConfig.defaultCommitPrompt`; right-aligned with text `Custom` otherwise.
 
 Pressing `Edit` opens a dedicated `Commit Prompt` window. The window uses the
 focused editor layout:
@@ -96,8 +95,8 @@ config and persists it.
   not manage prompt edit drafts.
 - `CommitPromptEditorWindow`: owns the prompt edit session, including draft,
   reset, save, cancel, and window close behavior.
-- Prompt status helper: a small pure helper maps stored prompt text to `Default`
-  or `Custom` for the compact status chip.
+- Prompt status helper: a small pure helper maps stored prompt text to no chip
+  for the default prompt or `Custom` for custom prompts.
 
 ## Error Handling
 
@@ -111,7 +110,7 @@ error surface is added, this window can adopt it.
 Use focused tests where they add value:
 
 - If a prompt status helper is extracted, add Swift Testing coverage for:
-  - default prompt -> `Default`
+  - default prompt -> no status chip
   - modified prompt -> `Custom`
 - Existing `AppConfigChangesTests` already cover prompt persistence. Leave them
   unchanged because the data model is not changing.

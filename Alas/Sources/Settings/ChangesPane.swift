@@ -25,7 +25,9 @@ struct ChangesPane: View {
                                 openWindow(id: "commit-prompt-editor")
                             }
                             Spacer()
-                            PromptStatusChip(label: CommitPromptStatus.label(for: state.config.changes.prompt))
+                            if let chipLabel = CommitPromptStatus.chipLabel(for: state.config.changes.prompt) {
+                                PromptStatusChip(label: chipLabel)
+                            }
                         }
                         .frame(maxWidth: .infinity)
                     }

@@ -1,5 +1,5 @@
 enum CommitPromptStatus {
-    static func label(for prompt: String) -> String {
-        prompt == AppConfig.defaultCommitPrompt ? "Default" : "Custom"
+    static func chipLabel(for prompt: String) -> String? {
+        prompt == AppConfig.defaultCommitPrompt ? nil : "Custom"
     }
 }

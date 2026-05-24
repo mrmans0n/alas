@@ -2,11 +2,11 @@ import Testing
 @testable import Alas
 
 struct CommitPromptStatusTests {
-    @Test func defaultPromptUsesDefaultStatus() {
-        #expect(CommitPromptStatus.label(for: AppConfig.defaultCommitPrompt) == "Default")
+    @Test func defaultPromptHasNoStatusChip() {
+        #expect(CommitPromptStatus.chipLabel(for: AppConfig.defaultCommitPrompt) == nil)
     }
 
-    @Test func modifiedPromptUsesCustomStatus() {
-        #expect(CommitPromptStatus.label(for: AppConfig.defaultCommitPrompt + "\nExtra instruction.") == "Custom")
+    @Test func modifiedPromptUsesCustomStatusChip() {
+        #expect(CommitPromptStatus.chipLabel(for: AppConfig.defaultCommitPrompt + "\nExtra instruction.") == "Custom")
     }
 }
