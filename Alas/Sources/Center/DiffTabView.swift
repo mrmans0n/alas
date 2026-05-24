@@ -335,6 +335,7 @@ struct HunkView: View {
                 Text(hunk.header)
                     .font(CenterTypography.codeFont(family: codeFontFamily, size: headerFontSize))
                     .foregroundColor(theme.color("fg-dim"))
+                    .textSelection(.enabled)
                 Spacer(minLength: 8)
                 if onStage != nil {
                     AlasButton(title: "Stage hunk", style: .subtle, action: { onStage?() })
