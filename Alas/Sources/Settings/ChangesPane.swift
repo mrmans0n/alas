@@ -3,6 +3,7 @@ import SwiftUI
 struct ChangesPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ScrollView {
@@ -19,22 +20,12 @@ struct ChangesPane: View {
                     }
                     SettingsRow(name: "Prompt",
                                 desc: "Instructions sent to the CLI. The staged diff is appended on stdin.") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextEditor(text: state.bind(\.changes.prompt))
-                                .font(.system(size: 12, design: .monospaced))
-                                .frame(minHeight: 200, maxHeight: 320)
-                                .scrollContentBackground(.hidden)
-                                .background(theme.color("bg-2"))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(theme.color("line-soft"), lineWidth: 0.5)
-                                )
-                            HStack {
-                                Spacer()
-                                AlasButton(title: "Reset to default", style: .subtle) {
-                                    state.config.changes.prompt = AppConfig.defaultCommitPrompt
-                                    state.saveConfig()
-                                }
+                        HStack(spacing: 12) {
+                            Text(CommitPromptStatus.label(for: state.config.changes.prompt))
+                                .font(.system(size: 12.5))
+                                .foregroundColor(theme.color("fg-muted"))
+                            AlasButton(title: "Edit...", style: .subtle) {
+                                openWindow(id: "commit-prompt-editor")
                             }
                         }
                     }
