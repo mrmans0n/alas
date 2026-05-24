@@ -28,6 +28,49 @@ struct DiffSelectableTextTests {
         )
     }
 
+    @Test func diffSelectableTextBuilderPlainStringExcludesGutters() {
+        let text = DiffSelectableTextBuilder.plainString(for: sampleHunk())
+        #expect(text == """
+struct Foo {
+    let bar: Int
+    let bar: String
+}
+""")
+        #expect(!text.contains("+11"))
+        #expect(!text.contains("−11"))
+        #expect(!text.contains("@@"))
+    }
+
+    @Test func diffSelectableTextBuilderPreservesEmptyLines() {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,3 +1,3 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(kind: .context, text: "alpha", oldNumber: 1, newNumber: 1),
+                .init(kind: .delete, text: "", oldNumber: 2, newNumber: nil),
+                .init(kind: .add, text: "omega", oldNumber: nil, newNumber: 2),
+            ]
+        )
+
+        #expect(DiffSelectableTextBuilder.plainString(for: hunk) == "alpha\n\nomega")
+    }
+
+    @Test func diffSelectableTextBuilderReturnsLineMetadataForEveryLine() {
+        let result = DiffSelectableTextBuilder.build(
+            hunk: sampleHunk(),
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            theme: currentTheme()
+        )
+
+        #expect(result.attributedString.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
+        #expect(result.lines.map(\.kind) == [.context, .delete, .add, .context])
+        #expect(result.lines.map(\.marker) == [" 10", "−11", "+11", " 12"])
+        #expect(result.lines.first?.range == NSRange(location: 0, length: 12))
+        #expect(result.lines.last?.range.location == (result.attributedString.string as NSString).length - 1)
+    }
+
     // MARK: HunkView standalone
 
     @Test func hunkViewRendersWithoutCrashing() {
