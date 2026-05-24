@@ -1163,6 +1163,9 @@ extension GitService {
             cwd: worktreePath
         )
         let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, !raw.isEmpty else {
+            throw OperationError.gitFailed(command: "rev-parse --absolute-git-dir", stderr: result.stderr)
+        }
         return URL(fileURLWithPath: raw)
     }
 
