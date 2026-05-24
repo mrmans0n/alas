@@ -3,10 +3,10 @@ import Testing
 
 struct CommitPromptStatusTests {
     @Test func defaultPromptUsesDefaultStatus() {
-        #expect(CommitPromptStatus.label(for: AppConfig.defaultCommitPrompt) == "Default prompt")
+        #expect(CommitPromptStatus.label(for: AppConfig.defaultCommitPrompt) == "Default")
     }
 
     @Test func modifiedPromptUsesCustomStatus() {
-        #expect(CommitPromptStatus.label(for: AppConfig.defaultCommitPrompt + "\nExtra instruction.") == "Custom prompt")
+        #expect(CommitPromptStatus.label(for: AppConfig.defaultCommitPrompt + "\nExtra instruction.") == "Custom")
     }
 }

@@ -21,13 +21,13 @@ struct ChangesPane: View {
                     SettingsRow(name: "Prompt",
                                 desc: "Instructions sent to the CLI. The staged diff is appended on stdin.") {
                         HStack(spacing: 12) {
-                            Text(CommitPromptStatus.label(for: state.config.changes.prompt))
-                                .font(.system(size: 12.5))
-                                .foregroundColor(theme.color("fg-muted"))
-                            AlasButton(title: "Edit...", style: .subtle) {
+                            AlasButton(title: "Edit", style: .normal) {
                                 openWindow(id: "commit-prompt-editor")
                             }
+                            Spacer()
+                            PromptStatusChip(label: CommitPromptStatus.label(for: state.config.changes.prompt))
                         }
+                        .frame(maxWidth: .infinity)
                     }
                 }
             }
@@ -51,5 +51,24 @@ struct ChangesPane: View {
         }
         .pickerStyle(.menu)
         .frame(width: 240)
+    }
+}
+
+private struct PromptStatusChip: View {
+    let label: String
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(theme.color("fg-muted"))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(theme.color("bg-2"))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(theme.color("line-soft"), lineWidth: 0.5)
+            )
     }
 }
