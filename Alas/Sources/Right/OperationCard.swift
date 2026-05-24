@@ -107,10 +107,14 @@ struct OperationCard: View {
     }
 
     private func symbol(_ s: RebasePlanCommit.State) -> String {
-        switch s { case .done: return "✓"; case .current: return "▸"; case .pending: return "·" }
+        switch s { case .done: return "✓"
+        case .current: return "▸"
+        case .pending: return "·" }
     }
     private func color(_ s: RebasePlanCommit.State) -> Color {
-        switch s { case .done: return .green; case .current: return .orange; case .pending: return .secondary }
+        switch s { case .done: return .green
+        case .current: return .orange
+        case .pending: return .secondary }
     }
 
     private var actions: some View {

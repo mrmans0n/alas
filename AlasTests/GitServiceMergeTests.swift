@@ -242,7 +242,8 @@ struct GitServiceMergeTests {
         try await svc.markResolved(worktreePath: repo, relativePath: "a.txt")
 
         let state = try await svc.mergeState(worktreePath: repo)
-        guard case .merge = state else { Issue.record("expected merge state"); return }
+        guard case .merge = state else { Issue.record("expected merge state")
+        return }
 
         let result = try await svc.continueOperation(worktreePath: repo, op: state!)
         #expect(result == .clean)

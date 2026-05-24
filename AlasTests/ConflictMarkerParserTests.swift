@@ -29,7 +29,8 @@ struct ConflictMarkerParserTests {
         guard case .text(let pre) = regions[0],
               case .conflict(let block) = regions[1],
               case .text(let post) = regions[2]
-        else { Issue.record("region kinds wrong"); return }
+        else { Issue.record("region kinds wrong")
+        return }
         #expect(pre == "before\n")
         #expect(block.local == "ours line\n")
         #expect(block.remote == "theirs line\n")
@@ -53,7 +54,8 @@ struct ConflictMarkerParserTests {
         let regions = ConflictMarkerParser.parse(input)
         #expect(regions.count == 2)
         guard case .conflict(let block) = regions[0] else {
-            Issue.record("expected leading conflict region"); return
+            Issue.record("expected leading conflict region")
+            return
         }
         #expect(block.local == "ours\n")
         #expect(block.base == "base\n")
@@ -85,7 +87,8 @@ struct ConflictMarkerParserTests {
               case .text = regions[2],
               case .conflict(let second) = regions[3],
               case .text = regions[4]
-        else { Issue.record("region order wrong"); return }
+        else { Issue.record("region order wrong")
+        return }
         #expect(first.local == "a-ours\n")
         #expect(second.local == "b-ours\n")
     }
@@ -103,7 +106,8 @@ struct ConflictMarkerParserTests {
             """
         let regions = ConflictMarkerParser.parse(input)
         guard case .conflict(let block) = regions[1] else {
-            Issue.record("expected conflict region"); return
+            Issue.record("expected conflict region")
+            return
         }
         // Lines are 0-indexed in the merged buffer.
         // Marker lines are 1 (<<<), 3 (===), 5 (>>>).
@@ -145,7 +149,8 @@ struct ConflictMarkerParserTests {
         let input = "<<<<<<< HEAD\n=======\ntheirs\n>>>>>>> feature\n"
         let regions = ConflictMarkerParser.parse(input)
         guard case .conflict(let block) = regions[0] else {
-            Issue.record("expected conflict region"); return
+            Issue.record("expected conflict region")
+            return
         }
         #expect(block.local == "")
         #expect(block.remote == "theirs\n")
@@ -155,7 +160,8 @@ struct ConflictMarkerParserTests {
         let input = "<<<<<<< HEAD\nours\n=======\n>>>>>>> feature\n"
         let regions = ConflictMarkerParser.parse(input)
         guard case .conflict(let block) = regions[0] else {
-            Issue.record("expected conflict region"); return
+            Issue.record("expected conflict region")
+            return
         }
         #expect(block.local == "ours\n")
         #expect(block.remote == "")
@@ -165,7 +171,8 @@ struct ConflictMarkerParserTests {
         let input = "<<<<<<< HEAD\nours\n||||||| ancestor\n=======\ntheirs\n>>>>>>> feature\n"
         let regions = ConflictMarkerParser.parse(input)
         guard case .conflict(let block) = regions[0] else {
-            Issue.record("expected conflict region"); return
+            Issue.record("expected conflict region")
+            return
         }
         #expect(block.local == "ours\n")
         #expect(block.base == "")
@@ -176,7 +183,8 @@ struct ConflictMarkerParserTests {
         let input = "<<<<<<< HEAD\n=======\n>>>>>>> feature\n"
         let regions = ConflictMarkerParser.parse(input)
         guard case .conflict(let block) = regions[0] else {
-            Issue.record("expected conflict region"); return
+            Issue.record("expected conflict region")
+            return
         }
         #expect(block.local == "")
         #expect(block.base == nil)
