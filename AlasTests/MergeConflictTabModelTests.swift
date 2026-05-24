@@ -276,4 +276,34 @@ struct MergeConflictTabModelTests {
         )
         #expect(recreated == false)
     }
+
+    @Test func loadSnapshotsInitialConflictCount() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        #expect(model.initialConflictCount == 1)
+        model.acceptLocal()
+        // After resolution, the snapshot survives:
+        #expect(model.initialConflictCount == 1)
+        #expect(model.conflictCount == 0)
+    }
+
+    @Test func annotationsStartEmptyAndCanBeSet() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        #expect(model.annotations.isEmpty)
+        model.setAnnotation("LOCAL renamed; REMOTE changed default.", forConflictOrdinal: 0)
+        #expect(model.annotations[0] == "LOCAL renamed; REMOTE changed default.")
+    }
 }

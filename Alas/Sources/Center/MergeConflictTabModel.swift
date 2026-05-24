@@ -18,6 +18,13 @@ final class MergeConflictTabModel {
     var resultText: String = ""
     /// Set when `load()` fails. Cleared on successful (re)load.
     private(set) var loadError: String?
+    /// Per-conflict-ordinal one-line annotation populated by the agent.
+    /// Cached for the lifetime of the model (cleared on `load()`).
+    private(set) var annotations: [Int: String] = [:]
+    /// Conflict count at the moment `load()` last succeeded. Used by the
+    /// minimap to show progress (resolved vs total). Cleared (set to 0)
+    /// on `load()` failure.
+    private(set) var initialConflictCount: Int = 0
 
     let worktreePath: URL
     let relativePath: String
@@ -47,12 +54,16 @@ final class MergeConflictTabModel {
             self.resultText = file.merged
             self.regions = ConflictMarkerParser.parse(file.merged)
             self.currentConflictIndex = firstConflictIndex()
+            self.initialConflictCount = self.conflictCount
+            self.annotations = [:]
             self.loadError = nil
         } catch {
             self.conflictedFile = nil
             self.regions = []
             self.resultText = ""
             self.currentConflictIndex = nil
+            self.initialConflictCount = 0
+            self.annotations = [:]
             self.loadError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
             logger.error("merge-conflict load failed: \(self.loadError ?? "", privacy: .public)")
@@ -213,5 +224,11 @@ final class MergeConflictTabModel {
             worktreePath: worktreePath,
             relativePath: relativePath
         )
+    }
+
+    /// Records a one-line agent annotation for the conflict at `ordinal`.
+    /// Called by `MergeConflictTabView` after a successful `MergeAgent.explainConflict` round-trip.
+    func setAnnotation(_ text: String, forConflictOrdinal ordinal: Int) {
+        annotations[ordinal] = text
     }
 }
