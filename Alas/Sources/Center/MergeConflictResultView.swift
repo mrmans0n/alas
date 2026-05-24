@@ -81,32 +81,10 @@ struct MergeConflictResultView: NSViewRepresentable {
     }
 
     /// Applies a yellow background to each line range that falls inside a
-    /// `<<<<<<< ... >>>>>>>` block in `text`.
+    /// `<<<<<<< ... >>>>>>>` block in `text`. Accepts any `NSMutableAttributedString`
+    /// (including `NSTextStorage`, which IS-A `NSMutableAttributedString`).
     private func applyConflictShading(
         to storage: NSMutableAttributedString,
-        text: String,
-        theme: Theme
-    ) {
-        let regions = ConflictMarkerParser.parse(text)
-        let highlight = NSColor(theme.color("warn")).withAlphaComponent(0.18)
-        storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
-        let lineRanges = Self.computeLineRanges(in: text as NSString)
-        for region in regions {
-            if case .conflict(let block) = region {
-                let lower = max(block.lineRangeInMerged.lowerBound, 0)
-                let upper = min(block.lineRangeInMerged.upperBound, lineRanges.count - 1)
-                guard upper >= lower, upper < lineRanges.count else { continue }
-                let start = lineRanges[lower].location
-                let end = NSMaxRange(lineRanges[upper])
-                let nsr = NSRange(location: start, length: end - start)
-                storage.addAttribute(.backgroundColor, value: highlight, range: nsr)
-            }
-        }
-    }
-
-    /// NSTextStorage variant — same algorithm, applied to a live storage.
-    private func applyConflictShading(
-        to storage: NSTextStorage,
         text: String,
         theme: Theme
     ) {
