@@ -21,7 +21,7 @@ struct CommitEditorTabView: View {
     @State private var savedBodyText = ""
     @State private var busy = false
     @State private var error: String?
-    @State private var pendingDropFile: CommitChangedFile?
+    @State private var pendingDropFile: PendingCommitFileDrop?
     @State private var pendingDropHunk: PendingCommitHunkDrop?
 
     @Environment(\.theme) private var theme
@@ -78,8 +78,8 @@ struct CommitEditorTabView: View {
             get: { pendingDropFile != nil },
             set: { if !$0 { pendingDropFile = nil } }
         )) {
-            Button("Drop \(((pendingDropFile?.path ?? "file") as NSString).lastPathComponent)", role: .destructive) {
-                if let file = pendingDropFile { dropFile(file) }
+            Button("Drop \(((pendingDropFile?.file.path ?? "file") as NSString).lastPathComponent)", role: .destructive) {
+                if let pending = pendingDropFile { dropFile(pending) }
                 pendingDropFile = nil
             }
             .disabled(busy)
@@ -112,7 +112,7 @@ struct CommitEditorTabView: View {
                 CommitFilesListView(
                     files: details.files,
                     selectedPath: $selectedPath,
-                    onDropFile: { pendingDropFile = $0 },
+                    onDropFile: { pendingDropFile = PendingCommitFileDrop(sha: tabState.currentSha, file: $0) },
                     dropFileEnabled: canDropFile
                 )
                     .frame(width: leftWidth)
@@ -251,8 +251,12 @@ struct CommitEditorTabView: View {
         runEdit(action: .message(subject: subject, body: bodyText))
     }
 
-    private func dropFile(_ file: CommitChangedFile) {
-        runEdit(action: .dropFile(path: file.path))
+    private func dropFile(_ pending: PendingCommitFileDrop) {
+        guard pending.sha == tabState.currentSha else {
+            error = "Commit changed before file drop could run. Try again."
+            return
+        }
+        runEdit(action: .dropFile(path: pending.file.path))
     }
 
     private func dropHunk(_ pending: PendingCommitHunkDrop) {
@@ -357,6 +361,11 @@ struct CommitEditorTabView: View {
             }
         }
     }
+}
+
+private struct PendingCommitFileDrop: Equatable {
+    let sha: String
+    let file: CommitChangedFile
 }
 
 private struct PendingCommitHunkDrop: Equatable {

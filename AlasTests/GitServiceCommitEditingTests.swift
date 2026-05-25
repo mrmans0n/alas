@@ -72,6 +72,50 @@ struct GitServiceCommitEditingTests {
         #expect(body.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "body text")
     }
 
+    @Test func concurrentEditsForSameWorktreeAreSerialized() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commit(repo, subject: "old target", files: ["a.txt": "a1\n"])
+        _ = try await commit(repo, subject: "descendant", files: ["b.txt": "b1\n"])
+
+        async let first = captureResult {
+            try await GitService().editCommit(
+                worktreePath: repo,
+                baseRef: base,
+                targetSha: target,
+                action: .message(subject: "first target", body: "")
+            )
+        }
+        async let second = captureResult {
+            try await GitService().editCommit(
+                worktreePath: repo,
+                baseRef: base,
+                targetSha: target,
+                action: .message(subject: "second target", body: "")
+            )
+        }
+
+        let results = await [first, second]
+        let successes = results.compactMap { try? $0.get() }
+        let failures = results.compactMap { result -> CommitEditError? in
+            guard case .failure(let error) = result else { return nil }
+            return error as? CommitEditError
+        }
+
+        #expect(successes.count == 1)
+        #expect(failures == [.targetNotAboveFold])
+        #expect(try await subjects(repo).filter { $0.hasSuffix(" target") }.count == 1)
+    }
+
+    private func captureResult<T>(_ operation: () async throws -> T) async -> Result<T, Error> {
+        do {
+            return .success(try await operation())
+        } catch {
+            return .failure(error)
+        }
+    }
+
     @Test func rawCommitSubjectPreservesConventionalScopeAndBreakingMarker() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

@@ -59,6 +59,22 @@ extension GitService {
         targetSha: String,
         action: CommitEditAction
     ) async throws -> CommitEditResult {
+        try await CommitEditWorktreeLocks.shared.withLock(key: worktreePath.standardizedFileURL.path) {
+            try await editCommitUnlocked(
+                worktreePath: worktreePath,
+                baseRef: baseRef,
+                targetSha: targetSha,
+                action: action
+            )
+        }
+    }
+
+    private func editCommitUnlocked(
+        worktreePath: URL,
+        baseRef: String,
+        targetSha: String,
+        action: CommitEditAction
+    ) async throws -> CommitEditResult {
         let message: (subject: String, body: String)?
         switch action {
         case .message(let newSubject, let newBody):
@@ -147,6 +163,45 @@ extension GitService {
             }
             throw error
         }
+    }
+}
+
+private actor CommitEditWorktreeLocks {
+    static let shared = CommitEditWorktreeLocks()
+
+    private var lockedKeys: Set<String> = []
+    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    func withLock<T>(key: String, operation: () async throws -> T) async throws -> T {
+        await acquire(key: key)
+        do {
+            let result = try await operation()
+            release(key: key)
+            return result
+        } catch {
+            release(key: key)
+            throw error
+        }
+    }
+
+    private func acquire(key: String) async {
+        if !lockedKeys.contains(key) {
+            lockedKeys.insert(key)
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters[key, default: []].append(continuation)
+        }
+    }
+
+    private func release(key: String) {
+        guard var queue = waiters[key], !queue.isEmpty else {
+            lockedKeys.remove(key)
+            return
+        }
+        let continuation = queue.removeFirst()
+        waiters[key] = queue.isEmpty ? nil : queue
+        continuation.resume()
     }
 }
 
