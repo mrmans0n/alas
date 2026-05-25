@@ -71,6 +71,9 @@ struct RootView: View {
                                     },
                                     onSelectCommit: { commit in
                                         openOrFocusCommit(worktree: wt, commit: commit)
+                                    },
+                                    onEditCommit: { commit, baseRef in
+                                        openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
                                     }
                                 )
                             } else {
@@ -278,6 +281,18 @@ struct RootView: View {
             let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
             state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
         }
+    }
+
+    private func openOrFocusCommitEditor(worktree: Worktree, commit: CommitInfo, baseRef: String) {
+        let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
+        let tab = state.tabs.openCommitEditor(
+            worktreeId: worktree.id,
+            baseRef: baseRef,
+            originalSha: commit.sha,
+            currentSha: commit.sha,
+            title: title
+        )
+        state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
     }
 }
 

@@ -6,6 +6,7 @@ struct RightPaneView: View {
     let onSelectChangedFile: (ChangedFile) -> Void
     let onSelectTreeFile: (FileTreeNode) -> Void
     let onSelectCommit: (CommitInfo) -> Void
+    let onEditCommit: (CommitInfo, String) -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -38,7 +39,13 @@ struct RightPaneView: View {
 
                 switch rps.activeTab {
                 case .changes:
-                    ChangesTabView(rps: rps, appState: state, onSelect: onSelectChangedFile, onSelectCommit: onSelectCommit)
+                    ChangesTabView(
+                        rps: rps,
+                        appState: state,
+                        onSelect: onSelectChangedFile,
+                        onSelectCommit: onSelectCommit,
+                        onEditCommit: onEditCommit
+                    )
                 case .files:
                     FilesTabView(
                         nodes: rps.fileTree,
