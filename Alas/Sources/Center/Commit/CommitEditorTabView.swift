@@ -22,7 +22,7 @@ struct CommitEditorTabView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var pendingDropFile: CommitChangedFile?
-    @State private var pendingDropHunk: ParsedDiff.Hunk?
+    @State private var pendingDropHunk: PendingCommitHunkDrop?
 
     @Environment(\.theme) private var theme
     private let git = GitService()
@@ -82,6 +82,7 @@ struct CommitEditorTabView: View {
                 if let file = pendingDropFile { dropFile(file) }
                 pendingDropFile = nil
             }
+            .disabled(busy)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This rewrites commit \(String(tabState.currentSha.prefix(7))) immediately.")
@@ -91,9 +92,10 @@ struct CommitEditorTabView: View {
             set: { if !$0 { pendingDropHunk = nil } }
         )) {
             Button("Drop hunk", role: .destructive) {
-                if let hunk = pendingDropHunk { dropHunk(hunk) }
+                if let pending = pendingDropHunk { dropHunk(pending) }
                 pendingDropHunk = nil
             }
+            .disabled(busy)
             Button("Cancel", role: .cancel) { pendingDropHunk = nil }
         } message: {
             Text("This rewrites commit \(String(tabState.currentSha.prefix(7))) immediately.")
@@ -139,7 +141,7 @@ struct CommitEditorTabView: View {
                             onOpenFile: openAvailable
                                 ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
                                 : nil,
-                            onDropHunk: { pendingDropHunk = $0 },
+                            onDropHunk: { pendingDropHunk = PendingCommitHunkDrop(sha: tabState.currentSha, path: path, hunk: $0) },
                             dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) }
                         )
                     } else {
@@ -219,11 +221,11 @@ struct CommitEditorTabView: View {
     }
 
     private func canDropFile(_ file: CommitChangedFile) -> Bool {
-        ["A", "M", "D"].contains(file.status)
+        !busy && ["A", "M", "D"].contains(file.status)
     }
 
     private func canDropHunk(file: CommitChangedFile, hunk: ParsedDiff.Hunk) -> Bool {
-        file.status == "M" && !hunk.lines.isEmpty
+        !busy && file.status == "M" && !hunk.lines.isEmpty
     }
 
     private func subjectLine(from commit: CommitInfo) -> String {
@@ -253,9 +255,12 @@ struct CommitEditorTabView: View {
         runEdit(action: .dropFile(path: file.path))
     }
 
-    private func dropHunk(_ hunk: ParsedDiff.Hunk) {
-        guard let selectedPath else { return }
-        runEdit(action: .dropHunk(path: selectedPath, hunk: hunk))
+    private func dropHunk(_ pending: PendingCommitHunkDrop) {
+        guard pending.sha == tabState.currentSha else {
+            error = "Commit changed before hunk drop could run. Try again."
+            return
+        }
+        runEdit(action: .dropHunk(path: pending.path, hunk: pending.hunk))
     }
 
     private func runEdit(action: CommitEditAction) {
@@ -351,4 +356,10 @@ struct CommitEditorTabView: View {
             }
         }
     }
+}
+
+private struct PendingCommitHunkDrop: Equatable {
+    let sha: String
+    let path: String
+    let hunk: ParsedDiff.Hunk
 }
