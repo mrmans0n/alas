@@ -221,11 +221,11 @@ struct CommitEditorTabView: View {
     }
 
     private func canDropFile(_ file: CommitChangedFile) -> Bool {
-        !busy && ["A", "M", "D"].contains(file.status)
+        !busy && !dirty && ["A", "M", "D"].contains(file.status)
     }
 
     private func canDropHunk(file: CommitChangedFile, hunk: ParsedDiff.Hunk) -> Bool {
-        !busy && file.status == "M" && !hunk.lines.isEmpty
+        !busy && !dirty && file.status == "M" && !hunk.lines.isEmpty
     }
 
     private func subjectLine(from commit: CommitInfo) -> String {
@@ -252,6 +252,10 @@ struct CommitEditorTabView: View {
     }
 
     private func dropFile(_ pending: PendingCommitFileDrop) {
+        guard !dirty else {
+            error = "Save or discard message edits before dropping files."
+            return
+        }
         guard pending.sha == tabState.currentSha else {
             error = "Commit changed before file drop could run. Try again."
             return
@@ -260,6 +264,10 @@ struct CommitEditorTabView: View {
     }
 
     private func dropHunk(_ pending: PendingCommitHunkDrop) {
+        guard !dirty else {
+            error = "Save or discard message edits before dropping hunks."
+            return
+        }
         guard pending.sha == tabState.currentSha else {
             error = "Commit changed before hunk drop could run. Try again."
             return
@@ -271,6 +279,7 @@ struct CommitEditorTabView: View {
         guard !busy else { return }
         let targetSha = tabState.currentSha
         let tabId = tabState.id
+        let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? tabState.baseRef
 
         busy = true
         error = nil
@@ -280,7 +289,7 @@ struct CommitEditorTabView: View {
             do {
                 let result = try await git.editCommit(
                     worktreePath: worktreePath,
-                    baseRef: tabState.baseRef,
+                    baseRef: baseRef,
                     targetSha: targetSha,
                     action: action
                 )
