@@ -83,9 +83,30 @@ struct MergeResultPane: NSViewRepresentable {
             fg: fg,
             fgDim: fgDim
         )
-        if context.coordinator.lastKey != key {
+        if context.coordinator.lastKey != key, let textStorage = textView.textStorage {
             let newAttr = buildAttributedString(theme: theme)
-            textView.textStorage?.setAttributedString(newAttr)
+            // When only the attributes changed — the typing case
+            // where model.applyEditedFullText echoes the buffer back
+            // verbatim — refresh attributes in place instead of
+            // replacing the storage. setAttributedString resets the
+            // cursor and clobbers undo grouping, both noticeable on
+            // every keystroke. Falls through to setAttributedString
+            // only when the actual text differs (accept/reject taps,
+            // file switches).
+            if textStorage.string == newAttr.string {
+                let fullRange = NSRange(location: 0, length: textStorage.length)
+                textStorage.beginEditing()
+                textStorage.setAttributes([:], range: fullRange)
+                newAttr.enumerateAttributes(in: fullRange) { attrs, range, _ in
+                    textStorage.setAttributes(attrs, range: range)
+                }
+                textStorage.endEditing()
+            } else {
+                let oldSelection = textView.selectedRange()
+                textStorage.setAttributedString(newAttr)
+                let clampedLocation = min(oldSelection.location, textStorage.length)
+                textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
+            }
             context.coordinator.lastKey = key
         }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
