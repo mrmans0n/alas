@@ -72,26 +72,30 @@ private struct ImageStageView: NSViewRepresentable {
     let relativePath: String
     let stage: Int
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> NSImageView {
         let view = NSImageView()
         view.imageScaling = .scaleProportionallyUpOrDown
         view.imageAlignment = .alignCenter
         view.imageFrameStyle = .none
         view.animates = false
-        loadImage(into: view)
+        loadIfNeeded(into: view, context: context)
         return view
     }
 
     func updateNSView(_ view: NSImageView, context: Context) {
-        loadImage(into: view)
+        loadIfNeeded(into: view, context: context)
     }
 
-    private func loadImage(into view: NSImageView) {
-        let path = relativePath
-        let stage = stage
-        let cwd = worktreePath
+    private func loadIfNeeded(into view: NSImageView, context: Context) {
+        let key = "\(worktreePath.path)\n\(relativePath)\n\(stage)"
+        guard context.coordinator.lastKey != key else { return }
+        context.coordinator.lastKey = key
         Task {
-            let data = await readStageData(stage: stage, path: path, cwd: cwd)
+            let data = await readStageData(stage: stage, path: relativePath, cwd: worktreePath)
             await MainActor.run {
                 if let data, let image = NSImage(data: data) {
                     view.image = image
@@ -109,5 +113,9 @@ private struct ImageStageView: NSViewRepresentable {
         )
         guard let result, result.exitCode == 0 else { return nil }
         return result.stdout
+    }
+
+    final class Coordinator {
+        var lastKey: String?
     }
 }
