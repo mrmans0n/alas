@@ -202,6 +202,7 @@
 		523568D4D67F61ACA677EE44 /* SubHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE8B45ECF898B83A616586D /* SubHeader.swift */; };
 		524B70F03B9A934CEEA5FA61 /* LSPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8F6FBCE1218EAB74B608A /* LSPClientTests.swift */; };
 		5426DC977050AACBCBDA37E9 /* AgentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DAAC7481503A68EA0888682 /* AgentDetectorTests.swift */; };
+		5585C223E2CB23CD8650A5DC /* MergeActionGutter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56780EE994E2CA14A3ABBA7B /* MergeActionGutter.swift */; };
 		55A6D67E063518A3A757EE18 /* GeminiInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0EBA9DC694E3F11300FC6C /* GeminiInstaller.swift */; };
 		55C7881F382ACCEBCDB7D157 /* AgentsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BB6172AE118D2F9A40FD534 /* AgentsPane.swift */; };
 		5632CE3BB7220370D87A987B /* AgentLauncherModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D8B88C4D4837376C123D45 /* AgentLauncherModelTests.swift */; };
@@ -766,6 +767,7 @@
 		55DE02E1672044B68F9DE0B1 /* EditorFindController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFindController.swift; sourceTree = "<group>"; };
 		561094BA96058468F12002A1 /* ConflictsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictsSection.swift; sourceTree = "<group>"; };
 		563B664D082A9523260AA2EF /* RepoDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoDot.swift; sourceTree = "<group>"; };
+		56780EE994E2CA14A3ABBA7B /* MergeActionGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeActionGutter.swift; sourceTree = "<group>"; };
 		56D1AC9E1E00C3C5C234382C /* TouchTargetSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchTargetSmokeTests.swift; sourceTree = "<group>"; };
 		576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsAheadTests.swift; sourceTree = "<group>"; };
 		57713D7143CFD53124E0523F /* AlasHookCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasHookCommand.swift; sourceTree = "<group>"; };
@@ -1143,6 +1145,7 @@
 		073E19743F9145840DD47C8B /* Merge */ = {
 			isa = PBXGroup;
 			children = (
+				56780EE994E2CA14A3ABBA7B /* MergeActionGutter.swift */,
 				D0FF6BFD0A460F0E723F796E /* MergeRegionVisualLayout.swift */,
 				4DC787CE0F5625F8114C9F6F /* MergeResultPane.swift */,
 				7095EA2868EF619BA4202BDF /* MergeScrollCoordinator.swift */,
@@ -2438,6 +2441,7 @@
 				6C9E804AB246E7BFF8906C17 /* MarkdownTabView.swift in Sources */,
 				A98F3436BE8AB680178B341C /* MarkdownViewMode.swift in Sources */,
 				F3EB289C9DA8B25FC26DAB58 /* MasonSnapshot.swift in Sources */,
+				5585C223E2CB23CD8650A5DC /* MergeActionGutter.swift in Sources */,
 				4D1584E4013D1A667723E4A6 /* MergeAgent.swift in Sources */,
 				2FE10FC44BD9CDBD0C969374 /* MergeBulkResolvePromptEditorWindow.swift in Sources */,
 				0575E49BE44BEB8AB9D4977F /* MergeConflictAgentProposalView.swift in Sources */,
