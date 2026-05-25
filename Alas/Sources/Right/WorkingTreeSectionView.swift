@@ -183,7 +183,12 @@ struct WorkingTreeSectionView: View {
                         HStack(spacing: 6) {
                             Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
                                 .frame(width: 14, height: 14)
-                            Icon(name: "folder", size: 11, color: open ? theme.color("accent") : theme.color("fg-dim"))
+                            FolderIconView(
+                                name: node.name,
+                                path: node.path,
+                                open: open,
+                                fallbackColor: open ? theme.color("accent") : theme.color("fg-dim")
+                            )
                             Text(node.name)
                                 .font(.system(size: 11.5, design: .monospaced))
                                 .foregroundColor(theme.color("fg"))
