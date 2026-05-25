@@ -71,6 +71,8 @@ final class MergeConflictTabModel {
             self.currentConflictIndex = firstConflictIndex()
             self.initialConflictCount = self.conflictCount
             self.annotations = [:]
+            self.agentProposal = nil
+            self.agentBusy = false
             self.loadError = nil
             self.loadGeneration += 1
         } catch {
@@ -80,6 +82,8 @@ final class MergeConflictTabModel {
             self.currentConflictIndex = nil
             self.initialConflictCount = 0
             self.annotations = [:]
+            self.agentProposal = nil
+            self.agentBusy = false
             self.loadError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
             logger.error("merge-conflict load failed: \(self.loadError ?? "", privacy: .public)")

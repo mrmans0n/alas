@@ -386,6 +386,29 @@ struct MergeConflictTabModelTests {
         #expect(model.agentProposal == nil)
     }
 
+    @Test func loadClearsAnyPendingAgentProposal() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // Simulate a pending agent proposal from a prior session/conflict.
+        model.setAgentProposalForTesting("stale proposal\n")
+        #expect(model.agentProposal != nil)
+
+        // Reloading the tab (e.g. re-focused for a fresh conflict) must
+        // clear the stale proposal so the user can't accidentally Apply
+        // it onto the newly loaded conflict.
+        await model.load()
+        #expect(model.agentProposal == nil)
+    }
+
     @Test func discardAgentProposalClearsProposalAndKeepsResultText() {
         let model = MergeConflictTabModel(
             worktreePath: URL(fileURLWithPath: "/tmp/unused"),
