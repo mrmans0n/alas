@@ -436,7 +436,7 @@ struct TabsManagerTests {
         #expect(decoded.iconName == "commit")
     }
 
-    @Test func appendCommitEditorReusesOriginalShaIdentity() {
+    @Test func appendCommitEditorReusesOriginalShaIdentityWithoutOverwritingCurrentSha() {
         let worktreeId = "tabs-manager-commit-editor"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
         let mgr = TabsManager()
@@ -463,8 +463,37 @@ struct TabsManagerTests {
             Issue.record("Expected commit editor tab")
             return
         }
+        #expect(state.currentSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        #expect(state.title == "aaaaaaa original")
+    }
+
+    @Test func openCommitEditorReuseDoesNotRegressCurrentSha() {
+        let worktreeId = "tabs-manager-commit-editor-no-regress"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb rewritten"
+        )
+        let second = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            title: "aaaaaaa stale"
+        )
+
+        #expect(first.id == second.id)
+        guard case .commitEditor(let state) = second else {
+            Issue.record("Expected commit editor tab")
+            return
+        }
         #expect(state.currentSha == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-        #expect(state.title == "bbbbbbb updated")
+        #expect(state.title == "bbbbbbb rewritten")
     }
 
     @Test func findsCommitEditorByCurrentShaAfterRewrite() {

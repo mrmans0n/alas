@@ -537,8 +537,12 @@ final class TabsManager {
             title: title
         )
         if var file = byWorktree[worktreeId],
-           let idx = file.tabs.firstIndex(where: { $0.id == state.id }) {
-            let tab = Tab.commitEditor(state)
+           let idx = file.tabs.firstIndex(where: { $0.id == state.id }),
+           case .commitEditor(var existing) = file.tabs[idx] {
+            if existing.currentSha == currentSha {
+                existing.title = title
+            }
+            let tab = Tab.commitEditor(existing)
             file.tabs[idx] = tab
             file.activeTabId = tab.id
             byWorktree[worktreeId] = file
