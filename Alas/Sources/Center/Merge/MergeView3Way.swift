@@ -130,7 +130,7 @@ struct MergeView3Way: View {
                 onJump: onJumpToConflict
             )
         }
-        .onChange(of: model.currentConflictIndex) { _, _ in
+        .onChange(of: model.currentConflictIndex, initial: true) { _, _ in
             scrollToCurrentConflict()
         }
     }
