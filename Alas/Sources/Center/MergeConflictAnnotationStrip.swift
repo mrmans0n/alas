@@ -13,12 +13,17 @@ import SwiftUI
 struct MergeConflictAnnotationStrip: View {
     let annotation: String
     /// Stable identity for the current conflict block — typically
-    /// `MergeConflictTabModel.annotationKey(for:)`. Used as the dismissal
-    /// key so dismissals follow the conflict, not the rendered sentence.
+    /// `MergeConflictTabModel.annotationKey(for:)` combined with the
+    /// block's line range. Used as the dismissal key so dismissals
+    /// follow the conflict, not the rendered sentence.
     let conflictKey: String
+    /// Set of dismissed conflict keys, owned by the parent view so the
+    /// dismissal survives this strip being unmounted between
+    /// navigations (e.g., visiting a conflict that has no cached
+    /// annotation yet would otherwise destroy local @State).
+    @Binding var dismissedKeys: Set<String>
 
     @State private var isExpanded = false
-    @State private var dismissedKeys: Set<String> = []
 
     @Environment(\.theme) var theme
 

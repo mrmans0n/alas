@@ -6,6 +6,11 @@ struct MergeConflictTabView: View {
     let tabState: MergeConflictTabState
 
     @State private var model: MergeConflictTabModel
+    /// Conflict keys dismissed from the annotation strip. Lifted out of
+    /// `MergeConflictAnnotationStrip` so dismissal survives navigating
+    /// to a conflict that has no cached annotation (which would unmount
+    /// the strip and otherwise reset its local @State).
+    @State private var dismissedAnnotationKeys: Set<String> = []
     @Environment(\.theme) var theme
 
     init(state: AppState, worktree: Worktree, tabState: MergeConflictTabState) {
@@ -69,7 +74,8 @@ struct MergeConflictTabView: View {
                    let key = currentBlockKey {
                     MergeConflictAnnotationStrip(
                         annotation: annotation,
-                        conflictKey: key
+                        conflictKey: key,
+                        dismissedKeys: $dismissedAnnotationKeys
                     )
                 }
                 content
