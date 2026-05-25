@@ -828,6 +828,30 @@ struct MergeConflictTabModelTests {
         #expect(flat.contains("feature mid"))
     }
 
+    @Test func applyEditedFullTextRoutesRemoteSideEditToRemote() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // Conflict: local "main line\n", remote "feature line\n".
+        // RESULT pane (markerless, stacked) = "main line\nfeature line\n".
+        // User adds a new line at the end of REMOTE side:
+        // new buffer = "main line\nfeature line\nextra remote\n"
+        model.applyEditedFullText("main line\nfeature line\nextra remote\n")
+        let block = try #require(model.allConflictBlocks().first)
+        // The "extra remote" line MUST land in REMOTE, not LOCAL.
+        #expect(!block.local.contains("extra remote"))
+        #expect(block.local.contains("main line"))
+        #expect(block.remote.contains("feature line"))
+        #expect(block.remote.contains("extra remote"))
+    }
+
     @Test func setRowContentRoutesToRemoteWhenLocalHunkIsEmpty() async throws {
         // Regression test: when LOCAL is empty (e.g., addedByThem),
         // visual row 0 of the conflict belongs to REMOTE, not LOCAL.

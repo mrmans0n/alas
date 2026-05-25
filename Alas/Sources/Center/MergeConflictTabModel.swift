@@ -470,7 +470,10 @@ final class MergeConflictTabModel {
         }
         let newRegionUTF16 = Array(newUTF16[newRegionStart ..< newRegionEnd])
         let newRegionString = String(decoding: newRegionUTF16, as: UTF16.self)
-        rewriteRegion(at: regionIdx, fromMarkerlessContent: newRegionString, showBase: showBase)
+        // NEW: pass the within-region UTF-16 offset of the change so
+        // rewriteRegion can route extras to the correct conflict half.
+        let withinRegionOffset = oldChangedStart - oldRegionStart
+        rewriteRegion(at: regionIdx, fromMarkerlessContent: newRegionString, showBase: showBase, editOffsetInOldRegion: withinRegionOffset)
         return true
     }
 
@@ -540,10 +543,12 @@ final class MergeConflictTabModel {
 
     /// Rewrites region at `index` using the new markerless content for
     /// that region. For `.text` regions, the content becomes the new
-    /// text. For `.conflict` regions, we need to split the new content
-    /// back into LOCAL / (BASE) / REMOTE — we use the original line
-    /// counts as the split, with any extras absorbed by LOCAL.
-    private func rewriteRegion(at index: Int, fromMarkerlessContent content: String, showBase: Bool) {
+    /// text. For `.conflict` regions, splits the new content back into
+    /// LOCAL / (BASE) / REMOTE — uses `editOffsetInOldRegion` (if
+    /// provided) to determine which side absorbs any added lines.
+    /// Without a hint, extras default to LOCAL (matches the slow
+    /// path's behavior).
+    private func rewriteRegion(at index: Int, fromMarkerlessContent content: String, showBase: Bool, editOffsetInOldRegion: Int? = nil) {
         let lines = Self.splitPreservingTrailingEmpty(content)
         let trailingNewline = content.hasSuffix("\n")
         switch regions[index] {
@@ -555,15 +560,48 @@ final class MergeConflictTabModel {
             let remoteCount = Self.lineCount(of: block.remote)
             let totalOriginal = localCount + baseCount + remoteCount
             let extras = max(0, lines.count - totalOriginal)
-            let localTake = min(localCount + extras, lines.count)
-            let baseTake = min(baseCount, lines.count - localTake)
-            let remoteTake = max(0, lines.count - localTake - baseTake)
-            let localSlice = Array(lines[0 ..< localTake])
-            let baseSlice = Array(lines[localTake ..< localTake + baseTake])
-            let remoteSlice = Array(lines[localTake + baseTake ..< localTake + baseTake + remoteTake])
-            let localText = localSlice.isEmpty ? "" : localSlice.joined(separator: "\n") + (block.local.hasSuffix("\n") || localTake < localCount || trailingNewline ? "\n" : "")
-            let remoteText = remoteSlice.isEmpty ? "" : remoteSlice.joined(separator: "\n") + (block.remote.hasSuffix("\n") || remoteTake < remoteCount || trailingNewline ? "\n" : "")
-            _ = baseSlice // BASE is preserved as-is via block.base
+            // Decide which side absorbs extras based on edit offset.
+            // The rendered region's UTF-16 layout is: LOCAL bytes ||
+            // BASE bytes (if showBase) || REMOTE bytes.
+            let localBytes = block.local.isEmpty ? 0
+                : (block.local as NSString).length + (block.local.hasSuffix("\n") ? 0 : 1)
+            let baseBytes: Int = {
+                guard showBase, let b = block.base, !b.isEmpty else { return 0 }
+                return (b as NSString).length + (b.hasSuffix("\n") ? 0 : 1)
+            }()
+            // Default: LOCAL absorbs extras. Override if the edit
+            // offset points into BASE (treat as LOCAL — BASE is
+            // immutable) or REMOTE.
+            enum ExtrasTarget { case local, remote }
+            let extrasTarget: ExtrasTarget = {
+                guard let offset = editOffsetInOldRegion else { return .local }
+                if offset <= localBytes { return .local }
+                if offset <= localBytes + baseBytes { return .local } // BASE immutable
+                return .remote
+            }()
+            let localTake: Int
+            let remoteTake: Int
+            let baseTake = min(baseCount, lines.count - localCount - remoteCount)
+            switch extrasTarget {
+            case .local:
+                localTake = min(localCount + extras, max(0, lines.count - baseCount - remoteCount))
+                remoteTake = max(0, lines.count - localTake - baseTake)
+            case .remote:
+                let remoteWithExtras = remoteCount + extras
+                remoteTake = max(0, min(remoteWithExtras, lines.count - localCount - baseCount))
+                localTake = max(0, lines.count - remoteTake - baseTake)
+            }
+            let localSlice = Array(lines[0 ..< min(localTake, lines.count)])
+            let baseSliceStart = min(localTake, lines.count)
+            let baseSliceEnd = min(baseSliceStart + baseTake, lines.count)
+            let _ = Array(lines[baseSliceStart ..< baseSliceEnd]) // BASE unchanged
+            let remoteSliceStart = baseSliceEnd
+            let remoteSliceEnd = min(remoteSliceStart + remoteTake, lines.count)
+            let remoteSlice = Array(lines[remoteSliceStart ..< remoteSliceEnd])
+            let localText = localSlice.isEmpty ? "" : localSlice.joined(separator: "\n")
+                + (block.local.hasSuffix("\n") || localTake < localCount || trailingNewline ? "\n" : "")
+            let remoteText = remoteSlice.isEmpty ? "" : remoteSlice.joined(separator: "\n")
+                + (block.remote.hasSuffix("\n") || remoteTake < remoteCount || trailingNewline ? "\n" : "")
             regions[index] = .conflict(ConflictBlock(
                 local: localText,
                 base: block.base,
