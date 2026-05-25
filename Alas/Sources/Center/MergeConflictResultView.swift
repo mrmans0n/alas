@@ -173,23 +173,31 @@ struct MergeConflictResultView: NSViewRepresentable {
                     // upper bound, typing at end-of-marker-line would
                     // append text directly to the marker (e.g.
                     // `>>>>>>> feature` + 'x' → `>>>>>>> featurex`),
-                    // corrupting it. Positions on adjacent lines stay
-                    // editable because they're outside this range.
+                    // corrupting it. Inserting at NSMaxRange(marker)
+                    // (start of the next line) stays allowed.
                     if affectedCharRange.location >= body.location,
                        affectedCharRange.location <= NSMaxRange(body) {
                         return false
                     }
-                } else if NSIntersectionRange(body, affectedCharRange).length > 0 {
-                    return false
-                }
-                // Backspace into the marker line (selection at marker
-                // start, deleting the previous newline) is also rejected
-                // because deleting the newline would merge a content
-                // line into the marker line.
-                if affectedCharRange.length > 0,
-                   affectedCharRange.location < marker.location,
-                   NSMaxRange(affectedCharRange) > marker.location {
-                    return false
+                } else {
+                    // Deletion/replacement: protect the FULL marker
+                    // range (including the trailing newline). Forward-
+                    // delete at end of marker line or backspace at
+                    // start of the line below both remove the trailing
+                    // `\n` and merge the next content line into the
+                    // marker — same corruption mode as editing the
+                    // marker text itself.
+                    if NSIntersectionRange(marker, affectedCharRange).length > 0 {
+                        return false
+                    }
+                    // Backspace at start of marker line (selection
+                    // ending exactly at marker.location) deletes the
+                    // previous line's newline and merges the previous
+                    // content line into the marker line. Same problem,
+                    // different boundary.
+                    if NSMaxRange(affectedCharRange) == marker.location {
+                        return false
+                    }
                 }
             }
             return true
