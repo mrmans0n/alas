@@ -26,12 +26,9 @@ struct MergeView3Way: View {
         MergeRegionVisualLayout.compute(regions: model.regions)
     }
 
-    private var hunkPairs: [(local: String, remote: String)] {
-        model.allConflictBlocks().map { ($0.local, $0.remote) }
-    }
-
     var body: some View {
         let layout = self.layout
+        let hunkPairs = model.allConflictBlocks().map { (local: $0.local, remote: $0.remote) }
         HStack(spacing: 0) {
             lineNumberGutter(rows: layout.local, alignment: .trailing)
             MergeSidePane(
