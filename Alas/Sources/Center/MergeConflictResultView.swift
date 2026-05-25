@@ -100,6 +100,22 @@ struct MergeConflictResultView: NSViewRepresentable {
         storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
         let nsString = text as NSString
         let lineRanges = Self.computeLineRanges(in: nsString)
+        // Clear ALL conflict-region-only styling that this function may have
+        // added in a prior pass: background, plus the italic + muted attributes
+        // applied to BASE lines (which can persist on lines that no longer
+        // belong to the BASE segment after an edit shifts line numbering).
+        for region in regions {
+            if case .conflict(let block) = region {
+                let lower = max(block.lineRangeInMerged.lowerBound, 0)
+                let upper = min(block.lineRangeInMerged.upperBound, lineRanges.count - 1)
+                guard upper >= lower, upper < lineRanges.count else { continue }
+                let start = lineRanges[lower].location
+                let end = NSMaxRange(lineRanges[upper])
+                let regionRange = NSRange(location: start, length: end - start)
+                storage.removeAttribute(.font, range: regionRange)
+                storage.removeAttribute(.foregroundColor, range: regionRange)
+            }
+        }
         for region in regions {
             if case .conflict(let block) = region {
                 let lower = max(block.lineRangeInMerged.lowerBound, 0)
