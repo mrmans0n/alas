@@ -166,7 +166,8 @@ struct MergeConflictTabView: View {
                     codeFontFamily: state.config.code.fontFamily,
                     codeFontSize: CGFloat(state.config.code.fontSize),
                     showBase: tabState.showBase,
-                    currentConflictIndex: model.currentConflictIndex
+                    currentConflictIndex: model.currentConflictIndex,
+                    conflictCount: model.conflictCount
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -274,14 +275,17 @@ struct MergeConflictTabView: View {
         return model.annotation(for: block)
     }
 
-    /// Content-stable identity for the current conflict block. Passed to
-    /// `MergeConflictAnnotationStrip` as the dismissal key so dismissals
-    /// follow the conflict and not the rendered annotation text.
+    /// Per-instance identity for the current conflict block, used as the
+    /// strip's dismissal key. Combines line-range position with the
+    /// content hash so two blocks with identical LOCAL/BASE/REMOTE
+    /// content (the model's content-only `annotationKey` would alias
+    /// them) still dismiss independently.
     private var currentBlockKey: String? {
         guard let ord = model.currentConflictIndex,
               let block = currentConflictBlock(at: ord)
         else { return nil }
-        return MergeConflictTabModel.annotationKey(for: block)
+        let range = block.lineRangeInMerged
+        return "\(range.lowerBound)-\(range.upperBound):\(MergeConflictTabModel.annotationKey(for: block))"
     }
 
     /// Returns the `ConflictBlock` for the Nth unresolved conflict, or nil.

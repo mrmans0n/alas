@@ -16,6 +16,13 @@ struct MergeConflictResultView: NSViewRepresentable {
     /// line range on every change so the navigation actually moves the
     /// cursor in the editor.
     let currentConflictIndex: Int?
+    /// Structural-change signal. Paired with `currentConflictIndex` in
+    /// the reselection guard so an accept that removes a conflict block
+    /// (which leaves the index numerically the same while the underlying
+    /// block at that ordinal changes) still triggers a reselect. Plain
+    /// text edits inside the buffer don't change this count, so we
+    /// don't scroll-jack the user mid-typing.
+    let conflictCount: Int
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -72,20 +79,27 @@ struct MergeConflictResultView: NSViewRepresentable {
         }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
 
-        // Scroll + select the current conflict whenever the index changes.
-        // Done AFTER any storage update so the layout manager has the
-        // refreshed text. Guarded against running on every keystroke by
-        // tracking the last applied index on the coordinator.
-        if let index = currentConflictIndex,
-           index != context.coordinator.lastAppliedConflictIndex {
-            if let range = Self.conflictRange(in: text, at: index) {
+        // Scroll + select the current conflict when navigation lands on
+        // a new ordinal OR when an accept removes a block and renumbers
+        // (same ordinal points at a different block). The guard tuple
+        // is (index, count); plain text edits don't change `count`, so
+        // typing won't yank the user's cursor.
+        let trigger = ReselectTrigger(index: currentConflictIndex, count: conflictCount)
+        if trigger != context.coordinator.lastReselectTrigger {
+            if let index = currentConflictIndex,
+               let range = Self.conflictRange(in: text, at: index) {
                 textView.setSelectedRange(range)
                 textView.scrollRangeToVisible(range)
             }
-            context.coordinator.lastAppliedConflictIndex = index
-        } else if currentConflictIndex == nil {
-            context.coordinator.lastAppliedConflictIndex = nil
+            context.coordinator.lastReselectTrigger = trigger
         }
+    }
+
+    /// Pair tracked across `updateNSView` invocations to decide whether
+    /// to re-select the current conflict's range. See the call site.
+    struct ReselectTrigger: Equatable {
+        let index: Int?
+        let count: Int
     }
 
     func makeCoordinator() -> Coordinator {
@@ -98,9 +112,10 @@ struct MergeConflictResultView: NSViewRepresentable {
         /// Tracks the `showBase` value from the last full re-render so we can
         /// detect toggle changes and force a fresh attributed string build.
         var lastShowBase: Bool = false
-        /// Tracks the index we already scrolled to so updateNSView doesn't
-        /// re-select on every keystroke or text update.
-        var lastAppliedConflictIndex: Int?
+        /// Pair we last reselected for, so we only re-scroll when the
+        /// user actually navigates or a structural change (accept, agent
+        /// apply) renumbers conflicts.
+        var lastReselectTrigger: ReselectTrigger?
         init(_ text: Binding<String>) { self.text = text }
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
