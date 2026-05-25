@@ -28,10 +28,10 @@ struct MergeActionGutter: NSViewRepresentable {
     func makeNSView(context: Context) -> GutterView {
         let view = GutterView()
         view.side = side
+        view.conflictRanges = conflictRanges
         view.coordinator = coordinator
         view.onAccept = onAccept
         view.onReject = onReject
-        view.theme = theme
         return view
     }
 
@@ -41,7 +41,6 @@ struct MergeActionGutter: NSViewRepresentable {
         view.coordinator = coordinator
         view.onAccept = onAccept
         view.onReject = onReject
-        view.theme = theme
         view.needsDisplay = true
         view.needsLayout = true
     }
@@ -52,7 +51,6 @@ struct MergeActionGutter: NSViewRepresentable {
         var coordinator: MergeScrollCoordinator?
         var onAccept: ((Int) -> Void)?
         var onReject: ((Int) -> Void)?
-        var theme: Theme?
 
         override var isFlipped: Bool { true }
 
@@ -65,23 +63,16 @@ struct MergeActionGutter: NSViewRepresentable {
                 ? NSColor.systemGreen.withAlphaComponent(0.22)
                 : NSColor.systemBlue.withAlphaComponent(0.22)
             for range in conflictRanges {
-                let (sourceStart, sourceEnd, resultStart, resultEnd) = endpoints(for: range)
-                let leftTop = CGFloat(sourceStart) * rowHeight - scrollOffset
-                let leftBottom = CGFloat(sourceEnd) * rowHeight - scrollOffset
-                let rightTop = CGFloat(resultStart) * rowHeight - scrollOffset
-                let rightBottom = CGFloat(resultEnd) * rowHeight - scrollOffset
+                let pts = endpoints(for: range)
+                let leftTop = CGFloat(pts.leftStart) * rowHeight - scrollOffset
+                let leftBottom = CGFloat(pts.leftEnd) * rowHeight - scrollOffset
+                let rightTop = CGFloat(pts.rightStart) * rowHeight - scrollOffset
+                let rightBottom = CGFloat(pts.rightEnd) * rowHeight - scrollOffset
                 let path = NSBezierPath()
-                if side == .localToResult {
-                    path.move(to: NSPoint(x: 0, y: leftTop))
-                    path.line(to: NSPoint(x: bounds.width, y: rightTop))
-                    path.line(to: NSPoint(x: bounds.width, y: rightBottom))
-                    path.line(to: NSPoint(x: 0, y: leftBottom))
-                } else {
-                    path.move(to: NSPoint(x: 0, y: rightTop))
-                    path.line(to: NSPoint(x: bounds.width, y: leftTop))
-                    path.line(to: NSPoint(x: bounds.width, y: leftBottom))
-                    path.line(to: NSPoint(x: 0, y: rightBottom))
-                }
+                path.move(to: NSPoint(x: 0, y: leftTop))
+                path.line(to: NSPoint(x: bounds.width, y: rightTop))
+                path.line(to: NSPoint(x: bounds.width, y: rightBottom))
+                path.line(to: NSPoint(x: 0, y: leftBottom))
                 path.close()
                 fill.setFill()
                 path.fill()
@@ -95,48 +86,71 @@ struct MergeActionGutter: NSViewRepresentable {
             let rowHeight = coordinator.rowHeight
             let scrollOffset = CGFloat(coordinator.logicalRow) * rowHeight
             for range in conflictRanges {
-                let (sourceStart, _, _, _) = endpoints(for: range)
-                let y = CGFloat(sourceStart) * rowHeight - scrollOffset
+                let pts = endpoints(for: range)
+                let y = CGFloat(pts.sourceStart) * rowHeight - scrollOffset
                 let accept = makeButton(
                     glyph: side == .localToResult ? "chevron.right.2" : "chevron.left.2",
+                    label: side == .localToResult
+                        ? "Accept LOCAL conflict \(range.conflictOrdinal + 1)"
+                        : "Accept REMOTE conflict \(range.conflictOrdinal + 1)",
                     accent: NSColor.systemBlue
                 ) { [weak self] in self?.onAccept?(range.conflictOrdinal) }
                 accept.frame = NSRect(x: 4, y: y, width: 16, height: rowHeight)
                 addSubview(accept)
-                let reject = makeButton(glyph: "xmark", accent: NSColor.gray) {
-                    [weak self] in self?.onReject?(range.conflictOrdinal)
-                }
+                let reject = makeButton(
+                    glyph: "xmark",
+                    label: side == .localToResult
+                        ? "Reject LOCAL conflict \(range.conflictOrdinal + 1)"
+                        : "Reject REMOTE conflict \(range.conflictOrdinal + 1)",
+                    accent: NSColor.gray
+                ) { [weak self] in self?.onReject?(range.conflictOrdinal) }
                 reject.frame = NSRect(x: 4, y: y + rowHeight, width: 16, height: rowHeight)
                 addSubview(reject)
             }
         }
 
-        /// Endpoints for the diagonal path + glyph anchor. Returns the
-        /// source-pane (LOCAL or REMOTE) range and the RESULT-pane
-        /// range for this conflict. All values are RAW row indices —
-        /// the caller converts to Y in points.
-        ///
-        /// `localRows` / `remoteRows` / `resultRows` are half-open
-        /// `Range<Int>`, so `lowerBound` is inclusive and
-        /// `upperBound` is exclusive (one past the last row).
-        private func endpoints(for range: MergeRegionVisualLayout.VisualConflictRange) -> (Int, Int, Int, Int) {
+        /// Left-edge and right-edge row ranges (half-open) for the
+        /// diagonal quad. "Left" is the column nearer x=0 in the
+        /// gutter, "right" is nearer x=bounds.width. For
+        /// `.localToResult` that means LOCAL on the left and RESULT
+        /// on the right; for `.resultToRemote` it's RESULT on the
+        /// left and REMOTE on the right. Returning left/right
+        /// directly avoids the naming inversion that would happen if
+        /// we returned (source, result) because RESULT plays "source"
+        /// in one branch and "destination" in the other.
+        private func endpoints(for range: MergeRegionVisualLayout.VisualConflictRange) -> (
+            leftStart: Int, leftEnd: Int,
+            rightStart: Int, rightEnd: Int,
+            sourceStart: Int  // for the button anchor — always the side-pane hunk
+        ) {
             switch side {
             case .localToResult:
-                return (range.localRows.lowerBound, range.localRows.upperBound,
-                        range.resultRows.lowerBound, range.resultRows.upperBound)
+                return (
+                    leftStart: range.localRows.lowerBound,
+                    leftEnd: range.localRows.upperBound,
+                    rightStart: range.resultRows.lowerBound,
+                    rightEnd: range.resultRows.upperBound,
+                    sourceStart: range.localRows.lowerBound
+                )
             case .resultToRemote:
-                return (range.remoteRows.lowerBound, range.remoteRows.upperBound,
-                        range.resultRows.lowerBound, range.resultRows.upperBound)
+                return (
+                    leftStart: range.resultRows.lowerBound,
+                    leftEnd: range.resultRows.upperBound,
+                    rightStart: range.remoteRows.lowerBound,
+                    rightEnd: range.remoteRows.upperBound,
+                    sourceStart: range.remoteRows.lowerBound
+                )
             }
         }
 
-        private func makeButton(glyph: String, accent: NSColor, action: @escaping () -> Void) -> NSButton {
-            let button = NSButton(image: NSImage(systemSymbolName: glyph, accessibilityDescription: nil) ?? NSImage(),
+        private func makeButton(glyph: String, label: String, accent: NSColor, action: @escaping () -> Void) -> NSButton {
+            let button = NSButton(image: NSImage(systemSymbolName: glyph, accessibilityDescription: label) ?? NSImage(),
                                   target: nil,
                                   action: nil)
             button.bezelStyle = .accessoryBar
             button.isBordered = false
             button.contentTintColor = accent
+            button.setAccessibilityLabel(label)
             let handler = ActionHandler(closure: action)
             objc_setAssociatedObject(button, &ActionHandler.key, handler, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             button.target = handler
