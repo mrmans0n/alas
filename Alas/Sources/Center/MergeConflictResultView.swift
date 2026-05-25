@@ -394,13 +394,20 @@ private struct HunkClassification {
                 continue
             }
             if state == .outside { continue }
-            if line.hasPrefix("||||||| ") {
+            // Match `ConflictMarkerParser`'s state restrictions:
+            //  - baseMarker is only valid before the separator (i.e.
+            //    while still in LOCAL). A `||||||| ` line that appears
+            //    in REMOTE content is content, not a marker.
+            //  - midMarker is only valid before REMOTE starts (in
+            //    LOCAL or BASE). A `=======` line that appears in
+            //    REMOTE content is content, not a marker.
+            if state == .local, line.hasPrefix("||||||| ") {
                 state = .base
                 lines.append(Line(range: range, kind: .markerBase))
                 markerLineRanges.append(range)
                 continue
             }
-            if trimmed == "=======" {
+            if (state == .local || state == .base), trimmed == "=======" {
                 state = .remote
                 lines.append(Line(range: range, kind: .markerSeparator))
                 markerLineRanges.append(range)
