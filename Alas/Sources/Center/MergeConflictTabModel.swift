@@ -363,26 +363,223 @@ final class MergeConflictTabModel {
     }
 
     /// Reconciles user edits in the RESULT pane back to the model's
-    /// regions. Walks regions in document order, slicing `newLines`
-    /// into per-region buckets. Each non-last region claims exactly
-    /// its `originalCount` lines from `newLines`; the LAST region
-    /// claims everything remaining (so appending text at the end of
-    /// the buffer works). For conflict regions, the bucket is split
-    /// between LOCAL and REMOTE based on the original split; extras
-    /// (the user inserted a line inside the hunk) are absorbed into
-    /// the LOCAL side by default.
+    /// regions. Two strategies:
     ///
-    /// Limitation: inserting a line inside a NON-LAST plain-text
-    /// region pushes the extra into the next region. The visible
-    /// editor still shows the user's edit; the next render will
-    /// re-render based on the reconciled regions. For typical merge
-    /// resolution flows (where the user edits inside hunks or appends
-    /// notes at the end) this is correct.
+    /// 1. **Single-region edit (fast path):** find the longest common
+    ///    prefix/suffix between the old buffer (rendered markerless,
+    ///    same view the user sees) and the new buffer. The changed
+    ///    range, when it falls entirely within a single region, is
+    ///    attributed to that region — so typing a context line ABOVE
+    ///    a conflict stays in the text region, doesn't leak into the
+    ///    conflict's LOCAL hunk.
     ///
-    /// After mutation, `resultText` is rebuilt in MARKER form so
-    /// subsequent `acceptLocal`/`acceptRemote` continue to find the
-    /// blocks via line-range parsing.
+    /// 2. **Cross-region or ambiguous edit (slow path):** fall back to
+    ///    the cursor-walking reconcile that distributes lines to
+    ///    regions in order, with conflicts capped at their original
+    ///    total. Last meaningful region absorbs extras.
+    ///
+    /// After mutation, `resultText` is rebuilt in MARKER form via
+    /// `serializeRegionsWithMarkers` and `reparse()` is called so each
+    /// block's `lineRangeInMerged` reflects the new line counts.
     func applyEditedFullText(_ newText: String, showBase: Bool = false) {
+        let oldBuffer = renderMarkerlessBuffer(showBase: showBase)
+        // Try the single-region fast path first.
+        if applyEditedFullTextSingleRegion(newText: newText, oldBuffer: oldBuffer, showBase: showBase) {
+            rebuildResultText()
+            reparse()
+            return
+        }
+        // Fall back to cursor-walking reconcile.
+        applyEditedFullTextCursorWalk(newText, showBase: showBase)
+        rebuildResultText()
+        reparse()
+    }
+
+    /// Renders the same markerless stacked-hunk buffer the user sees
+    /// in the RESULT pane. Used to compute prefix/suffix against the
+    /// edited buffer.
+    private func renderMarkerlessBuffer(showBase: Bool) -> String {
+        var out = ""
+        for region in regions {
+            switch region {
+            case .text(let t):
+                out.append(t)
+            case .conflict(let block):
+                if !block.local.isEmpty {
+                    out.append(block.local)
+                    if !block.local.hasSuffix("\n") { out.append("\n") }
+                }
+                if showBase, let base = block.base, !base.isEmpty {
+                    out.append(base)
+                    if !base.hasSuffix("\n") { out.append("\n") }
+                }
+                if !block.remote.isEmpty {
+                    out.append(block.remote)
+                    if !block.remote.hasSuffix("\n") { out.append("\n") }
+                }
+            }
+        }
+        return out
+    }
+
+    /// Fast path: detects a single contiguous change between
+    /// `oldBuffer` and `newText`, attributes it to one region, and
+    /// returns `true` if it could handle the edit. Returns `false`
+    /// when the change spans multiple regions (caller falls back).
+    private func applyEditedFullTextSingleRegion(
+        newText: String,
+        oldBuffer: String,
+        showBase: Bool
+    ) -> Bool {
+        let oldUTF16 = Array(oldBuffer.utf16)
+        let newUTF16 = Array(newText.utf16)
+        // Longest common prefix.
+        var pre = 0
+        while pre < oldUTF16.count, pre < newUTF16.count, oldUTF16[pre] == newUTF16[pre] {
+            pre += 1
+        }
+        // Longest common suffix (bounded so prefix and suffix don't overlap).
+        var suf = 0
+        let oldRemaining = oldUTF16.count - pre
+        let newRemaining = newUTF16.count - pre
+        while suf < oldRemaining, suf < newRemaining,
+              oldUTF16[oldUTF16.count - 1 - suf] == newUTF16[newUTF16.count - 1 - suf] {
+            suf += 1
+        }
+        let oldChangedStart = pre
+        let oldChangedEnd = oldUTF16.count - suf
+        // Map UTF-16 offsets to region indices in the old buffer.
+        guard let regionIdx = regionContainingUTF16Range(
+            start: oldChangedStart,
+            end: oldChangedEnd,
+            in: oldBuffer,
+            showBase: showBase
+        ) else {
+            return false // change spans multiple regions
+        }
+        // Slice the new lines for this region: take everything from
+        // the region's start in the old buffer up to (region end +
+        // (newText.length - oldText.length)).
+        let oldRegionStart = regionUTF16Start(at: regionIdx, in: oldBuffer, showBase: showBase)
+        let oldRegionEnd = regionUTF16End(at: regionIdx, in: oldBuffer, showBase: showBase)
+        let delta = newUTF16.count - oldUTF16.count
+        let newRegionStart = oldRegionStart
+        let newRegionEnd = oldRegionEnd + delta
+        guard newRegionStart >= 0, newRegionEnd <= newUTF16.count, newRegionStart <= newRegionEnd else {
+            return false
+        }
+        let newRegionUTF16 = Array(newUTF16[newRegionStart ..< newRegionEnd])
+        let newRegionString = String(decoding: newRegionUTF16, as: UTF16.self)
+        rewriteRegion(at: regionIdx, fromMarkerlessContent: newRegionString, showBase: showBase)
+        return true
+    }
+
+    /// Returns the region index whose UTF-16 range in the markerless
+    /// rendering of the old buffer fully contains `[start, end)`.
+    /// Nil if the range spans multiple regions or is out of bounds.
+    private func regionContainingUTF16Range(
+        start: Int,
+        end: Int,
+        in buffer: String,
+        showBase: Bool
+    ) -> Int? {
+        guard end >= start else { return nil }
+        var cursor = 0
+        for (i, region) in regions.enumerated() {
+            let length = regionRenderedUTF16Length(region, showBase: showBase)
+            let regionEnd = cursor + length
+            if start >= cursor, end <= regionEnd {
+                return i
+            }
+            if start < regionEnd, end > regionEnd {
+                return nil // straddles a boundary
+            }
+            cursor = regionEnd
+        }
+        // Edge: change at the very end of the buffer.
+        if start == cursor, end == cursor, !regions.isEmpty {
+            return regions.count - 1
+        }
+        return nil
+    }
+
+    private func regionUTF16Start(at index: Int, in buffer: String, showBase: Bool) -> Int {
+        var cursor = 0
+        for i in 0 ..< index {
+            cursor += regionRenderedUTF16Length(regions[i], showBase: showBase)
+        }
+        return cursor
+    }
+
+    private func regionUTF16End(at index: Int, in buffer: String, showBase: Bool) -> Int {
+        regionUTF16Start(at: index, in: buffer, showBase: showBase)
+            + regionRenderedUTF16Length(regions[index], showBase: showBase)
+    }
+
+    private func regionRenderedUTF16Length(_ region: ConflictRegion, showBase: Bool) -> Int {
+        switch region {
+        case .text(let t):
+            return (t as NSString).length
+        case .conflict(let block):
+            var len = 0
+            if !block.local.isEmpty {
+                len += (block.local as NSString).length
+                if !block.local.hasSuffix("\n") { len += 1 }
+            }
+            if showBase, let base = block.base, !base.isEmpty {
+                len += (base as NSString).length
+                if !base.hasSuffix("\n") { len += 1 }
+            }
+            if !block.remote.isEmpty {
+                len += (block.remote as NSString).length
+                if !block.remote.hasSuffix("\n") { len += 1 }
+            }
+            return len
+        }
+    }
+
+    /// Rewrites region at `index` using the new markerless content for
+    /// that region. For `.text` regions, the content becomes the new
+    /// text. For `.conflict` regions, we need to split the new content
+    /// back into LOCAL / (BASE) / REMOTE — we use the original line
+    /// counts as the split, with any extras absorbed by LOCAL.
+    private func rewriteRegion(at index: Int, fromMarkerlessContent content: String, showBase: Bool) {
+        let lines = Self.splitPreservingTrailingEmpty(content)
+        let trailingNewline = content.hasSuffix("\n")
+        switch regions[index] {
+        case .text:
+            regions[index] = .text(content)
+        case .conflict(let block):
+            let localCount = Self.lineCount(of: block.local)
+            let baseCount = (showBase && block.base != nil) ? Self.lineCount(of: block.base ?? "") : 0
+            let remoteCount = Self.lineCount(of: block.remote)
+            let totalOriginal = localCount + baseCount + remoteCount
+            let extras = max(0, lines.count - totalOriginal)
+            let localTake = min(localCount + extras, lines.count)
+            let baseTake = min(baseCount, lines.count - localTake)
+            let remoteTake = max(0, lines.count - localTake - baseTake)
+            let localSlice = Array(lines[0 ..< localTake])
+            let baseSlice = Array(lines[localTake ..< localTake + baseTake])
+            let remoteSlice = Array(lines[localTake + baseTake ..< localTake + baseTake + remoteTake])
+            let localText = localSlice.isEmpty ? "" : localSlice.joined(separator: "\n") + (block.local.hasSuffix("\n") || localTake < localCount || trailingNewline ? "\n" : "")
+            let remoteText = remoteSlice.isEmpty ? "" : remoteSlice.joined(separator: "\n") + (block.remote.hasSuffix("\n") || remoteTake < remoteCount || trailingNewline ? "\n" : "")
+            _ = baseSlice // BASE is preserved as-is via block.base
+            regions[index] = .conflict(ConflictBlock(
+                local: localText,
+                base: block.base,
+                remote: remoteText,
+                localLabel: block.localLabel,
+                remoteLabel: block.remoteLabel,
+                lineRangeInMerged: block.lineRangeInMerged
+            ))
+        }
+    }
+
+    /// Slow-path reconcile: the previous cursor-walking algorithm,
+    /// used when the prefix/suffix detection couldn't isolate the
+    /// change to a single region. See the original applyEditedFullText
+    /// for the full rationale.
+    private func applyEditedFullTextCursorWalk(_ newText: String, showBase: Bool) {
         let newLines = Self.splitPreservingTrailingEmpty(newText)
         var cursor = 0
         // Treat trailing zero-linecount text regions (e.g. the empty string
@@ -451,7 +648,7 @@ final class MergeConflictTabModel {
                     + (block.remote.hasSuffix("\n") || remoteTake < remoteCount ? "\n" : "")
                 regions[regionIndex] = .conflict(ConflictBlock(
                     local: localText,
-                    base: block.base,  // unchanged — BASE is immutable in the UI
+                    base: block.base, // unchanged — BASE is immutable in the UI
                     remote: remoteText,
                     localLabel: block.localLabel,
                     remoteLabel: block.remoteLabel,
@@ -460,12 +657,6 @@ final class MergeConflictTabModel {
                 cursor += totalTake
             }
         }
-        rebuildResultText()
-        // Re-parse so each block's `lineRangeInMerged` reflects the
-        // new line counts after the edit. Without this, subsequent
-        // acceptLocal/acceptRemote calls slice resultText using
-        // pre-edit ranges and corrupt adjacent content.
-        reparse()
     }
 
     /// Same semantics as `MergeRegionVisualLayout.splitPreservingTrailingEmpty`,

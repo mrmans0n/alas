@@ -790,6 +790,44 @@ struct MergeConflictTabModelTests {
         #expect(flat == "added by them\n")
     }
 
+    @Test func applyEditedFullTextKeepsInsertedContextLineOutOfConflictHunk() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // Build a fixture with PRE-text + conflict + POST-text.
+        // We need a file that produces a text region BEFORE the conflict.
+        try Self.writeFile(repo, "a.txt", "header line\nbase mid\nfooter line\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try Self.writeFile(repo, "a.txt", "header line\nfeature mid\nfooter line\n")
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try Self.writeFile(repo, "a.txt", "header line\nmain mid\nfooter line\n")
+        _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // RESULT pane shows (markerless): "header line\nmain mid\nfeature mid\nfooter line\n"
+        // User adds an extra context line BEFORE the conflict, between header and the conflict.
+        // New buffer: "header line\nextra context\nmain mid\nfeature mid\nfooter line\n"
+        model.applyEditedFullText("header line\nextra context\nmain mid\nfeature mid\nfooter line\n")
+        let block = try #require(model.allConflictBlocks().first)
+        // The "extra context" line MUST end up in the pre-conflict text region,
+        // NOT in block.local.
+        #expect(!block.local.contains("extra context"))
+        #expect(block.local.contains("main mid"))
+        #expect(block.remote.contains("feature mid"))
+        let flat = model.flatTextForWriting()
+        #expect(flat.contains("extra context"))
+        #expect(flat.contains("main mid"))
+        #expect(flat.contains("feature mid"))
+    }
+
     @Test func setRowContentRoutesToRemoteWhenLocalHunkIsEmpty() async throws {
         // Regression test: when LOCAL is empty (e.g., addedByThem),
         // visual row 0 of the conflict belongs to REMOTE, not LOCAL.
