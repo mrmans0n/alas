@@ -278,13 +278,17 @@ struct ChangesTabView: View {
     private var resolvedBulkAgent: AgentDefinition? {
         let id = appState.config.changes.aiToolId
         if id == "none" { return nil }
-        let candidate: AgentDefinition?
         if !id.isEmpty, let agent = appState.agent(id: id) {
-            candidate = agent
-        } else {
-            candidate = appState.agentRegistry.enabled().first
+            return agent.bypassPermissionsFlag != nil ? agent : nil
         }
-        guard let candidate, candidate.bypassPermissionsFlag != nil else { return nil }
-        return candidate
+        // Fallback: pick the first ENABLED agent that also supports
+        // bypass. Filtering before .first matters when the registry's
+        // enabled list begins with an agent that has no bypass flag
+        // (e.g. Pi) but a later one does (e.g. Claude / Codex /
+        // Cursor) — without this we'd reject the first match and
+        // leave bulk resolve disabled despite a usable tool being
+        // available.
+        return appState.agentRegistry.enabled()
+            .first(where: { $0.bypassPermissionsFlag != nil })
     }
 }
