@@ -106,14 +106,20 @@ struct ConflictsSection: View {
     private func deleteSideRow(_ file: ChangedFile) -> some View {
         let isOursDeleted = file.conflict == .deletedByUs
         return HStack(spacing: 6) {
-            Image(systemName: "trash.fill")
-                .foregroundColor(.orange)
-                .frame(width: 14)
-            Text(file.path)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundColor(.primary)
-            Spacer()
+            Button(action: { onSelect(file) }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "trash.fill")
+                        .foregroundColor(.orange)
+                        .frame(width: 14)
+                    Text(file.path)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundColor(.primary)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
             Button(isOursDeleted ? "Keep theirs" : "Keep ours") {
                 if isOursDeleted { onUseTheirs(file) } else { onUseOurs(file) }
             }
