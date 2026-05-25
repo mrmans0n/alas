@@ -147,7 +147,7 @@ struct CenterPaneView: View {
                             tabState: s,
                             appState: state
                         )
-                        .id(s.currentSha)
+                        .id(s.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath)
