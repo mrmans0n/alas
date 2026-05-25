@@ -21,11 +21,17 @@ struct MergeScrollCoordinatorTests {
     @Test func reentryGuardPreventsLoops() {
         let coord = MergeScrollCoordinator()
         coord.rowHeight = 16
-        var observed: [Int] = []
-        coord.onSync = { _, row in observed.append(row) }
+        var localObserved: [Int] = []
+        var resultObserved: [Int] = []
+        var remoteObserved: [Int] = []
+        coord.onSyncLocal = { localObserved.append($0) }
+        coord.onSyncResult = { resultObserved.append($0) }
+        coord.onSyncRemote = { remoteObserved.append($0) }
+        // Source = .result → should broadcast to .local and .remote
         coord.applyPaneY(32, source: .result)
         #expect(coord.logicalRow == 2)
-        #expect(observed.count == 2)
-        #expect(observed == [2, 2])
+        #expect(localObserved == [2])
+        #expect(remoteObserved == [2])
+        #expect(resultObserved.isEmpty) // never bounced back to source
     }
 }

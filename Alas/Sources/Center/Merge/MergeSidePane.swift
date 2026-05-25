@@ -18,7 +18,6 @@ struct MergeSidePane: NSViewRepresentable {
     /// Conflict ranges in THIS pane's row space (`localRows` if
     /// `.local`, `remoteRows` if `.remote`).
     let hunkRanges: [Range<Int>]
-    let fileExtension: String
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let coordinator: MergeScrollCoordinator
@@ -61,6 +60,7 @@ struct MergeSidePane: NSViewRepresentable {
         context.coordinator.coordinator = coordinator
         context.coordinator.side = side
         context.coordinator.lastRowHeight = lineHeight()
+        coordinator.rowHeight = lineHeight()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -87,16 +87,20 @@ struct MergeSidePane: NSViewRepresentable {
                 let y = scroll.contentView.bounds.origin.y
                 self.coordinator?.applyPaneY(y, source: self.side == .local ? .local : .remote)
             }
+            let mySource: MergeScrollCoordinator.Source = (side == .local) ? .local : .remote
             MainActor.assumeIsolated {
-            coord.onSync = { @MainActor [weak coord, weak scroll] target, row in
-                guard let scroll, let coord else { return }
-                let mySource: MergeScrollCoordinator.Source = (side == .local) ? .local : .remote
-                guard target == mySource else { return }
-                let y = CGFloat(row) * coord.rowHeight
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
-                scroll.reflectScrolledClipView(scroll.contentView)
+                let handler: @MainActor (Int) -> Void = { [weak coord, weak scroll] row in
+                    guard let scroll, let coord else { return }
+                    let y = CGFloat(row) * coord.rowHeight
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
+                switch mySource {
+                case .local: coord.onSyncLocal = handler
+                case .remote: coord.onSyncRemote = handler
+                case .result: break // unreachable; this pane is always local or remote
+                }
             }
-            } // MainActor.assumeIsolated
         }
 
         deinit {

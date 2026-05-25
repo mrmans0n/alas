@@ -22,12 +22,14 @@ final class MergeScrollCoordinator {
 
     private(set) var logicalRow: Int = 0
 
-    /// Called when the coordinator needs the other panes to scroll to
-    /// match. The Source argument names the pane the new value is for
-    /// — the SOURCE of the update is never broadcast back to itself.
-    /// Set by `MergeView3Way` to wire up the actual `NSScrollView`
-    /// adjustments.
-    var onSync: ((Source, Int) -> Void)?
+    /// Per-target scroll handlers. Each pane (LOCAL, RESULT, REMOTE)
+    /// registers its own handler so the three subscribers don't stomp
+    /// each other — a single-slot closure would have meant whichever
+    /// pane registered last wins. `applyPaneY` dispatches to the
+    /// handler for every target OTHER than the source of the scroll.
+    var onSyncLocal: ((Int) -> Void)?
+    var onSyncResult: ((Int) -> Void)?
+    var onSyncRemote: ((Int) -> Void)?
 
     /// Programmatic setter. Doesn't broadcast — the caller is
     /// presumed to be initialization or a non-scroll trigger.
@@ -55,7 +57,11 @@ final class MergeScrollCoordinator {
         guard row != logicalRow else { return }
         logicalRow = row
         for target in [Source.local, .result, .remote] where target != source {
-            onSync?(target, row)
+            switch target {
+            case .local:  onSyncLocal?(row)
+            case .result: onSyncResult?(row)
+            case .remote: onSyncRemote?(row)
+            }
         }
     }
 }
