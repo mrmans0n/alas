@@ -27,18 +27,28 @@ struct MergeView3Way: View {
         MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
     }
 
-    /// Whether the model's last region's content ends with `\n`.
-    /// Passed to `MergeResultPane` so the rendered buffer matches the
-    /// file's EOF-newline state (no phantom newline added on writeback).
+    /// Whether the model's last region's RENDERED content ends with
+    /// `\n`. Mirrors `renderMarkerlessBuffer`'s LOCAL → (BASE if
+    /// `showBase`) → REMOTE order — the last visible side is whichever
+    /// non-empty side comes last in that walk. Passed to
+    /// `MergeResultPane` so the rendered buffer matches the file's
+    /// EOF-newline state (no phantom newline added on writeback, and
+    /// no real newline silently dropped).
     private var lastRegionEndsWithNewline: Bool {
         guard let last = model.regions.last else { return false }
         switch last {
         case .text(let t):
             return t.hasSuffix("\n")
         case .conflict(let block):
-            if !block.remote.isEmpty { return block.remote.hasSuffix("\n") }
-            if !block.local.isEmpty { return block.local.hasSuffix("\n") }
-            return false
+            // Walk render order LOCAL → BASE (if showBase) → REMOTE;
+            // the last non-empty side determines the EOF newline state.
+            var trailing: Bool? = nil
+            if !block.local.isEmpty { trailing = block.local.hasSuffix("\n") }
+            if showBase, let base = block.base, !base.isEmpty {
+                trailing = base.hasSuffix("\n")
+            }
+            if !block.remote.isEmpty { trailing = block.remote.hasSuffix("\n") }
+            return trailing ?? false
         }
     }
 
