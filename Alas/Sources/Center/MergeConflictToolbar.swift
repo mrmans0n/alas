@@ -4,10 +4,14 @@ struct MergeConflictToolbar: View {
     let conflictCount: Int
     let currentConflictIndex: Int?
     let currentAnnotation: String?
-    /// True only after the conflicted file has been loaded successfully.
-    /// Gates `Mark resolved` so it can't fire on an empty initial buffer
-    /// and clobber the on-disk file with empty contents.
+    /// True once the conflicted file has been loaded successfully (binary
+    /// or text). Gates `Mark resolved` so it can't fire on an empty initial
+    /// buffer. Stays true for binaries — the user resolves them via the
+    /// right-pane Use ours/theirs context menu, then clicks Mark resolved here.
     let isLoaded: Bool
+    /// True only when a loaded file is text-based (non-binary). Gates the
+    /// agent + 3-column-only actions (prev/next, accept LOCAL/REMOTE/BOTH).
+    let canRunAgent: Bool
     let agentBusy: Bool
     let hasAgent: Bool
     /// True while an unreviewed agent proposal is on screen. The toolbar
@@ -48,7 +52,7 @@ struct MergeConflictToolbar: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!isLoaded || !hasAgent || agentBusy || hasPendingProposal)
+            .disabled(!canRunAgent || !hasAgent || agentBusy || hasPendingProposal)
             .help(hasAgent
                 ? "Run the configured agent on the whole file and preview its proposal"
                 : "Configure an agent in Settings to enable this")

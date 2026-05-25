@@ -28,10 +28,8 @@ struct MergeConflictTabView: View {
                     conflictCount: model.conflictCount,
                     currentConflictIndex: model.currentConflictIndex,
                     currentAnnotation: currentBlockAnnotation,
-                    // Binaries can't be resolved through the 3-column editor
-                    // (they're handled via the right-pane Use ours / Use theirs
-                    // context menu). Keep the resolve button disabled for them.
-                    isLoaded: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
+                    isLoaded: model.conflictedFile != nil,
+                    canRunAgent: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
                     agentBusy: model.agentBusy,
                     hasAgent: resolvedAgent != nil,
                     hasPendingProposal: model.agentProposal != nil,
