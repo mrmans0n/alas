@@ -6,6 +6,7 @@ struct CommitRow: View {
     var isHistorical: Bool = false
     let onSelect: () -> Void
     let onCopySHA: () -> Void
+    var onEdit: (() -> Void)? = nil
     var onCherryPick: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
@@ -31,6 +32,10 @@ struct CommitRow: View {
         .buttonStyle(.plain)
         .copyFeedbackOverlay(message: copyFeedback.message)
         .contextMenu {
+            if let onEdit {
+                Button("Edit Commit...") { onEdit() }
+                Divider()
+            }
             Button("Copy Commit SHA") { copySHA() }
             if onCherryPick != nil {
                 Divider()

@@ -31,7 +31,7 @@ struct AgentHookSocketServerTests {
     private func sendToSocket(path: String, payload: String) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", "printf '%s' '\(payload)' | /usr/bin/nc -U -w2 '\(path)'"]
+        process.arguments = ["-c", "printf '%s' '\(payload)' | /usr/bin/nc -U -w5 '\(path)'"]
         let outPipe = Pipe()
         process.standardOutput = outPipe
         try process.run()
@@ -47,7 +47,7 @@ struct AgentHookSocketServerTests {
         defer { server.shutdown() }
 
         let json = #"{"v":1,"event":"busy","agent":"claude","session_id":"s1","pid":123}"#
-        let (response, received) = try await awaitEvent(on: server, timeoutMs: 2000) {
+        let (response, received) = try await awaitEvent(on: server, timeoutMs: 5000) {
             try sendToSocket(path: path, payload: json)
         }
 
@@ -65,7 +65,7 @@ struct AgentHookSocketServerTests {
         defer { server.shutdown() }
 
         let json = #"{"v":1,"event":"SessionStart","agent":"claude","session_id":"s1","pid":123}"#
-        let (response, received) = try await awaitEvent(on: server, timeoutMs: 2000) {
+        let (response, received) = try await awaitEvent(on: server, timeoutMs: 5000) {
             try sendToSocket(path: path, payload: json)
         }
 

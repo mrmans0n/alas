@@ -433,19 +433,6 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         let nsLength = (string as NSString).length
         guard selection.location != NSNotFound, selection.location <= nsLength else { return nil }
 
-        if let window {
-            var screenRect = firstRect(forCharacterRange: NSRange(location: selection.location, length: 0), actualRange: nil)
-            guard screenRect.origin.x.isFinite,
-                  screenRect.origin.y.isFinite,
-                  screenRect.height.isFinite,
-                  screenRect.height > 0 else { return nil }
-            screenRect.size.width = max(screenRect.width.isFinite ? screenRect.width : 0, 1)
-            let windowRect = window.convertFromScreen(screenRect)
-            var localRect = convert(windowRect, from: nil)
-            localRect.size.width = max(localRect.width, 1)
-            return localRect
-        }
-
         return localInsertionRect(at: selection.location)
     }
 

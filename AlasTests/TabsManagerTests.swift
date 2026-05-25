@@ -403,6 +403,152 @@ struct TabsManagerTests {
         let ids = secondMgr.tabs(forWorktree: worktreeId).map(\.id)
         #expect(ids == [b.id, c.id, a.id])
     }
+
+    @Test func commitEditorTabStateUsesOriginalShaForStableIdentity() {
+        let state = CommitEditorTabState(
+            worktreeId: "wt",
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb edited subject"
+        )
+
+        #expect(state.id == "commit-editor:wt:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        #expect(state.currentSha == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        #expect(state.title == "bbbbbbb edited subject")
+    }
+
+    @Test func commitEditorTabRoundTrips() throws {
+        let tab = Tab.commitEditor(CommitEditorTabState(
+            worktreeId: "wt",
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            title: "aaaaaaa subject"
+        ))
+
+        let data = try JSONEncoder().encode(tab)
+        let decoded = try JSONDecoder().decode(Tab.self, from: data)
+
+        #expect(decoded == tab)
+        #expect(decoded.id == "commit-editor:wt:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        #expect(decoded.title == "aaaaaaa subject")
+        #expect(decoded.iconName == "commit")
+    }
+
+    @Test func appendCommitEditorReusesOriginalShaIdentityWithoutOverwritingCurrentSha() {
+        let worktreeId = "tabs-manager-commit-editor"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            title: "aaaaaaa original"
+        )
+        let second = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb updated"
+        )
+
+        #expect(first.id == second.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 1)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
+        guard case .commitEditor(let state) = mgr.tabs(forWorktree: worktreeId).first else {
+            Issue.record("Expected commit editor tab")
+            return
+        }
+        #expect(state.currentSha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        #expect(state.title == "aaaaaaa original")
+    }
+
+    @Test func openCommitEditorReuseDoesNotRegressCurrentSha() {
+        let worktreeId = "tabs-manager-commit-editor-no-regress"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb rewritten"
+        )
+        let second = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            title: "aaaaaaa stale"
+        )
+
+        #expect(first.id == second.id)
+        guard case .commitEditor(let state) = second else {
+            Issue.record("Expected commit editor tab")
+            return
+        }
+        #expect(state.currentSha == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        #expect(state.title == "bbbbbbb rewritten")
+    }
+
+    @Test func findsCommitEditorByCurrentShaAfterRewrite() {
+        let worktreeId = "tabs-manager-commit-editor-current-sha"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let editor = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb updated"
+        )
+        _ = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "cccccccccccccccccccccccccccccccccccccccc",
+            currentSha: "cccccccccccccccccccccccccccccccccccccccc",
+            title: "ccccccc other"
+        )
+
+        let found = mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+        #expect(found?.id == editor.id)
+    }
+
+    @Test func updateCommitEditorShasAppliesShaMapToOpenCommitEditors() {
+        let worktreeId = "tabs-manager-commit-editor-sha-map"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let target = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb target"
+        )
+        let descendant = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "cccccccccccccccccccccccccccccccccccccccc",
+            currentSha: "dddddddddddddddddddddddddddddddddddddddd",
+            title: "ddddddd descendant"
+        )
+
+        mgr.updateCommitEditorShas(worktreeId: worktreeId, shaMap: [
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "dddddddddddddddddddddddddddddddddddddddd": "ffffffffffffffffffffffffffffffffffffffff"
+        ])
+
+        #expect(mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")?.id == target.id)
+        #expect(mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "ffffffffffffffffffffffffffffffffffffffff")?.id == descendant.id)
+    }
 }
 
 // MARK: - Pane tree mutations

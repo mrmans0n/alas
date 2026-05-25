@@ -326,6 +326,7 @@ struct HunkView: View {
     var codeFontSize: CGFloat = 13
     var onStage:   (() -> Void)? = nil
     var onDiscard: (() -> Void)? = nil
+    var onDropFromCommit: (() -> Void)? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -341,6 +342,9 @@ struct HunkView: View {
                 }
                 if onDiscard != nil {
                     AlasButton(title: "Discard hunk...", style: .subtle, action: { onDiscard?() })
+                }
+                if onDropFromCommit != nil {
+                    AlasButton(title: "Drop hunk...", style: .subtle, action: { onDropFromCommit?() })
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 4)

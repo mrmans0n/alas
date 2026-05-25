@@ -7,6 +7,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case editor(EditorTabState)
     case diff(DiffTabState)
     case commit(CommitTabState)
+    case commitEditor(CommitEditorTabState)
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
 
@@ -16,6 +17,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.id
         case .diff(let s):         return s.id
         case .commit(let s):       return s.id
+        case .commitEditor(let s): return s.id
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         }
@@ -27,6 +29,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.title
         case .diff(let s):         return s.title
         case .commit(let s):       return s.title
+        case .commitEditor(let s): return s.title
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         }
@@ -38,6 +41,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor:       return "code"
         case .diff:         return "diff"
         case .commit:       return "commit"
+        case .commitEditor: return "commit"
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
         }
@@ -63,6 +67,24 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         self.id = "commit:\(worktreeId):\(sha)"
         self.worktreeId = worktreeId
         self.sha = sha
+        self.title = title
+    }
+}
+
+struct CommitEditorTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let baseRef: String
+    let originalSha: String
+    var currentSha: String
+    var title: String
+
+    init(worktreeId: String, baseRef: String, originalSha: String, currentSha: String, title: String) {
+        self.id = "commit-editor:\(worktreeId):\(originalSha)"
+        self.worktreeId = worktreeId
+        self.baseRef = baseRef
+        self.originalSha = originalSha
+        self.currentSha = currentSha
         self.title = title
     }
 }

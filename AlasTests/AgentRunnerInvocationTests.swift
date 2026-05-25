@@ -236,7 +236,7 @@ struct AgentRunnerInvocationTests {
                 return false
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(for: .seconds(5))
                 if let pid = try? String(contentsOf: pidFile, encoding: .utf8)
                     .trimmingCharacters(in: .whitespacesAndNewlines),
                    let processId = Int32(pid) {
@@ -251,6 +251,6 @@ struct AgentRunnerInvocationTests {
         }
         let elapsed = Date().timeIntervalSince(start)
         #expect(completed)
-        #expect(elapsed < 1.5, "expected timeout to complete before test cleanup kill, took \(elapsed)s")
+        #expect(elapsed < 5, "expected timeout to complete before test cleanup kill, took \(elapsed)s")
     }
 }

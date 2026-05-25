@@ -6,6 +6,7 @@ struct ChangesTabView: View {
     @Bindable var appState: AppState
     let onSelect: (ChangedFile) -> Void
     let onSelectCommit: (CommitInfo) -> Void
+    let onEditCommit: (CommitInfo, String) -> Void
 
     private var stagedCount: Int {
         rps.changes.filter { $0.stage == .staged }.count
@@ -135,6 +136,11 @@ struct ChangesTabView: View {
                 ),
                 onSelect: onSelectCommit,
                 onCopySHA: copyCommitSHA,
+                onEdit: { commit in
+                    if let ref = rps.comparisonRef {
+                        onEditCommit(commit, ref)
+                    }
+                },
                 onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
                 onSelectBaseBranch: { branch in
                     rps.selectBaseBranch(branch)

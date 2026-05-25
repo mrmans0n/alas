@@ -94,6 +94,11 @@ final class RightPaneStore {
         await state.refresh()
     }
 
+    func commitEditorComparisonRef(worktreeId: String) -> String? {
+        guard let state = states[worktreeId] else { return nil }
+        return state.comparisonRef
+    }
+
     /// Stops the currently-active state's background work. Call when the
     /// right pane is hidden or no worktree is selected, so the FSEvents
     /// watcher and the 5-min sync timer don't keep running with no

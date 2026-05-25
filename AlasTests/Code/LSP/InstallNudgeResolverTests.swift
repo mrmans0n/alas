@@ -86,8 +86,8 @@ struct InstallNudgeResolverTests {
         #expect(resolver.nudgeData(forAbsolutePath: "/tmp/Config.toml") == nil)
     }
 
-    @Test("Mason fallback runs for default-disabled built-in registry extension")
-    func masonFallbackRunsForDefaultDisabledBuiltIn() {
+    @Test("Mason fallback does not run for enabled built-in without install recipe")
+    func masonFallbackSkipsEnabledBuiltInWithoutInstallRecipe() {
         let resolver = InstallNudgeResolver(
             registry: LanguageServerRegistry(userDefined: []),
             userDefinedRecipes: [:],
@@ -101,9 +101,7 @@ struct InstallNudgeResolverTests {
 
         let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/Main.kt")
 
-        #expect(nudge?.language == "kotlin")
-        #expect(nudge?.masonPackage?.masonId == "kotlin-language-server")
-        #expect(nudge?.dismissalKey == "extension:kt")
+        #expect(nudge == nil)
     }
 
     @Test("registry nudge keeps language dismissal key")

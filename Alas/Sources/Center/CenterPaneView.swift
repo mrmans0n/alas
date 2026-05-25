@@ -140,9 +140,17 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(s.sha)
+                    case .commitEditor(let s):
+                        CommitEditorTabView(
+                            worktreePath: worktree.path,
+                            worktreeId: worktree.id,
+                            tabState: s,
+                            appState: state
+                        )
+                        .id(s.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
-                                            relativePath: s.relativePath)
+                                             relativePath: s.relativePath)
                     case .mergeConflict(let s):
                         MergeConflictTabView(
                             state: state,

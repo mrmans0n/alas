@@ -56,6 +56,15 @@ final class TabsManager {
         byWorktree[id]?.tabs ?? []
     }
 
+    func commitEditorTab(worktreeId: String, currentSha: String) -> Tab? {
+        tabs(forWorktree: worktreeId).first { tab in
+            if case .commitEditor(let state) = tab {
+                return state.currentSha == currentSha
+            }
+            return false
+        }
+    }
+
     func activeTabId(forWorktree id: String) -> TabID? {
         byWorktree[id]?.activeTabId
     }
@@ -510,6 +519,75 @@ final class TabsManager {
         let tab = Tab.commit(state)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    @discardableResult
+    func openCommitEditor(
+        worktreeId: String,
+        baseRef: String,
+        originalSha: String,
+        currentSha: String,
+        title: String
+    ) -> Tab {
+        let state = CommitEditorTabState(
+            worktreeId: worktreeId,
+            baseRef: baseRef,
+            originalSha: originalSha,
+            currentSha: currentSha,
+            title: title
+        )
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { $0.id == state.id }),
+           case .commitEditor(var existing) = file.tabs[idx] {
+            if existing.currentSha == currentSha {
+                existing.title = title
+            }
+            let tab = Tab.commitEditor(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+        let tab = Tab.commitEditor(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func updateCommitEditor(
+        worktreeId: String,
+        tabId: TabID,
+        currentSha: String,
+        title: String
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .commitEditor(var state) = file.tabs[idx]
+        else { return nil }
+        state.currentSha = currentSha
+        state.title = title
+        let tab = Tab.commitEditor(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    func updateCommitEditorShas(worktreeId: String, shaMap: [String: String]) {
+        guard !shaMap.isEmpty, var file = byWorktree[worktreeId] else { return }
+        var changed = false
+        for idx in file.tabs.indices {
+            guard case .commitEditor(var state) = file.tabs[idx],
+                  let newSha = shaMap[state.currentSha],
+                  newSha != state.currentSha else { continue }
+            state.currentSha = newSha
+            file.tabs[idx] = .commitEditor(state)
+            changed = true
+        }
+        guard changed else { return }
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
     }
 
     /// Open a merge-conflict tab for `relativePath`, or activate the existing

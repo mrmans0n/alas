@@ -32,6 +32,7 @@ struct CommitsSectionView: View {
     let branches: [String]
     let onSelect: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
+    let onEdit: (CommitInfo) -> Void
     let onLoadOlder: () -> Void
     let onSelectBaseBranch: (String) -> Void
     let onOpenBaseBranchSelector: () -> Void
@@ -88,6 +89,7 @@ struct CommitsSectionView: View {
                     isLast: idx == commits.count - 1 && olderCommits.isEmpty,
                     onSelect: { onSelect(commit) },
                     onCopySHA: { onCopySHA(commit) },
+                    onEdit: { onEdit(commit) },
                     onCherryPick: { rps.runCherryPick(sha: commit.sha) }
                 )
             }
