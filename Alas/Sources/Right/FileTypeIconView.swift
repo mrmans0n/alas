@@ -290,6 +290,7 @@ struct FolderIconView: View {
                 .frame(width: size, height: size)
         } else {
             Icon(name: "folder", size: 11, color: fallbackColor)
+                .frame(width: size, height: size)
         }
     }
 }
