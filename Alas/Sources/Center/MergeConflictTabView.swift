@@ -81,6 +81,12 @@ struct MergeConflictTabView: View {
         // resultText/regions from the prior conflict.
         .task {
             await model.load()
+            // Kick off the first annotation fetch directly after load. The
+            // `.onChange` hooks on `body3Columns` don't fire on initial
+            // insertion, so without this call a single-conflict file
+            // (where currentConflictIndex stays at 0 forever) would never
+            // get auto-explained.
+            triggerExplainIfNeeded()
         }
     }
 
