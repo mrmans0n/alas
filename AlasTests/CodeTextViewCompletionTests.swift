@@ -176,5 +176,4 @@ struct CodeTextViewCompletionTests {
         #expect(finalLine.minY > firstLine.minY)
         #expect(finalLine.minX <= firstLine.minX + 1)
     }
-
 }
