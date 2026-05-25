@@ -268,12 +268,23 @@ struct ChangesTabView: View {
     /// `MergeConflictTabView.resolvedAgent` precedence: respect explicit
     /// "none", prefer the user's pinned tool from Settings, fall back to
     /// any enabled agent.
+    ///
+    /// Filters out agents without a `bypassPermissionsFlag` because the
+    /// bulk action runs the agent non-interactively (no TTY to answer
+    /// write-approval prompts). Without bypass support, the agent would
+    /// stall on the first file write and the run would hang until the
+    /// 10-minute timeout fires. The bulk button is disabled in that
+    /// case with a tooltip explaining why.
     private var resolvedBulkAgent: AgentDefinition? {
         let id = appState.config.changes.aiToolId
         if id == "none" { return nil }
+        let candidate: AgentDefinition?
         if !id.isEmpty, let agent = appState.agent(id: id) {
-            return agent
+            candidate = agent
+        } else {
+            candidate = appState.agentRegistry.enabled().first
         }
-        return appState.agentRegistry.enabled().first
+        guard let candidate, candidate.bypassPermissionsFlag != nil else { return nil }
+        return candidate
     }
 }

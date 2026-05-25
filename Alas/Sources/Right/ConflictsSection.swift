@@ -92,7 +92,7 @@ struct ConflictsSection: View {
             .disabled(!hasAgent)
             .help(hasAgent
                 ? "Run the configured agent across every text conflict and stage the results"
-                : "Configure an agent in Settings → Changes to enable this")
+                : "Pick an agent in Settings → Changes that supports non-interactive permission bypass (e.g. Claude, Codex, Cursor)")
         }
     }
 
