@@ -379,7 +379,14 @@ private struct HunkClassification {
             // misclassified as a separator). Strip the trailing newline
             // for the mid exact match because `line` includes it.
             let trimmed = line.hasSuffix("\n") ? String(line.dropLast()) : line
-            if line.hasPrefix("<<<<<<< ") {
+            // Only treat `<<<<<<< ` as a marker when we're OUTSIDE a
+            // conflict. `ConflictMarkerParser` doesn't recurse, so a
+            // line with that prefix appearing inside LOCAL/BASE/REMOTE
+            // content (e.g. a docstring or test fixture about merge
+            // markers) is content, not a marker. Recursing here would
+            // misclassify those lines as non-editable AND corrupt
+            // navigation by overwriting `blockStartLineIdx` mid-block.
+            if state == .outside, line.hasPrefix("<<<<<<< ") {
                 state = .local
                 blockStartLineIdx = idx
                 lines.append(Line(range: range, kind: .markerBegin))

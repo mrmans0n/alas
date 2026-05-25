@@ -237,8 +237,14 @@ private struct AgentPromptInvocation {
             )
         }
 
+        // Put bypass BEFORE `promptModeArgs` (not between args + prompt)
+        // so a custom agent whose `promptModeArgs` ends with an
+        // option-taking-value (e.g. `["chat", "--prompt"]`) keeps
+        // that option adjacent to its value. Inserting bypass in the
+        // middle would make the option swallow the bypass flag as its
+        // value and misparse the prompt.
         return AgentPromptInvocation(
-            arguments: agent.promptModeArgs + bypass + [prompt],
+            arguments: bypass + agent.promptModeArgs + [prompt],
             stdin: input
         )
     }
