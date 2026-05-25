@@ -20,6 +20,17 @@ enum MergeWordDiff {
         guard mode != .off, local != remote else {
             return Result(localChanged: [], remoteChanged: [])
         }
+        // Bound the DP table to ~4MB (1024 * 1024 cells × 8 bytes/Int).
+        // For long-line conflicts (lockfiles, minified JSON, base64
+        // blobs) the quadratic cost spikes pathologically. Above the
+        // cap, fall back to the hunk-level tint only — no character
+        // overlay. The line-level diff is a nice-to-have, not a
+        // correctness requirement.
+        let maxLineLength = 1024
+        guard local.utf16.count <= maxLineLength,
+              remote.utf16.count <= maxLineLength else {
+            return Result(localChanged: [], remoteChanged: [])
+        }
         let localUnits = Array(local.utf16)
         let remoteUnits = Array(remote.utf16)
         let (localRanges, remoteRanges) = charDiff(localUnits, remoteUnits)

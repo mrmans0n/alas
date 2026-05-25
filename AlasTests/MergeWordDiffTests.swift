@@ -37,6 +37,16 @@ struct MergeWordDiffTests {
         #expect(result.remoteChanged.isEmpty)
     }
 
+    @Test func longLinesFallBackToEmptyDiff() {
+        // Simulate a 2000-char minified line. The DP table would be
+        // 4M cells × 8 bytes = 32 MB and a lengthy compute — fall back.
+        let long = String(repeating: "a", count: 2000)
+        let longB = String(repeating: "b", count: 2000)
+        let result = MergeWordDiff.diff(local: long, remote: longB, mode: .characters)
+        #expect(result.localChanged.isEmpty)
+        #expect(result.remoteChanged.isEmpty)
+    }
+
     @Test func emojiInLocalDoesNotProduceMisalignedRanges() {
         // "🦆count" vs "🦆rate" — the difference starts at UTF-16
         // index 2 (after the surrogate pair) and runs to the end.

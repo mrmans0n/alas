@@ -461,6 +461,11 @@ final class MergeConflictTabModel {
             }
         }
         rebuildResultText()
+        // Re-parse so each block's `lineRangeInMerged` reflects the
+        // new line counts after the edit. Without this, subsequent
+        // acceptLocal/acceptRemote calls slice resultText using
+        // pre-edit ranges and corrupt adjacent content.
+        reparse()
     }
 
     /// Same semantics as `MergeRegionVisualLayout.splitPreservingTrailingEmpty`,
@@ -486,7 +491,7 @@ final class MergeConflictTabModel {
             case .conflict(let block):
                 out.append("<<<<<<< \(block.localLabel)\n")
                 out.append(block.local)
-                if !block.local.hasSuffix("\n") { out.append("\n") }
+                if !block.local.isEmpty, !block.local.hasSuffix("\n") { out.append("\n") }
                 if let base = block.base, !base.isEmpty {
                     out.append("||||||| ancestor\n")
                     out.append(base)
@@ -494,7 +499,7 @@ final class MergeConflictTabModel {
                 }
                 out.append("=======\n")
                 out.append(block.remote)
-                if !block.remote.hasSuffix("\n") { out.append("\n") }
+                if !block.remote.isEmpty, !block.remote.hasSuffix("\n") { out.append("\n") }
                 out.append(">>>>>>> \(block.remoteLabel)\n")
             }
         }

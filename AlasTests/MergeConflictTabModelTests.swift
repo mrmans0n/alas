@@ -744,6 +744,38 @@ struct MergeConflictTabModelTests {
         #expect(model.flatTextForWriting().contains("appended"))
     }
 
+    @Test func acceptAfterEditedHunkUsesUpdatedLineRanges() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // Edit the LOCAL hunk to add a new line.
+        // Original RESULT pane content (markerless, stacked):
+        //   "main line\nfeature line\n"
+        // After insert in LOCAL: "main line\nextra local\nfeature line\n"
+        model.applyEditedFullText("main line\nextra local\nfeature line\n")
+        let block = try #require(model.allConflictBlocks().first)
+        #expect(block.local.contains("extra local"))
+        // Now accept LOCAL. The accept must replace the FULL marker
+        // block in resultText, even though the block's line count
+        // grew. After accept: conflictCount == 0, and the file
+        // contains both LOCAL lines without any leftover markers.
+        model.acceptLocal(for: block)
+        #expect(model.conflictCount == 0)
+        let flat = model.flatTextForWriting()
+        #expect(flat.contains("main line"))
+        #expect(flat.contains("extra local"))
+        #expect(!flat.contains("<<<<<<<"))
+        #expect(!flat.contains("======="))
+        #expect(!flat.contains(">>>>>>>"))
+    }
+
     @Test func setRowContentRoutesToRemoteWhenLocalHunkIsEmpty() async throws {
         // Regression test: when LOCAL is empty (e.g., addedByThem),
         // visual row 0 of the conflict belongs to REMOTE, not LOCAL.
