@@ -157,4 +157,61 @@ struct GitServiceCommitEditingTests {
         #expect(result.shaMap[descendant] != nil)
         #expect(try await subjects(repo) == ["base", "new target", "empty descendant"])
     }
+
+    @Test func dropModifiedFileRemovesOnlyTargetCommitContribution() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["a.txt": "base\n"])
+        let target = try await commit(repo, subject: "target", files: ["a.txt": "target\n", "c.txt": "keep\n"])
+        _ = try await commit(repo, subject: "descendant", files: ["b.txt": "desc\n"])
+
+        _ = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .dropFile(path: "a.txt")
+        )
+
+        let content = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(content == "base\n")
+        let keptContent = try String(contentsOf: repo.appendingPathComponent("c.txt"), encoding: .utf8)
+        #expect(keptContent == "keep\n")
+        #expect(try await subjects(repo) == ["base", "target", "descendant"])
+    }
+
+    @Test func dropAddedFileThatWouldEmptyCommitIsRejected() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commit(repo, subject: "target", files: ["new.txt": "new\n"])
+
+        await #expect(throws: CommitEditError.self) {
+            _ = try await GitService().editCommit(
+                worktreePath: repo,
+                baseRef: base,
+                targetSha: target,
+                action: .dropFile(path: "new.txt")
+            )
+        }
+    }
+
+    @Test func dropHunkRemovesOnlySelectedHunk() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["a.txt": "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n"])
+        let target = try await commit(repo, subject: "target", files: ["a.txt": "ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nTEN\n"])
+        let rawDiff = try await Process.git(["diff", "\(target)^", target, "--", "a.txt"], cwd: repo)
+        let parsed = DiffParser.parse(rawDiff.stdout)
+        #expect(parsed.hunks.count == 2)
+
+        _ = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .dropHunk(path: "a.txt", hunk: parsed.hunks[0])
+        )
+
+        let content = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(content == "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nTEN\n")
+    }
 }

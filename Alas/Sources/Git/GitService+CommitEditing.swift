@@ -47,17 +47,20 @@ extension GitService {
         targetSha: String,
         action: CommitEditAction
     ) async throws -> CommitEditResult {
-        let subject: String
-        let body: String
+        let message: (subject: String, body: String)?
         switch action {
         case .message(let newSubject, let newBody):
-            subject = newSubject.trimmingCharacters(in: .whitespacesAndNewlines)
-            body = newBody.trimmingCharacters(in: .whitespacesAndNewlines)
+            message = (
+                subject: newSubject.trimmingCharacters(in: .whitespacesAndNewlines),
+                body: newBody.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         case .dropFile, .dropHunk:
-            throw CommitEditError.unsupportedAction
+            message = nil
         }
 
-        guard !subject.isEmpty else { throw CommitEditError.emptySubject }
+        if let message {
+            guard !message.subject.isEmpty else { throw CommitEditError.emptySubject }
+        }
         try await validateEditableState(worktreePath: worktreePath)
 
         let chain = try await gitLines(["rev-list", "--reverse", "\(baseRef)..HEAD"], cwd: worktreePath)
@@ -87,14 +90,25 @@ extension GitService {
             if !targetIsEmpty {
                 try await runGit(["cherry-pick", "--no-commit", targetSha], cwd: worktreePath)
             }
-            var commitArgs = ["commit", "--author", author.ident, "-m", subject]
-            if targetIsEmpty {
-                commitArgs.append("--allow-empty")
+
+            switch action {
+            case .message:
+                guard let message else { throw CommitEditError.emptySubject }
+                var commitArgs = ["commit", "--author", author.ident, "-m", message.subject]
+                if targetIsEmpty {
+                    commitArgs.append("--allow-empty")
+                }
+                if !message.body.isEmpty {
+                    commitArgs += ["-m", message.body]
+                }
+                try await runGit(commitArgs, cwd: worktreePath, env: ["GIT_AUTHOR_DATE": author.date])
+            case .dropFile(let path):
+                try await dropFileFromStagedCommit(worktreePath: worktreePath, parentSha: anchor, path: path)
+                try await commitIfNonEmpty(worktreePath: worktreePath, sourceSha: targetSha)
+            case .dropHunk(let path, let hunk):
+                try await dropHunkFromStagedCommit(worktreePath: worktreePath, path: path, hunk: hunk)
+                try await commitIfNonEmpty(worktreePath: worktreePath, sourceSha: targetSha)
             }
-            if !body.isEmpty {
-                commitArgs += ["-m", body]
-            }
-            try await runGit(commitArgs, cwd: worktreePath, env: ["GIT_AUTHOR_DATE": author.date])
             let currentSha = try await headSha(cwd: worktreePath)
             shaMap[targetSha] = currentSha
 
@@ -184,6 +198,31 @@ private extension GitService {
     func headSha(cwd: URL) async throws -> String {
         try await gitOutput(["rev-parse", "HEAD"], cwd: cwd)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func dropFileFromStagedCommit(worktreePath: URL, parentSha: String, path: String) async throws {
+        let parentProbe = try await Process.git(["cat-file", "-e", "\(parentSha):\(path)"], cwd: worktreePath)
+        if parentProbe.exitCode == 0 {
+            try await runGit(["restore", "--source", parentSha, "--staged", "--worktree", "--", path], cwd: worktreePath)
+        } else {
+            try await runGit(["rm", "-f", "--", path], cwd: worktreePath)
+        }
+    }
+
+    func dropHunkFromStagedCommit(worktreePath: URL, path: String, hunk: ParsedDiff.Hunk) async throws {
+        let patch = HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: true)
+        let result = try await Process.git(["apply", "--reverse", "--index", "-"], cwd: worktreePath, stdin: patch)
+        guard result.exitCode == 0 else {
+            throw CommitEditError.gitFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
+    func commitIfNonEmpty(worktreePath: URL, sourceSha: String) async throws {
+        let diff = try await Process.git(["diff", "--cached", "--quiet"], cwd: worktreePath)
+        if diff.exitCode == 0 {
+            throw CommitEditError.gitFailed("This edit would make the commit empty; dropping whole commits is not supported yet.")
+        }
+        try await runGit(["commit", "-C", sourceSha], cwd: worktreePath)
     }
 
     func gitLines(_ args: [String], cwd: URL) async throws -> [String] {
