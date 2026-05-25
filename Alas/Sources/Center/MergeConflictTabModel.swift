@@ -28,6 +28,11 @@ final class MergeConflictTabModel {
     /// on `load()` failure.
     private(set) var initialConflictCount: Int = 0
 
+    /// Increments on every successful `load()`. Consumers (binary preview)
+    /// include this in their cache keys so they invalidate when the tab is
+    /// re-focused for a fresh conflict on the same path.
+    private(set) var loadGeneration: Int = 0
+
     /// Set while a `MergeAgent` request is in flight. Drives toolbar disabled-state.
     private(set) var agentBusy: Bool = false
 
@@ -67,6 +72,7 @@ final class MergeConflictTabModel {
             self.initialConflictCount = self.conflictCount
             self.annotations = [:]
             self.loadError = nil
+            self.loadGeneration += 1
         } catch {
             self.conflictedFile = nil
             self.regions = []

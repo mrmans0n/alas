@@ -4,6 +4,7 @@ import AppKit
 struct MergeConflictBinaryView: View {
     let conflictedFile: ConflictedFile
     let worktreePath: URL
+    let loadGeneration: Int
     @Environment(\.theme) var theme
 
     private var isImage: Bool {
@@ -40,7 +41,8 @@ struct MergeConflictBinaryView: View {
             ImageStageView(
                 worktreePath: worktreePath,
                 relativePath: conflictedFile.relativePath,
-                stage: stage
+                stage: stage,
+                loadGeneration: loadGeneration
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -71,6 +73,7 @@ private struct ImageStageView: NSViewRepresentable {
     let worktreePath: URL
     let relativePath: String
     let stage: Int
+    let loadGeneration: Int
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -91,7 +94,7 @@ private struct ImageStageView: NSViewRepresentable {
     }
 
     private func loadIfNeeded(into view: NSImageView, context: Context) {
-        let key = "\(worktreePath.path)\n\(relativePath)\n\(stage)"
+        let key = "\(worktreePath.path)\n\(relativePath)\n\(stage)\n\(loadGeneration)"
         guard context.coordinator.lastKey != key else { return }
         context.coordinator.lastKey = key
         Task {
