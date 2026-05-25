@@ -354,7 +354,13 @@ private struct HunkClassification {
         var blockStartLineIdx = 0
         for (idx, range) in lineRanges.enumerated() {
             let line = nsString.substring(with: range)
-            if line.hasPrefix("<<<<<<<") {
+            // Match `ConflictMarkerParser` exactly: begin/base/end have
+            // a trailing space + label; mid is the literal `=======`
+            // (so a content line like "======= Section" doesn't get
+            // misclassified as a separator). Strip the trailing newline
+            // for the mid exact match because `line` includes it.
+            let trimmed = line.hasSuffix("\n") ? String(line.dropLast()) : line
+            if line.hasPrefix("<<<<<<< ") {
                 state = .local
                 blockStartLineIdx = idx
                 lines.append(Line(range: range, kind: .markerBegin))
@@ -368,13 +374,13 @@ private struct HunkClassification {
                 markerLineRanges.append(range)
                 continue
             }
-            if line.hasPrefix("=======") {
+            if trimmed == "=======" {
                 state = .remote
                 lines.append(Line(range: range, kind: .markerSeparator))
                 markerLineRanges.append(range)
                 continue
             }
-            if line.hasPrefix(">>>>>>>") {
+            if line.hasPrefix(">>>>>>> ") {
                 lines.append(Line(range: range, kind: .markerEnd))
                 markerLineRanges.append(range)
                 let start = lineRanges[blockStartLineIdx].location
