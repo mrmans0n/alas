@@ -281,17 +281,20 @@ struct MergeConflictTabView: View {
         return model.annotation(for: block)
     }
 
-    /// Per-instance identity for the current conflict block, used as the
-    /// strip's dismissal key. Combines line-range position with the
-    /// content hash so two blocks with identical LOCAL/BASE/REMOTE
-    /// content (the model's content-only `annotationKey` would alias
-    /// them) still dismiss independently.
+    /// Identity for the current conflict block, used as the strip's
+    /// dismissal key. Matches the content-hash key the model uses for
+    /// caching annotations (`MergeConflictTabModel.annotationKey(for:)`)
+    /// so dismissals survive positional shifts — edits above the block,
+    /// resolving earlier conflicts — the same way the cached annotation
+    /// itself does. Two blocks with byte-identical LOCAL/BASE/REMOTE
+    /// in the same file share both the cached explanation and the
+    /// dismissal state, which is consistent: the annotation cache is
+    /// already aliased, so the dismissal aliases too.
     private var currentBlockKey: String? {
         guard let ord = model.currentConflictIndex,
               let block = currentConflictBlock(at: ord)
         else { return nil }
-        let range = block.lineRangeInMerged
-        return "\(range.lowerBound)-\(range.upperBound):\(MergeConflictTabModel.annotationKey(for: block))"
+        return MergeConflictTabModel.annotationKey(for: block)
     }
 
     /// Returns the `ConflictBlock` for the Nth unresolved conflict, or nil.
