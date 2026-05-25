@@ -614,7 +614,7 @@ final class MergeConflictTabModel {
             let localSlice = Array(lines[0 ..< min(localTake, lines.count)])
             let baseSliceStart = min(localTake, lines.count)
             let baseSliceEnd = min(baseSliceStart + baseTake, lines.count)
-            let _ = Array(lines[baseSliceStart ..< baseSliceEnd]) // BASE unchanged
+            let baseSlice = Array(lines[baseSliceStart ..< baseSliceEnd])
             let remoteSliceStart = baseSliceEnd
             let remoteSliceEnd = min(remoteSliceStart + remoteTake, lines.count)
             let remoteSlice = Array(lines[remoteSliceStart ..< remoteSliceEnd])
@@ -622,9 +622,22 @@ final class MergeConflictTabModel {
                 + (block.local.hasSuffix("\n") || localTake < localCount || trailingNewline ? "\n" : "")
             let remoteText = remoteSlice.isEmpty ? "" : remoteSlice.joined(separator: "\n")
                 + (block.remote.hasSuffix("\n") || remoteTake < remoteCount || trailingNewline ? "\n" : "")
+            // BASE is only persisted when showBase is on; otherwise the
+            // user can't see/edit it and we keep the original. When
+            // visible and possibly edited, rebuild from the slice so
+            // BASE edits round-trip instead of being silently dropped.
+            let newBase: String?
+            if showBase {
+                let originalBaseHadNewline = block.base?.hasSuffix("\n") ?? true
+                let baseJoined = baseSlice.joined(separator: "\n")
+                newBase = baseSlice.isEmpty ? "" : baseJoined
+                    + (originalBaseHadNewline || baseTake < baseCount || trailingNewline ? "\n" : "")
+            } else {
+                newBase = block.base
+            }
             regions[index] = .conflict(ConflictBlock(
                 local: localText,
-                base: block.base,
+                base: newBase,
                 remote: remoteText,
                 localLabel: block.localLabel,
                 remoteLabel: block.remoteLabel,
@@ -693,11 +706,21 @@ final class MergeConflictTabModel {
                 let localJoined = localSlice.joined(separator: "\n")
                 let localText = localJoined.isEmpty ? "" : localJoined
                     + (block.local.hasSuffix("\n") || localTake < localCount ? "\n" : "")
-                // BASE slice (skipped — block.base is preserved as-is;
-                // editing the BASE hunk isn't supported in v1 because
-                // BASE is the common ancestor, not a side to merge).
+                // BASE slice — persisted when showBase is on so user
+                // edits inside the visible BASE rows aren't silently
+                // dropped. Otherwise the original block.base passes
+                // through unchanged.
                 let baseEnd = min(localEnd + baseTake, newLines.count)
-                _ = Array(newLines[localEnd ..< baseEnd])
+                let baseSlice = Array(newLines[localEnd ..< baseEnd])
+                let newBase: String?
+                if showBase {
+                    let originalBaseHadNewline = block.base?.hasSuffix("\n") ?? true
+                    let baseJoined = baseSlice.joined(separator: "\n")
+                    newBase = baseSlice.isEmpty ? "" : baseJoined
+                        + (originalBaseHadNewline || baseTake < baseCount ? "\n" : "")
+                } else {
+                    newBase = block.base
+                }
                 // REMOTE slice
                 let remoteEnd = min(baseEnd + remoteTake, newLines.count)
                 let remoteSlice = Array(newLines[baseEnd ..< remoteEnd])
@@ -706,7 +729,7 @@ final class MergeConflictTabModel {
                     + (block.remote.hasSuffix("\n") || remoteTake < remoteCount ? "\n" : "")
                 regions[regionIndex] = .conflict(ConflictBlock(
                     local: localText,
-                    base: block.base, // unchanged — BASE is immutable in the UI
+                    base: newBase,
                     remote: remoteText,
                     localLabel: block.localLabel,
                     remoteLabel: block.remoteLabel,

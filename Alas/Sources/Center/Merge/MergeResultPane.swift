@@ -66,9 +66,15 @@ struct MergeResultPane: NSViewRepresentable {
         guard let textView = scroll.documentView as? NSTextView else { return }
         context.coordinator.onEditFullText = onEditFullText
         context.coordinator.rows = rows
-        textView.textStorage?.setAttributedString(
-            buildAttributedString(theme: theme)
-        )
+        // Only rebuild the attributed string when the visible content
+        // actually changed. SwiftUI re-runs updateNSView on every
+        // observable change (including scroll position), and a full
+        // setAttributedString resets the cursor + scales O(buffer
+        // size), which causes visible jank on large files.
+        let newAttr = buildAttributedString(theme: theme)
+        if textView.textStorage?.string != newAttr.string {
+            textView.textStorage?.setAttributedString(newAttr)
+        }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         coordinator.rowHeight = lineHeight()
     }
