@@ -82,19 +82,24 @@ extension GitService {
             try await runGit(["reset", "--hard", anchor], cwd: worktreePath)
 
             var shaMap: [String: String] = [:]
-            let author = try await gitOutput(["show", "-s", "--format=%an <%ae>", targetSha], cwd: worktreePath)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            try await runGit(["cherry-pick", "--no-commit", targetSha], cwd: worktreePath)
-            var commitArgs = ["commit", "--author", author, "-m", subject]
+            let author = try await authorMetadata(for: targetSha, cwd: worktreePath)
+            let targetIsEmpty = try await isEmptyCommit(targetSha, cwd: worktreePath)
+            if !targetIsEmpty {
+                try await runGit(["cherry-pick", "--no-commit", targetSha], cwd: worktreePath)
+            }
+            var commitArgs = ["commit", "--author", author.ident, "-m", subject]
+            if targetIsEmpty {
+                commitArgs.append("--allow-empty")
+            }
             if !body.isEmpty {
                 commitArgs += ["-m", body]
             }
-            try await runGit(commitArgs, cwd: worktreePath)
+            try await runGit(commitArgs, cwd: worktreePath, env: ["GIT_AUTHOR_DATE": author.date])
             let currentSha = try await headSha(cwd: worktreePath)
             shaMap[targetSha] = currentSha
 
             for sha in replayRange.dropFirst() {
-                try await runGit(["cherry-pick", sha], cwd: worktreePath)
+                try await runGit(["cherry-pick", "--allow-empty", sha], cwd: worktreePath)
                 shaMap[sha] = try await headSha(cwd: worktreePath)
             }
 
@@ -113,6 +118,11 @@ extension GitService {
 }
 
 private extension GitService {
+    struct AuthorMetadata {
+        let ident: String
+        let date: String
+    }
+
     func validateEditableState(worktreePath: URL) async throws {
         let status = try await gitOutput(["status", "--porcelain=v1"], cwd: worktreePath)
         if !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -145,6 +155,32 @@ private extension GitService {
         try await parents(of: sha, cwd: cwd).first
     }
 
+    func authorMetadata(for sha: String, cwd: URL) async throws -> AuthorMetadata {
+        let output = try await gitOutput(["show", "-s", "--format=%an <%ae>%x1f%aI", sha], cwd: cwd)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = output.split(separator: "\u{1f}", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else {
+            throw CommitEditError.gitFailed("Could not read commit author metadata.")
+        }
+        return AuthorMetadata(ident: parts[0], date: parts[1])
+    }
+
+    func isEmptyCommit(_ sha: String, cwd: URL) async throws -> Bool {
+        if let parent = try await firstParent(of: sha, cwd: cwd) {
+            let result = try await Process.git(["diff-tree", "--quiet", "--exit-code", parent, sha], cwd: cwd)
+            guard result.exitCode == 0 || result.exitCode == 1 else {
+                throw CommitEditError.gitFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            return result.exitCode == 0
+        }
+
+        let result = try await Process.git(["diff-tree", "--quiet", "--exit-code", "--root", sha], cwd: cwd)
+        guard result.exitCode == 0 || result.exitCode == 1 else {
+            throw CommitEditError.gitFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return result.exitCode == 0
+    }
+
     func headSha(cwd: URL) async throws -> String {
         try await gitOutput(["rev-parse", "HEAD"], cwd: cwd)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -156,7 +192,15 @@ private extension GitService {
     }
 
     func gitOutput(_ args: [String], cwd: URL) async throws -> String {
-        let result = try await Process.git(args, cwd: cwd)
+        try await gitOutput(args, cwd: cwd, env: [:])
+    }
+
+    func gitOutput(_ args: [String], cwd: URL, env extraEnv: [String: String]) async throws -> String {
+        var env = Process.gitEnv()
+        for (key, value) in extraEnv {
+            env[key] = value
+        }
+        let result = try await Process.run("/usr/bin/env", args: ["git"] + args, cwd: cwd, env: env)
         guard result.exitCode == 0 else {
             throw CommitEditError.gitFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
@@ -164,6 +208,10 @@ private extension GitService {
     }
 
     func runGit(_ args: [String], cwd: URL) async throws {
-        _ = try await gitOutput(args, cwd: cwd)
+        try await runGit(args, cwd: cwd, env: [:])
+    }
+
+    func runGit(_ args: [String], cwd: URL, env: [String: String]) async throws {
+        _ = try await gitOutput(args, cwd: cwd, env: env)
     }
 }

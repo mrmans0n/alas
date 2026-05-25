@@ -34,6 +34,11 @@ struct GitServiceCommitEditingTests {
         return result.stdout.split(separator: "\n").map(String.init)
     }
 
+    private func authorDate(_ repo: URL, _ sha: String) async throws -> String {
+        let result = try await Process.git(["show", "-s", "--format=%aI", sha], cwd: repo)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     @Test func rewordAboveFoldCommitPreservesDescendant() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -87,5 +92,69 @@ struct GitServiceCommitEditingTests {
                 action: .message(subject: "new", body: "")
             )
         }
+    }
+
+    @Test func rewordPreservesAuthorDate() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        try write(repo, "dated.txt", "dated\n")
+        _ = try await Process.git(["add", "--", "dated.txt"], cwd: repo)
+        _ = try await Process.git([
+            "commit", "-q", "--date", "2001-02-03T04:05:06+00:00", "-m", "dated"
+        ], cwd: repo)
+        let target = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let originalAuthorDate = try await authorDate(repo, target)
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "new dated", body: "")
+        )
+
+        #expect(try await authorDate(repo, result.currentSha) == originalAuthorDate)
+    }
+
+    @Test func rewordEmptyTargetCommitPreservesDescendantOrder() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "empty target"], cwd: repo)
+        let target = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let descendant = try await commit(repo, subject: "descendant", files: ["d.txt": "d\n"])
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "new empty", body: "")
+        )
+
+        #expect(result.shaMap[target] == result.currentSha)
+        #expect(result.shaMap[descendant] != nil)
+        #expect(try await subjects(repo) == ["base", "new empty", "descendant"])
+    }
+
+    @Test func rewordTargetWithEmptyDescendantReplaysEmptyDescendant() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commit(repo, subject: "target", files: ["target.txt": "target\n"])
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "empty descendant"], cwd: repo)
+        let descendant = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .message(subject: "new target", body: "")
+        )
+
+        #expect(result.shaMap[descendant] != nil)
+        #expect(try await subjects(repo) == ["base", "new target", "empty descendant"])
     }
 }
