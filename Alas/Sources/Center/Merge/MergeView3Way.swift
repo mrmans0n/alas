@@ -17,13 +17,14 @@ struct MergeView3Way: View {
     let fileExtension: String
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    let showBase: Bool
     let onJumpToConflict: (Int) -> Void
 
     @State private var coordinator = MergeScrollCoordinator()
     @Environment(\.theme) var theme
 
     private var layout: MergeRegionVisualLayout.Layout {
-        MergeRegionVisualLayout.compute(regions: model.regions)
+        MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
     }
 
     var body: some View {
@@ -57,8 +58,8 @@ struct MergeView3Way: View {
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
                 coordinator: coordinator,
-                onEditRow: { row, content in
-                    model.setRowContent(at: row, to: content)
+                onEditFullText: { newText in
+                    model.applyEditedFullText(newText)
                 }
             )
             .frame(maxWidth: .infinity)

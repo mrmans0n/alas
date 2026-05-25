@@ -634,6 +634,54 @@ struct MergeConflictTabModelTests {
         #expect(model.conflictCount == 1) // structure preserved
     }
 
+    @Test func setRowContentPreservesMarkerStructureForFutureAccepts() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        #expect(model.conflictCount == 1)
+        // Edit the LOCAL hunk's first row inline.
+        model.setRowContent(at: 0, to: "tweaked main line")
+        // After the edit, resultText should still contain the marker
+        // structure so a subsequent acceptLocal can find the block.
+        #expect(model.resultText.contains("<<<<<<<"))
+        #expect(model.resultText.contains("======="))
+        #expect(model.resultText.contains(">>>>>>>"))
+        // And accepting LOCAL must actually resolve the conflict.
+        let block = try #require(model.allConflictBlocks().first)
+        model.acceptLocal(for: block)
+        #expect(model.conflictCount == 0)
+        #expect(model.flatTextForWriting().contains("tweaked main line"))
+    }
+
+    @Test func applyEditedFullTextHandlesDeletion() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        let originalBlock = try #require(model.allConflictBlocks().first)
+        // Conflict: local "main line\n", remote "feature line\n".
+        // RESULT pane shows: ["main line", "feature line"] = 2 lines.
+        // Simulate user deleting the remote line.
+        model.applyEditedFullText("main line\n")
+        let block = try #require(model.allConflictBlocks().first)
+        #expect(block.local.contains("main line"))
+        #expect(block.remote == "")
+        _ = originalBlock
+    }
+
     @Test func setRowContentRoutesToRemoteWhenLocalHunkIsEmpty() async throws {
         // Regression test: when LOCAL is empty (e.g., addedByThem),
         // visual row 0 of the conflict belongs to REMOTE, not LOCAL.

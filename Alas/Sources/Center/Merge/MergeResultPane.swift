@@ -18,10 +18,11 @@ struct MergeResultPane: NSViewRepresentable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let coordinator: MergeScrollCoordinator
-    /// Pushed by the view when the user types. Receives `(rowIndex,
-    /// newRowContent)` and is responsible for translating back to a
-    /// region edit on the model.
-    let onEditRow: (Int, String) -> Void
+    /// Pushed by the view when the user types. Receives the full new
+    /// buffer text so the model can reconcile inserts AND deletes
+    /// correctly. Replaces the old per-row `onEditRow` callback which
+    /// silently dropped deletions (only iterating `lines.count` rows).
+    let onEditFullText: (String) -> Void
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -50,14 +51,14 @@ struct MergeResultPane: NSViewRepresentable {
         scroll.documentView = textView
         context.coordinator.textView = textView
         context.coordinator.observeScroll(scroll, into: coordinator)
-        context.coordinator.onEditRow = onEditRow
+        context.coordinator.onEditFullText = onEditFullText
         context.coordinator.rows = rows
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        context.coordinator.onEditRow = onEditRow
+        context.coordinator.onEditFullText = onEditFullText
         context.coordinator.rows = rows
         textView.textStorage?.setAttributedString(
             buildAttributedString(theme: theme)
@@ -71,7 +72,7 @@ struct MergeResultPane: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         weak var textView: NSTextView?
         var rows: [MergeRegionVisualLayout.VisualRow] = []
-        var onEditRow: ((Int, String) -> Void)?
+        var onEditFullText: ((String) -> Void)?
         private var coordinator: MergeScrollCoordinator?
         private var token: NSObjectProtocol?
 
@@ -97,25 +98,14 @@ struct MergeResultPane: NSViewRepresentable {
             }
         }
 
-        /// Line-by-line content comparison against `rows`. Emits an
-        /// `onEditRow(i, newContent)` for every visible row whose
-        /// content differs from `rows[i].content`. This does NOT track
-        /// structural changes (inserts, deletes, reorders) — a single
-        /// inserted line cascades into per-row "edits" for every row
-        /// below the insertion point because the row alignment shifts.
-        /// Callers handle this by rebuilding from a snapshot rather
-        /// than treating individual `onEditRow` calls as authoritative.
-        /// Task 11's setRowContent on the model is designed against
-        /// this contract.
+        /// Called by AppKit when the user types. Emits the full new
+        /// buffer text — the model is responsible for diffing back to
+        /// `regions`. This handles both inserts and deletes correctly,
+        /// unlike the per-row diff approach which silently dropped
+        /// deletions (only iterating `lines.count` rows).
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            let lines = (tv.string + "\n").components(separatedBy: "\n").dropLast()
-            for (i, line) in lines.enumerated() {
-                guard i < rows.count else { break }
-                if rows[i].content != line {
-                    onEditRow?(i, line)
-                }
-            }
+            onEditFullText?(tv.string)
         }
 
         deinit {
@@ -178,9 +168,28 @@ struct MergeResultPane: NSViewRepresentable {
                         line.addAttribute(.backgroundColor, value: wordTint, range: r)
                     }
                 }
+            } else if conflictRanges.first(where: { $0.baseRows.contains(i) }) != nil {
+                let baseTint = NSColor(theme.color("fg-dim")).withAlphaComponent(0.10)
+                line.addAttribute(.backgroundColor, value: baseTint,
+                                  range: NSRange(location: 0, length: line.length))
+                line.addAttribute(.foregroundColor, value: NSColor(theme.color("fg-dim")),
+                                  range: NSRange(location: 0, length: line.length))
+                if let italicFont = (baseAttrs[.font] as? NSFont)?.italicVariant() {
+                    line.addAttribute(.font, value: italicFont,
+                                      range: NSRange(location: 0, length: line.length))
+                }
             }
             result.append(line)
         }
         return result
+    }
+}
+
+private extension NSFont {
+    func italicVariant() -> NSFont {
+        let descriptor = fontDescriptor.withSymbolicTraits(
+            fontDescriptor.symbolicTraits.union(.italic)
+        )
+        return NSFont(descriptor: descriptor, size: pointSize) ?? self
     }
 }

@@ -362,15 +362,108 @@ final class MergeConflictTabModel {
         }
     }
 
-    /// Re-derives `resultText` from the current `regions` so the
-    /// on-disk-style buffer reflects the in-memory edits. Used by
-    /// `setRowContent` after a region mutation. The serialized form
-    /// matches `flatTextForWriting()` (no conflict markers), which
-    /// means after this call `regions` may not re-parse to the same
-    /// shape — `reparse()` should NOT be called here, or you'll lose
-    /// the conflict structure.
+    /// Reconciles user edits in the RESULT pane back to the model's
+    /// regions. The pane shows a derived "marker-free stacked-hunk"
+    /// view: each conflict appears as LOCAL hunk rows followed by
+    /// REMOTE hunk rows; non-conflict content shows as-is. We walk
+    /// the existing regions in parallel with the new lines, slicing
+    /// the new lines into per-region buckets by line count, then
+    /// reassign each region's content from its bucket.
+    ///
+    /// After mutation, `resultText` is rebuilt in MARKER form (via
+    /// `serializeRegionsWithMarkers`) so subsequent
+    /// `acceptLocal()` / `acceptRemote()` calls still find the
+    /// blocks via line-range parsing.
+    func applyEditedFullText(_ newText: String) {
+        let newLines = Self.splitPreservingTrailingEmpty(newText)
+        var cursor = 0
+        for (regionIndex, region) in regions.enumerated() {
+            switch region {
+            case .text(let text):
+                let originalCount = Self.lineCount(of: text)
+                let safeCursor = min(cursor, newLines.count)
+                let take = min(originalCount, max(0, newLines.count - safeCursor))
+                let slice = Array(newLines[safeCursor ..< safeCursor + take])
+                let joined = slice.joined(separator: "\n")
+                let trailingNewline = text.hasSuffix("\n") || take < originalCount
+                let rebuilt = joined.isEmpty ? "" : joined + (trailingNewline ? "\n" : "")
+                regions[regionIndex] = .text(rebuilt)
+                cursor += originalCount
+            case .conflict(let block):
+                let localCount = Self.lineCount(of: block.local)
+                let remoteCount = Self.lineCount(of: block.remote)
+                let safeCursorLocal = min(cursor, newLines.count)
+                let localTake = min(localCount, max(0, newLines.count - safeCursorLocal))
+                let localSlice = Array(newLines[safeCursorLocal ..< safeCursorLocal + localTake])
+                let localJoined = localSlice.joined(separator: "\n")
+                let localText = localJoined.isEmpty ? "" : localJoined
+                    + (block.local.hasSuffix("\n") || localTake < localCount ? "\n" : "")
+                cursor += localCount
+                let safeCursorRemote = min(cursor, newLines.count)
+                let remoteTake = min(remoteCount, max(0, newLines.count - safeCursorRemote))
+                let remoteSlice = Array(newLines[safeCursorRemote ..< safeCursorRemote + remoteTake])
+                let remoteJoined = remoteSlice.joined(separator: "\n")
+                let remoteText = remoteJoined.isEmpty ? "" : remoteJoined
+                    + (block.remote.hasSuffix("\n") || remoteTake < remoteCount ? "\n" : "")
+                cursor += remoteCount
+                regions[regionIndex] = .conflict(ConflictBlock(
+                    local: localText,
+                    base: block.base,
+                    remote: remoteText,
+                    localLabel: block.localLabel,
+                    remoteLabel: block.remoteLabel,
+                    lineRangeInMerged: block.lineRangeInMerged
+                ))
+            }
+        }
+        rebuildResultText()
+    }
+
+    /// Same semantics as `MergeRegionVisualLayout.splitPreservingTrailingEmpty`,
+    /// duplicated here to avoid making the layout's helper public.
+    private static func splitPreservingTrailingEmpty(_ s: String) -> [String] {
+        guard !s.isEmpty else { return [] }
+        var parts = s.components(separatedBy: "\n")
+        if parts.last == "" { parts.removeLast() }
+        return parts
+    }
+
+    /// Re-emits `regions` back into marker form for in-memory storage
+    /// in `resultText`. Used by `setRowContent` so user edits don't
+    /// destroy the marker structure the accept methods rely on for
+    /// line-range lookup. Distinct from `flatTextForWriting()`, which
+    /// strips markers for the on-disk write at `markFileResolved`.
+    private func serializeRegionsWithMarkers() -> String {
+        var out = ""
+        for region in regions {
+            switch region {
+            case .text(let t):
+                out.append(t)
+            case .conflict(let block):
+                out.append("<<<<<<< \(block.localLabel)\n")
+                out.append(block.local)
+                if !block.local.hasSuffix("\n") { out.append("\n") }
+                if let base = block.base, !base.isEmpty {
+                    out.append("||||||| ancestor\n")
+                    out.append(base)
+                    if !base.hasSuffix("\n") { out.append("\n") }
+                }
+                out.append("=======\n")
+                out.append(block.remote)
+                if !block.remote.hasSuffix("\n") { out.append("\n") }
+                out.append(">>>>>>> \(block.remoteLabel)\n")
+            }
+        }
+        return out
+    }
+
+    /// Re-derives `resultText` from the current `regions` preserving
+    /// marker structure so subsequent `acceptLocal()` / `acceptRemote()`
+    /// calls can still find conflict blocks via line-range parsing.
+    /// `reparse()` must NOT be called here — it would clobber `regions`
+    /// with a fresh parse and lose any mid-edit state.
     private func rebuildResultText() {
-        resultText = flatTextForWriting()
+        resultText = serializeRegionsWithMarkers()
     }
 
     /// Derives the final on-disk file content from the current regions

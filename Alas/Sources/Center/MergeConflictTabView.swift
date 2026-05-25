@@ -173,6 +173,7 @@ struct MergeConflictTabView: View {
             fileExtension: fileExtension,
             codeFontFamily: state.config.code.fontFamily,
             codeFontSize: CGFloat(state.config.code.fontSize),
+            showBase: model.hasBase && tabState.showBase,
             onJumpToConflict: { idx in
                 while (model.currentConflictIndex ?? 0) < idx { model.nextConflict() }
                 while (model.currentConflictIndex ?? 0) > idx { model.previousConflict() }
