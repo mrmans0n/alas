@@ -284,6 +284,11 @@ struct RootView: View {
     }
 
     private func openOrFocusCommitEditor(worktree: Worktree, commit: CommitInfo, baseRef: String) {
+        if let existing = state.tabs.commitEditorTab(worktreeId: worktree.id, currentSha: commit.sha) {
+            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            return
+        }
+
         let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
         let tab = state.tabs.openCommitEditor(
             worktreeId: worktree.id,

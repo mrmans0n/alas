@@ -466,6 +466,31 @@ struct TabsManagerTests {
         #expect(state.currentSha == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         #expect(state.title == "bbbbbbb updated")
     }
+
+    @Test func findsCommitEditorByCurrentShaAfterRewrite() {
+        let worktreeId = "tabs-manager-commit-editor-current-sha"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let editor = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb updated"
+        )
+        _ = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "cccccccccccccccccccccccccccccccccccccccc",
+            currentSha: "cccccccccccccccccccccccccccccccccccccccc",
+            title: "ccccccc other"
+        )
+
+        let found = mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+        #expect(found?.id == editor.id)
+    }
 }
 
 // MARK: - Pane tree mutations

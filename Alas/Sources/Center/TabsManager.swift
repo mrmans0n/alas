@@ -56,6 +56,15 @@ final class TabsManager {
         byWorktree[id]?.tabs ?? []
     }
 
+    func commitEditorTab(worktreeId: String, currentSha: String) -> Tab? {
+        tabs(forWorktree: worktreeId).first { tab in
+            if case .commitEditor(let state) = tab {
+                return state.currentSha == currentSha
+            }
+            return false
+        }
+    }
+
     func activeTabId(forWorktree id: String) -> TabID? {
         byWorktree[id]?.activeTabId
     }
