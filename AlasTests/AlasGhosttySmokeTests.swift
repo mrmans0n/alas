@@ -8,6 +8,7 @@ import Foundation
 /// from CI via `-skip-testing AlasTests/AlasGhosttySmokeTests` in
 /// `.github/workflows/build.yml`. Manual smoke (launch Alas.app) is the
 /// real coverage for these code paths.
+@Suite(.disabled("Ghostty smoke coverage is manual; the runtime is unstable inside the hosted unit-test runner."))
 @MainActor
 struct AlasGhosttySmokeTests {
     @Test func canCreateConfigFromGeneratedFile() throws {

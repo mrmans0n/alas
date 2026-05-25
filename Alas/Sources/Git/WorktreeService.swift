@@ -205,7 +205,9 @@ struct WorktreeService {
 
     private static func looksLikeMissingLFS(_ stderr: String) -> Bool {
         let lower = stderr.lowercased()
-        return (lower.contains("command not found") || lower.contains("not found"))
+        return (lower.contains("command not found")
+                || lower.contains("not found")
+                || lower.contains("no such file or directory"))
             && (lower.contains("git-lfs") || lower.contains("filter-process"))
     }
 

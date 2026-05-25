@@ -106,3 +106,20 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Alas.app/Contents/MacOS/Alas
         BUNDLE_LOADER: $(TEST_HOST)
+
+schemes:
+  Alas:
+    build:
+      targets:
+        Alas: all
+        AlasTests: [test]
+    run:
+      config: Debug
+      executable: Alas
+    test:
+      config: Debug
+      commandLineArguments:
+        "--no-parallel": true
+      targets:
+        - name: AlasTests
+          parallelizable: false

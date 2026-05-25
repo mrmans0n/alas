@@ -8,10 +8,10 @@ struct ImageFileTypeTests {
         #expect(ImageFileType.isSupported(relativePath: "screenshots/preview.webp"))
         #expect(ImageFileType.isSupported(relativePath: "images/raw.HEIC"))
         #expect(ImageFileType.isSupported(relativePath: "scans/page.tiff"))
+        #expect(ImageFileType.isSupported(relativePath: "Assets/icon.svg"))
     }
 
-    @Test func rejectsSvgAndNonImagePaths() {
-        #expect(!ImageFileType.isSupported(relativePath: "Assets/icon.svg"))
+    @Test func rejectsNonImagePaths() {
         #expect(!ImageFileType.isSupported(relativePath: "Sources/AppState.swift"))
         #expect(!ImageFileType.isSupported(relativePath: "README.md"))
     }

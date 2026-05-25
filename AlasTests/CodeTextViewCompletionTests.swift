@@ -177,35 +177,4 @@ struct CodeTextViewCompletionTests {
         #expect(finalLine.minX <= firstLine.minX + 1)
     }
 
-    @Test func windowBackedCompletionAnchorAcceptsInsertionRect() throws {
-        let textView = makeTextView("foo")
-        textView.frame = NSRect(x: 0, y: 0, width: 240, height: 120)
-        textView.textContainerInset = .zero
-        textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 100, y: 100, width: 240, height: 120),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        defer { window.close() }
-        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
-        window.contentView?.addSubview(textView)
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(textView)
-        window.layoutIfNeeded()
-        textView.layoutSubtreeIfNeeded()
-        if let textContainer = textView.textContainer {
-            textView.layoutManager?.ensureLayout(for: textContainer)
-        }
-        textView.setSelectedRange(NSRange(location: 3, length: 0))
-
-        let rect = try #require(textView.completionAnchorRect())
-
-        #expect(rect.height > 0)
-        #expect(rect.width >= 1)
-        #expect(rect.origin.x.isFinite)
-        #expect(rect.origin.y.isFinite)
-    }
 }

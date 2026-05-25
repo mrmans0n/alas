@@ -3,6 +3,14 @@ import AppKit
 @testable import Alas
 
 struct CommitRowTests {
+    @MainActor
+    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async throws {
+        for _ in 0..<100 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
     @Test func copiesFullCommitSHA() {
         let commit = CommitInfo(
             sha: "deadbeef1234567890abcdef1234567890abcdef",
@@ -60,21 +68,21 @@ struct CommitRowTests {
         feedback.show("Copied SHA")
 
         #expect(feedback.message == "Copied SHA")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await waitUntil { feedback.message == nil }
         #expect(feedback.message == nil)
     }
 
     @MainActor
     @Test func copyFeedbackRefreshKeepsLatestMessageVisible() async throws {
-        let feedback = CopyFeedbackState(displayNanoseconds: 50_000_000)
+        let feedback = CopyFeedbackState(displayNanoseconds: 2_000_000_000)
 
         feedback.show("Copied SHA")
-        try await Task.sleep(nanoseconds: 20_000_000)
+        try await Task.sleep(for: .milliseconds(1_100))
         feedback.show("Copied title")
-        try await Task.sleep(nanoseconds: 35_000_000)
+        try await Task.sleep(for: .milliseconds(1_100))
 
         #expect(feedback.message == "Copied title")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await waitUntil { feedback.message == nil }
         #expect(feedback.message == nil)
     }
 }

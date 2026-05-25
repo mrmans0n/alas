@@ -79,6 +79,13 @@ struct RightPaneStateBaseBranchTests {
         return (worktree, root)
     }
 
+    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async throws {
+        for _ in 0..<100 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
     @Test func selectBaseBranchAppendsToRecent() async throws {
         let tmp = try await createTestRepoWithBranches()
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -110,7 +117,7 @@ struct RightPaneStateBaseBranchTests {
         let state = RightPaneState(worktree: wt, baseBranch: "main")
         await state.refresh()
         state.selectBaseBranch("trunk")
-        try await Task.sleep(nanoseconds: 1_000_000_000)
+        try await waitUntil { !state.loading }
         #expect(!state.loading)
     }
 

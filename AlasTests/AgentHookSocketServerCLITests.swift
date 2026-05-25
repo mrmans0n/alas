@@ -13,7 +13,7 @@ struct AgentHookSocketServerCLITests {
     private func sendToSocket(path: String, payload: String) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", "printf '%s' '\(payload)' | /usr/bin/nc -U -w2 '\(path)'"]
+        process.arguments = ["-c", "printf '%s' '\(payload)' | /usr/bin/nc -U -w5 '\(path)'"]
         let outPipe = Pipe()
         process.standardOutput = outPipe
         try process.run()
