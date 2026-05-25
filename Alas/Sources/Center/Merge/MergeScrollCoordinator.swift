@@ -1,0 +1,67 @@
+import Foundation
+import Observation
+
+/// Single source of truth for synchronized scrolling across the three
+/// merge panes. Holds a logical row index that all three panes derive
+/// their actual scroll Y from. When one pane scrolls (user touched its
+/// trackpad), it pushes the new Y; the coordinator converts to a
+/// logical row and broadcasts the corresponding Y to the others. A
+/// reentry counter prevents the broadcast from being re-interpreted as
+/// a fresh scroll and causing a feedback loop.
+@MainActor
+@Observable
+final class MergeScrollCoordinator {
+    enum Source: Equatable {
+        case local, result, remote
+    }
+
+    /// Per-pane line height. All three panes use the same monospaced
+    /// font at the same size, so a single number is enough. Set by the
+    /// view once the font is known; defaults to 16pt.
+    var rowHeight: CGFloat = 16
+
+    private(set) var logicalRow: Int = 0
+
+    /// Per-target scroll handlers. Each pane (LOCAL, RESULT, REMOTE)
+    /// registers its own handler so the three subscribers don't stomp
+    /// each other — a single-slot closure would have meant whichever
+    /// pane registered last wins. `applyPaneY` dispatches to the
+    /// handler for every target OTHER than the source of the scroll.
+    var onSyncLocal: ((Int) -> Void)?
+    var onSyncResult: ((Int) -> Void)?
+    var onSyncRemote: ((Int) -> Void)?
+
+    /// Programmatic setter. Doesn't broadcast — the caller is
+    /// presumed to be initialization or a non-scroll trigger.
+    func setLogicalRow(_ row: Int) {
+        logicalRow = max(0, row)
+    }
+
+    /// Returns the Y offset (points) corresponding to the current
+    /// logical row, suitable for an `NSClipView.scroll(to:)` call.
+    func paneY() -> CGFloat {
+        CGFloat(logicalRow) * rowHeight
+    }
+
+    /// Called by a pane's scroll observer when the user scrolls it.
+    /// Updates `logicalRow` and broadcasts to the OTHER two panes via
+    /// `onSync`. The source pane is excluded from the broadcast so it
+    /// doesn't bounce its own value back.
+    func applyPaneY(_ y: CGFloat, source: Source) {
+        // floor() rather than rounded(): rounded() causes mid-row hysteresis
+        // during slow trackpad scrolls (the value flickers between row N and
+        // N+1 when y is near (N + 0.5) * rowHeight). floor matches the
+        // conventional "the row at top of viewport is the logical row"
+        // invariant.
+        let row = max(0, Int((y / max(rowHeight, 1)).rounded(.down)))
+        guard row != logicalRow else { return }
+        logicalRow = row
+        for target in [Source.local, .result, .remote] where target != source {
+            switch target {
+            case .local:  onSyncLocal?(row)
+            case .result: onSyncResult?(row)
+            case .remote: onSyncRemote?(row)
+            }
+        }
+    }
+}

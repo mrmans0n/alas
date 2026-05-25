@@ -1,0 +1,154 @@
+import Testing
+import Foundation
+@testable import Alas
+
+struct MergeRegionVisualLayoutTests {
+    @Test func noConflictsKeepsRowsAlignedOneToOne() {
+        let regions: [ConflictRegion] = [.text("a\nb\nc\n")]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.local.count == 3)
+        #expect(layout.result.count == 3)
+        #expect(layout.remote.count == 3)
+        #expect(layout.local.allSatisfy { !$0.isPadding })
+        #expect(layout.conflictRanges.isEmpty)
+    }
+
+    @Test func singleConflictPadsLocalBelowAndRemoteAbove() {
+        let block = ConflictBlock(
+            local: "x\ny\n",
+            base: nil,
+            remote: "z\n",
+            localLabel: "HEAD",
+            remoteLabel: "feature",
+            lineRangeInMerged: 1 ... 5
+        )
+        let regions: [ConflictRegion] = [
+            .text("a\n"),
+            .conflict(block),
+            .text("b\n"),
+        ]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.local.count == 5)
+        #expect(layout.result.count == 5)
+        #expect(layout.remote.count == 5)
+        #expect(layout.local[0].isPadding == false)
+        #expect(layout.local[1].isPadding == false)
+        #expect(layout.local[2].isPadding == false)
+        #expect(layout.local[3].isPadding == true)
+        #expect(layout.local[4].isPadding == false)
+        #expect(layout.remote[0].isPadding == false)
+        #expect(layout.remote[1].isPadding == true)
+        #expect(layout.remote[2].isPadding == true)
+        #expect(layout.remote[3].isPadding == false)
+        #expect(layout.remote[4].isPadding == false)
+    }
+
+    @Test func conflictRangesPointAtTheCorrectVisualRows() {
+        let block = ConflictBlock(
+            local: "x\ny\n",
+            base: nil,
+            remote: "z\n",
+            localLabel: "HEAD",
+            remoteLabel: "feature",
+            lineRangeInMerged: 1 ... 5
+        )
+        let regions: [ConflictRegion] = [
+            .text("a\n"),
+            .conflict(block),
+            .text("b\n"),
+        ]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.conflictRanges.count == 1)
+        let r = layout.conflictRanges[0]
+        #expect(r.resultRows == 1 ..< 4)
+        #expect(r.localRows == 1 ..< 3)
+        #expect(r.remoteRows == 3 ..< 4)
+    }
+
+    @Test func sourceLineNumbersTrackRealContentOnly() {
+        let block = ConflictBlock(
+            local: "x\n",
+            base: nil,
+            remote: "y\ny\n",
+            localLabel: "HEAD",
+            remoteLabel: "feature",
+            lineRangeInMerged: 1 ... 4
+        )
+        let regions: [ConflictRegion] = [
+            .text("a\n"),
+            .conflict(block),
+            .text("b\n"),
+        ]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.local[0].sourceLineNumber == 1)
+        #expect(layout.local[1].sourceLineNumber == 2)
+        #expect(layout.local[2].sourceLineNumber == nil)
+        #expect(layout.local[3].sourceLineNumber == nil)
+        #expect(layout.local[4].sourceLineNumber == 3)
+    }
+
+    @Test func emptyLocalHunkProducesEmptyLocalRangeWithoutCrashing() {
+        let block = ConflictBlock(
+            local: "",
+            base: nil,
+            remote: "added\n",
+            localLabel: "HEAD",
+            remoteLabel: "feature",
+            lineRangeInMerged: 1 ... 3
+        )
+        let regions: [ConflictRegion] = [
+            .text("a\n"),
+            .conflict(block),
+            .text("b\n"),
+        ]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.conflictRanges.count == 1)
+        let r = layout.conflictRanges[0]
+        // LOCAL hunk is empty -> empty Range (lowerBound == upperBound)
+        #expect(r.localRows.isEmpty)
+        #expect(r.localRows.lowerBound == 1)
+        // RESULT stacks empty + remote -> 1 row
+        #expect(r.resultRows == 1 ..< 2)
+        #expect(r.remoteRows == 1 ..< 2)
+    }
+
+    @Test func resultPaneTracksItsOwnLineNumbers() {
+        let regions: [ConflictRegion] = [.text("a\nb\n")]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.result[0].sourceLineNumber == 1)
+        #expect(layout.result[1].sourceLineNumber == 2)
+    }
+
+    @Test func showBaseEmitsBaseRowsInResultAndPadsSidePanes() throws {
+        let block = ConflictBlock(
+            local: "L\n",
+            base: "B1\nB2\n",
+            remote: "R\n",
+            localLabel: "HEAD",
+            remoteLabel: "feature",
+            lineRangeInMerged: 1 ... 6
+        )
+        let regions: [ConflictRegion] = [
+            .text("a\n"),
+            .conflict(block),
+            .text("b\n"),
+        ]
+        let layout = MergeRegionVisualLayout.compute(regions: regions, showBase: true)
+        // RESULT: a, L, B1, B2, R, b -> 6 rows.
+        #expect(layout.result.count == 6)
+        #expect(layout.local.count == 6)
+        #expect(layout.remote.count == 6)
+        // LOCAL: a, L, pad, pad, pad, b. REMOTE: a, pad, pad, pad, R, b.
+        #expect(layout.local[1].content == "L")
+        #expect(layout.local[2].isPadding)
+        #expect(layout.local[3].isPadding)
+        #expect(layout.local[4].isPadding)
+        #expect(layout.remote[4].content == "R")
+        // conflictRange.baseRows covers the BASE portion in RESULT.
+        let r = try #require(layout.conflictRanges.first)
+        #expect(r.baseRows == 2 ..< 4)
+        #expect(r.localRows == 1 ..< 2)
+        #expect(r.remoteRows == 4 ..< 5)
+        #expect(r.resultRows == 1 ..< 5)
+    }
+}
