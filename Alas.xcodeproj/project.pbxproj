@@ -128,6 +128,7 @@
 		363F31C705CF7D17162E2CF6 /* CommitTabStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2FC38CF24F011448A3705F9 /* CommitTabStateTests.swift */; };
 		376A08C73011C5CA9E445C4B /* ImageDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D7D83CD76ABF9FED3B29F62 /* ImageDiffView.swift */; };
 		387EF12B6875648E422956F7 /* Highlighted.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66E8A2A1A02BD06F4B782D03 /* Highlighted.swift */; };
+		38DCAD9DA4B9418906700A25 /* MergeView3Way.swift in Sources */ = {isa = PBXBuildFile; fileRef = 695C887147631ACF1FA73C3F /* MergeView3Way.swift */; };
 		38EB2BAA50A7B7B37DDE2A4C /* RightPaneStateBaseBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6713F5A8712C0962BED1EFEA /* RightPaneStateBaseBranchTests.swift */; };
 		395BC74AF07FD44D67DBE579 /* EditorOverlayPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6883364648BF4B9F5DA131F /* EditorOverlayPanel.swift */; };
 		3961F6003185B2FC9DFE7E14 /* ImageDiffDifferenceComputerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9278ED5964A66871F5299F0C /* ImageDiffDifferenceComputerTests.swift */; };
@@ -802,6 +803,7 @@
 		679E62B501E0490F48CCA830 /* EditorFindBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFindBarView.swift; sourceTree = "<group>"; };
 		6821B71680094791995C4975 /* ShortcutsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsPane.swift; sourceTree = "<group>"; };
 		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		695C887147631ACF1FA73C3F /* MergeView3Way.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeView3Way.swift; sourceTree = "<group>"; };
 		69B7FA3997B6A60397B56CD4 /* MergeConflictBinaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictBinaryView.swift; sourceTree = "<group>"; };
 		69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhosttySmokeTests.swift; sourceTree = "<group>"; };
 		69FCCEC91C40EBC896CF9089 /* AppStateOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateOverlayTests.swift; sourceTree = "<group>"; };
@@ -1150,6 +1152,7 @@
 				4DC787CE0F5625F8114C9F6F /* MergeResultPane.swift */,
 				7095EA2868EF619BA4202BDF /* MergeScrollCoordinator.swift */,
 				52C55C85672956E1340B03B1 /* MergeSidePane.swift */,
+				695C887147631ACF1FA73C3F /* MergeView3Way.swift */,
 				7DD6C7F7A898CE1A030F28C3 /* MergeWordDiff.swift */,
 			);
 			path = Merge;
@@ -2462,6 +2465,7 @@
 				8E8ABE6BBA778EEA4170423C /* MergeScrollCoordinator.swift in Sources */,
 				3DB85FF0D4965BF78AD2B010 /* MergeSidePane.swift in Sources */,
 				8824EFBA6EA3673F13244C6D /* MergeSingleResolvePromptEditorWindow.swift in Sources */,
+				38DCAD9DA4B9418906700A25 /* MergeView3Way.swift in Sources */,
 				0890C803E92308809BE12930 /* MergeWordDiff.swift in Sources */,
 				82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */,
 				02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */,
