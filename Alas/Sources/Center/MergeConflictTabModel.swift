@@ -470,10 +470,21 @@ final class MergeConflictTabModel {
         }
         let newRegionUTF16 = Array(newUTF16[newRegionStart ..< newRegionEnd])
         let newRegionString = String(decoding: newRegionUTF16, as: UTF16.self)
-        // NEW: pass the within-region UTF-16 offset of the change so
-        // rewriteRegion can route extras to the correct conflict half.
-        let withinRegionOffset = oldChangedStart - oldRegionStart
-        rewriteRegion(at: regionIdx, fromMarkerlessContent: newRegionString, showBase: showBase, editOffsetInOldRegion: withinRegionOffset)
+        // Pass both START and END of the change in within-region
+        // UTF-16 coordinates. rewriteRegion uses END to decide which
+        // conflict half the change touches (a DELETE that starts at
+        // the LOCAL/REMOTE boundary but extends INTO REMOTE territory
+        // is a REMOTE-side edit; an INSERT at the same start that
+        // doesn't extend past the boundary is a LOCAL-side edit).
+        let withinRegionStart = oldChangedStart - oldRegionStart
+        let withinRegionEnd = oldChangedEnd - oldRegionStart
+        rewriteRegion(
+            at: regionIdx,
+            fromMarkerlessContent: newRegionString,
+            showBase: showBase,
+            editStartInOldRegion: withinRegionStart,
+            editEndInOldRegion: withinRegionEnd
+        )
         return true
     }
 
@@ -568,7 +579,13 @@ final class MergeConflictTabModel {
     /// provided) to determine which side absorbs any added lines.
     /// Without a hint, extras default to LOCAL (matches the slow
     /// path's behavior).
-    private func rewriteRegion(at index: Int, fromMarkerlessContent content: String, showBase: Bool, editOffsetInOldRegion: Int? = nil) {
+    private func rewriteRegion(
+        at index: Int,
+        fromMarkerlessContent content: String,
+        showBase: Bool,
+        editStartInOldRegion: Int? = nil,
+        editEndInOldRegion: Int? = nil
+    ) {
         let lines = Self.splitPreservingTrailingEmpty(content)
         let trailingNewline = content.hasSuffix("\n")
         switch regions[index] {
@@ -580,7 +597,7 @@ final class MergeConflictTabModel {
             let remoteCount = Self.lineCount(of: block.remote)
             let totalOriginal = localCount + baseCount + remoteCount
             let extras = max(0, lines.count - totalOriginal)
-            // Decide which side absorbs extras based on edit offset.
+            // Decide which side absorbs extras based on edit range.
             // The rendered region's UTF-16 layout is: LOCAL bytes ||
             // BASE bytes (if showBase) || REMOTE bytes.
             let localBytes = block.local.isEmpty ? 0
@@ -589,16 +606,23 @@ final class MergeConflictTabModel {
                 guard showBase, let b = block.base, !b.isEmpty else { return 0 }
                 return (b as NSString).length + (b.hasSuffix("\n") ? 0 : 1)
             }()
-            // Default: LOCAL absorbs extras. Override if the edit
-            // offset points into BASE (treat as LOCAL — BASE is
-            // immutable) or REMOTE.
+            // Use END to decide which side the change TOUCHES:
+            // - End extends past LOCAL+BASE → REMOTE (DELETE of REMOTE
+            //   or edit inside REMOTE).
+            // - End extends past LOCAL but stays in BASE → LOCAL
+            //   (BASE is immutable — treat as LOCAL fallback).
+            // - End stays at or before LOCAL → LOCAL.
+            // This handles the boundary case where START is at end of
+            // LOCAL: an INSERT (start==end) keeps end at LOCAL boundary
+            // and stays LOCAL; a DELETE through REMOTE has end > LOCAL
+            // and routes to REMOTE.
             enum ExtrasTarget { case local, remote }
             let extrasTarget: ExtrasTarget = {
-                guard let offset = editOffsetInOldRegion else { return .local }
-                if offset <= localBytes { return .local }
-                if offset <= localBytes + baseBytes { return .local } // BASE immutable
-                return .remote
+                guard let end = editEndInOldRegion else { return .local }
+                if end > localBytes + baseBytes { return .remote }
+                return .local
             }()
+            _ = editStartInOldRegion  // reserved for future use
             let localTake: Int
             let remoteTake: Int
             let baseTake = max(0, min(baseCount, lines.count - localCount - remoteCount))
