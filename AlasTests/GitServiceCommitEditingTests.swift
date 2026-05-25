@@ -66,6 +66,16 @@ struct GitServiceCommitEditingTests {
         #expect(body.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "body text")
     }
 
+    @Test func rawCommitSubjectPreservesConventionalScopeAndBreakingMarker() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let target = try await commit(repo, subject: "feat(ui)!: add button", files: ["button.txt": "button\n"])
+
+        let subject = try await GitService().rawCommitSubject(at: repo, sha: target)
+
+        #expect(subject == "feat(ui)!: add button")
+    }
+
     @Test func rewordRejectsBelowFoldCommit() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

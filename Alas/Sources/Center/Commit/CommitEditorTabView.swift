@@ -133,11 +133,12 @@ struct CommitEditorTabView: View {
             if activeDetailsKey == requestedKey { loadingDetails = false }
         }
         do {
-            let loadedDetails = try await git.commitDetails(at: worktreePath, sha: tabState.currentSha)
+            async let detailsLoad = git.commitDetails(at: worktreePath, sha: tabState.currentSha)
+            async let subjectLoad = git.rawCommitSubject(at: worktreePath, sha: tabState.currentSha)
+            let (loadedDetails, loadedSubject) = try await (detailsLoad, subjectLoad)
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             details = loadedDetails
             selectedPath = loadedDetails.files.first?.path
-            let loadedSubject = editorSubject(from: loadedDetails)
             subject = loadedSubject
             bodyText = loadedDetails.body
             savedSubject = loadedSubject
@@ -173,7 +174,7 @@ struct CommitEditorTabView: View {
         }
     }
 
-    private func editorSubject(from details: CommitDetails) -> String {
+    private func displaySubject(from details: CommitDetails) -> String {
         if let tag = details.info.conventionalTag {
             return "\(tag): \(details.info.subject)"
         }
@@ -181,7 +182,7 @@ struct CommitEditorTabView: View {
     }
 
     private func tabTitle(from details: CommitDetails) -> String {
-        "\(details.info.shortSha) \(editorSubject(from: details))"
+        "\(details.info.shortSha) \(displaySubject(from: details))"
     }
 
     private func subjectLine(from commit: CommitInfo) -> String {
@@ -222,8 +223,9 @@ struct CommitEditorTabView: View {
                     targetSha: targetSha,
                     action: .message(subject: newSubject, body: newBody)
                 )
-                let refreshedDetails = try await git.commitDetails(at: worktreePath, sha: result.currentSha)
-                let refreshedSubject = editorSubject(from: refreshedDetails)
+                async let detailsLoad = git.commitDetails(at: worktreePath, sha: result.currentSha)
+                async let subjectLoad = git.rawCommitSubject(at: worktreePath, sha: result.currentSha)
+                let (refreshedDetails, refreshedSubject) = try await (detailsLoad, subjectLoad)
 
                 details = refreshedDetails
                 selectedPath = refreshedDetails.files.first?.path

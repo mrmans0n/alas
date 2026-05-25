@@ -41,6 +41,18 @@ enum CommitEditError: LocalizedError, Equatable {
 }
 
 extension GitService {
+    func rawCommitSubject(at worktreePath: URL, sha: String) async throws -> String {
+        let result = try await Process.git(["show", "-s", "--format=%s", sha], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.rawCommitSubject",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr.isEmpty ? "git show failed" : result.stderr]
+            )
+        }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func editCommit(
         worktreePath: URL,
         baseRef: String,
