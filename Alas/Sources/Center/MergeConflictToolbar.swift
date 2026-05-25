@@ -9,7 +9,8 @@ struct MergeConflictToolbar: View {
     /// right-pane Use ours/theirs context menu, then clicks Mark resolved here.
     let isLoaded: Bool
     /// True only when a loaded file is text-based (non-binary). Gates the
-    /// agent + 3-column-only actions (prev/next, accept LOCAL/REMOTE/BOTH).
+    /// `Ask agent to resolve` button — binary files resolve via the
+    /// right-pane context menu (Use ours / Use theirs).
     let canRunAgent: Bool
     let agentBusy: Bool
     let hasAgent: Bool
