@@ -18,6 +18,12 @@ struct MergeResultPane: NSViewRepresentable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let coordinator: MergeScrollCoordinator
+    /// Whether the model's last region ends with a newline. When
+    /// false, `buildAttributedString` skips the trailing `\n` on the
+    /// final visual row so the NSTextView buffer matches the file's
+    /// EOF-newline state. Without this, no-EOF-newline files get a
+    /// phantom `\n` added on writeback.
+    let endsWithNewline: Bool
     /// Pushed by the view when the user types. Receives the full new
     /// buffer text so the model can reconcile inserts AND deletes
     /// correctly. Replaces the old per-row `onEditRow` callback which
@@ -153,7 +159,9 @@ struct MergeResultPane: NSViewRepresentable {
             }
         }
         for (i, row) in rows.enumerated() {
-            let line = NSMutableAttributedString(string: row.content + "\n", attributes: baseAttrs)
+            let isLastRow = i == rows.count - 1
+            let suffix = (isLastRow && !endsWithNewline) ? "" : "\n"
+            let line = NSMutableAttributedString(string: row.content + suffix, attributes: baseAttrs)
             if let kind = rowKind[i] {
                 let tint = kind.isLocal ? localTint : remoteTint
                 line.addAttribute(.backgroundColor, value: tint,

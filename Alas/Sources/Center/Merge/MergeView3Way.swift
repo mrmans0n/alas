@@ -27,6 +27,21 @@ struct MergeView3Way: View {
         MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
     }
 
+    /// Whether the model's last region's content ends with `\n`.
+    /// Passed to `MergeResultPane` so the rendered buffer matches the
+    /// file's EOF-newline state (no phantom newline added on writeback).
+    private var lastRegionEndsWithNewline: Bool {
+        guard let last = model.regions.last else { return false }
+        switch last {
+        case .text(let t):
+            return t.hasSuffix("\n")
+        case .conflict(let block):
+            if !block.remote.isEmpty { return block.remote.hasSuffix("\n") }
+            if !block.local.isEmpty { return block.local.hasSuffix("\n") }
+            return false
+        }
+    }
+
     var body: some View {
         let layout = self.layout
         let hunkPairs = model.allConflictBlocks().map { (local: $0.local, remote: $0.remote) }
@@ -58,6 +73,7 @@ struct MergeView3Way: View {
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
                 coordinator: coordinator,
+                endsWithNewline: lastRegionEndsWithNewline,
                 onEditFullText: { newText in
                     model.applyEditedFullText(newText, showBase: showBase)
                 }

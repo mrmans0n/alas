@@ -121,6 +121,7 @@ struct MergeSidePane: NSViewRepresentable {
         case .remote: tint = NSColor.systemBlue.withAlphaComponent(0.14)
         }
         let pad = NSAttributedString(string: "\n", attributes: [
+            .font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             .foregroundColor: NSColor.clear,
             .backgroundColor: NSColor.clear,
         ])
