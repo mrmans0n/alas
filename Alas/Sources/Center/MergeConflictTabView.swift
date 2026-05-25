@@ -55,12 +55,13 @@ struct MergeConflictTabView: View {
                     hasAgent: resolvedAgent != nil,
                     hasPendingProposal: model.agentProposal != nil,
                     showBase: showBaseBinding,
+                    wordDiffMode: Binding(
+                        get: { model.wordDiffMode },
+                        set: { model.wordDiffMode = $0 }
+                    ),
                     baseAvailable: model.hasBase,
                     onPrevious: { model.previousConflict() },
                     onNext: { model.nextConflict() },
-                    onAcceptLocal: { model.acceptLocal() },
-                    onAcceptRemote: { model.acceptRemote() },
-                    onAcceptBoth: { model.acceptBoth() },
                     onAskAgentResolve: {
                         guard let agent = resolvedAgent else { return }
                         let template = state.config.changes.mergeSingleResolvePrompt

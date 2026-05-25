@@ -19,15 +19,13 @@ struct MergeConflictToolbar: View {
     /// clobber the pending proposal.
     let hasPendingProposal: Bool
     @Binding var showBase: Bool
+    @Binding var wordDiffMode: MergeWordDiff.Mode
     /// True only when the merged file actually contains zdiff3 `|||||||`
     /// markers. Off for merges driven from outside alas without
     /// `merge.conflictStyle=zdiff3`, where the toggle would do nothing.
     let baseAvailable: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
-    let onAcceptLocal: () -> Void
-    let onAcceptRemote: () -> Void
-    let onAcceptBoth: () -> Void
     let onAskAgentResolve: () -> Void
     let onMarkResolved: () -> Void
 
@@ -39,7 +37,15 @@ struct MergeConflictToolbar: View {
             Divider().frame(height: 18)
             navigationButtons
             Divider().frame(height: 18)
-            acceptButtons
+            Picker("Highlight words", selection: $wordDiffMode) {
+                Text("Off").tag(MergeWordDiff.Mode.off)
+                Text("Characters").tag(MergeWordDiff.Mode.characters)
+                Text("Words").tag(MergeWordDiff.Mode.words)
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .frame(width: 150)
+            .help("Highlight character or word-level differences inside conflict hunks")
             Spacer()
             Button(action: onAskAgentResolve) {
                 HStack(spacing: 4) {
@@ -112,22 +118,6 @@ struct MergeConflictToolbar: View {
                 action: onNext
             )
         }
-    }
-
-    private var acceptButtons: some View {
-        HStack(spacing: 4) {
-            Button("Use LOCAL", action: onAcceptLocal)
-                .keyboardShortcut("[", modifiers: [.command, .option])
-                .help("Accept LOCAL for current conflict (⌥⌘[)")
-            Button("Use REMOTE", action: onAcceptRemote)
-                .keyboardShortcut("]", modifiers: [.command, .option])
-                .help("Accept REMOTE for current conflict (⌥⌘])")
-            Button("Use BOTH", action: onAcceptBoth)
-                .help("Accept LOCAL then REMOTE")
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .disabled(conflictCount == 0)
     }
 }
 
