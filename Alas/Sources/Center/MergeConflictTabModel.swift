@@ -12,7 +12,7 @@ final class MergeConflictTabModel {
     private(set) var regions: [ConflictRegion] = []
     /// 0-based index into the conflict subset of `regions`. nil when no
     /// unresolved conflicts remain.
-    var currentConflictIndex: Int?
+    private(set) var currentConflictIndex: Int?
     /// Mutable text of the on-disk merged buffer. Drives the RESULT column.
     /// Updated by accept-side actions and by direct user edits.
     var resultText: String = ""
@@ -241,7 +241,7 @@ final class MergeConflictTabModel {
         let saved = currentConflictIndex
         currentConflictIndex = ordinal
         acceptLocal()
-        if let saved, saved != ordinal { currentConflictIndex = saved }
+        restoreCursor(saved: saved, after: ordinal)
     }
 
     /// Accepts REMOTE for a specific conflict block (by identity).
@@ -250,21 +250,36 @@ final class MergeConflictTabModel {
         let saved = currentConflictIndex
         currentConflictIndex = ordinal
         acceptRemote()
-        if let saved, saved != ordinal { currentConflictIndex = saved }
+        restoreCursor(saved: saved, after: ordinal)
     }
 
-    /// Rebuilds a conflict at `ordinal` from the original LOCAL/REMOTE
-    /// content. Called by the gutter context-menu "reset this conflict"
-    /// action when the user wants to undo an accept without manually
-    /// rewriting markers. The originals are passed in because the
-    /// model no longer holds them once the conflict has been resolved.
-    func resetToInitialStack(
+    /// Restores `currentConflictIndex` after a per-block accept took
+    /// place at `acceptedOrdinal`. Compensates for the fact that
+    /// resolving a conflict shifts the ordinal of every later conflict
+    /// down by one.
+    private func restoreCursor(saved: Int?, after acceptedOrdinal: Int) {
+        guard let saved else { return }
+        if saved < acceptedOrdinal {
+            currentConflictIndex = saved
+        } else if saved > acceptedOrdinal {
+            currentConflictIndex = saved - 1
+        }
+        // If saved == acceptedOrdinal, leave reparse()'s post-state alone.
+    }
+
+    /// Appends a new conflict block at the end of the buffer. Called by
+    /// the gutter context-menu "reset this conflict" action when the user
+    /// wants to undo an accept without manually rewriting markers. The
+    /// originals are passed in because the model no longer holds them once
+    /// the conflict has been resolved. Note: this always appends to the end
+    /// of the buffer regardless of the original position of the conflict —
+    /// for use cases where positional fidelity is not required.
+    func appendConflictBlock(
         originalLocal: String,
         originalRemote: String,
         originalBase: String?,
         originalLocalLabel: String,
-        originalRemoteLabel: String,
-        at ordinal: Int
+        originalRemoteLabel: String
     ) {
         var marker = "<<<<<<< \(originalLocalLabel)\n"
         marker += originalLocal

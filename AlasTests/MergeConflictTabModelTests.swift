@@ -483,7 +483,8 @@ struct MergeConflictTabModelTests {
         let blocks = model.allConflictBlocks()
         #expect(blocks.count == 2)
         let secondBlock = try #require(blocks.last)
-        model.currentConflictIndex = 0
+        // Cursor is at ordinal 0 after load(); accept block 1.
+        #expect(model.currentConflictIndex == 0)
         model.acceptLocal(for: secondBlock)
         #expect(model.conflictCount == 1)
         let remaining = try #require(model.allConflictBlocks().first)
@@ -557,14 +558,36 @@ struct MergeConflictTabModelTests {
         let labelRemote = block.remoteLabel
         model.acceptLocal(for: block)
         #expect(model.conflictCount == 0)
-        model.resetToInitialStack(
+        model.appendConflictBlock(
             originalLocal: localBefore,
             originalRemote: remoteBefore,
             originalBase: nil,
             originalLocalLabel: labelLocal,
-            originalRemoteLabel: labelRemote,
-            at: 0
+            originalRemoteLabel: labelRemote
         )
         #expect(model.conflictCount == 1)
+    }
+
+    @Test func acceptForBlockShiftsLaterCursorDownByOne() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeTwoConflictBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        #expect(model.conflictCount == 2)
+        let firstBlock = try #require(model.allConflictBlocks().first)
+        // Position cursor on the SECOND conflict (ordinal 1), then
+        // accept the FIRST. Expected: cursor lands on ordinal 0 (the
+        // formerly-ordinal-1 block, now the only one left).
+        model.nextConflict()
+        #expect(model.currentConflictIndex == 1)
+        model.acceptLocal(for: firstBlock)
+        #expect(model.conflictCount == 1)
+        #expect(model.currentConflictIndex == 0)
     }
 }
