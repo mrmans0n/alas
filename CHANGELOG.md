@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-05-25
+
+### ✨ Features
+
+- 3-way merge editor redesign (IntelliJ-style) (#286).
+- Add live commit editor (#288).
+- bulk agent resolve + editable prompts + tab polish (#284).
+- merge-conflicts UX followups (#281).
+- use Nerd Font icons for special folders in files sidebar (#280).
+- agent assist + special conflict kinds for merge editor (#278).
+- clickable base branch selector in commits header (#275).
+- three-column merge editor in the center pane (#276).
+- detect and orchestrate git merge conflicts in the right pane (#273).
+- sync terminal tab title with terminal OSC title (#272).
+- allow dropping projects to empty bottom area to reorder last (#267).
+- show agent icons in picker dropdowns and rename Tool to Agent (#264).
+
+### 🐛 Fixes
+
+- selector header spacing (#283).
+- folder icon review feedback (#282).
+- align conventional commit verb chip to first-line baseline (#279).
+- strip trailing period from Ghostty file links when file not found (#274).
+- clamp agent logo icons in settings pickers to 14pt (#269).
+- show full bypass permissions description in Settings Agents (#266).
+
+### 🏗️ Internal
+
+- parse diffs off the main thread (#270).
+
 ## [0.3.12] - 2026-05-23
 
 ### ✨ Features
