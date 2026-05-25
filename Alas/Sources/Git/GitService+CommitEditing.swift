@@ -76,6 +76,13 @@ extension GitService {
             }
         }
 
+        if case .dropHunk(let path, _) = action {
+            let details = try await commitDetails(at: worktreePath, sha: targetSha)
+            guard details.files.first(where: { $0.path == path })?.status == "M" else {
+                throw CommitEditError.unsupportedAction
+            }
+        }
+
         let anchor = try await firstParent(of: targetSha, cwd: worktreePath) ?? baseRef
         let backupBranch = "alas-edit-backup-\(UUID().uuidString)"
         try await runGit(["branch", backupBranch, "HEAD"], cwd: worktreePath)

@@ -39,6 +39,11 @@ struct GitServiceCommitEditingTests {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func head(_ repo: URL) async throws -> String {
+        let result = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     @Test func rewordAboveFoldCommitPreservesDescendant() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -213,5 +218,64 @@ struct GitServiceCommitEditingTests {
 
         let content = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
         #expect(content == "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nTEN\n")
+    }
+
+    @Test func dropHunkRejectsAddedFileAndLeavesRepoUnchanged() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
+        let target = try await commit(repo, subject: "target", files: ["new.txt": "new\n", "keep.txt": "keep\n"])
+        let beforeHead = try await head(repo)
+        let rawDiff = try await Process.git(["diff", "\(target)^", target, "--", "new.txt"], cwd: repo)
+        let parsed = DiffParser.parse(rawDiff.stdout)
+        #expect(parsed.hunks.count == 1)
+
+        do {
+            _ = try await GitService().editCommit(
+                worktreePath: repo,
+                baseRef: base,
+                targetSha: target,
+                action: .dropHunk(path: "new.txt", hunk: parsed.hunks[0])
+            )
+            Issue.record("Expected added-file hunk drop to be rejected")
+        } catch let error as CommitEditError {
+            #expect(error == .unsupportedAction)
+        }
+
+        #expect(try await head(repo) == beforeHead)
+        #expect(try await subjects(repo) == ["base", "target"])
+        let content = try String(contentsOf: repo.appendingPathComponent("new.txt"), encoding: .utf8)
+        #expect(content == "new\n")
+    }
+
+    @Test func dropHunkRejectsDeletedFileAndLeavesRepoUnchanged() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["a.txt": "one\ntwo\n"])
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("a.txt"))
+        try write(repo, "keep.txt", "keep\n")
+        _ = try await Process.git(["add", "--", "a.txt", "keep.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "target"], cwd: repo)
+        let target = try await head(repo)
+        let beforeHead = target
+        let rawDiff = try await Process.git(["diff", "\(target)^", target, "--", "a.txt"], cwd: repo)
+        let parsed = DiffParser.parse(rawDiff.stdout)
+        #expect(parsed.hunks.count == 1)
+
+        do {
+            _ = try await GitService().editCommit(
+                worktreePath: repo,
+                baseRef: base,
+                targetSha: target,
+                action: .dropHunk(path: "a.txt", hunk: parsed.hunks[0])
+            )
+            Issue.record("Expected deleted-file hunk drop to be rejected")
+        } catch let error as CommitEditError {
+            #expect(error == .unsupportedAction)
+        }
+
+        #expect(try await head(repo) == beforeHead)
+        #expect(try await subjects(repo) == ["base", "target"])
+        #expect(!FileManager.default.fileExists(atPath: repo.appendingPathComponent("a.txt").path))
     }
 }
