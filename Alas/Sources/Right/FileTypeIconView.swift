@@ -10,7 +10,7 @@ enum FileTypeIcon {
         let hex: String       // 6-char RGB hex, no leading "#"
         let kind: Kind
         let style: Style
-        enum Kind { case filename, ext, fallbackExt, generic }
+        enum Kind { case filename, ext, fallbackExt, generic, folderExact, folderSuffix, folderPath }
         enum Style { case nerdFont, text }
     }
 
@@ -176,6 +176,62 @@ enum FileTypeIcon {
         "makefile":            ("\u{E673}", "7A6A5A"),
         "cmakelists.txt":      ("\u{E673}", "7A6A5A"),
     ]
+
+    // MARK: - Folder icon lookup
+
+    /// Returns icon info for semantically meaningful folders, or `nil` for
+    /// generic folders that should keep the default folder icon.
+    static func folderInfo(name: String, path: String? = nil) -> Info? {
+        // 1. Path-aware matches (folder name alone is too ambiguous).
+        if let path = path?.lowercased() {
+            for entry in folderPathSuffixes {
+                if path.hasSuffix(entry.pathSuffix) {
+                    return Info(symbol: entry.symbol, hex: entry.hex, kind: .folderPath, style: .nerdFont)
+                }
+            }
+        }
+
+        let lower = name.lowercased()
+
+        // 2. Exact folder-name match.
+        if let hit = folderTable[lower] {
+            return Info(symbol: hit.symbol, hex: hit.hex, kind: .folderExact, style: .nerdFont)
+        }
+
+        // 3. Suffix-pattern match (e.g. *.xcodeproj).
+        for entry in folderSuffixes {
+            if lower.hasSuffix(entry.suffix) {
+                return Info(symbol: entry.symbol, hex: entry.hex, kind: .folderSuffix, style: .nerdFont)
+            }
+        }
+
+        return nil
+    }
+
+    private static let folderTable: [String: (symbol: String, hex: String)] = [
+        ".github":      ("\u{EA84}", "7A8089"),  // GitHub
+        ".gitlab":      ("\u{F296}",  "FC6D26"),  // GitLab
+        ".git":         ("\u{E65D}", "F05033"),  // Git
+        ".vscode":      ("\u{E70C}", "007ACC"),  // VS Code
+        ".idea":        ("\u{E7B5}", "A97BF3"),  // JetBrains
+        "node_modules": ("\u{E718}", "68A063"),  // Node.js
+        ".gradle":      ("\u{E660}", "02303A"),  // Gradle
+        ".docker":      ("\u{E650}", "2496ED"),  // Docker
+        "docker":       ("\u{E650}", "2496ED"),  // Docker assets
+        ".circleci":    ("\u{E63E}", "343434"),  // CircleCI
+    ]
+
+    private static let folderSuffixes: [(suffix: String, symbol: String, hex: String)] = [
+        (".xcodeproj",   "\u{E711}", "A2AAAD"),  // Xcode project
+        (".xcworkspace", "\u{E711}", "A2AAAD"),  // Xcode workspace
+        (".framework",   "\u{E711}", "A2AAAD"),  // Apple framework
+        (".app",         "\u{E711}", "A2AAAD"),  // macOS app bundle
+    ]
+
+    private static let folderPathSuffixes: [(pathSuffix: String, symbol: String, hex: String)] = [
+        ("src/main/resources", "\u{E256}", "E76F00"),  // Java resources
+        ("src/test/resources", "\u{E256}", "E76F00"),  // Java test resources
+    ]
 }
 
 /// Square tile with the file-type glyph.
@@ -216,6 +272,26 @@ struct FileTypeIconView: View {
         default: scale = 0.48  // 3+
         }
         return max(8, (size * scale).rounded())
+    }
+}
+
+/// Renders a Nerd Font glyph for semantically meaningful folders,
+/// falling back to the standard SF Symbol folder icon for generic ones.
+struct FolderIconView: View {
+    let name: String
+    let path: String
+    let open: Bool
+    let fallbackColor: Color
+    var size: CGFloat = 18
+
+    var body: some View {
+        if let info = FileTypeIcon.folderInfo(name: name, path: path) {
+            NerdFontGlyphView(symbol: info.symbol, hex: info.hex)
+                .frame(width: size, height: size)
+        } else {
+            Icon(name: "folder", size: 11, color: fallbackColor)
+                .frame(width: size, height: size)
+        }
     }
 }
 

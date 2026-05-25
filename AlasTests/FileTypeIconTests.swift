@@ -84,4 +84,63 @@ struct FileTypeIconTests {
         #expect(FileTypeIcon.info(for: "widget.cpp").symbol == "\u{E646}")
         #expect(FileTypeIcon.info(for: "view.hpp").symbol == "\u{E646}")
     }
+
+    // MARK: - Folder icon lookup
+
+    @Test func exactFolderNameMatchesResolve() {
+        #expect(FileTypeIcon.folderInfo(name: ".github")?.symbol == "\u{EA84}")
+        #expect(FileTypeIcon.folderInfo(name: ".vscode")?.symbol == "\u{E70C}")
+        #expect(FileTypeIcon.folderInfo(name: "node_modules")?.symbol == "\u{E718}")
+        #expect(FileTypeIcon.folderInfo(name: ".gradle")?.symbol == "\u{E660}")
+        #expect(FileTypeIcon.folderInfo(name: ".git")?.symbol == "\u{E65D}")
+        #expect(FileTypeIcon.folderInfo(name: ".gitlab")?.symbol == "\u{F296}")
+        #expect(FileTypeIcon.folderInfo(name: ".docker")?.symbol == "\u{E650}")
+        #expect(FileTypeIcon.folderInfo(name: "docker")?.symbol == "\u{E650}")
+        #expect(FileTypeIcon.folderInfo(name: ".circleci")?.symbol == "\u{E63E}")
+    }
+
+    @Test func folderLookupIsCaseInsensitive() {
+        #expect(FileTypeIcon.folderInfo(name: ".GitHub")?.symbol == "\u{EA84}")
+        #expect(FileTypeIcon.folderInfo(name: ".GITHUB")?.symbol == "\u{EA84}")
+        #expect(FileTypeIcon.folderInfo(name: "Node_Modules")?.symbol == "\u{E718}")
+    }
+
+    @Test func folderSuffixMatchesResolve() {
+        #expect(FileTypeIcon.folderInfo(name: "Bleh.xcodeproj")?.symbol == "\u{E711}")
+        #expect(FileTypeIcon.folderInfo(name: "Alas.xcworkspace")?.symbol == "\u{E711}")
+        #expect(FileTypeIcon.folderInfo(name: "GhosttyKit.framework")?.symbol == "\u{E711}")
+        #expect(FileTypeIcon.folderInfo(name: "My.app")?.symbol == "\u{E711}")
+    }
+
+    @Test func folderSuffixMatchesAreCaseInsensitive() {
+        #expect(FileTypeIcon.folderInfo(name: "Foo.XCODEPROJ")?.symbol == "\u{E711}")
+    }
+
+    @Test func pathAwareFolderMatchesResolve() {
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "src/main/resources")?.symbol == "\u{E256}")
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "src/test/resources")?.symbol == "\u{E256}")
+    }
+
+    @Test func plainResourcesFolderReturnsNil() {
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "resources") == nil)
+        #expect(FileTypeIcon.folderInfo(name: "resources") == nil)
+    }
+
+    @Test func genericFoldersReturnNil() {
+        for name in ["src", "lib", "test", "tests", "__tests__", "build", "dist",
+                     "public", "assets", "docs", "config", "scripts", "bin"] {
+            #expect(FileTypeIcon.folderInfo(name: name) == nil, "Expected nil for \(name)")
+        }
+    }
+
+    @Test func unsupportedFoldersReturnNil() {
+        #expect(FileTypeIcon.folderInfo(name: ".husky") == nil)
+        #expect(FileTypeIcon.folderInfo(name: "vendor") == nil)
+    }
+
+    @Test func folderInfoKindsAreCorrect() {
+        #expect(FileTypeIcon.folderInfo(name: ".github")?.kind == .folderExact)
+        #expect(FileTypeIcon.folderInfo(name: "Foo.xcodeproj")?.kind == .folderSuffix)
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "src/main/resources")?.kind == .folderPath)
+    }
 }

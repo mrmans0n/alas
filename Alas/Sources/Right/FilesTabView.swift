@@ -44,7 +44,12 @@ struct FilesTabView: View {
                             } else {
                                 Color.clear.frame(width: 14, height: 14)
                             }
-                            Icon(name: "folder", size: 11, color: folderColor(for: node, open: open))
+                            FolderIconView(
+                                name: node.name,
+                                path: node.path,
+                                open: open,
+                                fallbackColor: folderColor(for: node, open: open)
+                            )
                             Text(node.name)
                                 .font(.system(size: 11.5, design: .monospaced))
                                 .foregroundColor(rowForeground(for: node))
