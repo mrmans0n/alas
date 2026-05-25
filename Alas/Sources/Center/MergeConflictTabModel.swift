@@ -33,6 +33,13 @@ final class MergeConflictTabModel {
     /// re-focused for a fresh conflict on the same path.
     private(set) var loadGeneration: Int = 0
 
+    /// Block keys for which an `explainCurrentConflict` request is currently
+    /// in flight. Prevents duplicate agent dispatches when both an
+    /// `onChange(currentConflictIndex)` and an `onChange(loadGeneration)`
+    /// view-hook fire for the same conflict in the same render cycle.
+    @ObservationIgnored
+    private var explainInFlight: Set<String> = []
+
     /// Set while a `MergeAgent` request is in flight. Drives toolbar disabled-state.
     private(set) var agentBusy: Bool = false
 
@@ -67,6 +74,7 @@ final class MergeConflictTabModel {
     /// into the model after we've cleared everything.
     func load() async {
         loadGeneration += 1
+        explainInFlight.removeAll()
         do {
             let file = try await gitService.conflictedFile(
                 worktreePath: worktreePath,
@@ -274,13 +282,20 @@ final class MergeConflictTabModel {
     // MARK: - Agent assist
 
     /// Asks the agent to summarize the current conflict in one sentence and
-    /// caches the result in `annotations[currentConflictIndex]`. No-op if
-    /// there's no current conflict or no agent. Errors are silent (no UI).
+    /// caches the result in `annotations`, keyed by block content. No-op if
+    /// there's no current conflict, no agent, the annotation is already
+    /// cached, or a request for the same block is already in flight.
+    /// Errors are silent (no UI).
     func explainCurrentConflict(using agent: AgentDefinition, language: String?) async {
         guard let ordinal = currentConflictIndex,
               let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
               case .conflict(let block) = regions[regionIdx]
         else { return }
+        let key = Self.annotationKey(for: block)
+        // De-dupe: cache hit or already-in-flight for the same block → bail.
+        guard annotations[key] == nil, !explainInFlight.contains(key) else { return }
+        explainInFlight.insert(key)
+        defer { explainInFlight.remove(key) }
         do {
             let sentence = try await MergeAgent.explainConflict(
                 agent: agent,

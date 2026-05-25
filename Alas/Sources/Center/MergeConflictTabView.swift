@@ -174,15 +174,32 @@ struct MergeConflictTabView: View {
                 }
             )
         }
-        .onChange(of: model.currentConflictIndex) { _, newIndex in
-            guard let agent = resolvedAgent,
-                  let ord = newIndex,
-                  let block = currentConflictBlock(at: ord),
-                  model.annotation(for: block) == nil
-            else { return }
-            Task {
-                await model.explainCurrentConflict(using: agent, language: fileLanguage)
-            }
+        .onChange(of: model.currentConflictIndex) { _, _ in
+            triggerExplainIfNeeded()
+        }
+        // Also re-trigger on every load attempt — covers the case where a
+        // reload (e.g. tab re-focused for a fresh conflict on the same path)
+        // lands on the same currentConflictIndex as before and the index
+        // hook wouldn't fire. Annotations are cleared on load(), so this
+        // request gets through the cache check, and the model's in-flight
+        // dedup ensures we don't double-dispatch with the index hook.
+        .onChange(of: model.loadGeneration) { _, _ in
+            triggerExplainIfNeeded()
+        }
+    }
+
+    /// Fires `explainCurrentConflict` for the current conflict if there's
+    /// an agent configured, a current conflict, and no cached annotation.
+    /// The model dedupes against in-flight requests for the same block, so
+    /// repeated calls from multiple `.onChange` hooks are safe.
+    private func triggerExplainIfNeeded() {
+        guard let agent = resolvedAgent,
+              let ord = model.currentConflictIndex,
+              let block = currentConflictBlock(at: ord),
+              model.annotation(for: block) == nil
+        else { return }
+        Task {
+            await model.explainCurrentConflict(using: agent, language: fileLanguage)
         }
     }
 
