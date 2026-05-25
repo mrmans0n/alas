@@ -3,7 +3,6 @@ import SwiftUI
 struct MergeConflictToolbar: View {
     let conflictCount: Int
     let currentConflictIndex: Int?
-    let currentAnnotation: String?
     /// True once the conflicted file has been loaded successfully (binary
     /// or text). Gates `Mark resolved` so it can't fire on an empty initial
     /// buffer. Stays true for binaries — the user resolves them via the
@@ -20,12 +19,15 @@ struct MergeConflictToolbar: View {
     /// clobber the pending proposal.
     let hasPendingProposal: Bool
     @Binding var showBase: Bool
+    /// True only when the merged file actually contains zdiff3 `|||||||`
+    /// markers. Off for merges driven from outside alas without
+    /// `merge.conflictStyle=zdiff3`, where the toggle would do nothing.
+    let baseAvailable: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
     let onAcceptLocal: () -> Void
     let onAcceptRemote: () -> Void
     let onAcceptBoth: () -> Void
-    let onAcceptAndNext: () -> Void
     let onAskAgentResolve: () -> Void
     let onMarkResolved: () -> Void
 
@@ -59,7 +61,10 @@ struct MergeConflictToolbar: View {
             Toggle("Show BASE", isOn: $showBase)
                 .toggleStyle(.button)
                 .controlSize(.small)
-                .help("Show the common-ancestor BASE lines inside each conflict region")
+                .disabled(!baseAvailable)
+                .help(baseAvailable
+                    ? "Show the common-ancestor BASE lines inside each conflict region"
+                    : "This file has no BASE markers. Run the merge with merge.conflictStyle=zdiff3 to enable BASE.")
             Button(action: onMarkResolved) {
                 Text("Mark resolved")
                     .font(.system(size: 11))
@@ -75,18 +80,9 @@ struct MergeConflictToolbar: View {
     }
 
     private var counter: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(counterText)
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-dim"))
-            if let annotation = currentAnnotation, !annotation.isEmpty {
-                Text("✦ \(annotation)")
-                    .font(.system(size: 10).italic())
-                    .foregroundColor(theme.color("fg-subtle"))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-            }
-        }
+        Text(counterText)
+            .font(.system(size: 11))
+            .foregroundColor(theme.color("fg-dim"))
     }
 
     private var counterText: String {
@@ -100,25 +96,22 @@ struct MergeConflictToolbar: View {
     }
 
     private var navigationButtons: some View {
-        HStack(spacing: 2) {
-            Button(action: onPrevious) { Image(systemName: "chevron.up") }
-                .keyboardShortcut(.upArrow, modifiers: [.option])
-                .help("Previous conflict (⌥↑)")
-            Button(action: onNext) { Image(systemName: "chevron.down") }
-                .keyboardShortcut(.downArrow, modifiers: [.option])
-                .help("Next conflict (⌥↓)")
-            Button(action: onAcceptAndNext) {
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark")
-                    Image(systemName: "chevron.down")
-                }
-            }
-            .keyboardShortcut(.return, modifiers: [.option])
-            .help("Accept LOCAL and jump to next (⌥↵)")
+        HStack(spacing: 4) {
+            ChevronNavButton(
+                systemName: "chevron.up",
+                tooltip: "Previous conflict (⌥↑)",
+                shortcut: .upArrow,
+                disabled: conflictCount == 0,
+                action: onPrevious
+            )
+            ChevronNavButton(
+                systemName: "chevron.down",
+                tooltip: "Next conflict (⌥↓)",
+                shortcut: .downArrow,
+                disabled: conflictCount == 0,
+                action: onNext
+            )
         }
-        .buttonStyle(.borderless)
-        .controlSize(.small)
-        .disabled(conflictCount == 0)
     }
 
     private var acceptButtons: some View {
@@ -135,5 +128,38 @@ struct MergeConflictToolbar: View {
         .buttonStyle(.bordered)
         .controlSize(.small)
         .disabled(conflictCount == 0)
+    }
+}
+
+/// Icon-only chevron button matching the worktree `+` button styling: a
+/// fixed-size hit area with a hover background and tinted icon. Plain
+/// borderless buttons in a toolbar read as text, which is what the user
+/// flagged — this gives prev/next a real affordance.
+private struct ChevronNavButton: View {
+    let systemName: String
+    let tooltip: String
+    let shortcut: KeyEquivalent
+    let disabled: Bool
+    let action: () -> Void
+
+    @State private var hovering = false
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(disabled
+                    ? theme.color("fg-faint")
+                    : (hovering ? theme.color("fg") : theme.color("fg-muted")))
+                .frame(width: 20, height: 20)
+                .background(hovering && !disabled ? theme.color("bg-4") : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(shortcut, modifiers: [.option])
+        .help(tooltip)
+        .disabled(disabled)
+        .onHover { hovering = $0 }
     }
 }

@@ -27,22 +27,18 @@ struct MergeConflictTabView: View {
                 MergeConflictToolbar(
                     conflictCount: model.conflictCount,
                     currentConflictIndex: model.currentConflictIndex,
-                    currentAnnotation: currentBlockAnnotation,
                     isLoaded: model.conflictedFile != nil,
                     canRunAgent: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
                     agentBusy: model.agentBusy,
                     hasAgent: resolvedAgent != nil,
                     hasPendingProposal: model.agentProposal != nil,
                     showBase: showBaseBinding,
+                    baseAvailable: model.hasBase,
                     onPrevious: { model.previousConflict() },
                     onNext: { model.nextConflict() },
                     onAcceptLocal: { model.acceptLocal() },
                     onAcceptRemote: { model.acceptRemote() },
                     onAcceptBoth: { model.acceptBoth() },
-                    onAcceptAndNext: {
-                        model.acceptLocal()
-                        model.nextConflict()
-                    },
                     onAskAgentResolve: {
                         guard let agent = resolvedAgent else { return }
                         Task {
@@ -51,14 +47,26 @@ struct MergeConflictTabView: View {
                     },
                     onMarkResolved: {
                         Task {
-                            try? await model.markFileResolved()
-                            // The WorktreeWatcher on RightPaneState picks up the
-                            // .git/index change from `git add` and refreshes the
-                            // Conflicts section automatically — no explicit call
-                            // is needed here.
+                            do {
+                                try await model.markFileResolved()
+                                // Explicit refresh + tab close so the user
+                                // gets immediate feedback that the file
+                                // moved out of Conflicts. The FSEvents
+                                // watcher would catch up eventually, but
+                                // the debouncer + watcher latency made the
+                                // change feel sticky.
+                                await state.rightPaneStore.refresh(worktreeId: worktree.id)
+                                state.closeTab(worktreeId: worktree.id, tabId: tabState.id)
+                            } catch {
+                                // markResolved is best-effort; the gitService
+                                // logs the underlying error.
+                            }
                         }
                     }
                 )
+                if let annotation = currentBlockAnnotation, !annotation.isEmpty {
+                    MergeConflictAnnotationStrip(annotation: annotation)
+                }
                 content
             }
             if let proposal = model.agentProposal {
@@ -152,7 +160,8 @@ struct MergeConflictTabView: View {
                     fileExtension: fileExtension,
                     codeFontFamily: state.config.code.fontFamily,
                     codeFontSize: CGFloat(state.config.code.fontSize),
-                    showBase: tabState.showBase
+                    showBase: tabState.showBase,
+                    currentConflictIndex: model.currentConflictIndex
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
