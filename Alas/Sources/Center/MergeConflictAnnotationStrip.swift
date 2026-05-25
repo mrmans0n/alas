@@ -45,7 +45,16 @@ struct MergeConflictAnnotationStrip: View {
                 }
                 .buttonStyle(.plain)
                 .help(isExpanded ? "Collapse" : "Click to expand")
-                Button(action: { dismissedKeys.insert(conflictKey) }) {
+                Button(action: {
+                    dismissedKeys.insert(conflictKey)
+                    // Also collapse so a future re-show (different conflict
+                    // whose strip is not dismissed) starts on the teaser.
+                    // The `.onChange(of: conflictKey)` below only fires
+                    // while the visible branch is mounted; resetting here
+                    // covers the dismiss-then-navigate path where the
+                    // strip is unmounted before the key change.
+                    isExpanded = false
+                }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(theme.color("fg-subtle"))
