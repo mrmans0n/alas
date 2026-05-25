@@ -297,6 +297,82 @@ final class MergeConflictTabModel {
         reparse()
     }
 
+    /// Pushes an edit on visual row `row` to the underlying region.
+    /// Maps row -> (region index, sub-position) via the same layout
+    /// algorithm the view uses, then rewrites that region's stored
+    /// content. No-op for rows that are out of bounds or padding.
+    /// Triggers `rebuildResultText()` so `resultText` stays in sync
+    /// with the rewritten `regions`.
+    func setRowContent(at row: Int, to content: String) {
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        guard row < layout.result.count else { return }
+        var cursor = 0
+        for (regionIndex, region) in regions.enumerated() {
+            switch region {
+            case .text(let text):
+                let lineCount = text.components(separatedBy: "\n").count - (text.hasSuffix("\n") ? 1 : 0)
+                if row < cursor + lineCount {
+                    var lines = text.components(separatedBy: "\n")
+                    let inside = row - cursor
+                    if inside < lines.count {
+                        lines[inside] = content
+                    }
+                    regions[regionIndex] = .text(lines.joined(separator: "\n"))
+                    rebuildResultText()
+                    return
+                }
+                cursor += lineCount
+            case .conflict(let block):
+                let localLineCount = block.local.components(separatedBy: "\n").count - (block.local.hasSuffix("\n") ? 1 : 0)
+                let remoteLineCount = block.remote.components(separatedBy: "\n").count - (block.remote.hasSuffix("\n") ? 1 : 0)
+                if row < cursor + localLineCount {
+                    var lines = block.local.components(separatedBy: "\n")
+                    let inside = row - cursor
+                    if inside < lines.count { lines[inside] = content }
+                    let updated = ConflictBlock(
+                        local: lines.joined(separator: "\n"),
+                        base: block.base,
+                        remote: block.remote,
+                        localLabel: block.localLabel,
+                        remoteLabel: block.remoteLabel,
+                        lineRangeInMerged: block.lineRangeInMerged
+                    )
+                    regions[regionIndex] = .conflict(updated)
+                    rebuildResultText()
+                    return
+                }
+                if row < cursor + localLineCount + remoteLineCount {
+                    var lines = block.remote.components(separatedBy: "\n")
+                    let inside = row - cursor - localLineCount
+                    if inside < lines.count { lines[inside] = content }
+                    let updated = ConflictBlock(
+                        local: block.local,
+                        base: block.base,
+                        remote: lines.joined(separator: "\n"),
+                        localLabel: block.localLabel,
+                        remoteLabel: block.remoteLabel,
+                        lineRangeInMerged: block.lineRangeInMerged
+                    )
+                    regions[regionIndex] = .conflict(updated)
+                    rebuildResultText()
+                    return
+                }
+                cursor += localLineCount + remoteLineCount
+            }
+        }
+    }
+
+    /// Re-derives `resultText` from the current `regions` so the
+    /// on-disk-style buffer reflects the in-memory edits. Used by
+    /// `setRowContent` after a region mutation. The serialized form
+    /// matches `flatTextForWriting()` (no conflict markers), which
+    /// means after this call `regions` may not re-parse to the same
+    /// shape — `reparse()` should NOT be called here, or you'll lose
+    /// the conflict structure.
+    private func rebuildResultText() {
+        resultText = flatTextForWriting()
+    }
+
     /// Derives the final on-disk file content from the current regions
     /// without conflict markers. Called by the new view layer to
     /// serialize edits back to disk on `markFileResolved`. Conflicts

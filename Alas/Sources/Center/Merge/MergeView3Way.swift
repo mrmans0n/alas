@@ -57,9 +57,8 @@ struct MergeView3Way: View {
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
                 coordinator: coordinator,
-                onEditRow: { _, _ in
-                    // v1: edits inside hunks are not yet round-tripped
-                    // to the model. Task 11 wires this.
+                onEditRow: { row, content in
+                    model.setRowContent(at: row, to: content)
                 }
             )
             .frame(maxWidth: .infinity)
