@@ -156,17 +156,36 @@ struct MergeResultPane: NSViewRepresentable {
     }
 
     private func buildAttributedString(theme: Theme) -> NSAttributedString {
-        let result = NSMutableAttributedString()
         let localTint = NSColor.systemGreen.withAlphaComponent(0.14)
         let remoteTint = NSColor.systemBlue.withAlphaComponent(0.14)
         let wordLocalTint = NSColor.systemGreen.withAlphaComponent(0.35)
         let wordRemoteTint = NSColor.systemBlue.withAlphaComponent(0.35)
-        let baseAttrs: [NSAttributedString.Key: Any] = [
-            .font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
-            .foregroundColor: NSColor(theme.color("fg")),
-        ]
-        // Build row-index -> (isLocal, ordinal, withinIndex) so we can
-        // color hunks and apply word diff to changed ranges.
+        // Build the plain text first, tracking per-row UTF-16 ranges
+        // so we can apply tints and word-diff overlays after
+        // syntax highlighting paints the base layer.
+        var plain = ""
+        var rowRanges: [NSRange] = []
+        for (i, row) in rows.enumerated() {
+            let isLastRow = i == rows.count - 1
+            let suffix = (isLastRow && !endsWithNewline) ? "" : "\n"
+            let start = (plain as NSString).length
+            plain += row.content + suffix
+            let length = (plain as NSString).length - start
+            rowRanges.append(NSRange(location: start, length: length))
+        }
+        // Syntax-highlighted base — same path used by the read-only
+        // merge editor, so the RESULT pane no longer drops back to
+        // monochrome plain text on code conflicts.
+        let result = MergeConflictTextStorage.highlightedAttributedString(
+            text: plain,
+            fileExtension: fileExtension,
+            fontFamily: codeFontFamily,
+            fontSize: codeFontSize,
+            theme: theme
+        )
+        // Map row index to (isLocal, ordinal, withinIndex) for tints
+        // and word-diff. BASE rows are intentionally left out so the
+        // BASE styling branch below applies dim+italic.
         var rowKind: [Int: (isLocal: Bool, ordinal: Int, withinIndex: Int)] = [:]
         for range in conflictRanges {
             let local = hunkPairs[range.conflictOrdinal].local
@@ -180,23 +199,20 @@ struct MergeResultPane: NSViewRepresentable {
                 if offset < localLineCount {
                     rowKind[row] = (true, range.conflictOrdinal, offset)
                 } else if offset < localLineCount + baseLineCount {
-                    // BASE row — leave out of rowKind so the BASE
-                    // styling branch in the per-row loop below
-                    // applies italic + muted instead of LOCAL/REMOTE tint.
                     continue
                 } else {
                     rowKind[row] = (false, range.conflictOrdinal, offset - localLineCount - baseLineCount)
                 }
             }
         }
+        let italicFont = CenterTypography
+            .resolveCodeFont(family: codeFontFamily, size: codeFontSize)
+            .italicVariant()
         for (i, row) in rows.enumerated() {
-            let isLastRow = i == rows.count - 1
-            let suffix = (isLastRow && !endsWithNewline) ? "" : "\n"
-            let line = NSMutableAttributedString(string: row.content + suffix, attributes: baseAttrs)
+            let range = rowRanges[i]
             if let kind = rowKind[i] {
                 let tint = kind.isLocal ? localTint : remoteTint
-                line.addAttribute(.backgroundColor, value: tint,
-                                  range: NSRange(location: 0, length: line.length))
+                result.addAttribute(.backgroundColor, value: tint, range: range)
                 if wordDiffMode != .off {
                     let pair = hunkPairs[kind.ordinal]
                     let pairLines = (kind.isLocal ? pair.local : pair.remote).components(separatedBy: "\n")
@@ -208,23 +224,18 @@ struct MergeResultPane: NSViewRepresentable {
                                                   mode: wordDiffMode)
                     let changed = kind.isLocal ? diff.localChanged : diff.remoteChanged
                     let wordTint = kind.isLocal ? wordLocalTint : wordRemoteTint
-                    let lineUTF16Length = (row.content as NSString).length
-                    for r in changed where NSMaxRange(r) <= lineUTF16Length {
-                        line.addAttribute(.backgroundColor, value: wordTint, range: r)
+                    let rowContentLen = (row.content as NSString).length
+                    for r in changed where NSMaxRange(r) <= rowContentLen {
+                        let abs = NSRange(location: range.location + r.location, length: r.length)
+                        result.addAttribute(.backgroundColor, value: wordTint, range: abs)
                     }
                 }
             } else if conflictRanges.first(where: { $0.baseRows.contains(i) }) != nil {
                 let baseTint = NSColor(theme.color("fg-dim")).withAlphaComponent(0.10)
-                line.addAttribute(.backgroundColor, value: baseTint,
-                                  range: NSRange(location: 0, length: line.length))
-                line.addAttribute(.foregroundColor, value: NSColor(theme.color("fg-dim")),
-                                  range: NSRange(location: 0, length: line.length))
-                if let italicFont = (baseAttrs[.font] as? NSFont)?.italicVariant() {
-                    line.addAttribute(.font, value: italicFont,
-                                      range: NSRange(location: 0, length: line.length))
-                }
+                result.addAttribute(.backgroundColor, value: baseTint, range: range)
+                result.addAttribute(.foregroundColor, value: NSColor(theme.color("fg-dim")), range: range)
+                result.addAttribute(.font, value: italicFont, range: range)
             }
-            result.append(line)
         }
         return result
     }
