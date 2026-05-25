@@ -88,6 +88,20 @@ struct MergeView3Way: View {
                 onJump: onJumpToConflict
             )
         }
+        .onChange(of: model.currentConflictIndex) { _, _ in
+            scrollToCurrentConflict()
+        }
+    }
+
+    private func scrollToCurrentConflict() {
+        guard let ordinal = model.currentConflictIndex else { return }
+        let layout = MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
+        guard ordinal < layout.conflictRanges.count else { return }
+        let row = layout.conflictRanges[ordinal].resultRows.lowerBound
+        coordinator.setLogicalRow(row)
+        coordinator.onSyncLocal?(row)
+        coordinator.onSyncResult?(row)
+        coordinator.onSyncRemote?(row)
     }
 
     private func acceptLocal(at ordinal: Int) {

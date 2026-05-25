@@ -527,10 +527,14 @@ final class MergeConflictTabModel {
             switch region {
             case .text(let t): out.append(t)
             case .conflict(let block):
-                out.append(block.local)
-                if !block.local.hasSuffix("\n") { out.append("\n") }
-                out.append(block.remote)
-                if !block.remote.hasSuffix("\n") { out.append("\n") }
+                if !block.local.isEmpty {
+                    out.append(block.local)
+                    if !block.local.hasSuffix("\n") { out.append("\n") }
+                }
+                if !block.remote.isEmpty {
+                    out.append(block.remote)
+                    if !block.remote.hasSuffix("\n") { out.append("\n") }
+                }
             }
         }
         return out

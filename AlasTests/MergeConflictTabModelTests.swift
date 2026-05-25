@@ -776,6 +776,20 @@ struct MergeConflictTabModelTests {
         #expect(!flat.contains(">>>>>>>"))
     }
 
+    @Test func flatTextForWritingSkipsBlankLineForEmptySideOfConflict() async throws {
+        // Simulate an addedByThem-style conflict: empty LOCAL, real REMOTE.
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        model.resultText = "<<<<<<< HEAD\n=======\nadded by them\n>>>>>>> feature\n"
+        model.reparse()
+        let flat = model.flatTextForWriting()
+        // No leading blank line; just the REMOTE content.
+        #expect(flat == "added by them\n")
+    }
+
     @Test func setRowContentRoutesToRemoteWhenLocalHunkIsEmpty() async throws {
         // Regression test: when LOCAL is empty (e.g., addedByThem),
         // visual row 0 of the conflict belongs to REMOTE, not LOCAL.
