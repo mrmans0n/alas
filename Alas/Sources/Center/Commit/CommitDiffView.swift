@@ -11,6 +11,8 @@ struct CommitDiffView: View {
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
     let onOpenFile: (() -> Void)?
+    let onDropHunk: ((ParsedDiff.Hunk) -> Void)?
+    let dropHunkEnabled: (CommitChangedFile, ParsedDiff.Hunk) -> Bool
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -18,6 +20,34 @@ struct CommitDiffView: View {
     @State private var imagePair: ImageDiffPair?
     @State private var imagePairLoaded: Bool = false
     private let git = GitService()
+
+    init(
+        worktreePath: URL,
+        sha: String,
+        file: CommitChangedFile,
+        path: String,
+        diff: ParsedDiff,
+        loading: Bool,
+        error: String?,
+        codeFontFamily: String = "",
+        codeFontSize: CGFloat = 13,
+        onOpenFile: (() -> Void)?,
+        onDropHunk: ((ParsedDiff.Hunk) -> Void)? = nil,
+        dropHunkEnabled: @escaping (CommitChangedFile, ParsedDiff.Hunk) -> Bool = { _, _ in false }
+    ) {
+        self.worktreePath = worktreePath
+        self.sha = sha
+        self.file = file
+        self.path = path
+        self.diff = diff
+        self.loading = loading
+        self.error = error
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.onOpenFile = onOpenFile
+        self.onDropHunk = onDropHunk
+        self.dropHunkEnabled = dropHunkEnabled
+    }
 
     var body: some View {
         if ImageFileType.isSupported(relativePath: path) {
@@ -121,7 +151,13 @@ struct CommitDiffView: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
-                        HunkView(hunk: hunk, fileExtension: (path as NSString).pathExtension, codeFontFamily: codeFontFamily, codeFontSize: codeFontSize)
+                        HunkView(
+                            hunk: hunk,
+                            fileExtension: (path as NSString).pathExtension,
+                            codeFontFamily: codeFontFamily,
+                            codeFontSize: codeFontSize,
+                            onDropFromCommit: dropHunkEnabled(file, hunk) ? { onDropHunk?(hunk) } : nil
+                        )
                     }
                 }
                 .padding(.vertical, 8)

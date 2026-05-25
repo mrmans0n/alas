@@ -21,6 +21,8 @@ struct CommitEditorTabView: View {
     @State private var savedBodyText = ""
     @State private var busy = false
     @State private var error: String?
+    @State private var pendingDropFile: CommitChangedFile?
+    @State private var pendingDropHunk: ParsedDiff.Hunk?
 
     @Environment(\.theme) private var theme
     private let git = GitService()
@@ -72,6 +74,30 @@ struct CommitEditorTabView: View {
         }
         .task(id: tabState.currentSha) { await loadDetails() }
         .task(id: diffTaskKey) { await loadDiffIfNeeded() }
+        .confirmationDialog("Drop file from commit?", isPresented: Binding(
+            get: { pendingDropFile != nil },
+            set: { if !$0 { pendingDropFile = nil } }
+        )) {
+            Button("Drop \(((pendingDropFile?.path ?? "file") as NSString).lastPathComponent)", role: .destructive) {
+                if let file = pendingDropFile { dropFile(file) }
+                pendingDropFile = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This rewrites commit \(String(tabState.currentSha.prefix(7))) immediately.")
+        }
+        .confirmationDialog("Drop hunk from commit?", isPresented: Binding(
+            get: { pendingDropHunk != nil },
+            set: { if !$0 { pendingDropHunk = nil } }
+        )) {
+            Button("Drop hunk", role: .destructive) {
+                if let hunk = pendingDropHunk { dropHunk(hunk) }
+                pendingDropHunk = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDropHunk = nil }
+        } message: {
+            Text("This rewrites commit \(String(tabState.currentSha.prefix(7))) immediately.")
+        }
     }
 
     @ViewBuilder
@@ -81,7 +107,12 @@ struct CommitEditorTabView: View {
             let ratio = max(0.15, min(0.7, appState.config.commitDetailSplitRatio))
             let leftWidth = max(Self.minPaneWidth, total * ratio)
             HStack(spacing: 0) {
-                CommitFilesListView(files: details.files, selectedPath: $selectedPath)
+                CommitFilesListView(
+                    files: details.files,
+                    selectedPath: $selectedPath,
+                    onDropFile: { pendingDropFile = $0 },
+                    dropFileEnabled: canDropFile
+                )
                     .frame(width: leftWidth)
                 DragHandle(axis: .horizontal, onDrag: { delta in
                     guard total > 0 else { return }
@@ -107,7 +138,9 @@ struct CommitEditorTabView: View {
                             codeFontSize: CGFloat(appState.config.code.fontSize),
                             onOpenFile: openAvailable
                                 ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
-                                : nil
+                                : nil,
+                            onDropHunk: { pendingDropHunk = $0 },
+                            dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) }
                         )
                     } else {
                         Text("Select a file")
@@ -185,6 +218,14 @@ struct CommitEditorTabView: View {
         "\(details.info.shortSha) \(displaySubject(from: details))"
     }
 
+    private func canDropFile(_ file: CommitChangedFile) -> Bool {
+        ["A", "M", "D"].contains(file.status)
+    }
+
+    private func canDropHunk(file: CommitChangedFile, hunk: ParsedDiff.Hunk) -> Bool {
+        file.status == "M" && !hunk.lines.isEmpty
+    }
+
     private func subjectLine(from commit: CommitInfo) -> String {
         if let tag = commit.conventionalTag {
             return "\(tag): \(commit.subject)"
@@ -205,9 +246,20 @@ struct CommitEditorTabView: View {
     }
 
     private func saveMessage() {
+        runEdit(action: .message(subject: subject, body: bodyText))
+    }
+
+    private func dropFile(_ file: CommitChangedFile) {
+        runEdit(action: .dropFile(path: file.path))
+    }
+
+    private func dropHunk(_ hunk: ParsedDiff.Hunk) {
+        guard let selectedPath else { return }
+        runEdit(action: .dropHunk(path: selectedPath, hunk: hunk))
+    }
+
+    private func runEdit(action: CommitEditAction) {
         guard !busy else { return }
-        let newSubject = subject
-        let newBody = bodyText
         let targetSha = tabState.currentSha
         let tabId = tabState.id
 
@@ -221,7 +273,7 @@ struct CommitEditorTabView: View {
                     worktreePath: worktreePath,
                     baseRef: tabState.baseRef,
                     targetSha: targetSha,
-                    action: .message(subject: newSubject, body: newBody)
+                    action: action
                 )
                 async let detailsLoad = git.commitDetails(at: worktreePath, sha: result.currentSha)
                 async let subjectLoad = git.rawCommitSubject(at: worktreePath, sha: result.currentSha)

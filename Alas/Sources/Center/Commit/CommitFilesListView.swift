@@ -4,8 +4,22 @@ import SwiftUI
 struct CommitFilesListView: View {
     let files: [CommitChangedFile]
     @Binding var selectedPath: String?
+    let onDropFile: ((CommitChangedFile) -> Void)?
+    let dropFileEnabled: (CommitChangedFile) -> Bool
 
     @Environment(\.theme) private var theme
+
+    init(
+        files: [CommitChangedFile],
+        selectedPath: Binding<String?>,
+        onDropFile: ((CommitChangedFile) -> Void)? = nil,
+        dropFileEnabled: @escaping (CommitChangedFile) -> Bool = { _ in false }
+    ) {
+        self.files = files
+        self._selectedPath = selectedPath
+        self.onDropFile = onDropFile
+        self.dropFileEnabled = dropFileEnabled
+    }
 
     var body: some View {
         ScrollView {
@@ -53,6 +67,12 @@ struct CommitFilesListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if let onDropFile {
+                Button("Drop file from commit...") { onDropFile(file) }
+                    .disabled(!dropFileEnabled(file))
+            }
+        }
     }
 
     private func statusColor(_ status: String) -> Color {
