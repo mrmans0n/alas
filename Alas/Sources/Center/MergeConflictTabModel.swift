@@ -468,6 +468,19 @@ final class MergeConflictTabModel {
         guard newRegionStart >= 0, newRegionEnd <= newUTF16.count, newRegionStart <= newRegionEnd else {
             return false
         }
+        // Boundary-newline deletion: if the change extends to the very
+        // end of a non-last region and the deleted bytes include a
+        // newline, the user is merging this region with the following
+        // one. Defer to slow path so the next region absorbs the
+        // boundary correctly — the fast path would re-emit a phantom
+        // separator newline (via serialize+reparse) and silently
+        // restore the deleted content.
+        if oldChangedEnd > oldChangedStart, oldChangedEnd == oldRegionEnd,
+           regionIdx < regions.count - 1,
+           regionRenderedUTF16Length(regions[regionIdx + 1], showBase: showBase) > 0,
+           oldUTF16[oldChangedEnd - 1] == 0x0A {
+            return false
+        }
         let newRegionUTF16 = Array(newUTF16[newRegionStart ..< newRegionEnd])
         let newRegionString = String(decoding: newRegionUTF16, as: UTF16.self)
         // Pass both START and END of the change in within-region
@@ -703,7 +716,16 @@ final class MergeConflictTabModel {
                 let trailingNewline = text.hasSuffix("\n")
                     || take < originalCount
                     || (isLast && newText.hasSuffix("\n"))
-                let rebuilt = slice.joined(separator: "\n") + (trailingNewline ? "\n" : "")
+                // Only emit a trailing newline when the slice has
+                // content. An empty slice with trailingNewline=true
+                // injects a phantom "\n" into the merged output,
+                // breaking round-trip when a boundary newline is
+                // deleted and earlier regions absorbed the consumed
+                // lines (e.g. deleting the newline between a conflict
+                // REMOTE row and the following .text region).
+                let rebuilt = slice.isEmpty
+                    ? ""
+                    : slice.joined(separator: "\n") + (trailingNewline ? "\n" : "")
                 regions[regionIndex] = .text(rebuilt)
                 cursor += take
             case .conflict(let block):

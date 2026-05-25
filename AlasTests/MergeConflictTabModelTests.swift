@@ -828,6 +828,39 @@ struct MergeConflictTabModelTests {
         #expect(flat.contains("feature mid"))
     }
 
+    @Test func applyEditedFullTextPreservesEditAcrossRegionBoundary() async throws {
+        // Regression: deleting the newline between the last REMOTE row
+        // and the following plain-text region used to leave the trailing
+        // .text region rebuilt with a phantom "\n", so the saved merge
+        // result diverged from the user's typed buffer.
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try Self.writeFile(repo, "a.txt", "header line\nbase mid\nfooter line\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try Self.writeFile(repo, "a.txt", "header line\nfeature mid\nfooter line\n")
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try Self.writeFile(repo, "a.txt", "header line\nmain mid\nfooter line\n")
+        _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // RESULT pane (markerless): "header line\nmain mid\nfeature mid\nfooter line\n"
+        // User deletes the newline between "feature mid" and "footer line":
+        // new buffer = "header line\nmain mid\nfeature midfooter line\n"
+        let edited = "header line\nmain mid\nfeature midfooter line\n"
+        model.applyEditedFullText(edited)
+        // Round trip must match exactly — no phantom trailing "\n".
+        #expect(model.flatTextForWriting() == edited)
+    }
+
     @Test func applyEditedFullTextRoutesRemoteSideEditToRemote() async throws {
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
