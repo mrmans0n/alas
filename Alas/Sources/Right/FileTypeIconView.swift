@@ -185,7 +185,7 @@ enum FileTypeIcon {
         // 1. Path-aware matches (folder name alone is too ambiguous).
         if let path = path?.lowercased() {
             for entry in folderPathSuffixes {
-                if path.hasSuffix(entry.pathSuffix) {
+                if pathMatchesSegmentSuffix(path, entry.pathSuffix) {
                     return Info(symbol: entry.symbol, hex: entry.hex, kind: .folderPath, style: .nerdFont)
                 }
             }
@@ -232,6 +232,15 @@ enum FileTypeIcon {
         ("src/main/resources", "\u{E256}", "E76F00"),  // Java resources
         ("src/test/resources", "\u{E256}", "E76F00"),  // Java test resources
     ]
+
+    private static func pathMatchesSegmentSuffix(_ path: String, _ suffix: String) -> Bool {
+        let normalizedPath = path.replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let normalizedSuffix = suffix.replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        return normalizedPath == normalizedSuffix || normalizedPath.hasSuffix("/" + normalizedSuffix)
+    }
 }
 
 /// Square tile with the file-type glyph.
@@ -285,13 +294,14 @@ struct FolderIconView: View {
     var size: CGFloat = 18
 
     var body: some View {
-        if let info = FileTypeIcon.folderInfo(name: name, path: path) {
-            NerdFontGlyphView(symbol: info.symbol, hex: info.hex)
-                .frame(width: size, height: size)
-        } else {
-            Icon(name: "folder", size: 11, color: fallbackColor)
-                .frame(width: size, height: size)
+        Group {
+            if let info = FileTypeIcon.folderInfo(name: name, path: path) {
+                NerdFontGlyphView(symbol: info.symbol, hex: info.hex)
+            } else {
+                Icon(name: "folder", size: 11, color: fallbackColor)
+            }
         }
+        .frame(width: size, height: size)
     }
 }
 
