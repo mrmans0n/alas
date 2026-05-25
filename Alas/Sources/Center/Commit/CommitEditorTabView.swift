@@ -180,9 +180,121 @@ struct CommitEditorTabView: View {
         return details.info.subject
     }
 
+    private func tabTitle(from details: CommitDetails) -> String {
+        "\(details.info.shortSha) \(editorSubject(from: details))"
+    }
+
+    private func subjectLine(from commit: CommitInfo) -> String {
+        if let tag = commit.conventionalTag {
+            return "\(tag): \(commit.subject)"
+        }
+        return commit.subject
+    }
+
+    private func gitStdout(_ args: [String]) async throws -> String {
+        let result = try await Process.git(args, cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "CommitEditorTabView.git",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr.isEmpty ? "git failed" : result.stderr]
+            )
+        }
+        return result.stdout
+    }
+
     private func saveMessage() {
+        guard !busy else { return }
+        let newSubject = subject
+        let newBody = bodyText
+        let targetSha = tabState.currentSha
+        let tabId = tabState.id
+
+        busy = true
+        error = nil
+
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                let result = try await git.editCommit(
+                    worktreePath: worktreePath,
+                    baseRef: tabState.baseRef,
+                    targetSha: targetSha,
+                    action: .message(subject: newSubject, body: newBody)
+                )
+                let refreshedDetails = try await git.commitDetails(at: worktreePath, sha: result.currentSha)
+                let refreshedSubject = editorSubject(from: refreshedDetails)
+
+                details = refreshedDetails
+                selectedPath = refreshedDetails.files.first?.path
+                diff = ParsedDiff(hunks: [])
+                activeDiffKey = nil
+                subject = refreshedSubject
+                bodyText = refreshedDetails.body
+                savedSubject = refreshedSubject
+                savedBodyText = refreshedDetails.body
+
+                appState.tabs.updateCommitEditor(
+                    worktreeId: worktreeId,
+                    tabId: tabId,
+                    currentSha: result.currentSha,
+                    title: tabTitle(from: refreshedDetails)
+                )
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+            } catch {
+                self.error = (error as NSError).localizedDescription
+            }
+        }
     }
 
     private func generateMessage() {
+        guard !busy else { return }
+        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
+            error = "Select an AI tool to generate a commit message."
+            return
+        }
+        guard details != nil else {
+            error = "Commit details are still loading."
+            return
+        }
+
+        let currentSubject = subject
+        let currentBody = bodyText
+        let currentSha = tabState.currentSha
+        let baseRef = tabState.baseRef
+        let prompt = appState.config.changes.prompt
+
+        busy = true
+        error = nil
+
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                let diff = try await gitStdout(["show", "--no-color", "--format=", currentSha])
+                let branchRaw = try await gitStdout(["rev-parse", "--abbrev-ref", "HEAD"])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let branch: String? = branchRaw == "HEAD" ? nil : branchRaw
+                let nearbyCommits = try await git.commitsAhead(at: worktreePath, baseBranch: baseRef).commits
+                let payload = CommitContextBuilder.buildForCommitEdit(
+                    branch: branch,
+                    base: baseRef,
+                    nearbySubjects: nearbyCommits.map(subjectLine(from:)),
+                    priorMessage: GitService.HeadMessage(subject: currentSubject, body: currentBody),
+                    diff: diff
+                )
+
+                let message = try await AgentRunner.runPrompt(
+                    agent: agent,
+                    input: payload,
+                    prompt: prompt,
+                    workingDirectory: worktreePath.path
+                )
+                guard !Task.isCancelled else { return }
+                subject = message.subject
+                bodyText = message.body
+            } catch {
+                self.error = (error as NSError).localizedDescription
+            }
+        }
     }
 }
