@@ -775,43 +775,68 @@ extension GitService {
     ///
     /// One `git log` invocation parses subject + author + ISO date +
     /// per-commit numstat in a single pass to avoid N round-trips.
-    func commitsAhead(at worktree: URL, baseBranch: String? = nil) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
+    func commitsAhead(at worktree: URL, baseBranch: String? = nil, ignoreUpstream: Bool = false) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
         // Step 1: Resolve upstream first. `--symbolic-full-name @{u}` returns
         // `refs/remotes/origin/main`; `--abbrev-ref @{u}` returns
         // `origin/main`. Use the abbreviated form for display.
-        let up = try await Process.git(
-            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd: worktree
-        )
         var upstreamName: String? = nil
-        if up.exitCode == 0 {
-            let candidate = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !candidate.isEmpty && candidate != "@{u}" {
-                upstreamName = candidate
+        if !ignoreUpstream {
+            let up = try await Process.git(
+                ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                cwd: worktree
+            )
+            if up.exitCode == 0 {
+                let candidate = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty && candidate != "@{u}" {
+                    upstreamName = candidate
+                }
             }
         }
 
         // Step 2: If no upstream, try the base branch. Prefer `origin/<base>`
-        // over local `<base>` — the remote-tracking ref is usually current
-        // after a fetch, while the local branch can be stale (especially in
-        // worktrees that never check out the base branch directly). This also
-        // matches the ref the rebase affordance targets via `resolveBaseRef`,
-        // so the Commits section stays consistent with what the user just
-        // rebased onto.
+        // over local `<base>` for simple branch names. Slash-named bases are
+        // ambiguous, so resolve local refs first before treating them as
+        // remote-qualified refs.
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
-            let origin = try await Process.git(
-                ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
-                cwd: worktree
-            )
-            if origin.exitCode == 0 {
-                baseName = "origin/\(base)"
-            } else {
+            if base.contains("/") {
                 let local = try await Process.git(
                     ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
                     cwd: worktree
                 )
-                if local.exitCode == 0 { baseName = base }
+                if local.exitCode == 0 {
+                    baseName = base
+                } else {
+                    let direct = try await Process.git(
+                        ["show-ref", "--verify", "--quiet", "refs/remotes/\(base)"],
+                        cwd: worktree
+                    )
+                    if direct.exitCode == 0 { baseName = base }
+                }
+            }
+            if baseName == nil {
+                if ignoreUpstream {
+                    let local = try await Process.git(
+                        ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
+                        cwd: worktree
+                    )
+                    if local.exitCode == 0 { baseName = base }
+                }
+                if baseName == nil {
+                    let origin = try await Process.git(
+                        ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
+                        cwd: worktree
+                    )
+                    if origin.exitCode == 0 {
+                        baseName = "origin/\(base)"
+                    } else if !ignoreUpstream {
+                        let local = try await Process.git(
+                            ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
+                            cwd: worktree
+                        )
+                        if local.exitCode == 0 { baseName = base }
+                    }
+                }
             }
         }
 
@@ -1010,34 +1035,85 @@ extension GitService {
     }
 
     /// Resolves the base ref to compare against for a given worktree.
-    /// Returns nil when neither `origin/<base>` nor local `<base>` exists.
+    /// Returns nil when neither `origin/<base>`, `refs/remotes/<base>`, nor local `<base>` exists.
     /// `remote == nil` means "no fetch path; use the local ref as-is".
     func resolveBaseRef(
         worktreePath: URL,
-        baseBranch: String
-    ) async throws -> (remote: String?, baseRef: String)? {
+        baseBranch: String,
+        preferLocal: Bool = false
+    ) async throws -> (remote: String?, baseRef: String, fetchBranch: String?)? {
         guard !baseBranch.isEmpty else { return nil }
 
-        // Prefer origin/<base>.
+        if baseBranch.contains("/") {
+            let localCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
+                cwd: worktreePath
+            )
+            if localCheck.exitCode == 0 {
+                return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
+            }
+
+            let directRef = "refs/remotes/\(baseBranch)"
+            let directCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", directRef],
+                cwd: worktreePath
+            )
+            if directCheck.exitCode == 0 {
+                let remoteBranch = try await splitRemoteQualifiedRef(baseBranch, worktreePath: worktreePath)
+                return (remote: remoteBranch.remote, baseRef: baseBranch, fetchBranch: remoteBranch.branch)
+            }
+        }
+
+        if preferLocal {
+            let localCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
+                cwd: worktreePath
+            )
+            if localCheck.exitCode == 0 {
+                return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
+            }
+        }
+
+        // Prefer origin/<base> for configured defaults.
         let originRef = "refs/remotes/origin/\(baseBranch)"
         let originCheck = try await Process.git(
             ["show-ref", "--verify", "--quiet", originRef],
             cwd: worktreePath
         )
         if originCheck.exitCode == 0 {
-            return (remote: "origin", baseRef: "origin/\(baseBranch)")
+            return (remote: "origin", baseRef: "origin/\(baseBranch)", fetchBranch: baseBranch)
         }
 
-        // Fall back to local <base>.
-        let localCheck = try await Process.git(
-            ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
-            cwd: worktreePath
-        )
-        if localCheck.exitCode == 0 {
-            return (remote: nil, baseRef: baseBranch)
+        if !preferLocal {
+            let localCheck = try await Process.git(
+                ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
+                cwd: worktreePath
+            )
+            if localCheck.exitCode == 0 {
+                return (remote: nil, baseRef: baseBranch, fetchBranch: nil)
+            }
         }
 
         return nil
+    }
+
+    private func splitRemoteQualifiedRef(_ ref: String, worktreePath: URL) async throws -> (remote: String?, branch: String?) {
+        let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
+        if remotesResult.exitCode == 0 {
+            let remotes = remotesResult.stdout
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            if let remote = remotes
+                .filter({ ref.hasPrefix($0 + "/") })
+                .max(by: { $0.count < $1.count }) {
+                return (remote: remote, branch: String(ref.dropFirst(remote.count + 1)))
+            }
+        }
+
+        let parts = ref.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2 else { return (remote: nil, branch: nil) }
+        return (remote: String(parts[0]), branch: String(parts[1]))
     }
 
     /// Resolves the upstream tracking ref (e.g. `origin/my-feature`) of the

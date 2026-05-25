@@ -167,4 +167,51 @@ struct CommitsAheadTests {
         #expect(comparisonRef == "origin/main")
         #expect(commits.count == 1)
     }
+
+    @Test func ignoreUpstreamSkipsUpstreamResolution() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        try "1\n".write(to: worktree.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feat: ahead"], cwd: worktree)
+
+        let svc = GitService()
+        // With upstream resolution (default), upstream wins.
+        let (_, refDefault) = try await svc.commitsAhead(at: worktree, baseBranch: "nonexistent")
+        #expect(refDefault == "origin/main")
+
+        // With ignoreUpstream, upstream is skipped; nonexistent base returns nil.
+        let (_, refIgnored) = try await svc.commitsAhead(at: worktree, baseBranch: "nonexistent", ignoreUpstream: true)
+        #expect(refIgnored == nil)
+    }
+
+    @Test func slashNamedBasePrefersLocalBranchOverRemoteTrackingRef() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        let otherRemote = worktree.deletingLastPathComponent().appendingPathComponent("team.git")
+        _ = try await Process.git(["init", "--bare", "-q", otherRemote.path], cwd: nil)
+        _ = try await Process.git(["remote", "add", "team", otherRemote.path], cwd: worktree)
+        _ = try await Process.git(["checkout", "-q", "-b", "team/main"], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "local slash base"], cwd: worktree)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: worktree)
+        _ = try await Process.git(["push", "-q", "team", "main"], cwd: worktree)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat: feature work"], cwd: worktree)
+
+        let svc = GitService()
+        let (_, comparisonRef) = try await svc.commitsAhead(at: worktree, baseBranch: "team/main", ignoreUpstream: true)
+
+        #expect(comparisonRef == "team/main")
+    }
+
+    @Test func explicitSimpleBasePrefersLocalBranchOverOrigin() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat: feature work"], cwd: worktree)
+
+        let svc = GitService()
+        let (_, comparisonRef) = try await svc.commitsAhead(at: worktree, baseBranch: "main", ignoreUpstream: true)
+
+        #expect(comparisonRef == "main")
+    }
 }

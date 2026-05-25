@@ -65,6 +65,16 @@ final class RightPaneState {
     /// without throwing away the rest of the cached state.
     var baseBranch: String
 
+    /// `true` once the user has explicitly picked a base branch via the
+    /// selector. Prevents `RightPaneStore` from snapping the branch back to
+    /// the global config default on the next render.
+    var userOverrodeBaseBranch: Bool = false
+
+    /// The last base branch value that came from `AppConfig` (not from the
+    /// selector). Used by `RightPaneStore` to distinguish a Settings change
+    /// (new config value) from a normal render (same config value).
+    var lastConfigBaseBranch: String = ""
+
     var pendingDiscard: PendingDiscard? = nil
 
     /// Injected by `RightPaneStore` after creation so `confirmDiscard` can
@@ -76,6 +86,19 @@ final class RightPaneState {
     /// given file. In Plan 1, this routes to the existing unified DiffTabView.
     /// In Plan 2, it will route to the new 3-column merge editor.
     var openConflict: ((String) -> Void)? = nil
+
+    /// In-memory ring buffer of recently selected base branches for this
+    /// worktree. Max 3 entries; newest at the end. Not persisted.
+    private(set) var recentBaseBranches: [String] = []
+
+    /// Branches available in this worktree, populated on-demand by
+    /// `fetchBranches()`. Used by the base-branch picker.
+    private(set) var availableBranches: [String] = []
+
+    /// Upstream tracking ref of the current branch (e.g. `origin/main`),
+    /// resolved during `refreshSyncStatus()`. Used by the base-branch
+    /// picker to include the upstream in the smart shortlist.
+    private(set) var upstreamRef: String? = nil
 
     private let git = GitService()
     private let watcher: WorktreeWatcher
@@ -142,6 +165,32 @@ final class RightPaneState {
         syncStatusTimer = nil
     }
 
+    /// Update the base branch, record it in the recent list, and refresh.
+    func selectBaseBranch(_ branch: String) {
+        baseBranch = branch
+        userOverrodeBaseBranch = true
+        behindBase = nil
+        recentBaseBranches.removeAll { $0 == branch }
+        recentBaseBranches.append(branch)
+        if recentBaseBranches.count > 3 {
+            recentBaseBranches = Array(recentBaseBranches.suffix(3))
+        }
+        Task { @MainActor in
+            async let r = refresh()
+            async let s = refreshSyncStatus()
+            _ = await (r, s)
+        }
+    }
+
+    /// Populate `availableBranches` from git. Best-effort; errors are logged.
+    func fetchBranches() async {
+        do {
+            availableBranches = try await git.branches(at: worktree.path)
+        } catch {
+            logger.error("branch list fetch failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     @MainActor
     func refresh() async {
         loading = true
@@ -155,7 +204,7 @@ final class RightPaneState {
             self.hasMoreOlder = true
             self.isLoadingOlder = false
             async let s = git.status(worktreePath: worktree.path)
-            async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch)
+            async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch, ignoreUpstream: userOverrodeBaseBranch)
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
@@ -760,7 +809,8 @@ final class RightPaneState {
         do {
             guard let resolved = try await git.resolveBaseRef(
                 worktreePath: worktree.path,
-                baseBranch: baseBranch
+                baseBranch: baseBranch,
+                preferLocal: userOverrodeBaseBranch
             ) else {
                 behindBase = nil
                 return
@@ -772,7 +822,7 @@ final class RightPaneState {
                         try await git.fetchRef(
                             worktreePath: worktree.path,
                             remote: remote,
-                            branch: baseBranch
+                            branch: resolved.fetchBranch ?? baseBranch
                         )
                     } catch {
                         logger.error("base fetch failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -795,8 +845,10 @@ final class RightPaneState {
                 worktreePath: worktree.path
             ) else {
                 behindUpstream = nil
+                upstreamRef = nil
                 return
             }
+            upstreamRef = upstream.ref
             // Upstream ref looks like "origin/<branch>"; the local branch name
             // is what we fetch.
             let branchName = String(upstream.ref.dropFirst(upstream.remote.count + 1))

@@ -28,9 +28,13 @@ struct CommitsSectionView: View {
     let behindBase: GitService.BehindStatus?
     let behindUpstream: GitService.BehindStatus?
     @Binding var expanded: Bool
+    @Binding var baseBranch: String
+    let branches: [String]
     let onSelect: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
     let onLoadOlder: () -> Void
+    let onSelectBaseBranch: (String) -> Void
+    let onOpenBaseBranchSelector: () -> Void
     let rps: RightPaneState
 
     @Environment(\.theme) private var theme
@@ -50,16 +54,13 @@ struct CommitsSectionView: View {
                     if let s = behindUpstream {
                         BehindChip(text: "\(s.count) behind \(s.ref)")
                     }
-                    if let comparisonRef {
-                        HStack(spacing: 4) {
-                            Icon(name: "branch", size: 10, color: theme.color("fg-faint"))
-                            Text(comparisonRef)
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(theme.color("fg-faint"))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
+                    BaseBranchSelector(
+                        baseBranch: $baseBranch,
+                        branches: branches,
+                        currentRef: comparisonRef,
+                        onSelect: onSelectBaseBranch,
+                        onOpen: onOpenBaseBranchSelector
+                    )
                 }
             }
 
