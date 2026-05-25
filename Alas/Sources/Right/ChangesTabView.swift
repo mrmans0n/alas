@@ -7,13 +7,6 @@ struct ChangesTabView: View {
     let onSelect: (ChangedFile) -> Void
     let onSelectCommit: (CommitInfo) -> Void
 
-    @State private var pendingMergeBranch: String = ""
-    @State private var pendingRebaseOnto: String = ""
-    @State private var branchesForPicker: [String] = []
-    @State private var branchesLoading: Bool = false
-    @State private var showMergePicker: Bool = false
-    @State private var showRebasePicker: Bool = false
-
     private var stagedCount: Int {
         rps.changes.filter { $0.stage == .staged }.count
     }
@@ -33,33 +26,8 @@ struct ChangesTabView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            branchOpsToolbar
-            ScrollView {
-                scrollContent
-            }
-        }
-        .popover(isPresented: $showMergePicker, arrowEdge: .bottom) {
-            branchPickerSheet(title: "Merge into current",
-                              actionLabel: "Merge",
-                              selection: $pendingMergeBranch,
-                              onConfirm: {
-                                  guard !pendingMergeBranch.isEmpty else { return }
-                                  rps.runMerge(branch: pendingMergeBranch)
-                                  showMergePicker = false
-                                  pendingMergeBranch = ""
-                              })
-        }
-        .popover(isPresented: $showRebasePicker, arrowEdge: .bottom) {
-            branchPickerSheet(title: "Rebase current onto",
-                              actionLabel: "Rebase",
-                              selection: $pendingRebaseOnto,
-                              onConfirm: {
-                                  guard !pendingRebaseOnto.isEmpty else { return }
-                                  rps.runRebase(onto: pendingRebaseOnto)
-                                  showRebasePicker = false
-                                  pendingRebaseOnto = ""
-                              })
+        ScrollView {
+            scrollContent
         }
     }
 
@@ -162,75 +130,6 @@ struct ChangesTabView: View {
                 onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
                 rps: rps
             )
-        }
-    }
-
-    private var branchOpsToolbar: some View {
-        HStack(spacing: 6) {
-            Menu {
-                Button("Merge branch into this worktree…") { openMergePicker() }
-                Button("Rebase this worktree onto…")      { openRebasePicker() }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.merge")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("Branch")
-                        .font(.system(size: 11))
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            Spacer()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(Color.gray.opacity(0.05))
-    }
-
-    @ViewBuilder
-    private func branchPickerSheet(title: String,
-                                   actionLabel: String,
-                                   selection: Binding<String>,
-                                   onConfirm: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 12, weight: .semibold))
-            BranchPicker(
-                selection: selection,
-                branches: branchesForPicker,
-                isLoading: branchesLoading,
-                errorMessage: nil
-            )
-            .frame(width: 280)
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    showMergePicker = false
-                    showRebasePicker = false
-                }
-                Button(actionLabel, action: onConfirm)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(selection.wrappedValue.isEmpty)
-            }
-        }
-        .padding(12)
-    }
-
-    private func openMergePicker() {
-        Task { await loadBranches() }
-        showMergePicker = true
-    }
-
-    private func openRebasePicker() {
-        Task { await loadBranches() }
-        showRebasePicker = true
-    }
-
-    private func loadBranches() async {
-        branchesLoading = true
-        defer { branchesLoading = false }
-        let svc = GitService()
-        if let list = try? await svc.branches(at: rps.worktree.path) {
-            branchesForPicker = list
         }
     }
 
