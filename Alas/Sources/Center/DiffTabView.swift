@@ -327,7 +327,6 @@ struct HunkView: View {
     var onStage:   (() -> Void)? = nil
     var onDiscard: (() -> Void)? = nil
     @Environment(\.theme) var theme
-    @State private var bodyViewportWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -349,38 +348,18 @@ struct HunkView: View {
             .background(theme.color("bg-2"))
             .overlay(Divider().opacity(0.5), alignment: .top)
             .overlay(Divider().opacity(0.5), alignment: .bottom)
-            ScrollView(.horizontal) {
-                DiffSelectableTextView(
-                    hunk: hunk,
-                    fileExtension: fileExtension,
-                    codeFontFamily: codeFontFamily,
-                    codeFontSize: codeFontSize,
-                    theme: theme
-                )
-                .frame(minWidth: bodyViewportWidth, alignment: .leading)
-            }
-            .defaultScrollAnchor(.topLeading)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(key: HunkBodyViewportWidthPreferenceKey.self, value: proxy.size.width)
-                }
+            DiffSelectableTextView(
+                hunk: hunk,
+                fileExtension: fileExtension,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                theme: theme
             )
+            .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onPreferenceChange(HunkBodyViewportWidthPreferenceKey.self) { width in
-            bodyViewportWidth = width
-        }
     }
 
     /// The hunk header (@@…@@) is rendered slightly smaller than diff content.
     private var headerFontSize: CGFloat { (codeFontSize * 0.85).rounded() }
-}
-
-private struct HunkBodyViewportWidthPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
 }

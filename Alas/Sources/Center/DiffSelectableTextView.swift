@@ -8,17 +8,70 @@ struct DiffSelectableTextView: NSViewRepresentable {
     let codeFontSize: CGFloat
     let theme: Theme
 
-    func makeNSView(context: Context) -> DiffSelectableTextContainerView {
-        DiffSelectableTextContainerView()
+    func makeNSView(context: Context) -> DiffSelectableTextScrollView {
+        DiffSelectableTextScrollView()
     }
 
-    func updateNSView(_ nsView: DiffSelectableTextContainerView, context: Context) {
+    func updateNSView(_ nsView: DiffSelectableTextScrollView, context: Context) {
         nsView.update(
             hunk: hunk,
             fileExtension: fileExtension,
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             theme: theme
         )
+    }
+}
+
+final class DiffSelectableTextScrollView: NSScrollView {
+    let containerView = DiffSelectableTextContainerView()
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: containerView.intrinsicContentSize.height)
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = false
+        borderType = .noBorder
+        hasHorizontalScroller = true
+        hasVerticalScroller = false
+        autohidesScrollers = true
+        scrollerStyle = .overlay
+        documentView = containerView
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    func update(
+        hunk: ParsedDiff.Hunk,
+        fileExtension: String,
+        font: NSFont,
+        theme: Theme
+    ) {
+        containerView.update(hunk: hunk, fileExtension: fileExtension, font: font, theme: theme)
+        invalidateIntrinsicContentSize()
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let contentSize = containerView.intrinsicContentSize
+        containerView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: max(contentSize.width, contentView.bounds.width),
+            height: contentSize.height
+        )
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) {
+            nextResponder?.scrollWheel(with: event)
+            return
+        }
+        super.scrollWheel(with: event)
     }
 }
 
