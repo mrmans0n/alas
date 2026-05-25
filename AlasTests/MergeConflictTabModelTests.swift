@@ -409,7 +409,10 @@ struct MergeConflictTabModelTests {
         #expect(model.agentProposal == nil)
     }
 
-    @Test func loadGenerationIncrementsOnEverySuccessfulLoad() async throws {
+    @Test func loadGenerationIncrementsOnEveryLoadAttempt() async throws {
+        // Both successful and failed loads must bump the generation — stale
+        // async guards (binary cache, requestAgentResolveFile) rely on it
+        // changing even when a reload fails.
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
         try await Self.makeConflictingBranches(repo)
@@ -425,9 +428,15 @@ struct MergeConflictTabModelTests {
         let first = model.loadGeneration
         #expect(first > 0)
         await model.load()
-        // The token must change on every reload — that's what stale-async
-        // guards (binary cache, requestAgentResolveFile) key off of.
         #expect(model.loadGeneration > first)
+
+        // Now make load() fail by abort'ing the merge so a.txt is no longer
+        // conflicted. The generation must still bump.
+        _ = try await Process.git(["merge", "--abort"], cwd: repo)
+        let beforeFailedLoad = model.loadGeneration
+        await model.load()
+        #expect(model.loadError != nil)
+        #expect(model.loadGeneration > beforeFailedLoad)
     }
 
     @Test func discardAgentProposalClearsProposalAndKeepsResultText() {

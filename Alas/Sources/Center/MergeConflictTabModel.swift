@@ -59,7 +59,14 @@ final class MergeConflictTabModel {
 
     /// Re-loads the conflicted file's three sides and re-parses the on-disk
     /// merged buffer. Safe to call repeatedly.
+    ///
+    /// `loadGeneration` is incremented on EVERY attempt (success or failure)
+    /// so stale-async guards (`requestAgentResolveFile`, binary image cache)
+    /// invalidate even when a reload fails — otherwise an in-flight agent
+    /// resolve from before a failed reload could still write its proposal
+    /// into the model after we've cleared everything.
     func load() async {
+        loadGeneration += 1
         do {
             let file = try await gitService.conflictedFile(
                 worktreePath: worktreePath,
@@ -74,7 +81,6 @@ final class MergeConflictTabModel {
             self.agentProposal = nil
             self.agentBusy = false
             self.loadError = nil
-            self.loadGeneration += 1
         } catch {
             self.conflictedFile = nil
             self.regions = []
