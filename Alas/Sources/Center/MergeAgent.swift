@@ -89,8 +89,14 @@ enum MergeAgent {
         prompt: String,
         worktreePath: URL,
         timeout: TimeInterval = 600
-    ) async throws -> GeneratedMessage {
-        return try await AgentRunner.runPrompt(
+    ) async throws -> String {
+        // Use the raw-stdout variant: `AgentMessageParser` collapses
+        // any subsequent same-paragraph lines after the first into the
+        // body, so a typical "one line per file" summary would have
+        // every line after the first dropped from `subject` and the
+        // banner tooltip would only show the first file. The raw
+        // output preserves the full per-file breakdown.
+        return try await AgentRunner.runPromptRaw(
             agent: agent,
             input: "",
             prompt: prompt,

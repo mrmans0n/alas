@@ -1079,22 +1079,13 @@ final class RightPaneState {
             guard let self else { return }
             var report: BulkConflictResolveReport
             do {
-                let result = try await MergeAgent.resolveAllInWorkspace(
+                let agentOutput = try await MergeAgent.resolveAllInWorkspace(
                     agent: agent,
                     prompt: prompt,
                     worktreePath: self.worktree.path
                 )
                 await self.refresh()
                 let remaining = self.changes.filter { $0.conflict != nil }.count
-                // Build a short status headline ourselves; stash the
-                // full agent output (subject + body, joined) in details.
-                // We can't use `result.subject` alone — the parser puts
-                // only the first line in subject, so a per-file
-                // breakdown collapses to the first file and the rest
-                // gets buried.
-                let agentOutput = [result.subject, result.body]
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n")
                 let headline: String = {
                     if remaining == 0 {
                         return "All conflicts resolved."
@@ -1105,7 +1096,7 @@ final class RightPaneState {
                     success: true,
                     remainingConflicts: remaining,
                     summary: headline,
-                    details: agentOutput
+                    details: agentOutput.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             } catch {
                 await self.refresh()

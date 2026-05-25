@@ -33,6 +33,12 @@ enum AgentMessageParser {
 /// `Process+Git.swift`; the commentary there explains why each fd is closed
 /// when it is.
 enum AgentRunner {
+    /// Convenience wrapper for callers that want the parsed
+    /// `subject`/`body` shape (commit-message generator, etc.). The
+    /// bulk merge-conflict resolve uses `runPromptRaw` instead because
+    /// `AgentMessageParser` drops every line after the first in the
+    /// initial paragraph, which collapses "one line per file"
+    /// summaries to a single line.
     static func runPrompt(
         agent: AgentDefinition,
         input: String,
@@ -42,6 +48,31 @@ enum AgentRunner {
         timeout: TimeInterval = 120,
         bypassPermissions: Bool = false
     ) async throws -> GeneratedMessage {
+        let stdout = try await runPromptRaw(
+            agent: agent,
+            input: input,
+            prompt: prompt,
+            workingDirectory: workingDirectory,
+            environment: environment,
+            timeout: timeout,
+            bypassPermissions: bypassPermissions
+        )
+        return AgentMessageParser.parse(stdout)
+    }
+
+    /// Returns the agent's raw stdout, lossless. Use this when the
+    /// caller wants the full output structure (e.g. a multi-line
+    /// per-file summary) instead of the heuristic
+    /// subject/body split.
+    static func runPromptRaw(
+        agent: AgentDefinition,
+        input: String,
+        prompt: String,
+        workingDirectory: String? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        timeout: TimeInterval = 120,
+        bypassPermissions: Bool = false
+    ) async throws -> String {
         let binary = agent.resolvedBinary
         let invocation = AgentPromptInvocation.make(
             agent: agent,
@@ -200,7 +231,7 @@ enum AgentRunner {
             }
             throw AgentRunError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }
-        return AgentMessageParser.parse(stdout)
+        return stdout
     }
 }
 
