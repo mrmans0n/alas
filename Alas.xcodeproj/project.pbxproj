@@ -122,6 +122,7 @@
 		32A4E1C6A5A43C8B9C47C3C9 /* MergeOperationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */; };
 		3326658AC801C394C43AC8A2 /* SearchKbd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36992F601C8EB6C3D45B584F /* SearchKbd.swift */; };
 		3388D5141427C0046BD8CCC7 /* LanguageRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 328607AAAAA12EE2206ED5A4 /* LanguageRegistry.swift */; };
+		35024237A37355969D6FA76A /* MergeResultPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DC787CE0F5625F8114C9F6F /* MergeResultPane.swift */; };
 		35705563BBEDDC1D0092C1F5 /* RepoSelectorRecentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 784A5C206CA363AB14B709E6 /* RepoSelectorRecentsTests.swift */; };
 		35A0942B075D267EBB9A4484 /* RightPaneStateFileTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A85E1D1600F487D359F363F /* RightPaneStateFileTreeTests.swift */; };
 		363F31C705CF7D17162E2CF6 /* CommitTabStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2FC38CF24F011448A3705F9 /* CommitTabStateTests.swift */; };
@@ -747,6 +748,7 @@
 		4CE0FF00CB2F81000FB09A72 /* LegacyHookSweep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyHookSweep.swift; sourceTree = "<group>"; };
 		4D131C3F1E4BE68A850097A4 /* ScopeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeRow.swift; sourceTree = "<group>"; };
 		4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParserTests.swift; sourceTree = "<group>"; };
+		4DC787CE0F5625F8114C9F6F /* MergeResultPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeResultPane.swift; sourceTree = "<group>"; };
 		4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerTests.swift; sourceTree = "<group>"; };
 		4FE58EF9CF8EC461667D9430 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		50737099AA490FAC6BD9F612 /* TextEditCoordinatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextEditCoordinatesTests.swift; sourceTree = "<group>"; };
@@ -1142,6 +1144,7 @@
 			isa = PBXGroup;
 			children = (
 				D0FF6BFD0A460F0E723F796E /* MergeRegionVisualLayout.swift */,
+				4DC787CE0F5625F8114C9F6F /* MergeResultPane.swift */,
 				7095EA2868EF619BA4202BDF /* MergeScrollCoordinator.swift */,
 				52C55C85672956E1340B03B1 /* MergeSidePane.swift */,
 				7DD6C7F7A898CE1A030F28C3 /* MergeWordDiff.swift */,
@@ -2451,6 +2454,7 @@
 				5031D53ED872A86B7C253696 /* MergeConflictToolbar.swift in Sources */,
 				32A4E1C6A5A43C8B9C47C3C9 /* MergeOperationState.swift in Sources */,
 				0E892EAAAC4EBA733BC441F2 /* MergeRegionVisualLayout.swift in Sources */,
+				35024237A37355969D6FA76A /* MergeResultPane.swift in Sources */,
 				8E8ABE6BBA778EEA4170423C /* MergeScrollCoordinator.swift in Sources */,
 				3DB85FF0D4965BF78AD2B010 /* MergeSidePane.swift in Sources */,
 				8824EFBA6EA3673F13244C6D /* MergeSingleResolvePromptEditorWindow.swift in Sources */,
