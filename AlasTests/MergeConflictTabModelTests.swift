@@ -682,6 +682,68 @@ struct MergeConflictTabModelTests {
         _ = originalBlock
     }
 
+    @Test func applyEditedFullTextAbsorbsInsertedLinesIntoLocalHunk() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // Conflict: local "main line\n", remote "feature line\n".
+        // RESULT (markerless, stacked) = "main line\nfeature line\n".
+        // User adds a new line inside LOCAL hunk by typing Enter after
+        // "main line". New buffer = "main line\nextra\nfeature line\n".
+        model.applyEditedFullText("main line\nextra\nfeature line\n")
+        let block = try #require(model.allConflictBlocks().first)
+        #expect(block.local.contains("main line"))
+        #expect(block.local.contains("extra"))
+        #expect(block.remote.contains("feature line"))
+    }
+
+    @Test func applyEditedFullTextSkipsBaseRowsWhenShowBaseIsOn() async throws {
+        // Build a zdiff3-style conflict with BASE.
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        model.resultText = "<<<<<<< HEAD\nL\n||||||| ancestor\nB\n=======\nR\n>>>>>>> feature\n"
+        model.reparse()
+        let block = try #require(model.allConflictBlocks().first)
+        #expect(block.base == "B\n")
+        // With showBase ON, RESULT pane shows L, B, R (3 rows).
+        // User edits L to "L-edited". New buffer = "L-edited\nB\nR\n".
+        model.applyEditedFullText("L-edited\nB\nR\n", showBase: true)
+        let updated = try #require(model.allConflictBlocks().first)
+        #expect(updated.local.contains("L-edited"))
+        #expect(updated.remote.contains("R")) // unchanged, NOT "B"
+        #expect(updated.base == "B\n") // BASE preserved as-is
+        _ = block
+    }
+
+    @Test func applyEditedFullTextAppendsTrailingLinesAtEndOfFile() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        let block = try #require(model.allConflictBlocks().first)
+        model.acceptLocal(for: block)
+        // After accept LOCAL, the file is "main line\n" (a single .text region).
+        // User appends a new line at the end.
+        model.applyEditedFullText("main line\nappended\n")
+        #expect(model.flatTextForWriting().contains("appended"))
+    }
+
     @Test func setRowContentRoutesToRemoteWhenLocalHunkIsEmpty() async throws {
         // Regression test: when LOCAL is empty (e.g., addedByThem),
         // visual row 0 of the conflict belongs to REMOTE, not LOCAL.

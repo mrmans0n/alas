@@ -59,7 +59,7 @@ struct MergeView3Way: View {
                 codeFontSize: codeFontSize,
                 coordinator: coordinator,
                 onEditFullText: { newText in
-                    model.applyEditedFullText(newText)
+                    model.applyEditedFullText(newText, showBase: showBase)
                 }
             )
             .frame(maxWidth: .infinity)

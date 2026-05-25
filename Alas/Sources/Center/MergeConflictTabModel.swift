@@ -363,57 +363,101 @@ final class MergeConflictTabModel {
     }
 
     /// Reconciles user edits in the RESULT pane back to the model's
-    /// regions. The pane shows a derived "marker-free stacked-hunk"
-    /// view: each conflict appears as LOCAL hunk rows followed by
-    /// REMOTE hunk rows; non-conflict content shows as-is. We walk
-    /// the existing regions in parallel with the new lines, slicing
-    /// the new lines into per-region buckets by line count, then
-    /// reassign each region's content from its bucket.
+    /// regions. Walks regions in document order, slicing `newLines`
+    /// into per-region buckets. Each non-last region claims exactly
+    /// its `originalCount` lines from `newLines`; the LAST region
+    /// claims everything remaining (so appending text at the end of
+    /// the buffer works). For conflict regions, the bucket is split
+    /// between LOCAL and REMOTE based on the original split; extras
+    /// (the user inserted a line inside the hunk) are absorbed into
+    /// the LOCAL side by default.
     ///
-    /// After mutation, `resultText` is rebuilt in MARKER form (via
-    /// `serializeRegionsWithMarkers`) so subsequent
-    /// `acceptLocal()` / `acceptRemote()` calls still find the
+    /// Limitation: inserting a line inside a NON-LAST plain-text
+    /// region pushes the extra into the next region. The visible
+    /// editor still shows the user's edit; the next render will
+    /// re-render based on the reconciled regions. For typical merge
+    /// resolution flows (where the user edits inside hunks or appends
+    /// notes at the end) this is correct.
+    ///
+    /// After mutation, `resultText` is rebuilt in MARKER form so
+    /// subsequent `acceptLocal`/`acceptRemote` continue to find the
     /// blocks via line-range parsing.
-    func applyEditedFullText(_ newText: String) {
+    func applyEditedFullText(_ newText: String, showBase: Bool = false) {
         let newLines = Self.splitPreservingTrailingEmpty(newText)
         var cursor = 0
+        // Treat trailing zero-linecount text regions (e.g. the empty string
+        // the parser emits for a file whose last char is "\n") as padding:
+        // the last MEANINGFUL region absorbs any extra lines the user typed.
+        let lastMeaningfulIndex: Int = {
+            var idx = regions.count - 1
+            while idx > 0 {
+                let r = regions[idx]
+                if case .text(let t) = r, Self.lineCount(of: t) == 0 { idx -= 1 }
+                else { break }
+            }
+            return idx
+        }()
         for (regionIndex, region) in regions.enumerated() {
+            let isLast = regionIndex == lastMeaningfulIndex
             switch region {
             case .text(let text):
                 let originalCount = Self.lineCount(of: text)
+                let take = isLast
+                    ? max(0, newLines.count - cursor)
+                    : min(originalCount, max(0, newLines.count - cursor))
                 let safeCursor = min(cursor, newLines.count)
-                let take = min(originalCount, max(0, newLines.count - safeCursor))
-                let slice = Array(newLines[safeCursor ..< safeCursor + take])
-                let joined = slice.joined(separator: "\n")
-                let trailingNewline = text.hasSuffix("\n") || take < originalCount
-                let rebuilt = joined.isEmpty ? "" : joined + (trailingNewline ? "\n" : "")
+                let safeEnd = min(safeCursor + take, newLines.count)
+                let slice = Array(newLines[safeCursor ..< safeEnd])
+                let trailingNewline = text.hasSuffix("\n")
+                    || take < originalCount
+                    || (isLast && newText.hasSuffix("\n"))
+                let rebuilt = slice.joined(separator: "\n") + (trailingNewline ? "\n" : "")
                 regions[regionIndex] = .text(rebuilt)
-                cursor += originalCount
+                cursor += take
             case .conflict(let block):
                 let localCount = Self.lineCount(of: block.local)
+                let baseCount = (showBase && block.base != nil)
+                    ? Self.lineCount(of: block.base ?? "") : 0
                 let remoteCount = Self.lineCount(of: block.remote)
-                let safeCursorLocal = min(cursor, newLines.count)
-                let localTake = min(localCount, max(0, newLines.count - safeCursorLocal))
-                let localSlice = Array(newLines[safeCursorLocal ..< safeCursorLocal + localTake])
+                let totalOriginal = localCount + baseCount + remoteCount
+                // For non-last regions: take exactly the original total.
+                // For the last region: take everything remaining.
+                let totalTake = isLast
+                    ? max(0, newLines.count - cursor)
+                    : min(totalOriginal, max(0, newLines.count - cursor))
+                // Distribute the take across LOCAL / BASE / REMOTE.
+                // Any extras (totalTake > totalOriginal) go to LOCAL.
+                let extras = max(0, totalTake - totalOriginal)
+                let localTake = min(localCount + extras, totalTake)
+                let baseTake = min(baseCount, totalTake - localTake)
+                let remoteTake = max(0, totalTake - localTake - baseTake)
+                let safeCursor = min(cursor, newLines.count)
+                // LOCAL slice
+                let localEnd = min(safeCursor + localTake, newLines.count)
+                let localSlice = Array(newLines[safeCursor ..< localEnd])
                 let localJoined = localSlice.joined(separator: "\n")
                 let localText = localJoined.isEmpty ? "" : localJoined
                     + (block.local.hasSuffix("\n") || localTake < localCount ? "\n" : "")
-                cursor += localCount
-                let safeCursorRemote = min(cursor, newLines.count)
-                let remoteTake = min(remoteCount, max(0, newLines.count - safeCursorRemote))
-                let remoteSlice = Array(newLines[safeCursorRemote ..< safeCursorRemote + remoteTake])
+                // BASE slice (skipped — block.base is preserved as-is;
+                // editing the BASE hunk isn't supported in v1 because
+                // BASE is the common ancestor, not a side to merge).
+                let baseEnd = min(localEnd + baseTake, newLines.count)
+                _ = Array(newLines[localEnd ..< baseEnd])
+                // REMOTE slice
+                let remoteEnd = min(baseEnd + remoteTake, newLines.count)
+                let remoteSlice = Array(newLines[baseEnd ..< remoteEnd])
                 let remoteJoined = remoteSlice.joined(separator: "\n")
                 let remoteText = remoteJoined.isEmpty ? "" : remoteJoined
                     + (block.remote.hasSuffix("\n") || remoteTake < remoteCount ? "\n" : "")
-                cursor += remoteCount
                 regions[regionIndex] = .conflict(ConflictBlock(
                     local: localText,
-                    base: block.base,
+                    base: block.base,  // unchanged — BASE is immutable in the UI
                     remote: remoteText,
                     localLabel: block.localLabel,
                     remoteLabel: block.remoteLabel,
                     lineRangeInMerged: block.lineRangeInMerged
                 ))
+                cursor += totalTake
             }
         }
         rebuildResultText()
