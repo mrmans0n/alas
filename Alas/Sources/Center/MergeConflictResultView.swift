@@ -155,17 +155,17 @@ struct MergeConflictResultView: NSViewRepresentable {
                     ? NSRange(location: marker.location, length: marker.length - 1)
                     : marker
                 if affectedCharRange.length == 0 {
-                    // Insertion: block when the cursor is anywhere from
-                    // the start of the marker body up to (but not
-                    // including) its end. We can't distinguish a
-                    // newline-only insert (safe — pushes the marker
-                    // down) from a text insert (unsafe — prepends to
-                    // the marker characters) without inspecting the
-                    // replacement string, so just block all of them.
-                    // Users can insert content on the line ABOVE the
-                    // marker instead.
+                    // Insertion: block the entire closed range
+                    // [body.location, NSMaxRange(body)] — anywhere on
+                    // the marker line including the position right
+                    // before its trailing newline. Without the inclusive
+                    // upper bound, typing at end-of-marker-line would
+                    // append text directly to the marker (e.g.
+                    // `>>>>>>> feature` + 'x' → `>>>>>>> featurex`),
+                    // corrupting it. Positions on adjacent lines stay
+                    // editable because they're outside this range.
                     if affectedCharRange.location >= body.location,
-                       affectedCharRange.location < NSMaxRange(body) {
+                       affectedCharRange.location <= NSMaxRange(body) {
                         return false
                     }
                 } else if NSIntersectionRange(body, affectedCharRange).length > 0 {

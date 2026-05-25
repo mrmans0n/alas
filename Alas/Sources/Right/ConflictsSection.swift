@@ -29,7 +29,11 @@ struct ConflictsSection: View {
     @State private var pendingBothDeletedConfirm: ChangedFile?
 
     var body: some View {
-        if conflicts.isEmpty, bulkReport == nil {
+        // Keep the section mounted while a bulk run is in flight too,
+        // so the spinner + Cancel stay visible even if conflicts drop
+        // to zero mid-run (e.g. an intermediate refresh after the
+        // agent stages a file).
+        if conflicts.isEmpty, bulkReport == nil, !bulkInFlight {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 2) {
