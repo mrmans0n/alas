@@ -96,7 +96,7 @@ final class RightPaneStore {
 
     func commitEditorComparisonRef(worktreeId: String) -> String? {
         guard let state = states[worktreeId] else { return nil }
-        return state.comparisonRef ?? state.baseBranch
+        return state.comparisonRef
     }
 
     /// Stops the currently-active state's background work. Call when the

@@ -176,4 +176,18 @@ struct RightPaneStateBaseBranchTests {
         #expect(!state.userOverrodeBaseBranch)
         #expect(state.comparisonRef == "origin/feature")
     }
+
+    @Test func commitEditorComparisonRefReturnsOnlyResolvedRef() async throws {
+        let tmp = try await createTestRepoWithBranches()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let wt = makeWorktree(at: tmp, branch: "feature")
+        let store = RightPaneStore()
+        let state = store.state(for: wt, baseBranch: "main")
+
+        #expect(store.commitEditorComparisonRef(worktreeId: wt.id) == nil)
+
+        state.comparisonRef = "origin/main"
+
+        #expect(store.commitEditorComparisonRef(worktreeId: wt.id) == "origin/main")
+    }
 }
