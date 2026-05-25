@@ -413,7 +413,15 @@ private struct HunkClassification {
                 markerLineRanges.append(range)
                 continue
             }
-            if line.hasPrefix(">>>>>>> ") {
+            // End marker only valid in REMOTE. `ConflictMarkerParser`
+            // technically scans for end-prefix earlier in its else-if
+            // chain, but if a separator was never seen it bails out
+            // and emits the whole "block" as plain text — so the
+            // effective end-marker semantics ARE remote-only. Mirror
+            // that here so a `>>>>>>> ` line inside LOCAL/BASE content
+            // (docs/test fixtures showing markers) doesn't prematurely
+            // close the block in the classifier.
+            if state == .remote, line.hasPrefix(">>>>>>> ") {
                 lines.append(Line(range: range, kind: .markerEnd))
                 markerLineRanges.append(range)
                 let start = lineRanges[blockStartLineIdx].location
