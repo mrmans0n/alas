@@ -27,6 +27,7 @@ struct CommitDiffView: View {
                 header
                 content
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(theme.color("bg-1"))
         }
     }
@@ -117,7 +118,7 @@ struct CommitDiffView: View {
                 .foregroundColor(theme.color("fg-dim"))
                 .padding()
         } else {
-            ScrollView {
+            ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
                         HunkView(hunk: hunk, fileExtension: (path as NSString).pathExtension, codeFontFamily: codeFontFamily, codeFontSize: codeFontSize)
@@ -125,6 +126,7 @@ struct CommitDiffView: View {
                 }
                 .padding(.vertical, 8)
             }
+            .defaultScrollAnchor(.topLeading)
         }
     }
 

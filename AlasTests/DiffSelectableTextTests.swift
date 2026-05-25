@@ -4,9 +4,8 @@ import AppKit
 @testable import Alas
 
 /// Smoke tests for the shared diff hunk renderer used by working-tree and
-/// commit diff panes. Text selection is exercised at runtime via
-/// `.textSelection(.enabled)` and is not inspectable in an `NSHostingController`;
-/// these tests guard rendering crashes with varied hunk shapes.
+/// commit diff panes. The native hunk body is inspectable in hosted views, while
+/// these tests also guard rendering crashes with varied hunk shapes.
 @Suite(.serialized)
 @MainActor
 struct DiffSelectableTextTests {
@@ -28,6 +27,188 @@ struct DiffSelectableTextTests {
         )
     }
 
+    @Test func diffSelectableTextBuilderPlainStringExcludesGutters() {
+        let text = DiffSelectableTextBuilder.plainString(for: sampleHunk())
+        #expect(text == """
+struct Foo {
+    let bar: Int
+    let bar: String
+}
+""")
+        #expect(!text.contains("+11"))
+        #expect(!text.contains("−11"))
+        #expect(!text.contains("@@"))
+    }
+
+    @Test func diffSelectableTextBuilderPreservesEmptyLines() {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,3 +1,3 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(kind: .context, text: "alpha", oldNumber: 1, newNumber: 1),
+                .init(kind: .delete, text: "", oldNumber: 2, newNumber: nil),
+                .init(kind: .add, text: "omega", oldNumber: nil, newNumber: 2),
+            ]
+        )
+
+        #expect(DiffSelectableTextBuilder.plainString(for: hunk) == "alpha\n\nomega")
+    }
+
+    @Test func diffSelectableTextBuilderReturnsLineMetadataForEveryLine() {
+        let result = DiffSelectableTextBuilder.build(
+            hunk: sampleHunk(),
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            theme: currentTheme()
+        )
+
+        #expect(result.attributedString.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
+        #expect(result.lines.map(\.kind) == [.context, .delete, .add, .context])
+        #expect(result.lines.map(\.marker) == [" 10", "−11", "+11", " 12"])
+        #expect(result.lines.first?.range == NSRange(location: 0, length: 12))
+        #expect(result.lines.last?.range.location == (result.attributedString.string as NSString).length - 1)
+    }
+
+    @Test func diffSelectableTextViewHostsCodeOnlyNativeTextView() throws {
+        let view = DiffSelectableTextView(
+            hunk: sampleHunk(),
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            theme: currentTheme()
+        )
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 300)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let textViews = allSubviews(of: controller.view).compactMap { $0 as? NSTextView }
+        #expect(textViews.count == 1)
+        let textView = try #require(textViews.first)
+        #expect(textView.isSelectable)
+        #expect(!textView.isEditable)
+        #expect(textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
+    }
+
+    @Test func diffSelectableTextViewUsesMeasuredAppKitLineFragmentsForRows() throws {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let container = DiffSelectableTextContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 300))
+        container.update(
+            hunk: sampleHunk(),
+            fileExtension: "swift",
+            font: font,
+            theme: currentTheme()
+        )
+        container.layoutSubtreeIfNeeded()
+
+        let textView = try #require(allSubviews(of: container).compactMap { $0 as? NSTextView }.first)
+        let measuredTextHeight = try measuredLineFragmentHeight(in: textView)
+        let expectedHeight = measuredTextHeight + CenterTypography.rowVerticalPadding * 2
+
+        #expect(abs(textView.frame.height - measuredTextHeight) < 0.001)
+        #expect(abs(container.intrinsicContentSize.height - expectedHeight) < 0.001)
+    }
+
+    @Test func diffSelectableTextViewDisablesLongLineWrapping() throws {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,1 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(
+                    kind: .add,
+                    text: String(repeating: "let value = veryLongExpression + ", count: 80),
+                    oldNumber: nil,
+                    newNumber: 1
+                ),
+            ]
+        )
+        let container = DiffSelectableTextContainerView(frame: NSRect(x: 0, y: 0, width: 160, height: 200))
+        container.update(
+            hunk: hunk,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            theme: currentTheme()
+        )
+        container.layoutSubtreeIfNeeded()
+
+        let textViews = allSubviews(of: container).compactMap { $0 as? NSTextView }
+        #expect(textViews.count == 1)
+        let textView = try #require(textViews.first)
+        #expect(textView.isHorizontallyResizable)
+        #expect(textView.textContainer?.widthTracksTextView == false)
+        #expect((textView.textContainer?.containerSize.width ?? 0) > textView.bounds.width)
+        #expect(container.intrinsicContentSize.width > container.frame.width)
+        #expect(textView.frame.width > container.frame.width)
+    }
+
+    @Test func diffSelectableTextViewPreservesWrappedFragmentHeightForHugeLine() throws {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,1 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(
+                    kind: .add,
+                    text: String(repeating: "x", count: 160_000),
+                    oldNumber: nil,
+                    newNumber: 1
+                ),
+            ]
+        )
+        let container = DiffSelectableTextContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 300))
+        container.update(
+            hunk: hunk,
+            fileExtension: "txt",
+            font: font,
+            theme: currentTheme()
+        )
+        container.layoutSubtreeIfNeeded()
+
+        let textView = try #require(allSubviews(of: container).compactMap { $0 as? NSTextView }.first)
+        let measuredTextHeight = try measuredLineFragmentHeight(in: textView)
+        let expectedHeight = measuredTextHeight + CenterTypography.rowVerticalPadding * 2
+
+        #expect(measuredTextHeight > layoutManagerLineHeight(font: font))
+        #expect(abs(textView.frame.height - measuredTextHeight) < 0.001)
+        #expect(abs(container.intrinsicContentSize.height - expectedHeight) < 0.001)
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func ancestorSubviews(of view: NSView) -> [NSView] {
+        var result: [NSView] = []
+        var current = view.superview
+        while let view = current {
+            result.append(view)
+            current = view.superview
+        }
+        return result
+    }
+
+    private func measuredLineFragmentHeight(in textView: NSTextView) throws -> CGFloat {
+        let layoutManager = try #require(textView.layoutManager)
+        let textContainer = try #require(textView.textContainer)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var measuredRect = NSRect.null
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
+            measuredRect = measuredRect.union(lineFragmentRect)
+        }
+
+        #expect(!measuredRect.isNull)
+        return measuredRect.height
+    }
+
+    private func layoutManagerLineHeight(font: NSFont) -> CGFloat {
+        NSLayoutManager().defaultLineHeight(for: font)
+    }
+
     // MARK: HunkView standalone
 
     @Test func hunkViewRendersWithoutCrashing() {
@@ -36,6 +217,71 @@ struct DiffSelectableTextTests {
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
+    }
+
+    @Test func hunkViewHostsNativeSelectableTextView() throws {
+        let view = HunkView(hunk: sampleHunk(), fileExtension: "swift")
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 300)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let containerViews = allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }
+        #expect(containerViews.count == 1)
+        let containerView = try #require(containerViews.first)
+
+        let textViews = allSubviews(of: containerView).compactMap { $0 as? NSTextView }
+        #expect(textViews.count == 1)
+        let textView = try #require(textViews.first)
+        #expect(textView.isSelectable)
+        #expect(!textView.isEditable)
+        #expect(textView.string == DiffSelectableTextBuilder.plainString(for: sampleHunk()))
+    }
+
+    @Test func hunkHeaderActionsRemainInViewportForLongLines() throws {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,1 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(
+                    kind: .add,
+                    text: String(repeating: "let value = veryLongExpression + ", count: 80),
+                    oldNumber: nil,
+                    newNumber: 1
+                ),
+            ]
+        )
+        let view = HunkView(
+            hunk: hunk,
+            fileExtension: "swift",
+            onStage: {},
+            onDiscard: {}
+        )
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 180)
+        controller.view.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let container = try #require(
+            allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }.first
+        )
+        #expect(ancestorSubviews(of: container).contains { $0 is NSScrollView })
+    }
+
+    @Test func hunkBodyFillsViewportForShortLines() throws {
+        let view = HunkView(hunk: sampleHunk(), fileExtension: "swift")
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 180)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let container = try #require(
+            allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }.first
+        )
+        #expect(container.bounds.width >= 490)
     }
 
     @Test func hunkViewWithActionsRendersWithoutCrashing() {
@@ -87,6 +333,34 @@ struct DiffSelectableTextTests {
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
+    }
+
+    @Test func commitDiffViewPinsShortDiffToTopOfViewport() throws {
+        let diff = ParsedDiff(hunks: [sampleHunk()])
+        let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp"),
+            sha: "abc1234",
+            file: sampleFile(),
+            path: "Sources/App.swift",
+            diff: diff,
+            loading: false,
+            error: nil,
+            onOpenFile: nil
+        )
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let container = try #require(
+            allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }.first
+        )
+        let containerRect = container.convert(container.bounds, to: controller.view)
+        let distanceFromTop = controller.view.isFlipped
+            ? containerRect.minY
+            : controller.view.bounds.maxY - containerRect.maxY
+
+        #expect(distanceFromTop < 140)
     }
 
     @Test func commitDiffViewEmptyHunksRendersWithoutCrashing() {
