@@ -61,6 +61,7 @@ struct CommitsSectionView: View {
                         onSelect: onSelectBaseBranch,
                         onOpen: onOpenBaseBranchSelector
                     )
+                    BranchOpsMenu(rps: rps)
                 }
             }
 
