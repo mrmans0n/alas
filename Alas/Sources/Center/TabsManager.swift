@@ -512,6 +512,55 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func openCommitEditor(
+        worktreeId: String,
+        baseRef: String,
+        originalSha: String,
+        currentSha: String,
+        title: String
+    ) -> Tab {
+        let state = CommitEditorTabState(
+            worktreeId: worktreeId,
+            baseRef: baseRef,
+            originalSha: originalSha,
+            currentSha: currentSha,
+            title: title
+        )
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { $0.id == state.id }) {
+            let tab = Tab.commitEditor(state)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+        let tab = Tab.commitEditor(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func updateCommitEditor(
+        worktreeId: String,
+        tabId: TabID,
+        currentSha: String,
+        title: String
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .commitEditor(var state) = file.tabs[idx]
+        else { return nil }
+        state.currentSha = currentSha
+        state.title = title
+        let tab = Tab.commitEditor(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
     /// Open a merge-conflict tab for `relativePath`, or activate the existing
     /// one if it's already open. Returns the tab.
     @discardableResult
