@@ -21,7 +21,6 @@ struct RepoSelectorDialog: View {
 
                 VStack(spacing: 0) {
                     inputRow
-                    Divider().background(theme.color("line"))
                     rowList
                     footer
                 }
@@ -69,18 +68,24 @@ struct RepoSelectorDialog: View {
     // MARK: - Subviews
 
     private var inputRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg-faint"))
+                .font(.system(size: 12, weight: .regular))
+                .foregroundColor(theme.color("fg-dim"))
             TextField("Switch worktree…", text: Bindable(appState.repoSelector).query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
-                .font(.system(size: 14))
+                .font(.system(size: 15))
                 .foregroundColor(theme.color("fg"))
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .overlay(
+            Rectangle()
+                .fill(theme.color("line-soft"))
+                .frame(height: 0.5),
+            alignment: .bottom
+        )
     }
 
     private var rowList: some View {
