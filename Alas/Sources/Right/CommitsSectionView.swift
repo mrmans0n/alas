@@ -49,10 +49,12 @@ struct CommitsSectionView: View {
             ) {
                 HStack(spacing: 6) {
                     if let s = behindBase {
-                        BehindChip(text: "\(s.count) behind \(s.ref)")
+                        BehindChip(text: "\(s.count) behind")
+                            .help("\(s.count) behind \(s.ref)")
                     }
                     if let s = behindUpstream {
-                        BehindChip(text: "\(s.count) behind \(s.ref)")
+                        BehindChip(text: "\(s.count) behind")
+                            .help("\(s.count) behind \(s.ref)")
                     }
                     BaseBranchSelector(
                         baseBranch: $baseBranch,
@@ -61,6 +63,7 @@ struct CommitsSectionView: View {
                         onSelect: onSelectBaseBranch,
                         onOpen: onOpenBaseBranchSelector
                     )
+                    BranchOpsMenu(rps: rps)
                 }
             }
 
