@@ -145,13 +145,24 @@ struct MergeConflictResultView: NSViewRepresentable {
             shouldChangeTextIn affectedCharRange: NSRange,
             replacementString: String?
         ) -> Bool {
+            let storage = textView.string as NSString
             for marker in markerLineRanges {
-                // `marker` includes the trailing newline; we don't want
-                // to block an insertion at the exact end of the marker
-                // line (which would push the marker down by inserting
-                // before it on the next line). Strip the newline for
-                // the intersection check.
-                let body = marker.length > 0
+                // `marker` includes the trailing newline when one
+                // exists. We strip the newline so an insertion at the
+                // exact end of the marker line (which would push the
+                // marker down by inserting before it on the next line)
+                // stays allowed. But when the buffer ends without a
+                // trailing newline — common for files that never had
+                // one — the final marker line has no newline to strip,
+                // so we use the full range unchanged. Without this
+                // check the last visible character of that final
+                // marker (e.g. the last `>`) would fall outside the
+                // protected range and could be edited or appended.
+                let endsWithNewline =
+                    marker.length > 0 &&
+                    NSMaxRange(marker) <= storage.length &&
+                    storage.character(at: NSMaxRange(marker) - 1) == 0x0A
+                let body = endsWithNewline
                     ? NSRange(location: marker.location, length: marker.length - 1)
                     : marker
                 if affectedCharRange.length == 0 {
