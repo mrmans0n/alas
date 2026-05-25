@@ -37,8 +37,9 @@ struct MergeAgentTests {
         #expect(!prompt.contains("BASE:"))
     }
 
-    @Test func resolvePromptIncludesPathAndAllThreeSides() {
-        let prompt = MergeAgent.resolvePrompt(
+    @Test func resolvePromptSubstitutesPlaceholdersAndAppendsSides() {
+        let prompt = MergeAgent.resolveFilePrompt(
+            template: AppConfig.defaultMergeSingleResolvePrompt,
             filePath: "Sources/Foo.swift",
             local: "let a = 1\n",
             base: "let a = 0\n",
@@ -52,6 +53,22 @@ struct MergeAgentTests {
         #expect(prompt.contains("BASE"))
         #expect(prompt.contains("Output ONLY the resolved file"))
         #expect(prompt.contains("swift"))
+        #expect(!prompt.contains("{filePath}"))
+        #expect(!prompt.contains("{language}"))
+    }
+
+    @Test func resolvePromptPreservesUnknownPlaceholders() {
+        let template = "Custom prompt for {filePath} in {language}, ticket {ticketId}."
+        let prompt = MergeAgent.resolveFilePrompt(
+            template: template,
+            filePath: "a.swift",
+            local: "x",
+            base: nil,
+            remote: "y",
+            mergedWithMarkers: "z",
+            language: "swift"
+        )
+        #expect(prompt.contains("Custom prompt for a.swift in swift, ticket {ticketId}."))
     }
 
     @Test func parseExplainOutputTakesFirstLineAndTrims() {

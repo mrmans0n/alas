@@ -149,6 +149,7 @@ struct CenterPaneView: View {
                             worktree: worktree,
                             tabState: s
                         )
+                        .id(s.id)
                     }
                 }
             }

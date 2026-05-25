@@ -77,11 +77,23 @@ struct ChangesTabView: View {
 
             ConflictsSection(
                 conflicts: conflicts,
+                bulkInFlight: rps.bulkResolveInFlight,
+                bulkReport: rps.bulkResolveReport,
+                hasAgent: resolvedBulkAgent != nil,
                 onSelect: { file in rps.openConflict?(file.path) },
                 onUseOurs: { file in rps.useOurs(file: file) },
                 onUseTheirs: { file in rps.useTheirs(file: file) },
                 onKeepDeleted: { file in rps.keepDeleted(file: file) },
-                onMarkResolved: { file in rps.markResolved(file: file) }
+                onMarkResolved: { file in rps.markResolved(file: file) },
+                onResolveAllWithAgent: {
+                    guard let agent = resolvedBulkAgent else { return }
+                    rps.resolveAllConflicts(
+                        using: agent,
+                        prompt: appState.config.changes.mergeBulkResolvePrompt
+                    )
+                },
+                onCancelBulkResolve: { rps.cancelBulkResolve() },
+                onDismissBulkReport: { rps.dismissBulkResolveReport() }
             )
 
             if stagedCount > 0 {
@@ -250,5 +262,18 @@ struct ChangesTabView: View {
 
     private func copyCommitSHA(_ commit: CommitInfo) {
         Clipboard.copy(commit.sha)
+    }
+
+    /// Agent to use for the Conflicts section's bulk resolve. Mirrors the
+    /// `MergeConflictTabView.resolvedAgent` precedence: respect explicit
+    /// "none", prefer the user's pinned tool from Settings, fall back to
+    /// any enabled agent.
+    private var resolvedBulkAgent: AgentDefinition? {
+        let id = appState.config.changes.aiToolId
+        if id == "none" { return nil }
+        if !id.isEmpty, let agent = appState.agent(id: id) {
+            return agent
+        }
+        return appState.agentRegistry.enabled().first
     }
 }

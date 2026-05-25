@@ -18,6 +18,11 @@ final class MergeConflictTabModel {
     var resultText: String = ""
     /// Set when `load()` fails. Cleared on successful (re)load.
     private(set) var loadError: String?
+    /// `true` when the most recent load failed specifically because the
+    /// file is no longer in a conflicted state (resolved or staged from
+    /// elsewhere while this tab stayed open). Drives the empty-state
+    /// pane rendering — distinct from a generic load failure.
+    private(set) var notInConflictedState: Bool = false
     /// Per-conflict-block one-line annotation populated by the agent.
     /// Keyed by a stable identity derived from the conflict's three sides
     /// (NOT by ordinal — ordinals shift when prior conflicts are resolved).
@@ -111,6 +116,7 @@ final class MergeConflictTabModel {
             self.agentProposal = nil
             self.agentBusy = false
             self.loadError = nil
+            self.notInConflictedState = false
         } catch {
             self.conflictedFile = nil
             self.regions = []
@@ -122,6 +128,11 @@ final class MergeConflictTabModel {
             self.agentBusy = false
             self.loadError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
+            if case ConflictedFileError.notConflicted = error {
+                self.notInConflictedState = true
+            } else {
+                self.notInConflictedState = false
+            }
             logger.error("merge-conflict load failed: \(self.loadError ?? "", privacy: .public)")
         }
         // Bump AFTER state is committed so view-side reload triggers read
@@ -343,7 +354,11 @@ final class MergeConflictTabModel {
     /// for a fresh conflict on the same path), the late response is dropped:
     /// applying it would clobber the freshly loaded buffer with stale content.
     /// We detect that via the `loadGeneration` token captured at request start.
-    func requestAgentResolveFile(using agent: AgentDefinition, language: String?) async {
+    func requestAgentResolveFile(
+        using agent: AgentDefinition,
+        template: String,
+        language: String?
+    ) async {
         guard let file = conflictedFile else { return }
         let startGeneration = loadGeneration
         agentBusy = true
@@ -355,6 +370,7 @@ final class MergeConflictTabModel {
         do {
             let proposal = try await MergeAgent.resolveFile(
                 agent: agent,
+                template: template,
                 filePath: relativePath,
                 local: file.local ?? "",
                 base: file.base,

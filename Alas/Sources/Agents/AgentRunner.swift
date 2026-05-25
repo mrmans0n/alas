@@ -39,13 +39,15 @@ enum AgentRunner {
         prompt: String,
         workingDirectory: String? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        timeout: TimeInterval = 120
+        timeout: TimeInterval = 120,
+        bypassPermissions: Bool = false
     ) async throws -> GeneratedMessage {
         let binary = agent.resolvedBinary
         let invocation = AgentPromptInvocation.make(
             agent: agent,
             input: input,
-            prompt: prompt
+            prompt: prompt,
+            bypassPermissions: bypassPermissions
         )
         let pipe = Pipe()
         // We can't use Process.run directly because it doesn't accept
@@ -209,21 +211,34 @@ private struct AgentPromptInvocation {
     static func make(
         agent: AgentDefinition,
         input: String,
-        prompt: String
+        prompt: String,
+        bypassPermissions: Bool = false
     ) -> AgentPromptInvocation {
+        // Insert the agent-specific bypass-permissions flag (e.g.
+        // `--dangerously-skip-permissions`, `--yolo`,
+        // `--dangerously-bypass-approvals-and-sandbox`) between the
+        // prompt-mode args and the prompt itself when the caller opted
+        // in. Callers that don't need file-write capability (e.g.
+        // read-only summary calls) leave this off.
+        let bypass: [String] = {
+            guard bypassPermissions, let flag = agent.bypassPermissionsFlag else {
+                return []
+            }
+            return [flag]
+        }()
         if isCodexExec(agent) {
             // `--skip-git-repo-check` is required because codex refuses to
             // start in a directory it hasn't been told to trust (and there
             // is no interactive prompt to satisfy in non-interactive exec).
             // The trailing `-` makes codex read the prompt from stdin.
             return AgentPromptInvocation(
-                arguments: agent.promptModeArgs + ["--skip-git-repo-check", "-"],
+                arguments: agent.promptModeArgs + bypass + ["--skip-git-repo-check", "-"],
                 stdin: combinedPrompt(prompt: prompt, input: input)
             )
         }
 
         return AgentPromptInvocation(
-            arguments: agent.promptModeArgs + [prompt],
+            arguments: agent.promptModeArgs + bypass + [prompt],
             stdin: input
         )
     }

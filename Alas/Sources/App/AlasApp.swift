@@ -230,5 +230,19 @@ struct AlasApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultSize(width: 720, height: 560)
+
+        Window("Merge: Resolve All Prompt", id: "merge-bulk-prompt-editor") {
+            MergeBulkResolvePromptEditorWindow(state: state)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 560)
+
+        Window("Merge: Single-File Prompt", id: "merge-single-prompt-editor") {
+            MergeSingleResolvePromptEditorWindow(state: state)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 560)
     }
 }
