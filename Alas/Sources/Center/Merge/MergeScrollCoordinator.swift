@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import Observation
 
 /// Single source of truth for synchronized scrolling across the three
@@ -46,7 +46,12 @@ final class MergeScrollCoordinator {
     /// `onSync`. The source pane is excluded from the broadcast so it
     /// doesn't bounce its own value back.
     func applyPaneY(_ y: CGFloat, source: Source) {
-        let row = max(0, Int((y / max(rowHeight, 1)).rounded()))
+        // floor() rather than rounded(): rounded() causes mid-row hysteresis
+        // during slow trackpad scrolls (the value flickers between row N and
+        // N+1 when y is near (N + 0.5) * rowHeight). floor matches the
+        // conventional "the row at top of viewport is the logical row"
+        // invariant.
+        let row = max(0, Int((y / max(rowHeight, 1)).rounded(.down)))
         guard row != logicalRow else { return }
         logicalRow = row
         for target in [Source.local, .result, .remote] where target != source {

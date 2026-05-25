@@ -26,6 +26,6 @@ struct MergeScrollCoordinatorTests {
         coord.applyPaneY(32, source: .result)
         #expect(coord.logicalRow == 2)
         #expect(observed.count == 2)
-        #expect(observed == observed)
+        #expect(observed == [2, 2])
     }
 }
