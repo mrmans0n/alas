@@ -103,16 +103,27 @@ struct MergeView3Way: View {
     }
 
     private func lineNumberGutter(rows: [MergeRegionVisualLayout.VisualRow], alignment: HorizontalAlignment) -> some View {
+        // Wrapped in a top-aligned container that clips overflow and
+        // offset by -coordinator.paneY() so the numbers track the
+        // synchronized scroll position of the three text panes. The
+        // gutter rows are still all materialised; the clip + offset
+        // is the cheap way to align them without a NSScrollView for
+        // a read-only column.
         VStack(alignment: alignment, spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                Text(row.sourceLineNumber.map(String.init) ?? "")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .frame(height: coordinator.rowHeight, alignment: alignment == .trailing ? .trailing : .leading)
-                    .padding(.horizontal, 4)
+            VStack(alignment: alignment, spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    Text(row.sourceLineNumber.map(String.init) ?? "")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .frame(height: coordinator.rowHeight, alignment: alignment == .trailing ? .trailing : .leading)
+                        .padding(.horizontal, 4)
+                }
             }
+            .offset(y: -coordinator.paneY())
+            Spacer(minLength: 0)
         }
         .frame(width: 28)
         .background(theme.color("bg-2"))
+        .clipped()
     }
 }

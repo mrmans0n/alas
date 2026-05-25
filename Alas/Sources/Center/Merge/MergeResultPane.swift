@@ -138,11 +138,17 @@ struct MergeResultPane: NSViewRepresentable {
                 : (local.components(separatedBy: "\n").last == ""
                     ? local.components(separatedBy: "\n").count - 1
                     : local.components(separatedBy: "\n").count)
+            let baseLineCount = range.baseRows.count
             for (offset, row) in range.resultRows.enumerated() {
                 if offset < localLineCount {
                     rowKind[row] = (true, range.conflictOrdinal, offset)
+                } else if offset < localLineCount + baseLineCount {
+                    // BASE row — leave out of rowKind so the BASE
+                    // styling branch in the per-row loop below
+                    // applies italic + muted instead of LOCAL/REMOTE tint.
+                    continue
                 } else {
-                    rowKind[row] = (false, range.conflictOrdinal, offset - localLineCount)
+                    rowKind[row] = (false, range.conflictOrdinal, offset - localLineCount - baseLineCount)
                 }
             }
         }
