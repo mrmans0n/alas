@@ -155,9 +155,16 @@ struct MergeConflictResultView: NSViewRepresentable {
                     ? NSRange(location: marker.location, length: marker.length - 1)
                     : marker
                 if affectedCharRange.length == 0 {
-                    // Insertion: block only when the cursor is strictly
-                    // inside the marker body (not at its start or end).
-                    if affectedCharRange.location > body.location,
+                    // Insertion: block when the cursor is anywhere from
+                    // the start of the marker body up to (but not
+                    // including) its end. We can't distinguish a
+                    // newline-only insert (safe — pushes the marker
+                    // down) from a text insert (unsafe — prepends to
+                    // the marker characters) without inspecting the
+                    // replacement string, so just block all of them.
+                    // Users can insert content on the line ABOVE the
+                    // marker instead.
+                    if affectedCharRange.location >= body.location,
                        affectedCharRange.location < NSMaxRange(body) {
                         return false
                     }

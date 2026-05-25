@@ -34,6 +34,13 @@ enum MergeAgent {
     /// three-side dump (LOCAL/BASE/REMOTE/MERGED) is appended verbatim
     /// because its format is consumed by the parsing step below — the
     /// user only controls the instructions, not the data layout.
+    ///
+    /// Intentionally does NOT pass `bypassPermissions`. This is a
+    /// proposal-only call: the agent should produce text on stdout that
+    /// alas previews to the user (Apply/Cancel overlay) before any
+    /// workspace mutation. Giving the agent skip-permissions would let
+    /// it write/stage files behind the user's back, breaking the
+    /// review boundary that the proposal overlay exists to enforce.
     static func resolveFile(
         agent: AgentDefinition,
         template: String,
@@ -58,8 +65,7 @@ enum MergeAgent {
             agent: agent,
             input: "",
             prompt: prompt,
-            timeout: timeout,
-            bypassPermissions: true
+            timeout: timeout
         )
         return parseResolveOutput(result.body.isEmpty ? result.subject : result.body)
     }
