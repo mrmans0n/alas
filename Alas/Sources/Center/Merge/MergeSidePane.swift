@@ -9,7 +9,7 @@ import SwiftUI
 /// Read-only — users edit only in `MergeResultPane`. Scroll position
 /// is driven externally by `MergeScrollCoordinator`.
 struct MergeSidePane: NSViewRepresentable {
-    enum Side {
+    enum Side: Equatable {
         case local, remote
     }
 
@@ -53,10 +53,26 @@ struct MergeSidePane: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        let attr = buildAttributedString(theme: theme)
-        textView.textStorage?.setAttributedString(attr)
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
-        // React to coordinator-driven scroll updates.
+        // Scroll-only updates re-run updateNSView via observable
+        // coordinator state. Skip the O(file size) attributed-string
+        // rebuild when none of the inputs that affect rendering have
+        // changed — only the bg color tracks the theme cheaply.
+        let bg = NSColor(theme.color("bg-1"))
+        let fg = NSColor(theme.color("fg"))
+        let key = Coordinator.CacheKey(
+            rows: rows,
+            hunkRanges: hunkRanges,
+            side: side,
+            fontFamily: codeFontFamily,
+            fontSize: codeFontSize,
+            fg: fg
+        )
+        if context.coordinator.lastKey != key {
+            let attr = buildAttributedString(theme: theme)
+            textView.textStorage?.setAttributedString(attr)
+            context.coordinator.lastKey = key
+        }
+        textView.backgroundColor = bg
         context.coordinator.coordinator = coordinator
         context.coordinator.side = side
         context.coordinator.lastRowHeight = lineHeight()
@@ -68,10 +84,19 @@ struct MergeSidePane: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject {
+        struct CacheKey: Equatable {
+            let rows: [MergeRegionVisualLayout.VisualRow]
+            let hunkRanges: [Range<Int>]
+            let side: Side
+            let fontFamily: String
+            let fontSize: CGFloat
+            let fg: NSColor
+        }
         weak var textView: NSTextView?
         var side: Side = .local
         var coordinator: MergeScrollCoordinator?
         var lastRowHeight: CGFloat = 16
+        var lastKey: CacheKey?
         private var token: NSObjectProtocol?
 
         func observeScroll(_ scroll: NSScrollView, side: Side, into coord: MergeScrollCoordinator) {

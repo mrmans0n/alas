@@ -66,19 +66,27 @@ struct MergeResultPane: NSViewRepresentable {
         guard let textView = scroll.documentView as? NSTextView else { return }
         context.coordinator.onEditFullText = onEditFullText
         context.coordinator.rows = rows
-        // Only rebuild the attributed string when the visible content
-        // actually changed. SwiftUI re-runs updateNSView on every
-        // observable change (including scroll position), and a full
-        // setAttributedString resets the cursor + scales O(buffer
-        // size), which causes visible jank on large files.
-        // Compare the full attributed string (including attributes)
-        // so visual-only updates — wordDiffMode toggles, theme changes
-        // — still rebuild the buffer. Plain-string equality dropped
-        // those, making the word-diff picker silently no-op until the
-        // user typed.
-        let newAttr = buildAttributedString(theme: theme)
-        if !(textView.textStorage?.isEqual(to: newAttr) ?? false) {
+        // Scroll-only updates re-run updateNSView via observable
+        // coordinator state. Skip the O(file size) build+set when
+        // none of the inputs that affect rendering have changed,
+        // so synchronized scrolling stays smooth on large files.
+        let fg = NSColor(theme.color("fg"))
+        let fgDim = NSColor(theme.color("fg-dim"))
+        let key = Coordinator.CacheKey(
+            rows: rows,
+            conflictRanges: conflictRanges,
+            hunkPairs: hunkPairs.map { "\($0.local)\u{0}\($0.remote)" },
+            wordDiffMode: wordDiffMode,
+            endsWithNewline: endsWithNewline,
+            fontFamily: codeFontFamily,
+            fontSize: codeFontSize,
+            fg: fg,
+            fgDim: fgDim
+        )
+        if context.coordinator.lastKey != key {
+            let newAttr = buildAttributedString(theme: theme)
             textView.textStorage?.setAttributedString(newAttr)
+            context.coordinator.lastKey = key
         }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         coordinator.rowHeight = lineHeight()
@@ -87,9 +95,21 @@ struct MergeResultPane: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+        struct CacheKey: Equatable {
+            let rows: [MergeRegionVisualLayout.VisualRow]
+            let conflictRanges: [MergeRegionVisualLayout.VisualConflictRange]
+            let hunkPairs: [String]
+            let wordDiffMode: MergeWordDiff.Mode
+            let endsWithNewline: Bool
+            let fontFamily: String
+            let fontSize: CGFloat
+            let fg: NSColor
+            let fgDim: NSColor
+        }
         weak var textView: NSTextView?
         var rows: [MergeRegionVisualLayout.VisualRow] = []
         var onEditFullText: ((String) -> Void)?
+        var lastKey: CacheKey?
         private var coordinator: MergeScrollCoordinator?
         private var token: NSObjectProtocol?
 
