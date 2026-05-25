@@ -19,9 +19,9 @@ enum MergeRegionVisualLayout {
 
     struct VisualConflictRange: Equatable {
         let conflictOrdinal: Int
-        let localRows: ClosedRange<Int>
-        let resultRows: ClosedRange<Int>
-        let remoteRows: ClosedRange<Int>
+        let localRows: Range<Int>
+        let resultRows: Range<Int>
+        let remoteRows: Range<Int>
     }
 
     struct Layout: Equatable {
@@ -38,16 +38,18 @@ enum MergeRegionVisualLayout {
         var conflictRanges: [VisualConflictRange] = []
         var localLine = 1
         var remoteLine = 1
+        var resultLine = 1
         var ordinal = 0
         for region in regions {
             switch region {
             case .text(let text):
                 for line in splitPreservingTrailingEmpty(text) {
                     local.append(.init(content: line, sourceLineNumber: localLine))
-                    result.append(.init(content: line, sourceLineNumber: localLine))
+                    result.append(.init(content: line, sourceLineNumber: resultLine))
                     remote.append(.init(content: line, sourceLineNumber: remoteLine))
                     localLine += 1
                     remoteLine += 1
+                    resultLine += 1
                 }
             case .conflict(let block):
                 let localLines = splitPreservingTrailingEmpty(block.local)
@@ -79,9 +81,9 @@ enum MergeRegionVisualLayout {
                 let remoteCount = remoteLines.count
                 conflictRanges.append(.init(
                     conflictOrdinal: ordinal,
-                    localRows: localStart ... (localStart + localCount - 1),
-                    resultRows: resultStart ... (resultStart + localCount + remoteCount - 1),
-                    remoteRows: (remoteStart + localCount) ... (remoteStart + localCount + remoteCount - 1)
+                    localRows: localStart ..< (localStart + localCount),
+                    resultRows: resultStart ..< (resultStart + localCount + remoteCount),
+                    remoteRows: (remoteStart + localCount) ..< (remoteStart + localCount + remoteCount)
                 ))
                 ordinal += 1
             }

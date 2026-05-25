@@ -60,9 +60,9 @@ struct MergeRegionVisualLayoutTests {
         let layout = MergeRegionVisualLayout.compute(regions: regions)
         #expect(layout.conflictRanges.count == 1)
         let r = layout.conflictRanges[0]
-        #expect(r.resultRows == 1 ... 3)
-        #expect(r.localRows == 1 ... 2)
-        #expect(r.remoteRows == 3 ... 3)
+        #expect(r.resultRows == 1 ..< 4)
+        #expect(r.localRows == 1 ..< 3)
+        #expect(r.remoteRows == 3 ..< 4)
     }
 
     @Test func sourceLineNumbersTrackRealContentOnly() {
@@ -85,5 +85,37 @@ struct MergeRegionVisualLayoutTests {
         #expect(layout.local[2].sourceLineNumber == nil)
         #expect(layout.local[3].sourceLineNumber == nil)
         #expect(layout.local[4].sourceLineNumber == 3)
+    }
+
+    @Test func emptyLocalHunkProducesEmptyLocalRangeWithoutCrashing() {
+        let block = ConflictBlock(
+            local: "",
+            base: nil,
+            remote: "added\n",
+            localLabel: "HEAD",
+            remoteLabel: "feature",
+            lineRangeInMerged: 1 ... 3
+        )
+        let regions: [ConflictRegion] = [
+            .text("a\n"),
+            .conflict(block),
+            .text("b\n"),
+        ]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.conflictRanges.count == 1)
+        let r = layout.conflictRanges[0]
+        // LOCAL hunk is empty -> empty Range (lowerBound == upperBound)
+        #expect(r.localRows.isEmpty)
+        #expect(r.localRows.lowerBound == 1)
+        // RESULT stacks empty + remote -> 1 row
+        #expect(r.resultRows == 1 ..< 2)
+        #expect(r.remoteRows == 1 ..< 2)
+    }
+
+    @Test func resultPaneTracksItsOwnLineNumbers() {
+        let regions: [ConflictRegion] = [.text("a\nb\n")]
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        #expect(layout.result[0].sourceLineNumber == 1)
+        #expect(layout.result[1].sourceLineNumber == 2)
     }
 }
