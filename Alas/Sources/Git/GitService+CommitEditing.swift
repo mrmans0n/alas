@@ -23,11 +23,11 @@ enum CommitEditError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .dirtyWorktree:
-            return "Commit editing requires a clean worktree."
+            return "Commit editing requires a clean worktree and index. Commit, stash, or discard current changes before editing history."
         case .operationInProgress:
-            return "Another git operation is already in progress."
+            return "Finish or abort the current merge, rebase, cherry-pick, or revert before editing a commit."
         case .targetNotAboveFold:
-            return "The selected commit is not above the base commit."
+            return "This commit is no longer above the comparison fold. Refresh and choose a local commit."
         case .mergeCommitUnsupported(let sha):
             return "Merge commit editing is not supported: \(sha)"
         case .emptySubject:

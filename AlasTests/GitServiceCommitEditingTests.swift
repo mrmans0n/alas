@@ -44,6 +44,12 @@ struct GitServiceCommitEditingTests {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    @Test func commitEditRecoveryMessagesTellUserWhatToDo() {
+        #expect(CommitEditError.dirtyWorktree.errorDescription == "Commit editing requires a clean worktree and index. Commit, stash, or discard current changes before editing history.")
+        #expect(CommitEditError.operationInProgress.errorDescription == "Finish or abort the current merge, rebase, cherry-pick, or revert before editing a commit.")
+        #expect(CommitEditError.targetNotAboveFold.errorDescription == "This commit is no longer above the comparison fold. Refresh and choose a local commit.")
+    }
+
     @Test func rewordAboveFoldCommitPreservesDescendant() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
