@@ -203,10 +203,14 @@ struct MergeConflictTabView: View {
 
     /// Resolves the agent to use for merge-conflict assistance. Prefers the
     /// user's pinned tool from Settings → Changes → AI tool, then falls back
-    /// to any enabled agent. Returns nil only when no agents are configured.
+    /// to any enabled agent. Returns nil when the user explicitly chose
+    /// "none" (AI disabled) or when no agents are configured.
     private var resolvedAgent: AgentDefinition? {
         let id = state.config.changes.aiToolId
-        if !id.isEmpty, id != "none", let agent = state.agent(id: id) {
+        // Explicit "none" means the user disabled AI: respect that and never
+        // auto-fire agent calls (auto-explain on conflict change, etc.).
+        if id == "none" { return nil }
+        if !id.isEmpty, let agent = state.agent(id: id) {
             return agent
         }
         return state.agentRegistry.enabled().first
