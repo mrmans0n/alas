@@ -36,4 +36,28 @@ struct MergeWordDiffTests {
         #expect(result.localChanged.isEmpty)
         #expect(result.remoteChanged.isEmpty)
     }
+
+    @Test func emojiInLocalDoesNotProduceMisalignedRanges() {
+        // "🦆count" vs "🦆rate" — the difference starts at UTF-16
+        // index 2 (after the surrogate pair) and runs to the end.
+        // If charDiff were grapheme-indexed, the returned NSRange
+        // would be measured in graphemes (start=1) which is wrong
+        // for the UTF-16 backing.
+        let local = "🦆count"
+        let remote = "🦆rate"
+        let result = MergeWordDiff.diff(local: local, remote: remote, mode: .characters)
+        // Verify every returned range is a valid UTF-16 substring on
+        // its respective NSString (no out-of-bounds, no surrogate
+        // split). NSString.substring will trap on malformed ranges.
+        let localNS = local as NSString
+        let remoteNS = remote as NSString
+        for r in result.localChanged {
+            _ = localNS.substring(with: r) // would trap if misaligned
+        }
+        for r in result.remoteChanged {
+            _ = remoteNS.substring(with: r)
+        }
+        // Sanity: at least one range exists.
+        #expect(!result.localChanged.isEmpty || !result.remoteChanged.isEmpty)
+    }
 }

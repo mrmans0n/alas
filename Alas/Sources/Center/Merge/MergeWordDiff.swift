@@ -20,12 +20,10 @@ enum MergeWordDiff {
         guard mode != .off, local != remote else {
             return Result(localChanged: [], remoteChanged: [])
         }
-        let localChars = Array(local)
-        let remoteChars = Array(remote)
-        let (localRanges, remoteRanges) = charDiff(localChars, remoteChars)
+        let localUnits = Array(local.utf16)
+        let remoteUnits = Array(remote.utf16)
+        let (localRanges, remoteRanges) = charDiff(localUnits, remoteUnits)
         switch mode {
-        case .off:
-            return Result(localChanged: [], remoteChanged: [])
         case .characters:
             return Result(
                 localChanged: mergeAdjacent(localRanges),
@@ -36,16 +34,21 @@ enum MergeWordDiff {
                 localChanged: mergeOverlapping(snapToWordBoundaries(in: local, ranges: mergeAdjacent(localRanges))),
                 remoteChanged: mergeOverlapping(snapToWordBoundaries(in: remote, ranges: mergeAdjacent(remoteRanges)))
             )
+        default:
+            return Result(localChanged: [], remoteChanged: [])
         }
     }
 
     /// Classic Myers LCS via dynamic programming, emitting per-side
-    /// ranges of characters NOT in the longest common subsequence.
-    /// O(N*M) time and memory; the caller caps the inputs to ~200
-    /// lines worth of text so this stays under a millisecond.
+    /// UTF-16-unit ranges NOT in the longest common subsequence.
+    /// O(N*M) time and memory.  `MergeResultPane.buildAttributedString`
+    /// calls this per hunk-line pair (typically 5–20 lines, ≤60 UTF-16
+    /// units each side), so N and M are at most ~1 200 units and the
+    /// LCS table fits comfortably within ~11 MB.  Returned `NSRange`
+    /// values are UTF-16 offsets, matching `NSString.substring(with:)`.
     private static func charDiff(
-        _ a: [Character],
-        _ b: [Character]
+        _ a: [Unicode.UTF16.CodeUnit],
+        _ b: [Unicode.UTF16.CodeUnit]
     ) -> (aChanged: [NSRange], bChanged: [NSRange]) {
         let n = a.count, m = b.count
         if n == 0 { return ([], [NSRange(location: 0, length: m)]) }
