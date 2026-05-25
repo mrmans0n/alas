@@ -38,6 +38,22 @@ struct MergeConflictTabModelTests {
         _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
     }
 
+    /// Sets up two conflict regions in `a.txt` so per-block accept
+    /// tests can target the second conflict explicitly. Base has 7
+    /// lines; feature and main each edit lines 1 and 7, with 5 context
+    /// lines in between — enough for git to produce two disjoint hunks.
+    fileprivate static func makeTwoConflictBranches(_ repo: URL) async throws {
+        try writeFile(repo, "a.txt", "L1 base\nL2 keep\nL3 keep\nL4 keep\nL5 keep\nL6 keep\nL7 base\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try writeFile(repo, "a.txt", "L1 feature\nL2 keep\nL3 keep\nL4 keep\nL5 keep\nL6 keep\nL7 feature\n")
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try writeFile(repo, "a.txt", "L1 main\nL2 keep\nL3 keep\nL4 keep\nL5 keep\nL6 keep\nL7 main\n")
+        _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
+    }
+
     @Test func loadPopulatesSidesAndRegions() async throws {
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -450,5 +466,105 @@ struct MergeConflictTabModelTests {
         model.discardAgentProposal()
         #expect(model.agentProposal == nil)
         #expect(model.resultText == "before\n")
+    }
+
+    @Test func acceptLocalForBlockTargetsThatBlockNotCurrentIndex() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeTwoConflictBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        #expect(model.conflictCount == 2)
+        let blocks = model.allConflictBlocks()
+        #expect(blocks.count == 2)
+        let secondBlock = try #require(blocks.last)
+        model.currentConflictIndex = 0
+        model.acceptLocal(for: secondBlock)
+        #expect(model.conflictCount == 1)
+        let remaining = try #require(model.allConflictBlocks().first)
+        #expect(remaining.local.contains("L1 main"))
+    }
+
+    @Test func wordDiffModeDefaultsToCharacters() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        #expect(model.wordDiffMode == .characters)
+    }
+
+    @Test func wordDiffModeIsMutableAndDoesNotResetOnReload() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        model.wordDiffMode = .words
+        await model.load()
+        #expect(model.wordDiffMode == .words)
+    }
+
+    @Test func flatTextForWritingSerializesRegionsWithoutMarkers() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        let flat = model.flatTextForWriting()
+        #expect(!flat.contains("<<<<<<<"))
+        #expect(!flat.contains("======="))
+        #expect(!flat.contains(">>>>>>>"))
+        #expect(flat.contains("main line"))
+        #expect(flat.contains("feature line"))
+    }
+
+    @Test func resetToInitialStackRestoresBothHunks() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        let block = try #require(model.allConflictBlocks().first)
+        let localBefore = block.local
+        let remoteBefore = block.remote
+        let labelLocal = block.localLabel
+        let labelRemote = block.remoteLabel
+        model.acceptLocal(for: block)
+        #expect(model.conflictCount == 0)
+        model.resetToInitialStack(
+            originalLocal: localBefore,
+            originalRemote: remoteBefore,
+            originalBase: nil,
+            originalLocalLabel: labelLocal,
+            originalRemoteLabel: labelRemote,
+            at: 0
+        )
+        #expect(model.conflictCount == 1)
     }
 }

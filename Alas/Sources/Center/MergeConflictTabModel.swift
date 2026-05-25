@@ -12,7 +12,7 @@ final class MergeConflictTabModel {
     private(set) var regions: [ConflictRegion] = []
     /// 0-based index into the conflict subset of `regions`. nil when no
     /// unresolved conflicts remain.
-    private(set) var currentConflictIndex: Int?
+    var currentConflictIndex: Int?
     /// Mutable text of the on-disk merged buffer. Drives the RESULT column.
     /// Updated by accept-side actions and by direct user edits.
     var resultText: String = ""
@@ -62,6 +62,11 @@ final class MergeConflictTabModel {
     /// Nil when no proposal is pending. Cleared by `applyAgentProposal` /
     /// `discardAgentProposal`.
     private(set) var agentProposal: String?
+
+    /// Per-tab session preference for word-level diff inside conflict
+    /// hunks. Drives the highlight inside `MergeResultPane`. Not
+    /// persisted — same lifetime semantics as `showBase`.
+    var wordDiffMode: MergeWordDiff.Mode = .characters
 
     let worktreePath: URL
     let relativePath: String
@@ -187,6 +192,17 @@ final class MergeConflictTabModel {
         regions.contains(where: isConflict) ? 0 : nil
     }
 
+    private func ordinal(of block: ConflictBlock) -> Int? {
+        var seen = 0
+        for region in regions {
+            if case .conflict(let candidate) = region {
+                if candidate == block { return seen }
+                seen += 1
+            }
+        }
+        return nil
+    }
+
     // MARK: - Accept actions
 
     /// Replaces the current conflict's marker block with LOCAL content.
@@ -205,6 +221,86 @@ final class MergeConflictTabModel {
               case .conflict(let block) = regions[regionIdx]
         else { return }
         replaceCurrentConflictBlock(with: block.remote)
+    }
+
+    /// Returns the parsed `ConflictBlock`s in document order. Used by
+    /// the new editor's action gutters to wire per-block accepts.
+    func allConflictBlocks() -> [ConflictBlock] {
+        regions.compactMap { region in
+            if case .conflict(let block) = region { return block }
+            return nil
+        }
+    }
+
+    /// Accepts LOCAL for a specific conflict block (by identity).
+    /// Equivalent to placing the cursor on that block and calling
+    /// `acceptLocal()` — implemented directly to skip the
+    /// currentConflictIndex round-trip.
+    func acceptLocal(for block: ConflictBlock) {
+        guard let ordinal = ordinal(of: block) else { return }
+        let saved = currentConflictIndex
+        currentConflictIndex = ordinal
+        acceptLocal()
+        if let saved, saved != ordinal { currentConflictIndex = saved }
+    }
+
+    /// Accepts REMOTE for a specific conflict block (by identity).
+    func acceptRemote(for block: ConflictBlock) {
+        guard let ordinal = ordinal(of: block) else { return }
+        let saved = currentConflictIndex
+        currentConflictIndex = ordinal
+        acceptRemote()
+        if let saved, saved != ordinal { currentConflictIndex = saved }
+    }
+
+    /// Rebuilds a conflict at `ordinal` from the original LOCAL/REMOTE
+    /// content. Called by the gutter context-menu "reset this conflict"
+    /// action when the user wants to undo an accept without manually
+    /// rewriting markers. The originals are passed in because the
+    /// model no longer holds them once the conflict has been resolved.
+    func resetToInitialStack(
+        originalLocal: String,
+        originalRemote: String,
+        originalBase: String?,
+        originalLocalLabel: String,
+        originalRemoteLabel: String,
+        at ordinal: Int
+    ) {
+        var marker = "<<<<<<< \(originalLocalLabel)\n"
+        marker += originalLocal
+        if !originalLocal.hasSuffix("\n") { marker += "\n" }
+        if let base = originalBase, !base.isEmpty {
+            marker += "||||||| ancestor\n"
+            marker += base
+            if !base.hasSuffix("\n") { marker += "\n" }
+        }
+        marker += "=======\n"
+        marker += originalRemote
+        if !originalRemote.hasSuffix("\n") { marker += "\n" }
+        marker += ">>>>>>> \(originalRemoteLabel)\n"
+        resultText.append(marker)
+        reparse()
+    }
+
+    /// Derives the final on-disk file content from the current regions
+    /// without conflict markers. Called by the new view layer to
+    /// serialize edits back to disk on `markFileResolved`. Conflicts
+    /// that haven't been explicitly resolved (still in stacked state)
+    /// are serialized as LOCAL hunk followed by REMOTE hunk — same as
+    /// today's "Use BOTH".
+    func flatTextForWriting() -> String {
+        var out = ""
+        for region in regions {
+            switch region {
+            case .text(let t): out.append(t)
+            case .conflict(let block):
+                out.append(block.local)
+                if !block.local.hasSuffix("\n") { out.append("\n") }
+                out.append(block.remote)
+                if !block.remote.hasSuffix("\n") { out.append("\n") }
+            }
+        }
+        return out
     }
 
     /// Replaces the current conflict's marker block with LOCAL followed by REMOTE.
@@ -288,7 +384,7 @@ final class MergeConflictTabModel {
         let absolute = worktreePath.appendingPathComponent(relativePath)
         let exists = FileManager.default.fileExists(atPath: absolute.path)
         if conflictedFile?.isBinary != true, exists {
-            try resultText.write(to: absolute, atomically: true, encoding: .utf8)
+            try flatTextForWriting().write(to: absolute, atomically: true, encoding: .utf8)
         }
         try await gitService.markResolved(
             worktreePath: worktreePath,
