@@ -2,32 +2,148 @@ import SwiftUI
 
 struct ConflictsSection: View {
     let conflicts: [ChangedFile]
+    /// True while the workspace-level agent invocation is running. The
+    /// resolve button flips into Cancel and a spinner row appears below
+    /// the header.
+    let bulkInFlight: Bool
+    /// Final outcome of the last bulk-resolve run. Surfaced as a
+    /// transient banner the user can dismiss.
+    let bulkReport: BulkConflictResolveReport?
+    /// True when at least one enabled AI tool is configured for the
+    /// Changes section. Gates the bulk action — disabled with a tooltip
+    /// otherwise.
+    let hasAgent: Bool
     let onSelect: (ChangedFile) -> Void
     let onUseOurs: (ChangedFile) -> Void
     let onUseTheirs: (ChangedFile) -> Void
     let onKeepDeleted: (ChangedFile) -> Void
     let onMarkResolved: (ChangedFile) -> Void
+    /// Triggered by the section-header bulk-resolve button.
+    let onResolveAllWithAgent: () -> Void
+    /// Triggered while a bulk resolve is in flight; the same button
+    /// flips into a cancel action.
+    let onCancelBulkResolve: () -> Void
+    /// Triggered when the user closes the post-run banner.
+    let onDismissBulkReport: () -> Void
 
     @State private var pendingBothDeletedConfirm: ChangedFile?
 
     var body: some View {
-        if conflicts.isEmpty {
+        // Keep the section mounted while a bulk run is in flight too,
+        // so the spinner + Cancel stay visible even if conflicts drop
+        // to zero mid-run (e.g. an intermediate refresh after the
+        // agent stages a file).
+        if conflicts.isEmpty, bulkReport == nil, !bulkInFlight {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Conflicts (\(conflicts.count))")
-                    .font(.system(size: 10, weight: .semibold))
-                    .textCase(.uppercase)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 6)
-                    .padding(.bottom, 2)
+                header
+                if bulkInFlight {
+                    progressRow
+                }
+                if let report = bulkReport {
+                    reportRow(report)
+                }
                 ForEach(conflicts) { file in
                     row(for: file)
                 }
             }
             .padding(.bottom, 4)
         }
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text("Conflicts (\(conflicts.count))")
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .foregroundColor(.secondary)
+            Spacer()
+            bulkResolveButton
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
+    private var bulkResolveButton: some View {
+        if bulkInFlight {
+            Button(action: onCancelBulkResolve) {
+                HStack(spacing: 4) {
+                    Image(systemName: "stop.circle")
+                    Text("Cancel")
+                }
+                .font(.system(size: 10))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .tint(.red)
+        } else if !conflicts.isEmpty {
+            Button(action: onResolveAllWithAgent) {
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkles")
+                    Text("Resolve all with agent")
+                }
+                .font(.system(size: 10))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .disabled(!hasAgent)
+            .help(hasAgent
+                ? "Run the configured agent across every text conflict and stage the results"
+                : "Pick an agent in Settings → Changes that supports non-interactive permission bypass (e.g. Claude, Codex, Cursor)")
+        }
+    }
+
+    private var progressRow: some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.mini)
+            Text("Agent resolving conflicts…")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 3)
+    }
+
+    private func reportRow(_ report: BulkConflictResolveReport) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: reportIcon(for: report))
+                .foregroundColor(reportColor(for: report))
+                .font(.system(size: 10))
+                .padding(.top, 1)
+            Text(report.summary)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onDismissBulkReport) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(.top, 1)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 3)
+        .help(report.details.isEmpty ? report.summary : report.details)
+    }
+
+    private func reportIcon(for report: BulkConflictResolveReport) -> String {
+        if !report.success { return "exclamationmark.triangle.fill" }
+        return report.remainingConflicts == 0
+            ? "checkmark.circle.fill"
+            : "exclamationmark.circle.fill"
+    }
+
+    private func reportColor(for report: BulkConflictResolveReport) -> Color {
+        if !report.success { return .red }
+        return report.remainingConflicts == 0 ? .green : .orange
     }
 
     @ViewBuilder

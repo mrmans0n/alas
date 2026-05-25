@@ -77,6 +77,21 @@ final class RightPaneState {
 
     var pendingDiscard: PendingDiscard? = nil
 
+    /// True while the workspace-level agent invocation is running.
+    /// Surfaced in the Conflicts section header as a spinner; the
+    /// resolve button flips into Cancel.
+    var bulkResolveInFlight: Bool = false
+
+    /// Last completed bulk-resolve outcome, or nil when none has run
+    /// since this state was created (or since the user dismissed the
+    /// banner). Cleared by `dismissBulkResolveReport`.
+    var bulkResolveReport: BulkConflictResolveReport? = nil
+
+    /// Task handle for the in-flight bulk resolve so the user can
+    /// cancel the agent (SIGTERM via Process cancellation).
+    @ObservationIgnored
+    private var bulkResolveTask: Task<Void, Never>? = nil
+
     /// Injected by `RightPaneStore` after creation so `confirmDiscard` can
     /// close any open diff tabs whose path was just discarded. Nil in tests
     /// that construct `RightPaneState` directly.
@@ -1045,6 +1060,72 @@ final class RightPaneState {
                 logger.error("markResolved failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    /// Hands the configured agent the whole worktree (CWD'd at
+    /// `worktree.path`) with a single "fix every merge conflict" prompt.
+    /// The agent uses its own tools to enumerate conflicted files, read
+    /// surrounding code for context, write reconciled output, and stage.
+    /// One call instead of N gives the agent cross-file context (which
+    /// is the entire point of resolving merges with a coding agent) and
+    /// avoids paying CLI startup cost per file.
+    @MainActor
+    func resolveAllConflicts(using agent: AgentDefinition, prompt: String) {
+        guard bulkResolveTask == nil else { return }
+        guard changes.contains(where: { $0.conflict != nil }) else { return }
+        bulkResolveReport = nil
+        bulkResolveInFlight = true
+        bulkResolveTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var report: BulkConflictResolveReport
+            do {
+                let agentOutput = try await MergeAgent.resolveAllInWorkspace(
+                    agent: agent,
+                    prompt: prompt,
+                    worktreePath: self.worktree.path
+                )
+                await self.refresh()
+                let remaining = self.changes.filter { $0.conflict != nil }.count
+                let headline: String = {
+                    if remaining == 0 {
+                        return "All conflicts resolved."
+                    }
+                    return "Agent finished — \(remaining) conflict(s) still need attention."
+                }()
+                report = BulkConflictResolveReport(
+                    success: true,
+                    remainingConflicts: remaining,
+                    summary: headline,
+                    details: agentOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            } catch {
+                await self.refresh()
+                let remaining = self.changes.filter { $0.conflict != nil }.count
+                report = BulkConflictResolveReport(
+                    success: false,
+                    remainingConflicts: remaining,
+                    summary: "Agent failed: \(error.localizedDescription)",
+                    details: ""
+                )
+            }
+            self.bulkResolveInFlight = false
+            self.bulkResolveReport = report
+            self.bulkResolveTask = nil
+        }
+    }
+
+    /// Cancels an in-flight bulk resolve by tearing down the agent
+    /// process via Task cancellation (AgentRunner forwards as SIGTERM).
+    @MainActor
+    func cancelBulkResolve() {
+        bulkResolveTask?.cancel()
+    }
+
+    /// Clears the post-run banner so it doesn't linger after the user
+    /// has acknowledged the outcome.
+    @MainActor
+    func dismissBulkResolveReport() {
+        bulkResolveReport = nil
     }
 
     /// On `.conflict`, auto-open the first conflicted file via the injected

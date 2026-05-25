@@ -28,6 +28,23 @@ struct MergeConflictTabView: View {
 
     var body: some View {
         ZStack {
+            if model.notInConflictedState {
+                MergeConflictResolvedEmptyView(
+                    relativePath: tabState.relativePath,
+                    onOpenFile: {
+                        state.openFile(
+                            relativePath: tabState.relativePath,
+                            worktreeId: worktree.id
+                        )
+                    },
+                    onCloseTab: {
+                        state.closeTab(
+                            worktreeId: worktree.id,
+                            tabId: tabState.id
+                        )
+                    }
+                )
+            } else {
             VStack(spacing: 0) {
                 MergeConflictToolbar(
                     conflictCount: model.conflictCount,
@@ -46,8 +63,13 @@ struct MergeConflictTabView: View {
                     onAcceptBoth: { model.acceptBoth() },
                     onAskAgentResolve: {
                         guard let agent = resolvedAgent else { return }
+                        let template = state.config.changes.mergeSingleResolvePrompt
                         Task {
-                            await model.requestAgentResolveFile(using: agent, language: fileLanguage)
+                            await model.requestAgentResolveFile(
+                                using: agent,
+                                template: template,
+                                language: fileLanguage
+                            )
                         }
                     },
                     onMarkResolved: {
@@ -79,6 +101,7 @@ struct MergeConflictTabView: View {
                     )
                 }
                 content
+            }
             }
             if let proposal = model.agentProposal {
                 MergeConflictAgentProposalView(

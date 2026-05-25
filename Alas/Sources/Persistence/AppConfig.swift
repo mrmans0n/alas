@@ -127,9 +127,18 @@ struct AppConfig: Codable, Equatable {
     struct Changes: Codable, Equatable {
         var aiToolId: String   // "claude" | "codex" | "cursor-agent" | "pi" | "none"
         var prompt: String
+        /// Workspace-level "fix every merge conflict in this repo"
+        /// prompt fed to the agent CWD'd at the worktree. The agent
+        /// uses its own filesystem tools to enumerate + reconcile.
+        var mergeBulkResolvePrompt: String
+        /// Single-file resolve template — the instructions portion
+        /// only. The three sides (LOCAL/BASE/REMOTE/MERGED) are
+        /// appended verbatim by `MergeAgent`. `{filePath}` and
+        /// `{language}` are substituted; anything else passes through.
+        var mergeSingleResolvePrompt: String
 
         enum CodingKeys: String, CodingKey {
-            case aiToolId, prompt
+            case aiToolId, prompt, mergeBulkResolvePrompt, mergeSingleResolvePrompt
         }
     }
 
@@ -210,7 +219,12 @@ struct AppConfig: Codable, Equatable {
             userDefinedRecipes: [:]
         ),
         markdown: Markdown(defaultViewMode: .editor),
-        changes: Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt),
+        changes: Changes(
+            aiToolId: "none",
+            prompt: AppConfig.defaultCommitPrompt,
+            mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
+            mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt
+        ),
         agents: Agents(
             builtinState: [:],
             custom: [],
@@ -247,6 +261,40 @@ extension AppConfig {
     When amending, the previous commit's message is provided — prefer
     refining it over starting from scratch unless the diff has materially
     changed.
+    """
+
+    static let defaultMergeBulkResolvePrompt = """
+    You are resolving every Git merge conflict in this workspace.
+
+    Procedure:
+    1. Run `git status` to list conflicted files (entries marked UU, AA, AU, UA).
+    2. For each text conflict, read the file. Use the surrounding code,
+       tests, and related files for context — that's the whole point of
+       doing this in-workspace rather than file-by-file in isolation.
+    3. Reconcile LOCAL and REMOTE intent into the smallest correct merged
+       file. Remove ALL conflict markers (<<<<<<<, |||||||, =======,
+       >>>>>>>) and any zdiff3 BASE blocks. Write the resolved file back.
+    4. For binary files, assume LOCAL (ours) is the source of truth: run
+       `git checkout --ours -- <path>` to drop the remote side.
+    5. Stage each resolved file with `git add <path>`.
+
+    Skip:
+    - Delete-side conflicts (deleted by us / deleted by them / both deleted)
+      — the user picks Keep ours / theirs / deleted in the UI.
+
+    Do NOT commit. Do NOT abort or continue the in-progress merge / rebase
+    / cherry-pick — the user drives those from the UI after reviewing.
+
+    When done, print a short summary: which files you resolved and which
+    you skipped or couldn't reconcile, with one line per file.
+    """
+
+    static let defaultMergeSingleResolvePrompt = """
+    You are resolving a Git merge conflict in {filePath}.
+    Language: {language}
+    Reconcile LOCAL and REMOTE intent into the smallest correct merged file.
+    Output ONLY the resolved file contents — no conflict markers, no prose,
+    no markdown fences, no commentary.
     """
 }
 
@@ -362,9 +410,23 @@ extension AppConfig {
         if let changesContainer = try? c.nestedContainer(keyedBy: AppConfig.Changes.CodingKeys.self, forKey: .changes) {
             let toolId = (try? changesContainer.decode(String.self, forKey: .aiToolId)) ?? "none"
             let prompt = (try? changesContainer.decode(String.self, forKey: .prompt)) ?? AppConfig.defaultCommitPrompt
-            changes = Changes(aiToolId: toolId, prompt: prompt)
+            let bulkResolve = (try? changesContainer.decode(String.self, forKey: .mergeBulkResolvePrompt))
+                ?? AppConfig.defaultMergeBulkResolvePrompt
+            let singleResolve = (try? changesContainer.decode(String.self, forKey: .mergeSingleResolvePrompt))
+                ?? AppConfig.defaultMergeSingleResolvePrompt
+            changes = Changes(
+                aiToolId: toolId,
+                prompt: prompt,
+                mergeBulkResolvePrompt: bulkResolve,
+                mergeSingleResolvePrompt: singleResolve
+            )
         } else {
-            changes = Changes(aiToolId: "none", prompt: AppConfig.defaultCommitPrompt)
+            changes = Changes(
+                aiToolId: "none",
+                prompt: AppConfig.defaultCommitPrompt,
+                mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
+                mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt
+            )
         }
         if let agentsContainer = try? c.nestedContainer(
             keyedBy: AppConfig.Agents.CodingKeys.self, forKey: .agents

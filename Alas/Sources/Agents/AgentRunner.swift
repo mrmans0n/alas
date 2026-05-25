@@ -33,19 +33,52 @@ enum AgentMessageParser {
 /// `Process+Git.swift`; the commentary there explains why each fd is closed
 /// when it is.
 enum AgentRunner {
+    /// Convenience wrapper for callers that want the parsed
+    /// `subject`/`body` shape (commit-message generator, etc.). The
+    /// bulk merge-conflict resolve uses `runPromptRaw` instead because
+    /// `AgentMessageParser` drops every line after the first in the
+    /// initial paragraph, which collapses "one line per file"
+    /// summaries to a single line.
     static func runPrompt(
         agent: AgentDefinition,
         input: String,
         prompt: String,
         workingDirectory: String? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        timeout: TimeInterval = 120
+        timeout: TimeInterval = 120,
+        bypassPermissions: Bool = false
     ) async throws -> GeneratedMessage {
+        let stdout = try await runPromptRaw(
+            agent: agent,
+            input: input,
+            prompt: prompt,
+            workingDirectory: workingDirectory,
+            environment: environment,
+            timeout: timeout,
+            bypassPermissions: bypassPermissions
+        )
+        return AgentMessageParser.parse(stdout)
+    }
+
+    /// Returns the agent's raw stdout, lossless. Use this when the
+    /// caller wants the full output structure (e.g. a multi-line
+    /// per-file summary) instead of the heuristic
+    /// subject/body split.
+    static func runPromptRaw(
+        agent: AgentDefinition,
+        input: String,
+        prompt: String,
+        workingDirectory: String? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        timeout: TimeInterval = 120,
+        bypassPermissions: Bool = false
+    ) async throws -> String {
         let binary = agent.resolvedBinary
         let invocation = AgentPromptInvocation.make(
             agent: agent,
             input: input,
-            prompt: prompt
+            prompt: prompt,
+            bypassPermissions: bypassPermissions
         )
         let pipe = Pipe()
         // We can't use Process.run directly because it doesn't accept
@@ -198,7 +231,7 @@ enum AgentRunner {
             }
             throw AgentRunError.nonZeroExit(stderr: stderr, exitCode: process.terminationStatus)
         }
-        return AgentMessageParser.parse(stdout)
+        return stdout
     }
 }
 
@@ -209,21 +242,40 @@ private struct AgentPromptInvocation {
     static func make(
         agent: AgentDefinition,
         input: String,
-        prompt: String
+        prompt: String,
+        bypassPermissions: Bool = false
     ) -> AgentPromptInvocation {
+        // Insert the agent-specific bypass-permissions flag (e.g.
+        // `--dangerously-skip-permissions`, `--yolo`,
+        // `--dangerously-bypass-approvals-and-sandbox`) between the
+        // prompt-mode args and the prompt itself when the caller opted
+        // in. Callers that don't need file-write capability (e.g.
+        // read-only summary calls) leave this off.
+        let bypass: [String] = {
+            guard bypassPermissions, let flag = agent.bypassPermissionsFlag else {
+                return []
+            }
+            return [flag]
+        }()
         if isCodexExec(agent) {
             // `--skip-git-repo-check` is required because codex refuses to
             // start in a directory it hasn't been told to trust (and there
             // is no interactive prompt to satisfy in non-interactive exec).
             // The trailing `-` makes codex read the prompt from stdin.
             return AgentPromptInvocation(
-                arguments: agent.promptModeArgs + ["--skip-git-repo-check", "-"],
+                arguments: agent.promptModeArgs + bypass + ["--skip-git-repo-check", "-"],
                 stdin: combinedPrompt(prompt: prompt, input: input)
             )
         }
 
+        // Put bypass BEFORE `promptModeArgs` (not between args + prompt)
+        // so a custom agent whose `promptModeArgs` ends with an
+        // option-taking-value (e.g. `["chat", "--prompt"]`) keeps
+        // that option adjacent to its value. Inserting bypass in the
+        // middle would make the option swallow the bypass flag as its
+        // value and misparse the prompt.
         return AgentPromptInvocation(
-            arguments: agent.promptModeArgs + [prompt],
+            arguments: bypass + agent.promptModeArgs + [prompt],
             stdin: input
         )
     }

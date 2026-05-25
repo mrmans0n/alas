@@ -45,11 +45,23 @@ struct ChangesTabView: View {
 
             ConflictsSection(
                 conflicts: conflicts,
+                bulkInFlight: rps.bulkResolveInFlight,
+                bulkReport: rps.bulkResolveReport,
+                hasAgent: resolvedBulkAgent != nil,
                 onSelect: { file in rps.openConflict?(file.path) },
                 onUseOurs: { file in rps.useOurs(file: file) },
                 onUseTheirs: { file in rps.useTheirs(file: file) },
                 onKeepDeleted: { file in rps.keepDeleted(file: file) },
-                onMarkResolved: { file in rps.markResolved(file: file) }
+                onMarkResolved: { file in rps.markResolved(file: file) },
+                onResolveAllWithAgent: {
+                    guard let agent = resolvedBulkAgent else { return }
+                    rps.resolveAllConflicts(
+                        using: agent,
+                        prompt: appState.config.changes.mergeBulkResolvePrompt
+                    )
+                },
+                onCancelBulkResolve: { rps.cancelBulkResolve() },
+                onDismissBulkReport: { rps.dismissBulkResolveReport() }
             )
 
             if stagedCount > 0 {
@@ -149,5 +161,33 @@ struct ChangesTabView: View {
 
     private func copyCommitSHA(_ commit: CommitInfo) {
         Clipboard.copy(commit.sha)
+    }
+
+    /// Agent to use for the Conflicts section's bulk resolve. Mirrors the
+    /// `MergeConflictTabView.resolvedAgent` precedence: respect explicit
+    /// "none", prefer the user's pinned tool from Settings, fall back to
+    /// any enabled agent.
+    ///
+    /// Filters out agents without a `bypassPermissionsFlag` because the
+    /// bulk action runs the agent non-interactively (no TTY to answer
+    /// write-approval prompts). Without bypass support, the agent would
+    /// stall on the first file write and the run would hang until the
+    /// 10-minute timeout fires. The bulk button is disabled in that
+    /// case with a tooltip explaining why.
+    private var resolvedBulkAgent: AgentDefinition? {
+        let id = appState.config.changes.aiToolId
+        if id == "none" { return nil }
+        if !id.isEmpty, let agent = appState.agent(id: id) {
+            return agent.bypassPermissionsFlag != nil ? agent : nil
+        }
+        // Fallback: pick the first ENABLED agent that also supports
+        // bypass. Filtering before .first matters when the registry's
+        // enabled list begins with an agent that has no bypass flag
+        // (e.g. Pi) but a later one does (e.g. Claude / Codex /
+        // Cursor) — without this we'd reject the first match and
+        // leave bulk resolve disabled despite a usable tool being
+        // available.
+        return appState.agentRegistry.enabled()
+            .first(where: { $0.bypassPermissionsFlag != nil })
     }
 }

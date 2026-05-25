@@ -9,7 +9,7 @@ struct ChangesPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Changes").font(.system(size: 18, weight: .semibold))
-                Text("AI-generated commit messages and related defaults.")
+                Text("AI-generated commit messages and merge-conflict resolution.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
@@ -20,20 +20,52 @@ struct ChangesPane: View {
                     }
                     SettingsRow(name: "Prompt",
                                 desc: "Instructions sent to the CLI. The staged diff is appended on stdin.") {
-                        HStack(spacing: 12) {
-                            AlasButton(title: "Edit", style: .normal) {
-                                openWindow(id: "commit-prompt-editor")
-                            }
-                            Spacer()
-                            if let chipLabel = CommitPromptStatus.chipLabel(for: state.config.changes.prompt) {
-                                PromptStatusChip(label: chipLabel)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
+                        promptEditorRow(
+                            windowId: "commit-prompt-editor",
+                            currentValue: state.config.changes.prompt,
+                            defaultValue: AppConfig.defaultCommitPrompt
+                        )
+                    }
+                }
+
+                SettingsGroup(title: "Merge conflicts") {
+                    SettingsRow(name: "Bulk resolve prompt",
+                                desc: "Sent to the agent CWD'd at the worktree when the user clicks 'Resolve all with agent'. The agent uses its own tools to enumerate, reconcile, and stage every conflicted file.") {
+                        promptEditorRow(
+                            windowId: "merge-bulk-prompt-editor",
+                            currentValue: state.config.changes.mergeBulkResolvePrompt,
+                            defaultValue: AppConfig.defaultMergeBulkResolvePrompt
+                        )
+                    }
+                    SettingsRow(name: "Single-file prompt",
+                                desc: "Used by 'Ask agent to resolve' in the merge editor toolbar. The three sides are appended automatically.") {
+                        promptEditorRow(
+                            windowId: "merge-single-prompt-editor",
+                            currentValue: state.config.changes.mergeSingleResolvePrompt,
+                            defaultValue: AppConfig.defaultMergeSingleResolvePrompt
+                        )
                     }
                 }
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
+        }
+    }
+
+    /// Edit button + Custom chip, grouped together. Previously this row
+    /// used a `Spacer()` between the two, which left them visually
+    /// disconnected — flagged as "awful and unaligned" during dogfooding.
+    private func promptEditorRow(
+        windowId: String,
+        currentValue: String,
+        defaultValue: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            AlasButton(title: "Edit", style: .normal) {
+                openWindow(id: windowId)
+            }
+            if currentValue != defaultValue {
+                PromptStatusChip(label: "Custom")
+            }
         }
     }
 
