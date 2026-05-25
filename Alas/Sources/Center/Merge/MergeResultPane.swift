@@ -71,8 +71,13 @@ struct MergeResultPane: NSViewRepresentable {
         // observable change (including scroll position), and a full
         // setAttributedString resets the cursor + scales O(buffer
         // size), which causes visible jank on large files.
+        // Compare the full attributed string (including attributes)
+        // so visual-only updates — wordDiffMode toggles, theme changes
+        // — still rebuild the buffer. Plain-string equality dropped
+        // those, making the word-diff picker silently no-op until the
+        // user typed.
         let newAttr = buildAttributedString(theme: theme)
-        if textView.textStorage?.string != newAttr.string {
+        if !(textView.textStorage?.isEqual(to: newAttr) ?? false) {
             textView.textStorage?.setAttributedString(newAttr)
         }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
