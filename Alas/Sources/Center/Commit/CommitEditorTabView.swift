@@ -174,10 +174,12 @@ struct CommitEditorTabView: View {
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             details = loadedDetails
             selectedPath = loadedDetails.files.first?.path
-            subject = loadedSubject
-            bodyText = loadedDetails.body
-            savedSubject = loadedSubject
-            savedBodyText = loadedDetails.body
+            if !dirty {
+                subject = loadedSubject
+                bodyText = loadedDetails.body
+                savedSubject = loadedSubject
+                savedBodyText = loadedDetails.body
+            }
         } catch {
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.error = (error as NSError).localizedDescription
