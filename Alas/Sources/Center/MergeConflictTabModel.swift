@@ -491,7 +491,27 @@ final class MergeConflictTabModel {
         for (i, region) in regions.enumerated() {
             let length = regionRenderedUTF16Length(region, showBase: showBase)
             let regionEnd = cursor + length
-            if start >= cursor, end <= regionEnd {
+            // Zero-length insertion at the end of a `.conflict` region:
+            // defer to the FOLLOWING region so the inserted content
+            // lands in the next .text region rather than corrupting
+            // the conflict hunk. BUT only when the following region
+            // has non-zero rendered length — if it's the trailing
+            // `.text("")` sentinel the parser emits (or absent), the
+            // edit really IS the last thing in the buffer and should
+            // attribute to the conflict (extras get routed to LOCAL
+            // or REMOTE based on the within-region offset).
+            let nextRegionHasContent: Bool = {
+                let nextIdx = i + 1
+                guard nextIdx < regions.count else { return false }
+                return regionRenderedUTF16Length(regions[nextIdx], showBase: showBase) > 0
+            }()
+            let isZeroLengthAtSkippableBoundary: Bool
+            if case .conflict = region, nextRegionHasContent {
+                isZeroLengthAtSkippableBoundary = (start == end && start == regionEnd)
+            } else {
+                isZeroLengthAtSkippableBoundary = false
+            }
+            if start >= cursor, end <= regionEnd, !isZeroLengthAtSkippableBoundary {
                 return i
             }
             if start < regionEnd, end > regionEnd {
@@ -499,7 +519,7 @@ final class MergeConflictTabModel {
             }
             cursor = regionEnd
         }
-        // Edge: change at the very end of the buffer.
+        // Edge: change at the very end of the buffer (no following region).
         if start == cursor, end == cursor, !regions.isEmpty {
             return regions.count - 1
         }

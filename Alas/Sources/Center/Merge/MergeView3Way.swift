@@ -27,16 +27,32 @@ struct MergeView3Way: View {
         MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
     }
 
-    /// Whether the model's last region's RENDERED content ends with
-    /// `\n`. Mirrors `renderMarkerlessBuffer`'s LOCAL → (BASE if
-    /// `showBase`) → REMOTE order — the last visible side is whichever
-    /// non-empty side comes last in that walk. Passed to
-    /// `MergeResultPane` so the rendered buffer matches the file's
-    /// EOF-newline state (no phantom newline added on writeback, and
-    /// no real newline silently dropped).
+    /// Whether the model's last MEANINGFUL region's RENDERED content
+    /// ends with `\n`. Mirrors `renderMarkerlessBuffer`'s LOCAL → (BASE
+    /// if `showBase`) → REMOTE order — the last visible side is
+    /// whichever non-empty side comes last in that walk. Skips
+    /// trailing zero-length `.text("")` regions (the parser emits one
+    /// for files whose merged content ends with `\n`; reading from it
+    /// directly would falsely report no-EOF-newline).
     private var lastRegionEndsWithNewline: Bool {
-        guard let last = model.regions.last else { return false }
-        switch last {
+        // Find the index of the last meaningful region.
+        var idx = model.regions.count - 1
+        while idx >= 0 {
+            switch model.regions[idx] {
+            case .text(let t):
+                if !t.isEmpty { break }
+            case .conflict:
+                break  // conflicts always meaningful
+            }
+            // .text("") fall-through: keep walking back.
+            if case .text(let t) = model.regions[idx], t.isEmpty {
+                idx -= 1
+                continue
+            }
+            break
+        }
+        guard idx >= 0 else { return false }
+        switch model.regions[idx] {
         case .text(let t):
             return t.hasSuffix("\n")
         case .conflict(let block):
