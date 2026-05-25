@@ -28,10 +28,20 @@ final class MergeConflictTabModel {
     /// on `load()` failure.
     private(set) var initialConflictCount: Int = 0
 
-    /// Increments on every successful `load()`. Consumers (binary preview)
-    /// include this in their cache keys so they invalidate when the tab is
-    /// re-focused for a fresh conflict on the same path.
+    /// Increments at the *start* of every `load()` attempt. Used by
+    /// stale-async guards (binary image cache, `requestAgentResolveFile`)
+    /// to detect that a load has begun mid-await and drop their results.
+    /// Bumping at start (rather than completion) means an in-flight request
+    /// is invalidated as soon as a new load kicks off — even if it never
+    /// finishes (e.g. file no longer conflicted).
     private(set) var loadGeneration: Int = 0
+
+    /// Increments after `load()` has committed its new state to the model
+    /// (success OR failure). Used by view-side reload triggers that need
+    /// to read the post-load `regions` / `currentConflictIndex` to dispatch
+    /// further work (e.g. auto-explain). Distinct from `loadGeneration`
+    /// because firing on the start-of-load value would read stale state.
+    private(set) var loadCompletionGeneration: Int = 0
 
     /// Block keys for which an `explainCurrentConflict` request is currently
     /// in flight. Prevents duplicate agent dispatches when both an
@@ -102,6 +112,9 @@ final class MergeConflictTabModel {
                 ?? error.localizedDescription
             logger.error("merge-conflict load failed: \(self.loadError ?? "", privacy: .public)")
         }
+        // Bump AFTER state is committed so view-side reload triggers read
+        // post-load `regions` / `currentConflictIndex` (not stale values).
+        loadCompletionGeneration += 1
     }
 
     /// Re-parses `resultText` and updates `regions` + `currentConflictIndex`.

@@ -177,13 +177,17 @@ struct MergeConflictTabView: View {
         .onChange(of: model.currentConflictIndex) { _, _ in
             triggerExplainIfNeeded()
         }
-        // Also re-trigger on every load attempt — covers the case where a
-        // reload (e.g. tab re-focused for a fresh conflict on the same path)
-        // lands on the same currentConflictIndex as before and the index
-        // hook wouldn't fire. Annotations are cleared on load(), so this
-        // request gets through the cache check, and the model's in-flight
-        // dedup ensures we don't double-dispatch with the index hook.
-        .onChange(of: model.loadGeneration) { _, _ in
+        // Also re-trigger after every load completes — covers the case
+        // where a reload (e.g. tab re-focused for a fresh conflict on the
+        // same path) lands on the same currentConflictIndex as before and
+        // the index hook wouldn't fire. We watch `loadCompletionGeneration`
+        // rather than `loadGeneration` so the trigger reads the POST-load
+        // `regions` / `currentConflictIndex` (loadGeneration bumps at the
+        // start of load, before state is committed). Annotations are
+        // cleared on load(), so this request gets through the cache check;
+        // the model's in-flight dedup makes the overlap with the index
+        // hook safe.
+        .onChange(of: model.loadCompletionGeneration) { _, _ in
             triggerExplainIfNeeded()
         }
     }
