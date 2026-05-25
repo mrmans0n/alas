@@ -93,7 +93,8 @@ struct MergeConflictTabView: View {
         } else if model.conflictedFile?.isBinary == true {
             MergeConflictBinaryView(
                 conflictedFile: model.conflictedFile!,
-                worktreePath: worktree.path
+                worktreePath: worktree.path,
+                loadGeneration: model.loadGeneration
             )
         } else {
             body3Columns
@@ -176,16 +177,6 @@ struct MergeConflictTabView: View {
         .onChange(of: model.currentConflictIndex) { _, newIndex in
             guard let agent = resolvedAgent,
                   let ord = newIndex,
-                  let block = currentConflictBlock(at: ord),
-                  model.annotation(for: block) == nil
-            else { return }
-            Task {
-                await model.explainCurrentConflict(using: agent, language: fileLanguage)
-            }
-        }
-        .onChange(of: model.conflictedFile?.relativePath) { _, _ in
-            guard let agent = resolvedAgent,
-                  let ord = model.currentConflictIndex,
                   let block = currentConflictBlock(at: ord),
                   model.annotation(for: block) == nil
             else { return }
