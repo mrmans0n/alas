@@ -43,6 +43,11 @@ enum Tab: Codable, Equatable, Identifiable {
         }
     }
 
+    var isTerminal: Bool {
+        if case .terminal = self { return true }
+        return false
+    }
+
     var relativeFilePath: String? {
         switch self {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
