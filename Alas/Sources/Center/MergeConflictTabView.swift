@@ -64,8 +64,13 @@ struct MergeConflictTabView: View {
                         }
                     }
                 )
-                if let annotation = currentBlockAnnotation, !annotation.isEmpty {
-                    MergeConflictAnnotationStrip(annotation: annotation)
+                if let annotation = currentBlockAnnotation,
+                   !annotation.isEmpty,
+                   let key = currentBlockKey {
+                    MergeConflictAnnotationStrip(
+                        annotation: annotation,
+                        conflictKey: key
+                    )
                 }
                 content
             }
@@ -267,6 +272,16 @@ struct MergeConflictTabView: View {
               let block = currentConflictBlock(at: ord)
         else { return nil }
         return model.annotation(for: block)
+    }
+
+    /// Content-stable identity for the current conflict block. Passed to
+    /// `MergeConflictAnnotationStrip` as the dismissal key so dismissals
+    /// follow the conflict and not the rendered annotation text.
+    private var currentBlockKey: String? {
+        guard let ord = model.currentConflictIndex,
+              let block = currentConflictBlock(at: ord)
+        else { return nil }
+        return MergeConflictTabModel.annotationKey(for: block)
     }
 
     /// Returns the `ConflictBlock` for the Nth unresolved conflict, or nil.

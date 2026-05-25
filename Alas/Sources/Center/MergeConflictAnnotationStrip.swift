@@ -3,19 +3,27 @@ import SwiftUI
 /// One-line strip below the merge-conflict toolbar that surfaces the AI
 /// explanation for the current conflict. Collapsed by default to a single
 /// truncated line; tapping anywhere expands to the full wrapped text, and
-/// the `×` button hides the strip entirely for the lifetime of the current
-/// annotation (it reappears when the annotation changes — e.g. user
-/// navigates to the next conflict).
+/// the `×` button hides the strip for this specific conflict (it reappears
+/// for any other conflict the user navigates to).
+///
+/// Dismissal is keyed by `conflictKey` rather than `annotation` text so two
+/// distinct conflicts that happen to produce identical one-line summaries
+/// (common with repetitive import/order conflicts) don't share dismissal
+/// state.
 struct MergeConflictAnnotationStrip: View {
     let annotation: String
+    /// Stable identity for the current conflict block — typically
+    /// `MergeConflictTabModel.annotationKey(for:)`. Used as the dismissal
+    /// key so dismissals follow the conflict, not the rendered sentence.
+    let conflictKey: String
 
     @State private var isExpanded = false
-    @State private var dismissedAnnotation: String?
+    @State private var dismissedKeys: Set<String> = []
 
     @Environment(\.theme) var theme
 
     var body: some View {
-        if dismissedAnnotation == annotation {
+        if dismissedKeys.contains(conflictKey) {
             EmptyView()
         } else {
             HStack(alignment: .top, spacing: 6) {
@@ -37,7 +45,7 @@ struct MergeConflictAnnotationStrip: View {
                 }
                 .buttonStyle(.plain)
                 .help(isExpanded ? "Collapse" : "Click to expand")
-                Button(action: { dismissedAnnotation = annotation }) {
+                Button(action: { dismissedKeys.insert(conflictKey) }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(theme.color("fg-subtle"))
@@ -50,10 +58,10 @@ struct MergeConflictAnnotationStrip: View {
             .padding(.vertical, 5)
             .background(theme.color("bg-2"))
             .overlay(Divider(), alignment: .bottom)
-            .onChange(of: annotation) { _, _ in
-                // New annotation arrived (e.g., user navigated to another
-                // conflict). Collapse back to the teaser so the user
-                // doesn't get a wall of text without asking for it.
+            .onChange(of: conflictKey) { _, _ in
+                // User navigated to another conflict. Collapse back to
+                // the teaser so they don't get a wall of text without
+                // asking for it.
                 isExpanded = false
             }
         }
