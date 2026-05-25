@@ -74,6 +74,18 @@ final class MergeConflictTabModel {
         regions.reduce(0) { $0 + (isConflict($1) ? 1 : 0) }
     }
 
+    /// True when any conflict region carries a BASE side. Used by the
+    /// toolbar to disable the Show BASE toggle for merges driven without
+    /// `merge.conflictStyle=zdiff3`, where toggling would be a no-op.
+    var hasBase: Bool {
+        for region in regions {
+            if case .conflict(let block) = region, block.base != nil {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Re-loads the conflicted file's three sides and re-parses the on-disk
     /// merged buffer. Safe to call repeatedly.
     ///

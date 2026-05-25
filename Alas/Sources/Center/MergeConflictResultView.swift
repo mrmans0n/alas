@@ -11,6 +11,18 @@ struct MergeConflictResultView: NSViewRepresentable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let showBase: Bool
+    /// Index of the conflict the user has navigated to (prev/next), or
+    /// nil when none. The view scrolls to and selects that conflict's
+    /// line range on every change so the navigation actually moves the
+    /// cursor in the editor.
+    let currentConflictIndex: Int?
+    /// Structural-change signal. Paired with `currentConflictIndex` in
+    /// the reselection guard so an accept that removes a conflict block
+    /// (which leaves the index numerically the same while the underlying
+    /// block at that ordinal changes) still triggers a reselect. Plain
+    /// text edits inside the buffer don't change this count, so we
+    /// don't scroll-jack the user mid-typing.
+    let conflictCount: Int
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -66,6 +78,28 @@ struct MergeConflictResultView: NSViewRepresentable {
             }
         }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
+
+        // Scroll + select the current conflict when navigation lands on
+        // a new ordinal OR when an accept removes a block and renumbers
+        // (same ordinal points at a different block). The guard tuple
+        // is (index, count); plain text edits don't change `count`, so
+        // typing won't yank the user's cursor.
+        let trigger = ReselectTrigger(index: currentConflictIndex, count: conflictCount)
+        if trigger != context.coordinator.lastReselectTrigger {
+            if let index = currentConflictIndex,
+               let range = Self.conflictRange(in: text, at: index) {
+                textView.setSelectedRange(range)
+                textView.scrollRangeToVisible(range)
+            }
+            context.coordinator.lastReselectTrigger = trigger
+        }
+    }
+
+    /// Pair tracked across `updateNSView` invocations to decide whether
+    /// to re-select the current conflict's range. See the call site.
+    struct ReselectTrigger: Equatable {
+        let index: Int?
+        let count: Int
     }
 
     func makeCoordinator() -> Coordinator {
@@ -78,11 +112,37 @@ struct MergeConflictResultView: NSViewRepresentable {
         /// Tracks the `showBase` value from the last full re-render so we can
         /// detect toggle changes and force a fresh attributed string build.
         var lastShowBase: Bool = false
+        /// Pair we last reselected for, so we only re-scroll when the
+        /// user actually navigates or a structural change (accept, agent
+        /// apply) renumbers conflicts.
+        var lastReselectTrigger: ReselectTrigger?
         init(_ text: Binding<String>) { self.text = text }
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             text.wrappedValue = tv.string
         }
+    }
+
+    /// Returns the NSRange covering the Nth conflict block's lines in
+    /// `text`, or nil when the index is out of bounds.
+    private static func conflictRange(in text: String, at ordinal: Int) -> NSRange? {
+        let regions = ConflictMarkerParser.parse(text)
+        var seen = 0
+        let nsString = text as NSString
+        let lineRanges = computeLineRanges(in: nsString)
+        for region in regions {
+            guard case .conflict(let block) = region else { continue }
+            if seen == ordinal {
+                let lower = max(block.lineRangeInMerged.lowerBound, 0)
+                let upper = min(block.lineRangeInMerged.upperBound, lineRanges.count - 1)
+                guard upper >= lower, upper < lineRanges.count else { return nil }
+                let start = lineRanges[lower].location
+                let end = NSMaxRange(lineRanges[upper])
+                return NSRange(location: start, length: end - start)
+            }
+            seen += 1
+        }
+        return nil
     }
 
     /// Applies a yellow background to each line range that falls inside a

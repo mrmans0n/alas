@@ -84,6 +84,16 @@ final class RightPaneStore {
         activeId = id
     }
 
+    /// Refreshes the cached `RightPaneState` for `worktreeId` if one exists.
+    /// No-op when the worktree hasn't been activated yet. Called from the
+    /// merge-conflict editor after `Mark resolved` so the Conflicts section
+    /// reflects the staged resolution immediately without waiting for the
+    /// FSEvents debouncer.
+    func refresh(worktreeId: String) async {
+        guard let state = states[worktreeId] else { return }
+        await state.refresh()
+    }
+
     /// Stops the currently-active state's background work. Call when the
     /// right pane is hidden or no worktree is selected, so the FSEvents
     /// watcher and the 5-min sync timer don't keep running with no

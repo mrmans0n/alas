@@ -6,6 +6,11 @@ struct MergeConflictTabView: View {
     let tabState: MergeConflictTabState
 
     @State private var model: MergeConflictTabModel
+    /// Conflict keys dismissed from the annotation strip. Lifted out of
+    /// `MergeConflictAnnotationStrip` so dismissal survives navigating
+    /// to a conflict that has no cached annotation (which would unmount
+    /// the strip and otherwise reset its local @State).
+    @State private var dismissedAnnotationKeys: Set<String> = []
     @Environment(\.theme) var theme
 
     init(state: AppState, worktree: Worktree, tabState: MergeConflictTabState) {
@@ -27,22 +32,18 @@ struct MergeConflictTabView: View {
                 MergeConflictToolbar(
                     conflictCount: model.conflictCount,
                     currentConflictIndex: model.currentConflictIndex,
-                    currentAnnotation: currentBlockAnnotation,
                     isLoaded: model.conflictedFile != nil,
                     canRunAgent: model.conflictedFile != nil && model.conflictedFile?.isBinary == false,
                     agentBusy: model.agentBusy,
                     hasAgent: resolvedAgent != nil,
                     hasPendingProposal: model.agentProposal != nil,
                     showBase: showBaseBinding,
+                    baseAvailable: model.hasBase,
                     onPrevious: { model.previousConflict() },
                     onNext: { model.nextConflict() },
                     onAcceptLocal: { model.acceptLocal() },
                     onAcceptRemote: { model.acceptRemote() },
                     onAcceptBoth: { model.acceptBoth() },
-                    onAcceptAndNext: {
-                        model.acceptLocal()
-                        model.nextConflict()
-                    },
                     onAskAgentResolve: {
                         guard let agent = resolvedAgent else { return }
                         Task {
@@ -51,14 +52,32 @@ struct MergeConflictTabView: View {
                     },
                     onMarkResolved: {
                         Task {
-                            try? await model.markFileResolved()
-                            // The WorktreeWatcher on RightPaneState picks up the
-                            // .git/index change from `git add` and refreshes the
-                            // Conflicts section automatically — no explicit call
-                            // is needed here.
+                            do {
+                                try await model.markFileResolved()
+                                // Explicit refresh + tab close so the user
+                                // gets immediate feedback that the file
+                                // moved out of Conflicts. The FSEvents
+                                // watcher would catch up eventually, but
+                                // the debouncer + watcher latency made the
+                                // change feel sticky.
+                                await state.rightPaneStore.refresh(worktreeId: worktree.id)
+                                state.closeTab(worktreeId: worktree.id, tabId: tabState.id)
+                            } catch {
+                                // markResolved is best-effort; the gitService
+                                // logs the underlying error.
+                            }
                         }
                     }
                 )
+                if let annotation = currentBlockAnnotation,
+                   !annotation.isEmpty,
+                   let key = currentBlockKey {
+                    MergeConflictAnnotationStrip(
+                        annotation: annotation,
+                        conflictKey: key,
+                        dismissedKeys: $dismissedAnnotationKeys
+                    )
+                }
                 content
             }
             if let proposal = model.agentProposal {
@@ -152,7 +171,9 @@ struct MergeConflictTabView: View {
                     fileExtension: fileExtension,
                     codeFontFamily: state.config.code.fontFamily,
                     codeFontSize: CGFloat(state.config.code.fontSize),
-                    showBase: tabState.showBase
+                    showBase: tabState.showBase,
+                    currentConflictIndex: model.currentConflictIndex,
+                    conflictCount: model.conflictCount
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -258,6 +279,22 @@ struct MergeConflictTabView: View {
               let block = currentConflictBlock(at: ord)
         else { return nil }
         return model.annotation(for: block)
+    }
+
+    /// Identity for the current conflict block, used as the strip's
+    /// dismissal key. Matches the content-hash key the model uses for
+    /// caching annotations (`MergeConflictTabModel.annotationKey(for:)`)
+    /// so dismissals survive positional shifts — edits above the block,
+    /// resolving earlier conflicts — the same way the cached annotation
+    /// itself does. Two blocks with byte-identical LOCAL/BASE/REMOTE
+    /// in the same file share both the cached explanation and the
+    /// dismissal state, which is consistent: the annotation cache is
+    /// already aliased, so the dismissal aliases too.
+    private var currentBlockKey: String? {
+        guard let ord = model.currentConflictIndex,
+              let block = currentConflictBlock(at: ord)
+        else { return nil }
+        return MergeConflictTabModel.annotationKey(for: block)
     }
 
     /// Returns the `ConflictBlock` for the Nth unresolved conflict, or nil.
