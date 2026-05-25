@@ -601,7 +601,7 @@ final class MergeConflictTabModel {
             }()
             let localTake: Int
             let remoteTake: Int
-            let baseTake = min(baseCount, lines.count - localCount - remoteCount)
+            let baseTake = max(0, min(baseCount, lines.count - localCount - remoteCount))
             switch extrasTarget {
             case .local:
                 localTake = min(localCount + extras, max(0, lines.count - baseCount - remoteCount))
@@ -684,7 +684,7 @@ final class MergeConflictTabModel {
                 // Any extras (totalTake > totalOriginal) go to LOCAL.
                 let extras = max(0, totalTake - totalOriginal)
                 let localTake = min(localCount + extras, totalTake)
-                let baseTake = min(baseCount, totalTake - localTake)
+                let baseTake = max(0, min(baseCount, totalTake - localTake))
                 let remoteTake = max(0, totalTake - localTake - baseTake)
                 let safeCursor = min(cursor, newLines.count)
                 // LOCAL slice
