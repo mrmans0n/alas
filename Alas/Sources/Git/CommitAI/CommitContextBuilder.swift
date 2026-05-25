@@ -33,4 +33,31 @@ enum CommitContextBuilder {
         lines.append("---")
         return lines.joined(separator: "\n") + "\n" + diff
     }
+
+    static func buildForCommitEdit(
+        branch: String?,
+        base: String?,
+        nearbySubjects: [String],
+        priorMessage: GitService.HeadMessage,
+        diff: String
+    ) -> String {
+        var lines: [String] = []
+        lines.append("# Editing existing commit message")
+        lines.append("# Branch: \(branch ?? "(detached)")")
+        if let base { lines.append("# Base: \(base)") }
+        if !nearbySubjects.isEmpty {
+            lines.append("# Nearby subjects on this branch:")
+            for subject in nearbySubjects { lines.append("#   \(subject)") }
+        }
+        lines.append("# Current commit message:")
+        lines.append("#   \(priorMessage.subject)")
+        if !priorMessage.body.isEmpty {
+            lines.append("#")
+            for line in priorMessage.body.split(separator: "\n", omittingEmptySubsequences: false) {
+                lines.append("#   \(line)")
+            }
+        }
+        lines.append("---")
+        return lines.joined(separator: "\n") + "\n" + diff
+    }
 }

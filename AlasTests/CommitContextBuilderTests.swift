@@ -57,4 +57,23 @@ struct CommitContextBuilderTests {
         #expect(s.contains("# Branch: (detached)"))
         #expect(!s.contains("# Base:"))
     }
+
+    @Test func editContextNamesExistingCommitAndIncludesSelectedDiff() {
+        let payload = CommitContextBuilder.buildForCommitEdit(
+            branch: "feature/live-editor",
+            base: "origin/main",
+            nearbySubjects: ["base", "old target", "descendant"],
+            priorMessage: GitService.HeadMessage(subject: "old target", body: "old body"),
+            diff: "diff --git a/a.txt b/a.txt\n+new\n"
+        )
+
+        #expect(payload.contains("# Editing existing commit message"))
+        #expect(payload.contains("# Branch: feature/live-editor"))
+        #expect(payload.contains("# Base: origin/main"))
+        #expect(payload.contains("# Nearby subjects on this branch:"))
+        #expect(payload.contains("#   old target"))
+        #expect(payload.contains("# Current commit message:"))
+        #expect(payload.contains("#   old target"))
+        #expect(payload.contains("diff --git a/a.txt b/a.txt"))
+    }
 }
