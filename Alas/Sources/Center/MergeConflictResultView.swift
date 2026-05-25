@@ -10,6 +10,7 @@ struct MergeConflictResultView: NSViewRepresentable {
     let fileExtension: String
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    let showBase: Bool
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -42,11 +43,11 @@ struct MergeConflictResultView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        // Only re-render the text storage when the bound text actually differs
-        // from what the user has typed. Otherwise we clobber the in-flight
-        // caret position on every external @State change.
+        // Re-render whenever text changed OR the showBase toggle changed since
+        // last render (italic/muted attrs would otherwise persist after toggle-off).
         let current = textView.string
-        if current != text {
+        let needsFullRender = current != text || context.coordinator.lastShowBase != showBase
+        if needsFullRender {
             let attr = MergeConflictTextStorage.highlightedAttributedString(
                 text: text,
                 fileExtension: fileExtension,
@@ -56,6 +57,7 @@ struct MergeConflictResultView: NSViewRepresentable {
             )
             applyConflictShading(to: attr, text: text, theme: theme)
             textView.textStorage?.setAttributedString(attr)
+            context.coordinator.lastShowBase = showBase
         } else {
             // Even when the string is unchanged, the conflict regions may have
             // shifted (a typed edit can resolve a marker). Re-apply shading.
@@ -73,6 +75,9 @@ struct MergeConflictResultView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         weak var textView: NSTextView?
         let text: Binding<String>
+        /// Tracks the `showBase` value from the last full re-render so we can
+        /// detect toggle changes and force a fresh attributed string build.
+        var lastShowBase: Bool = false
         init(_ text: Binding<String>) { self.text = text }
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
@@ -81,8 +86,10 @@ struct MergeConflictResultView: NSViewRepresentable {
     }
 
     /// Applies a yellow background to each line range that falls inside a
-    /// `<<<<<<< ... >>>>>>>` block in `text`. Accepts any `NSMutableAttributedString`
-    /// (including `NSTextStorage`, which IS-A `NSMutableAttributedString`).
+    /// `<<<<<<< ... >>>>>>>` block in `text`. Also applies italic + muted
+    /// attributes to BASE lines when `showBase` is true.
+    /// Accepts any `NSMutableAttributedString` (including `NSTextStorage`,
+    /// which IS-A `NSMutableAttributedString`).
     private func applyConflictShading(
         to storage: NSMutableAttributedString,
         text: String,
@@ -90,8 +97,14 @@ struct MergeConflictResultView: NSViewRepresentable {
     ) {
         let regions = ConflictMarkerParser.parse(text)
         let highlight = NSColor(theme.color("warn")).withAlphaComponent(0.18)
+        // We deliberately do NOT clear .font / .foregroundColor here. Clearing
+        // them over conflict regions would strip the TreeSitter syntax styling
+        // from LOCAL/REMOTE lines. The Coordinator's `lastShowBase` tracking in
+        // `updateNSView` forces a full re-render whenever `showBase` toggles,
+        // which is when stale BASE styling actually matters in practice.
         storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
-        let lineRanges = Self.computeLineRanges(in: text as NSString)
+        let nsString = text as NSString
+        let lineRanges = Self.computeLineRanges(in: nsString)
         for region in regions {
             if case .conflict(let block) = region {
                 let lower = max(block.lineRangeInMerged.lowerBound, 0)
@@ -99,8 +112,48 @@ struct MergeConflictResultView: NSViewRepresentable {
                 guard upper >= lower, upper < lineRanges.count else { continue }
                 let start = lineRanges[lower].location
                 let end = NSMaxRange(lineRanges[upper])
-                let nsr = NSRange(location: start, length: end - start)
-                storage.addAttribute(.backgroundColor, value: highlight, range: nsr)
+                storage.addAttribute(.backgroundColor, value: highlight,
+                                     range: NSRange(location: start, length: end - start))
+
+                if showBase, block.base != nil {
+                    applyBaseStyling(in: storage,
+                                     fullText: nsString,
+                                     lineRanges: lineRanges,
+                                     conflictRange: lower ... upper,
+                                     theme: theme)
+                }
+            }
+        }
+    }
+
+    /// Walks the lines inside a conflict marker block and applies italic +
+    /// muted-color attributes to the lines that fall between `||||||| ` and
+    /// `=======` markers. Called only when `showBase == true`.
+    private func applyBaseStyling(
+        in storage: NSMutableAttributedString,
+        fullText: NSString,
+        lineRanges: [NSRange],
+        conflictRange: ClosedRange<Int>,
+        theme: Theme
+    ) {
+        var inBase = false
+        let italic = CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize)
+            .italicVariant()
+        let muted = NSColor(theme.color("fg-dim"))
+        for lineIdx in conflictRange {
+            let lineRange = lineRanges[lineIdx]
+            let lineText = fullText.substring(with: lineRange)
+            if lineText.hasPrefix("||||||| ") {
+                inBase = true
+                continue
+            }
+            if lineText.hasPrefix("=======") {
+                inBase = false
+                continue
+            }
+            if inBase {
+                storage.addAttribute(.font, value: italic, range: lineRange)
+                storage.addAttribute(.foregroundColor, value: muted, range: lineRange)
             }
         }
     }
@@ -120,5 +173,16 @@ struct MergeConflictResultView: NSViewRepresentable {
             if index >= nsString.length { break }
         }
         return ranges
+    }
+}
+
+private extension NSFont {
+    /// Returns the italic version of this font, falling back to self if the
+    /// font has no italic face.
+    func italicVariant() -> NSFont {
+        let descriptor = fontDescriptor.withSymbolicTraits(
+            fontDescriptor.symbolicTraits.union(.italic)
+        )
+        return NSFont(descriptor: descriptor, size: pointSize) ?? self
     }
 }

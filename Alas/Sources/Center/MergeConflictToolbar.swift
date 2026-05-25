@@ -3,10 +3,22 @@ import SwiftUI
 struct MergeConflictToolbar: View {
     let conflictCount: Int
     let currentConflictIndex: Int?
-    /// True only after the conflicted file has been loaded successfully.
-    /// Gates `Mark resolved` so it can't fire on an empty initial buffer
-    /// and clobber the on-disk file with empty contents.
+    let currentAnnotation: String?
+    /// True once the conflicted file has been loaded successfully (binary
+    /// or text). Gates `Mark resolved` so it can't fire on an empty initial
+    /// buffer. Stays true for binaries — the user resolves them via the
+    /// right-pane Use ours/theirs context menu, then clicks Mark resolved here.
     let isLoaded: Bool
+    /// True only when a loaded file is text-based (non-binary). Gates the
+    /// agent + 3-column-only actions (prev/next, accept LOCAL/REMOTE/BOTH).
+    let canRunAgent: Bool
+    let agentBusy: Bool
+    let hasAgent: Bool
+    /// True while an unreviewed agent proposal is on screen. The toolbar
+    /// stays interactive at the edges of the overlay; this gate prevents
+    /// the user from kicking off a second agent run that would silently
+    /// clobber the pending proposal.
+    let hasPendingProposal: Bool
     @Binding var showBase: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -14,6 +26,7 @@ struct MergeConflictToolbar: View {
     let onAcceptRemote: () -> Void
     let onAcceptBoth: () -> Void
     let onAcceptAndNext: () -> Void
+    let onAskAgentResolve: () -> Void
     let onMarkResolved: () -> Void
 
     @Environment(\.theme) var theme
@@ -26,11 +39,27 @@ struct MergeConflictToolbar: View {
             Divider().frame(height: 18)
             acceptButtons
             Spacer()
+            Button(action: onAskAgentResolve) {
+                HStack(spacing: 4) {
+                    if agentBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
+                    Text("Ask agent to resolve")
+                        .font(.system(size: 11))
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!canRunAgent || !hasAgent || agentBusy || hasPendingProposal)
+            .help(hasAgent
+                ? "Run the configured agent on the whole file and preview its proposal"
+                : "Configure an agent in Settings to enable this")
             Toggle("Show BASE", isOn: $showBase)
                 .toggleStyle(.button)
                 .controlSize(.small)
-                .disabled(true)
-                .help("BASE inline rendering arrives in a follow-up — toggle is wired for persistence only")
+                .help("Show the common-ancestor BASE lines inside each conflict region")
             Button(action: onMarkResolved) {
                 Text("Mark resolved")
                     .font(.system(size: 11))
@@ -46,9 +75,18 @@ struct MergeConflictToolbar: View {
     }
 
     private var counter: some View {
-        Text(counterText)
-            .font(.system(size: 11))
-            .foregroundColor(theme.color("fg-dim"))
+        VStack(alignment: .leading, spacing: 1) {
+            Text(counterText)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            if let annotation = currentAnnotation, !annotation.isEmpty {
+                Text("✦ \(annotation)")
+                    .font(.system(size: 10).italic())
+                    .foregroundColor(theme.color("fg-subtle"))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+        }
     }
 
     private var counterText: String {

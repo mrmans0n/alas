@@ -18,6 +18,45 @@ final class MergeConflictTabModel {
     var resultText: String = ""
     /// Set when `load()` fails. Cleared on successful (re)load.
     private(set) var loadError: String?
+    /// Per-conflict-block one-line annotation populated by the agent.
+    /// Keyed by a stable identity derived from the conflict's three sides
+    /// (NOT by ordinal — ordinals shift when prior conflicts are resolved).
+    /// Cleared on `load()`.
+    private(set) var annotations: [String: String] = [:]
+    /// Conflict count at the moment `load()` last succeeded. Used by the
+    /// minimap to show progress (resolved vs total). Cleared (set to 0)
+    /// on `load()` failure.
+    private(set) var initialConflictCount: Int = 0
+
+    /// Increments at the *start* of every `load()` attempt. Used by
+    /// stale-async guards (binary image cache, `requestAgentResolveFile`)
+    /// to detect that a load has begun mid-await and drop their results.
+    /// Bumping at start (rather than completion) means an in-flight request
+    /// is invalidated as soon as a new load kicks off — even if it never
+    /// finishes (e.g. file no longer conflicted).
+    private(set) var loadGeneration: Int = 0
+
+    /// Increments after `load()` has committed its new state to the model
+    /// (success OR failure). Used by view-side reload triggers that need
+    /// to read the post-load `regions` / `currentConflictIndex` to dispatch
+    /// further work (e.g. auto-explain). Distinct from `loadGeneration`
+    /// because firing on the start-of-load value would read stale state.
+    private(set) var loadCompletionGeneration: Int = 0
+
+    /// Block keys for which an `explainCurrentConflict` request is currently
+    /// in flight. Prevents duplicate agent dispatches when both an
+    /// `onChange(currentConflictIndex)` and an `onChange(loadGeneration)`
+    /// view-hook fire for the same conflict in the same render cycle.
+    @ObservationIgnored
+    private var explainInFlight: Set<String> = []
+
+    /// Set while a `MergeAgent` request is in flight. Drives toolbar disabled-state.
+    private(set) var agentBusy: Bool = false
+
+    /// Agent's proposed full-file resolution, awaiting user Apply/Cancel.
+    /// Nil when no proposal is pending. Cleared by `applyAgentProposal` /
+    /// `discardAgentProposal`.
+    private(set) var agentProposal: String?
 
     let worktreePath: URL
     let relativePath: String
@@ -37,7 +76,15 @@ final class MergeConflictTabModel {
 
     /// Re-loads the conflicted file's three sides and re-parses the on-disk
     /// merged buffer. Safe to call repeatedly.
+    ///
+    /// `loadGeneration` is incremented on EVERY attempt (success or failure)
+    /// so stale-async guards (`requestAgentResolveFile`, binary image cache)
+    /// invalidate even when a reload fails — otherwise an in-flight agent
+    /// resolve from before a failed reload could still write its proposal
+    /// into the model after we've cleared everything.
     func load() async {
+        loadGeneration += 1
+        explainInFlight.removeAll()
         do {
             let file = try await gitService.conflictedFile(
                 worktreePath: worktreePath,
@@ -47,16 +94,27 @@ final class MergeConflictTabModel {
             self.resultText = file.merged
             self.regions = ConflictMarkerParser.parse(file.merged)
             self.currentConflictIndex = firstConflictIndex()
+            self.initialConflictCount = self.conflictCount
+            self.annotations = [:]
+            self.agentProposal = nil
+            self.agentBusy = false
             self.loadError = nil
         } catch {
             self.conflictedFile = nil
             self.regions = []
             self.resultText = ""
             self.currentConflictIndex = nil
+            self.initialConflictCount = 0
+            self.annotations = [:]
+            self.agentProposal = nil
+            self.agentBusy = false
             self.loadError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
             logger.error("merge-conflict load failed: \(self.loadError ?? "", privacy: .public)")
         }
+        // Bump AFTER state is committed so view-side reload triggers read
+        // post-load `regions` / `currentConflictIndex` (not stale values).
+        loadCompletionGeneration += 1
     }
 
     /// Re-parses `resultText` and updates `regions` + `currentConflictIndex`.
@@ -213,5 +271,112 @@ final class MergeConflictTabModel {
             worktreePath: worktreePath,
             relativePath: relativePath
         )
+    }
+
+    /// Deterministic stable identity for a `ConflictBlock`. Used as the key
+    /// for `annotations` so cached explanations follow the block when other
+    /// conflicts get resolved and the ordinal numbering shifts.
+    static func annotationKey(for block: ConflictBlock) -> String {
+        "\(block.local)\n<<<<<<<<\n\(block.base ?? "")\n========\n\(block.remote)"
+    }
+
+    /// Records a one-line agent annotation for `block`. Called by
+    /// `MergeConflictTabView` after a successful `MergeAgent.explainConflict`
+    /// round-trip.
+    func setAnnotation(_ text: String, for block: ConflictBlock) {
+        annotations[Self.annotationKey(for: block)] = text
+    }
+
+    /// Returns the cached annotation for `block`, or nil if not cached.
+    func annotation(for block: ConflictBlock) -> String? {
+        annotations[Self.annotationKey(for: block)]
+    }
+
+    // MARK: - Agent assist
+
+    /// Asks the agent to summarize the current conflict in one sentence and
+    /// caches the result in `annotations`, keyed by block content. No-op if
+    /// there's no current conflict, no agent, the annotation is already
+    /// cached, or a request for the same block is already in flight.
+    /// Errors are silent (no UI).
+    func explainCurrentConflict(using agent: AgentDefinition, language: String?) async {
+        guard let ordinal = currentConflictIndex,
+              let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
+              case .conflict(let block) = regions[regionIdx]
+        else { return }
+        let key = Self.annotationKey(for: block)
+        // De-dupe: cache hit or already-in-flight for the same block → bail.
+        guard annotations[key] == nil, !explainInFlight.contains(key) else { return }
+        explainInFlight.insert(key)
+        defer { explainInFlight.remove(key) }
+        do {
+            let sentence = try await MergeAgent.explainConflict(
+                agent: agent,
+                block: block,
+                language: language
+            )
+            if !sentence.isEmpty {
+                setAnnotation(sentence, for: block)
+            }
+        } catch {
+            logger.error("explain failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Asks the agent to propose a full-file resolution. On success, stashes
+    /// the proposal in `agentProposal` for the view to render as a diff
+    /// overlay. Errors leave `agentProposal` nil.
+    ///
+    /// If `load()` runs while this request is in flight (e.g. tab re-focused
+    /// for a fresh conflict on the same path), the late response is dropped:
+    /// applying it would clobber the freshly loaded buffer with stale content.
+    /// We detect that via the `loadGeneration` token captured at request start.
+    func requestAgentResolveFile(using agent: AgentDefinition, language: String?) async {
+        guard let file = conflictedFile else { return }
+        let startGeneration = loadGeneration
+        agentBusy = true
+        defer {
+            if loadGeneration == startGeneration {
+                agentBusy = false
+            }
+        }
+        do {
+            let proposal = try await MergeAgent.resolveFile(
+                agent: agent,
+                filePath: relativePath,
+                local: file.local ?? "",
+                base: file.base,
+                remote: file.remote ?? "",
+                mergedWithMarkers: resultText,
+                language: language
+            )
+            guard loadGeneration == startGeneration else { return }
+            agentProposal = proposal
+        } catch {
+            guard loadGeneration == startGeneration else { return }
+            agentProposal = nil
+            logger.error("resolveFile failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Replaces `resultText` with the pending `agentProposal` and clears it.
+    /// No-op when there's no proposal.
+    func applyAgentProposal() {
+        guard let proposal = agentProposal else { return }
+        resultText = proposal
+        agentProposal = nil
+        reparse()
+    }
+
+    /// Discards the pending agent proposal without changing `resultText`.
+    func discardAgentProposal() {
+        agentProposal = nil
+    }
+
+    /// Test-only setter so unit tests can stage a proposal without invoking
+    /// a real agent. Marked `internal` (default) and named to make its
+    /// test-only intent obvious.
+    func setAgentProposalForTesting(_ proposal: String) {
+        agentProposal = proposal
     }
 }

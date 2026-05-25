@@ -276,4 +276,179 @@ struct MergeConflictTabModelTests {
         )
         #expect(recreated == false)
     }
+
+    @Test func loadSnapshotsInitialConflictCount() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        #expect(model.initialConflictCount == 1)
+        model.acceptLocal()
+        // After resolution, the snapshot survives:
+        #expect(model.initialConflictCount == 1)
+        #expect(model.conflictCount == 0)
+    }
+
+    @Test func annotationsStartEmptyAndCanBeSet() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        #expect(model.annotations.isEmpty)
+        let block = ConflictBlock(
+            local: "ours\n", base: nil, remote: "theirs\n",
+            localLabel: "HEAD", remoteLabel: "feature",
+            lineRangeInMerged: 0 ... 4
+        )
+        model.setAnnotation("LOCAL renamed; REMOTE changed default.", for: block)
+        #expect(model.annotation(for: block) == "LOCAL renamed; REMOTE changed default.")
+    }
+
+    @Test func annotationKeyedByBlockContentSurvivesResolution() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        // Two conflicts with distinguishable sides.
+        model.resultText = """
+        head
+        <<<<<<< HEAD
+        a-ours
+        =======
+        a-theirs
+        >>>>>>> feature
+        middle
+        <<<<<<< HEAD
+        b-ours
+        =======
+        b-theirs
+        >>>>>>> feature
+        tail
+
+        """
+        model.reparse()
+        #expect(model.conflictCount == 2)
+
+        // Manually cache an annotation for the SECOND conflict (block "b").
+        let blocks = model.regions.compactMap { (r: ConflictRegion) -> ConflictBlock? in
+            if case .conflict(let b) = r { return b } else { return nil }
+        }
+        #expect(blocks.count == 2)
+        model.setAnnotation("about b", for: blocks[1])
+        #expect(model.annotation(for: blocks[1]) == "about b")
+
+        // Now resolve the FIRST conflict. After reparse the only remaining
+        // conflict is the "b" block, now at ordinal 0. Its annotation must
+        // still resolve to "about b" — not the empty string the OLD ordinal 1
+        // index would have produced under the old [Int: String] scheme.
+        // (Navigate to ordinal 0 via previousConflict from reparse's default.)
+        model.previousConflict() // ensure we're at ordinal 0
+        model.acceptLocal()
+        #expect(model.conflictCount == 1)
+
+        let remaining = model.regions.compactMap { (r: ConflictRegion) -> ConflictBlock? in
+            if case .conflict(let b) = r { return b } else { return nil }
+        }
+        #expect(remaining.count == 1)
+        #expect(model.annotation(for: remaining[0]) == "about b")
+    }
+
+    @Test func applyAgentProposalReplacesResultTextAndReparses() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        model.resultText = """
+        <<<<<<< HEAD
+        ours
+        =======
+        theirs
+        >>>>>>> feature
+
+        """
+        model.reparse()
+        #expect(model.conflictCount == 1)
+        model.setAgentProposalForTesting("merged content\n")
+        #expect(model.agentProposal == "merged content\n")
+        model.applyAgentProposal()
+        #expect(model.resultText == "merged content\n")
+        #expect(model.conflictCount == 0)
+        #expect(model.agentProposal == nil)
+    }
+
+    @Test func loadClearsAnyPendingAgentProposal() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // Simulate a pending agent proposal from a prior session/conflict.
+        model.setAgentProposalForTesting("stale proposal\n")
+        #expect(model.agentProposal != nil)
+
+        // Reloading the tab (e.g. re-focused for a fresh conflict) must
+        // clear the stale proposal so the user can't accidentally Apply
+        // it onto the newly loaded conflict.
+        await model.load()
+        #expect(model.agentProposal == nil)
+    }
+
+    @Test func loadGenerationIncrementsOnEveryLoadAttempt() async throws {
+        // Both successful and failed loads must bump the generation — stale
+        // async guards (binary cache, requestAgentResolveFile) rely on it
+        // changing even when a reload fails.
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        #expect(model.loadGeneration == 0)
+        await model.load()
+        let first = model.loadGeneration
+        #expect(first > 0)
+        await model.load()
+        #expect(model.loadGeneration > first)
+
+        // Now make load() fail by abort'ing the merge so a.txt is no longer
+        // conflicted. The generation must still bump.
+        _ = try await Process.git(["merge", "--abort"], cwd: repo)
+        let beforeFailedLoad = model.loadGeneration
+        await model.load()
+        #expect(model.loadError != nil)
+        #expect(model.loadGeneration > beforeFailedLoad)
+    }
+
+    @Test func discardAgentProposalClearsProposalAndKeepsResultText() {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        model.resultText = "before\n"
+        model.setAgentProposalForTesting("after\n")
+        model.discardAgentProposal()
+        #expect(model.agentProposal == nil)
+        #expect(model.resultText == "before\n")
+    }
 }
