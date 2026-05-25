@@ -292,10 +292,20 @@ final class MergeConflictTabModel {
     /// Asks the agent to propose a full-file resolution. On success, stashes
     /// the proposal in `agentProposal` for the view to render as a diff
     /// overlay. Errors leave `agentProposal` nil.
+    ///
+    /// If `load()` runs while this request is in flight (e.g. tab re-focused
+    /// for a fresh conflict on the same path), the late response is dropped:
+    /// applying it would clobber the freshly loaded buffer with stale content.
+    /// We detect that via the `loadGeneration` token captured at request start.
     func requestAgentResolveFile(using agent: AgentDefinition, language: String?) async {
         guard let file = conflictedFile else { return }
+        let startGeneration = loadGeneration
         agentBusy = true
-        defer { agentBusy = false }
+        defer {
+            if loadGeneration == startGeneration {
+                agentBusy = false
+            }
+        }
         do {
             let proposal = try await MergeAgent.resolveFile(
                 agent: agent,
@@ -306,8 +316,10 @@ final class MergeConflictTabModel {
                 mergedWithMarkers: resultText,
                 language: language
             )
+            guard loadGeneration == startGeneration else { return }
             agentProposal = proposal
         } catch {
+            guard loadGeneration == startGeneration else { return }
             agentProposal = nil
             logger.error("resolveFile failed: \(error.localizedDescription, privacy: .public)")
         }
