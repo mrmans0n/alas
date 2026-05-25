@@ -168,76 +168,19 @@ struct MergeConflictTabView: View {
     }
 
     private var body3Columns: some View {
-        HStack(spacing: 0) {
-            // LOCAL
-            VStack(spacing: 0) {
-                columnHeader("LOCAL · ours")
-                MergeConflictColumnView(
-                    text: model.conflictedFile?.local ?? "",
-                    fileExtension: fileExtension,
-                    codeFontFamily: state.config.code.fontFamily,
-                    codeFontSize: CGFloat(state.config.code.fontSize)
-                )
+        MergeView3Way(
+            model: model,
+            fileExtension: fileExtension,
+            codeFontFamily: state.config.code.fontFamily,
+            codeFontSize: CGFloat(state.config.code.fontSize),
+            onJumpToConflict: { idx in
+                while (model.currentConflictIndex ?? 0) < idx { model.nextConflict() }
+                while (model.currentConflictIndex ?? 0) > idx { model.previousConflict() }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            // RESULT (editable)
-            VStack(spacing: 0) {
-                columnHeader("RESULT")
-                MergeConflictResultView(
-                    text: Binding(
-                        get: { model.resultText },
-                        set: { newValue in
-                            model.resultText = newValue
-                            model.reparse()
-                        }
-                    ),
-                    fileExtension: fileExtension,
-                    codeFontFamily: state.config.code.fontFamily,
-                    codeFontSize: CGFloat(state.config.code.fontSize),
-                    showBase: tabState.showBase,
-                    currentConflictIndex: model.currentConflictIndex,
-                    conflictCount: model.conflictCount
-                )
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            // REMOTE
-            VStack(spacing: 0) {
-                columnHeader("REMOTE · theirs")
-                MergeConflictColumnView(
-                    text: model.conflictedFile?.remote ?? "",
-                    fileExtension: fileExtension,
-                    codeFontFamily: state.config.code.fontFamily,
-                    codeFontSize: CGFloat(state.config.code.fontSize)
-                )
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            MergeConflictMinimap(
-                conflictCount: model.conflictCount,
-                resolvedCount: max(model.initialConflictCount - model.conflictCount, 0),
-                currentConflictIndex: model.currentConflictIndex,
-                onJump: { idx in
-                    // Clamp via repeated next/previous — the model's clamping
-                    // logic ensures we land exactly on `idx` when reachable.
-                    while (model.currentConflictIndex ?? 0) < idx { model.nextConflict() }
-                    while (model.currentConflictIndex ?? 0) > idx { model.previousConflict() }
-                }
-            )
-        }
+        )
         .onChange(of: model.currentConflictIndex) { _, _ in
             triggerExplainIfNeeded()
         }
-        // Also re-trigger after every load completes — covers the case
-        // where a reload (e.g. tab re-focused for a fresh conflict on the
-        // same path) lands on the same currentConflictIndex as before and
-        // the index hook wouldn't fire. We watch `loadCompletionGeneration`
-        // rather than `loadGeneration` so the trigger reads the POST-load
-        // `regions` / `currentConflictIndex` (loadGeneration bumps at the
-        // start of load, before state is committed). Annotations are
-        // cleared on load(), so this request gets through the cache check;
-        // the model's in-flight dedup makes the overlap with the index
-        // hook safe.
         .onChange(of: model.loadCompletionGeneration) { _, _ in
             triggerExplainIfNeeded()
         }
@@ -256,17 +199,6 @@ struct MergeConflictTabView: View {
         Task {
             await model.explainCurrentConflict(using: agent, language: fileLanguage)
         }
-    }
-
-    private func columnHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 10, weight: .semibold))
-            .textCase(.uppercase)
-            .foregroundColor(theme.color("fg-dim"))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.color("bg-2"))
     }
 
     private var fileExtension: String {
