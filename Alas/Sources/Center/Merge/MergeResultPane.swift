@@ -97,6 +97,16 @@ struct MergeResultPane: NSViewRepresentable {
             }
         }
 
+        /// Line-by-line content comparison against `rows`. Emits an
+        /// `onEditRow(i, newContent)` for every visible row whose
+        /// content differs from `rows[i].content`. This does NOT track
+        /// structural changes (inserts, deletes, reorders) — a single
+        /// inserted line cascades into per-row "edits" for every row
+        /// below the insertion point because the row alignment shifts.
+        /// Callers handle this by rebuilding from a snapshot rather
+        /// than treating individual `onEditRow` calls as authoritative.
+        /// Task 11's setRowContent on the model is designed against
+        /// this contract.
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             let lines = (tv.string + "\n").components(separatedBy: "\n").dropLast()
@@ -163,7 +173,8 @@ struct MergeResultPane: NSViewRepresentable {
                                                   mode: wordDiffMode)
                     let changed = kind.isLocal ? diff.localChanged : diff.remoteChanged
                     let wordTint = kind.isLocal ? wordLocalTint : wordRemoteTint
-                    for r in changed where NSMaxRange(r) <= row.content.count {
+                    let lineUTF16Length = (row.content as NSString).length
+                    for r in changed where NSMaxRange(r) <= lineUTF16Length {
                         line.addAttribute(.backgroundColor, value: wordTint, range: r)
                     }
                 }
