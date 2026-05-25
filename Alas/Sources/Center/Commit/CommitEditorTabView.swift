@@ -271,7 +271,7 @@ struct CommitEditorTabView: View {
         busy = true
         error = nil
 
-        Task { @MainActor in
+        Task<Void, Never> { @MainActor in
             defer { busy = false }
             do {
                 let result = try await git.editCommit(
@@ -293,6 +293,7 @@ struct CommitEditorTabView: View {
                 savedSubject = refreshedSubject
                 savedBodyText = refreshedDetails.body
 
+                appState.tabs.updateCommitEditorShas(worktreeId: worktreeId, shaMap: result.shaMap)
                 appState.tabs.updateCommitEditor(
                     worktreeId: worktreeId,
                     tabId: tabId,

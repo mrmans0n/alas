@@ -570,6 +570,22 @@ final class TabsManager {
         return tab
     }
 
+    func updateCommitEditorShas(worktreeId: String, shaMap: [String: String]) {
+        guard !shaMap.isEmpty, var file = byWorktree[worktreeId] else { return }
+        var changed = false
+        for idx in file.tabs.indices {
+            guard case .commitEditor(var state) = file.tabs[idx],
+                  let newSha = shaMap[state.currentSha],
+                  newSha != state.currentSha else { continue }
+            state.currentSha = newSha
+            file.tabs[idx] = .commitEditor(state)
+            changed = true
+        }
+        guard changed else { return }
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
     /// Open a merge-conflict tab for `relativePath`, or activate the existing
     /// one if it's already open. Returns the tab.
     @discardableResult

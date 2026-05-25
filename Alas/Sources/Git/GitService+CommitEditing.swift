@@ -132,7 +132,7 @@ extension GitService {
             shaMap[targetSha] = currentSha
 
             for sha in replayRange.dropFirst() {
-                try await runGit(["cherry-pick", "--allow-empty", sha], cwd: worktreePath)
+                try await runGit(["cherry-pick", "--allow-empty", "--keep-redundant-commits", sha], cwd: worktreePath)
                 shaMap[sha] = try await headSha(cwd: worktreePath)
             }
 

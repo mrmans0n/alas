@@ -104,8 +104,4 @@ final class RightPaneStore {
         }
         activeId = nil
     }
-
-    func refresh(worktreeId: String) async {
-        await states[worktreeId]?.refresh()
-    }
 }

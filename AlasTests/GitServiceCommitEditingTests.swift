@@ -200,6 +200,26 @@ struct GitServiceCommitEditingTests {
         #expect(try await subjects(repo) == ["base", "target", "descendant"])
     }
 
+    @Test func dropFilePreservesDescendantThatBecomesRedundant() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let base = try await commit(repo, subject: "base", files: ["a.txt": "base\n"])
+        let target = try await commit(repo, subject: "target", files: ["a.txt": "target\n", "keep.txt": "keep\n"])
+        let descendant = try await commit(repo, subject: "restore base", files: ["a.txt": "base\n"])
+
+        let result = try await GitService().editCommit(
+            worktreePath: repo,
+            baseRef: base,
+            targetSha: target,
+            action: .dropFile(path: "a.txt")
+        )
+
+        #expect(result.shaMap[descendant] != nil)
+        #expect(try await subjects(repo) == ["base", "target", "restore base"])
+        let content = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
+        #expect(content == "base\n")
+    }
+
     @Test func dropAddedFileThatWouldEmptyCommitIsRejected() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

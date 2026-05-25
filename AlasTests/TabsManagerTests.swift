@@ -491,6 +491,35 @@ struct TabsManagerTests {
 
         #expect(found?.id == editor.id)
     }
+
+    @Test func updateCommitEditorShasAppliesShaMapToOpenCommitEditors() {
+        let worktreeId = "tabs-manager-commit-editor-sha-map"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let target = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            title: "bbbbbbb target"
+        )
+        let descendant = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "origin/main",
+            originalSha: "cccccccccccccccccccccccccccccccccccccccc",
+            currentSha: "dddddddddddddddddddddddddddddddddddddddd",
+            title: "ddddddd descendant"
+        )
+
+        mgr.updateCommitEditorShas(worktreeId: worktreeId, shaMap: [
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "dddddddddddddddddddddddddddddddddddddddd": "ffffffffffffffffffffffffffffffffffffffff"
+        ])
+
+        #expect(mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")?.id == target.id)
+        #expect(mgr.commitEditorTab(worktreeId: worktreeId, currentSha: "ffffffffffffffffffffffffffffffffffffffff")?.id == descendant.id)
+    }
 }
 
 // MARK: - Pane tree mutations
