@@ -310,7 +310,7 @@ final class MergeConflictTabModel {
         for (regionIndex, region) in regions.enumerated() {
             switch region {
             case .text(let text):
-                let lineCount = text.components(separatedBy: "\n").count - (text.hasSuffix("\n") ? 1 : 0)
+                let lineCount = Self.lineCount(of: text)
                 if row < cursor + lineCount {
                     var lines = text.components(separatedBy: "\n")
                     let inside = row - cursor
@@ -323,8 +323,8 @@ final class MergeConflictTabModel {
                 }
                 cursor += lineCount
             case .conflict(let block):
-                let localLineCount = block.local.components(separatedBy: "\n").count - (block.local.hasSuffix("\n") ? 1 : 0)
-                let remoteLineCount = block.remote.components(separatedBy: "\n").count - (block.remote.hasSuffix("\n") ? 1 : 0)
+                let localLineCount = Self.lineCount(of: block.local)
+                let remoteLineCount = Self.lineCount(of: block.remote)
                 if row < cursor + localLineCount {
                     var lines = block.local.components(separatedBy: "\n")
                     let inside = row - cursor
@@ -481,6 +481,15 @@ final class MergeConflictTabModel {
             worktreePath: worktreePath,
             relativePath: relativePath
         )
+    }
+
+    /// Mirrors `MergeRegionVisualLayout.splitPreservingTrailingEmpty`:
+    /// 0 rows for an empty string, otherwise the number of physical
+    /// lines (treating a trailing newline as terminator, not separator).
+    private static func lineCount(of text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        let parts = text.components(separatedBy: "\n")
+        return text.hasSuffix("\n") ? parts.count - 1 : parts.count
     }
 
     /// Deterministic stable identity for a `ConflictBlock`. Used as the key

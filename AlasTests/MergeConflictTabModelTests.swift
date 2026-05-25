@@ -590,4 +590,77 @@ struct MergeConflictTabModelTests {
         #expect(model.conflictCount == 1)
         #expect(model.currentConflictIndex == 0)
     }
+
+    @Test func setRowContentEditsTextRegion() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        // The fixture's conflict is the whole file (single conflict
+        // block, no surrounding text). After resolving via accept
+        // LOCAL we get a single .text region containing "main line".
+        let block = try #require(model.allConflictBlocks().first)
+        model.acceptLocal(for: block)
+        #expect(model.conflictCount == 0)
+        model.setRowContent(at: 0, to: "edited line")
+        #expect(model.flatTextForWriting().contains("edited line"))
+        #expect(!model.flatTextForWriting().contains("main line"))
+    }
+
+    @Test func setRowContentEditsLocalHunkAndPreservesRemote() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.makeConflictingBranches(repo)
+        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+        let model = MergeConflictTabModel(
+            worktreePath: repo,
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        await model.load()
+        #expect(model.conflictCount == 1)
+        // Conflict spans rows 0 (LOCAL "main line") and 1 (REMOTE
+        // "feature line"). Edit row 0 → LOCAL becomes "renamed line".
+        model.setRowContent(at: 0, to: "renamed line")
+        let block = try #require(model.allConflictBlocks().first)
+        #expect(block.local.contains("renamed line"))
+        #expect(block.remote.contains("feature line"))
+        #expect(model.conflictCount == 1) // structure preserved
+    }
+
+    @Test func setRowContentRoutesToRemoteWhenLocalHunkIsEmpty() async throws {
+        // Regression test: when LOCAL is empty (e.g., addedByThem),
+        // visual row 0 of the conflict belongs to REMOTE, not LOCAL.
+        // setRowContent must route the edit accordingly.
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
+            relativePath: "a.txt",
+            gitService: GitService()
+        )
+        // Seed the model's regions manually with a single empty-local
+        // conflict. resultText needs to match so reparse() agrees.
+        let block = ConflictBlock(
+            local: "",
+            base: nil,
+            remote: "added by them\n",
+            localLabel: "HEAD",
+            remoteLabel: "feature",
+            lineRangeInMerged: 0 ... 2
+        )
+        model.resultText = "<<<<<<< HEAD\n=======\nadded by them\n>>>>>>> feature\n"
+        model.reparse()
+        #expect(model.conflictCount == 1)
+        // Row 0 is REMOTE's first line (no LOCAL rows in this conflict).
+        model.setRowContent(at: 0, to: "tweaked")
+        let updated = try #require(model.allConflictBlocks().first)
+        #expect(updated.local == "") // LOCAL untouched
+        #expect(updated.remote.contains("tweaked"))
+        _ = block // silence unused
+    }
 }
