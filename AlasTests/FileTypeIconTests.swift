@@ -119,6 +119,14 @@ struct FileTypeIconTests {
     @Test func pathAwareFolderMatchesResolve() {
         #expect(FileTypeIcon.folderInfo(name: "resources", path: "src/main/resources")?.symbol == "\u{E256}")
         #expect(FileTypeIcon.folderInfo(name: "resources", path: "src/test/resources")?.symbol == "\u{E256}")
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "server/src/main/resources")?.symbol == "\u{E256}")
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "server\\src\\test\\resources")?.symbol == "\u{E256}")
+    }
+
+    @Test func pathAwareFolderMatchesRequireSegmentBoundary() {
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "mysrc/main/resources") == nil)
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "src/main/myresources") == nil)
+        #expect(FileTypeIcon.folderInfo(name: "resources", path: "app/mysrc/test/resources") == nil)
     }
 
     @Test func plainResourcesFolderReturnsNil() {
