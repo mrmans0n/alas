@@ -97,9 +97,25 @@ private struct ImageStageView: NSViewRepresentable {
         let key = "\(worktreePath.path)\n\(relativePath)\n\(stage)\n\(loadGeneration)"
         guard context.coordinator.lastKey != key else { return }
         context.coordinator.lastKey = key
-        Task {
-            let data = await readStageData(stage: stage, path: relativePath, cwd: worktreePath)
+
+        // Cancel any in-flight load — its result, if it arrives now, would be
+        // for a stale key and would overwrite the just-requested image.
+        context.coordinator.loadTask?.cancel()
+
+        let coordinator = context.coordinator
+        let capturedKey = key
+        let capturedStage = stage
+        let capturedPath = relativePath
+        let capturedCwd = worktreePath
+        coordinator.loadTask = Task {
+            let data = await Self.readStageData(stage: capturedStage, path: capturedPath, cwd: capturedCwd)
+            if Task.isCancelled { return }
             await MainActor.run {
+                // Defensive: only apply if the coordinator's key still matches
+                // what this Task was started for. If the user switched again
+                // mid-await, the new task already updated lastKey and we'd be
+                // setting an image for an outdated request.
+                guard coordinator.lastKey == capturedKey else { return }
                 if let data, let image = NSImage(data: data) {
                     view.image = image
                 } else {
@@ -109,7 +125,7 @@ private struct ImageStageView: NSViewRepresentable {
         }
     }
 
-    private func readStageData(stage: Int, path: String, cwd: URL) async -> Data? {
+    private static func readStageData(stage: Int, path: String, cwd: URL) async -> Data? {
         let result = try? await Process.gitData(
             ["show", ":\(stage):\(path)"],
             cwd: cwd
@@ -120,5 +136,10 @@ private struct ImageStageView: NSViewRepresentable {
 
     final class Coordinator {
         var lastKey: String?
+        var loadTask: Task<Void, Never>?
+
+        deinit {
+            loadTask?.cancel()
+        }
     }
 }
