@@ -53,6 +53,7 @@ struct CommitMessageEditorView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canRunPrimary)
+                .keyboardShortcut(primaryAction.keyboardShortcut)
             }
 
             TextField("Subject", text: $subject)

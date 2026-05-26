@@ -67,6 +67,7 @@ struct DraftCommitTabView: View {
                     savedLabel: nil,
                     isEnabled: canCommit,
                     showSavedState: false,
+                    keyboardShortcut: appState.shortcut(for: .commitInComposer),
                     handler: runCommit
                 ),
                 accessory: AnyView(

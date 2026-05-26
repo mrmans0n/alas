@@ -54,7 +54,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .resetFontSize:            return "Reset Font Size"
         case .splitSelectionIntoLines:  return "Split Selection into Lines"
         case .toggleMarkdownPreview:    return "Toggle Markdown Preview"
-        case .commitInComposer:         return "Commit (in composer)"
+        case .commitInComposer:         return "Commit draft"
         case .splitTerminalRight:       return "Split Right"
         case .splitTerminalDown:        return "Split Down"
         case .focusPaneLeft:            return "Focus Pane Left"
@@ -73,7 +73,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .searchFiles:        return "Open the file search"
         case .switchRepository:   return "Open the repository picker"
         case .launchAgentTerminal: return "Open the agent launcher"
-        case .commitInComposer:   return "In the commit composer"
+        case .commitInComposer:   return "In the draft commit tab"
         default:                  return nil
         }
     }
