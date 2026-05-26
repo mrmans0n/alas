@@ -126,6 +126,35 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen
 
+      - name: Compute Xcode package cache key inputs
+        run: |
+          xcodebuild -version > .xcode-cache-toolchain
+          swift --version >> .xcode-cache-toolchain
+          cat .xcode-cache-toolchain
+
+      - name: Restore SwiftPM package cache
+        id: swiftpm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .build/xcode/SourcePackages
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ThirdParty/TreeSitter*/Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Resolve SwiftPM packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Alas.xcodeproj \
+            -scheme Alas \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages
+
+      - name: Save SwiftPM package cache
+        if: success() && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .build/xcode/SourcePackages
+          key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
+
       - name: Build for testing
         # Splitting build/test into `build-for-testing` + `test-without-building`
         # avoids the lsregister/CoreServices hang we observed locally and on CI
@@ -140,6 +169,8 @@ jobs:
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode/DerivedData \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -156,6 +187,8 @@ jobs:
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode/DerivedData \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -only-testing AlasTests/AppConfigTests \
             -only-testing AlasTests/OKLCHTests \
             -only-testing AlasTests/ThemeTests \
@@ -186,6 +219,8 @@ jobs:
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode/DerivedData \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -only-testing AlasTests/ProcessGitTests \
             -skipMacroValidation \
             -parallel-testing-enabled NO \
