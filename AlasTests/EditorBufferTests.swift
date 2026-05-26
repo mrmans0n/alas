@@ -911,3 +911,31 @@ private final class TestUndoOwner: NSObject, NSTextViewDelegate {
     let undoManager = UndoManager()
     func undoManager(for view: NSTextView) -> UndoManager? { undoManager }
 }
+
+@Suite("EditorBuffer.languageOverride")
+@MainActor
+struct EditorBufferLanguageOverrideTests {
+    private func buffer(language: String?) -> EditorBuffer {
+        let buf = EditorBuffer(worktreeRoot: URL(fileURLWithPath: "/tmp/repo"), relativePath: "main.swift")
+        buf.setLanguageForTest(language)
+        return buf
+    }
+
+    @Test func effectiveLanguageFallsBackToInferred() {
+        let buf = buffer(language: "swift")
+        #expect(buf.effectiveLanguage == "swift")
+    }
+
+    @Test func effectiveLanguageUsesOverrideWhenSet() {
+        let buf = buffer(language: "swift")
+        buf.languageOverride = "typescript"
+        #expect(buf.effectiveLanguage == "typescript")
+    }
+
+    @Test func effectiveLanguageClearsBackToInferredOnNilOverride() {
+        let buf = buffer(language: "swift")
+        buf.languageOverride = "typescript"
+        buf.languageOverride = nil
+        #expect(buf.effectiveLanguage == "swift")
+    }
+}

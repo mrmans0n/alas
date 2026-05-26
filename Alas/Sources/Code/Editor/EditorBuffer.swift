@@ -73,6 +73,24 @@ final class EditorBuffer {
     private let lsp: WorkspaceLSPManager?
     @ObservationIgnored
     private(set) var language: String?
+
+    /// Per-tab, per-session override of the inferred language. Setting this
+    /// triggers `CodeEditorCoordinator` to close the document on the current
+    /// holder and re-open it under the new language. Cleared automatically
+    /// when the buffer is torn down at tab close.
+    var languageOverride: String?
+
+    /// Language used for LSP routing, syntax highlighting, and the status
+    /// badge. `languageOverride` (set by the badge popover) wins; otherwise
+    /// the inferred `language` from the file extension is used.
+    var effectiveLanguage: String? { languageOverride ?? language }
+
+    #if DEBUG
+    /// Test-only setter so unit tests can simulate a buffer whose
+    /// inferred language has already been computed.
+    func setLanguageForTest(_ value: String?) { language = value }
+    #endif
+
     @ObservationIgnored
     var shouldFollowPathChange: ((String, String) -> Bool)?
     @ObservationIgnored

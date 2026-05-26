@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 
 /// Lifecycle adapter between a `CodeTextView` (per-mount, recreated by
 /// SwiftUI) and an `EditorBuffer` (per-tab, owned by `TabsManager`). The
@@ -427,6 +428,52 @@ final class CodeEditorCoordinator {
         subscribeIfPossible(theme: theme)
         editObserverToken = buffer.onTextEdit { [weak self] edit in
             self?.scheduleEditPropagation(edit: edit)
+        }
+        observeEffectiveLanguage(buffer)
+    }
+
+    private var languageObservationArmed = false
+
+    private func observeEffectiveLanguage(_ buffer: EditorBuffer) {
+        // One-shot `withObservationTracking` re-arms itself from inside
+        // `onChange`, so each change drives at most one close+reopen cycle.
+        _ = withObservationTracking {
+            buffer.effectiveLanguage
+        } onChange: { [weak self, weak buffer] in
+            Task { @MainActor [weak self, weak buffer] in
+                guard let self, let buffer else { return }
+                self.handleLanguageChange(for: buffer)
+                self.observeEffectiveLanguage(buffer)
+            }
+        }
+        languageObservationArmed = true
+    }
+
+    private func handleLanguageChange(for buffer: EditorBuffer) {
+        let newLanguage = buffer.effectiveLanguage
+        let previous = currentLanguage
+        guard newLanguage != previous else { return }
+        let rootCapture = currentRoot
+        let relCapture = currentRelativePath
+        let text = buffer.storage.string
+        currentLanguage = newLanguage
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let previous, let root = rootCapture, let rel = relCapture {
+                await self.appState.lsp.closeDocument(
+                    worktreeRoot: root,
+                    fileURL: root.appendingPathComponent(rel),
+                    languageId: previous
+                )
+            }
+            if let newLanguage, let root = rootCapture, let rel = relCapture {
+                _ = await self.appState.lsp.openDocument(
+                    worktreeRoot: root,
+                    fileURL: root.appendingPathComponent(rel),
+                    languageId: newLanguage,
+                    text: text
+                )
+            }
         }
     }
 
