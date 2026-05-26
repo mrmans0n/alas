@@ -634,9 +634,11 @@ final class EditorBuffer {
         let prior = languageReopenTask
         languageReopenTask = Task {
             await prior?.value
+            if Task.isCancelled { return }
             if let previous {
                 await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: previous)
             }
+            if Task.isCancelled { return }
             if let new {
                 await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: new, text: text)
             }
@@ -866,6 +868,11 @@ final class EditorBuffer {
     /// for hot-exit restore; explicit tab removal discards it.
     func close(persistDirtySnapshot: Bool = true) {
         snapshotTask?.cancel()
+        // Cancel any in-flight language-override reopen so it can't run
+        // `openDocument` after close() has already torn down the buffer —
+        // that would leak an LSP holder ref nobody owns.
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         if persistDirtySnapshot {
             if dirty { snapshotNow() }
         } else {

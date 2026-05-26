@@ -273,11 +273,24 @@ final class CodeEditorCoordinator {
     }
 
     func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
-        let nextLanguage: String?
+        // Re-query the registry every time so a registry change (e.g. a
+        // server gets installed) still flips this comparison and triggers a
+        // rebind. When the same tab is being re-evaluated and has an
+        // override set, layer the override on top — otherwise the path
+        // identity check would see `currentLanguage = override` vs.
+        // `nextLanguage = inferred` permanently and rebind on every update,
+        // churning undo/selection state.
+        let inferred: String?
         if let abs = externalAbsolutePath {
-            nextLanguage = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
+            inferred = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
         } else {
-            nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+            inferred = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        }
+        let nextLanguage: String?
+        if let buf = self.buffer, currentWorktreeId == worktreeId, currentTabId == tabId {
+            nextLanguage = buf.languageOverride ?? inferred
+        } else {
+            nextLanguage = inferred
         }
 
         let pathChanged: Bool
@@ -427,10 +440,14 @@ final class CodeEditorCoordinator {
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
         let ext = (buffer.relativePath as NSString).pathExtension
-        currentLanguage = appState.lsp.language(forFileExtension: ext)
-        // Reconcile against any pre-existing override before arming the
-        // observer (the observer only fires on subsequent changes).
-        currentLanguage = buffer.effectiveLanguage
+        let freshlyInferred = appState.lsp.language(forFileExtension: ext)
+        // Layer a pre-existing override on top of the freshly inferred
+        // language. We don't read `buffer.effectiveLanguage` directly
+        // because `buffer.language` is captured at buffer-init time and
+        // can be stale after a registry change (e.g. a server gets
+        // installed) — using the fresh registry lookup keeps that
+        // transition working while still honoring override.
+        currentLanguage = buffer.languageOverride ?? freshlyInferred
         observeEffectiveLanguage(buffer)
         applyIndentationMode()
         if let layoutManager {
