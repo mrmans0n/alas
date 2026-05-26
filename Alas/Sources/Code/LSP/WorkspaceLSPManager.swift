@@ -296,6 +296,17 @@ final class WorkspaceLSPManager: DocumentFormatter {
         holder.refsByURI = refs
         holders[key] = holder
 
+        // If the holder never reached `.ready` (init failed), it lingers
+        // in the dict so the badge can show `.problem(.dead)` and offer
+        // restart. Once the last user-intent ref is released, sweep the
+        // dead entry — otherwise repeated open-then-close attempts on a
+        // misconfigured server would accumulate stale holders.
+        if holder.lifeState == .dead, refs.isEmpty {
+            holders.removeValue(forKey: key)
+            bumpStateTick()
+            return
+        }
+
         let initOk = await holder.ready.value
         guard let cur = holders[key] else { return }
         if !initOk { return }

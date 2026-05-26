@@ -657,7 +657,16 @@ final class EditorBuffer {
             if let target {
                 let text = self.storage.string
                 await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target, text: text)
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    // openDocument has already bumped refs on the server
+                    // (the ref bump happens synchronously inside the
+                    // manager before its first await). `close()` would
+                    // have read `openedLanguage == nil` and skipped its
+                    // didClose, so without this compensation the doc
+                    // would be left referenced with no owning buffer.
+                    await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target)
+                    return
+                }
                 self.openedLanguage = target
             }
         }
