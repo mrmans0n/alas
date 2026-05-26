@@ -115,6 +115,8 @@
 		2E82C412B34A091035A7DB41 /* CommitMessageEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D65BEFA85B6671FDE505A30D /* CommitMessageEditorView.swift */; };
 		A3F9C821D04B17E5F962A1D7 /* CommitPrimaryAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E1D743C95A062F3A17D840 /* CommitPrimaryAction.swift */; };
 		A4B5C6D7E8F901234567890A /* DraftCommitTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B5C6D7E8F9012345678901 /* DraftCommitTabView.swift */; };
+		646C3C7867B34CD6B9BEF362 /* DraftAmendPrefill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504B1347564643C2955CFC59 /* DraftAmendPrefill.swift */; };
+		FFB8836514FD4022AFDDAD60 /* DraftAmendPrefillTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CFCE2B96E9E4EF485DE7DE6 /* DraftAmendPrefillTests.swift */; };
 		2EA0D9B6F711518ECBF14CF7 /* TabMergeConflictCodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14907D679267359B3FB8A848 /* TabMergeConflictCodingTests.swift */; };
 		2ED636DD3A179B95C061A9E6 /* InlineErrorStripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2345B9578E57D570FDB058B /* InlineErrorStripTests.swift */; };
 		2F110275F3EC46505EF4DA48 /* SettingsSaveNormalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346272D3AF9A7D78067C96F /* SettingsSaveNormalizationTests.swift */; };
@@ -1060,6 +1062,8 @@
 		D65BEFA85B6671FDE505A30D /* CommitMessageEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitMessageEditorView.swift; sourceTree = "<group>"; };
 		B8E1D743C95A062F3A17D840 /* CommitPrimaryAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitPrimaryAction.swift; sourceTree = "<group>"; };
 		A4B5C6D7E8F9012345678901 /* DraftCommitTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabView.swift; sourceTree = "<group>"; };
+		504B1347564643C2955CFC59 /* DraftAmendPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftAmendPrefill.swift; sourceTree = "<group>"; };
+		1CFCE2B96E9E4EF485DE7DE6 /* DraftAmendPrefillTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftAmendPrefillTests.swift; sourceTree = "<group>"; };
 		D6A9977C979705A40595FD5E /* TabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManagerTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60718293A4B5C /* DraftCommitTabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabsManagerTests.swift; sourceTree = "<group>"; };
 		D7268D601058775FE02B6B06 /* CommitEditorTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitEditorTabView.swift; sourceTree = "<group>"; };
@@ -1283,6 +1287,7 @@
 				2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */,
 				EE26221DC8E8837FFEB87474 /* DiffParserTests.swift */,
 				C34ED0F4DB5FB6620993ECFC /* DiffSelectableTextTests.swift */,
+				1CFCE2B96E9E4EF485DE7DE6 /* DraftAmendPrefillTests.swift */,
 				D03F7D7F9CE045059260881A /* DraftCommitTabStateTests.swift */,
 				1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */,
 				35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */,
@@ -2073,6 +2078,7 @@
 				D65BEFA85B6671FDE505A30D /* CommitMessageEditorView.swift */,
 				B8E1D743C95A062F3A17D840 /* CommitPrimaryAction.swift */,
 				59DBB72EE97F0E906442919B /* CommitTabView.swift */,
+				504B1347564643C2955CFC59 /* DraftAmendPrefill.swift */,
 				A4B5C6D7E8F9012345678901 /* DraftCommitTabView.swift */,
 			);
 			path = Commit;
@@ -2411,6 +2417,7 @@
 				B79D01EECD92181B710D2648 /* CommitInfo.swift in Sources */,
 				2E82C412B34A091035A7DB41 /* CommitMessageEditorView.swift in Sources */,
 				A3F9C821D04B17E5F962A1D7 /* CommitPrimaryAction.swift in Sources */,
+				646C3C7867B34CD6B9BEF362 /* DraftAmendPrefill.swift in Sources */,
 				A4B5C6D7E8F901234567890A /* DraftCommitTabView.swift in Sources */,
 				C4E0EADB37C91E54DCB897AB /* CommitPromptEditorWindow.swift in Sources */,
 				39DE92AE4B12D2CD03655562 /* CommitPromptStatus.swift in Sources */,
@@ -2736,6 +2743,7 @@
 				9927E3934D3CAA9055EF5E44 /* DiffOpenFileAvailabilityTests.swift in Sources */,
 				0CF488290CC525EA7C11A43C /* DiffParserTests.swift in Sources */,
 				10F83C7DA89B3BF168E47310 /* DiffSelectableTextTests.swift in Sources */,
+				FFB8836514FD4022AFDDAD60 /* DraftAmendPrefillTests.swift in Sources */,
 				7E16F30886DA4DD1B31A2EC4 /* DraftCommitTabStateTests.swift in Sources */,
 				A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */,
 				3B7D77B9E71C66ACB1E007D7 /* EditorBufferStoreTests.swift in Sources */,

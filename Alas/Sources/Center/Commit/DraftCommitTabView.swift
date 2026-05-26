@@ -173,12 +173,16 @@ struct DraftCommitTabView: View {
         let head = (try? await git.headMessage(worktreePath: worktreePath)) ?? nil
         guard amend else { return }
         if let head,
-           subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            subject = head.subject
-            bodyText = head.body
-            amendPrefilledSubject = head.subject
-            amendPrefilledBody = head.body
+           let prefill = DraftAmendPrefill.apply(
+               priorSubject: head.subject,
+               priorBody: head.body,
+               currentSubject: subject,
+               currentBody: bodyText
+           ) {
+            subject = prefill.subject
+            bodyText = prefill.body
+            amendPrefilledSubject = prefill.subject
+            amendPrefilledBody = prefill.body
             amendPrefilled = true
         }
         let pushed = (try? await git.isHeadAtOrBehindUpstream(worktreePath: worktreePath)) ?? false
@@ -188,10 +192,13 @@ struct DraftCommitTabView: View {
 
     private func clearAmendPrefillIfUnchanged() {
         amendWarning = false
-        guard amendPrefilled,
-              subject == amendPrefilledSubject,
-              bodyText == amendPrefilledBody
-        else { return }
+        guard DraftAmendPrefill.shouldClear(
+            wasPrefilled: amendPrefilled,
+            prefilledSubject: amendPrefilledSubject,
+            prefilledBody: amendPrefilledBody,
+            currentSubject: subject,
+            currentBody: bodyText
+        ) else { return }
         subject = ""
         bodyText = ""
         amendPrefilled = false
