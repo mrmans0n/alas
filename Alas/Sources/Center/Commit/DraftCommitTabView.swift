@@ -20,6 +20,7 @@ struct DraftCommitTabView: View {
     @State private var amendPrefilledSubject: String = ""
     @State private var amendPrefilledBody: String = ""
     @State private var amendWarning: Bool = false
+    @State private var canAmend: Bool = true
     @State private var generation: Task<Void, Never>? = nil
 
     @Environment(\.theme) private var theme
@@ -75,7 +76,8 @@ struct DraftCommitTabView: View {
                         Text("Amend").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
                     }
                     .toggleStyle(.checkbox)
-                    .disabled(busy)
+                    .disabled(busy || !canAmend)
+                    .help(canAmend ? "" : "No previous commit to amend")
                 )
             )
             if amend && amendWarning {
@@ -89,6 +91,7 @@ struct DraftCommitTabView: View {
             splitBody
         }
         .onAppear { hydrateFromTabState() }
+        .task { await refreshCanAmend() }
         .onChange(of: subject) { _, new in persist(subject: new) }
         .onChange(of: bodyText) { _, new in persist(body: new) }
         .onChange(of: amend) { _, new in
@@ -194,6 +197,11 @@ struct DraftCommitTabView: View {
         amendPrefilled = false
         amendPrefilledSubject = ""
         amendPrefilledBody = ""
+    }
+
+    private func refreshCanAmend() async {
+        let head = (try? await git.hasHead(worktreePath: worktreePath)) ?? true
+        canAmend = head
     }
 
     private func handleGenerate() {
@@ -361,6 +369,7 @@ struct DraftCommitTabView: View {
                     title: title
                 )
                 await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+                await refreshCanAmend()
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
