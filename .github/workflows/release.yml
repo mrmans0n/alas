@@ -20,6 +20,12 @@ jobs:
     # and one DMG). Worst-case notary time alone is 60 min if Apple's queue is
     # slow on both submissions. 90 min leaves headroom for build/package/upload.
     timeout-minutes: 90
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      GIT_ASKPASS: "/usr/bin/true"
+      SSH_ASKPASS: "/usr/bin/true"
+      DISPLAY: ":0"
+      GIT_PAGER: "cat"
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +35,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Configure headless git for package resolution
+        run: |
+          git config --global --unset-all credential.helper || true
+          git config --global credential.helper ""
 
       - name: Install xcodegen + zig@0.15
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
@@ -78,9 +89,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .build/xcode/SourcePackages
-          key: swiftpm-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ThirdParty/TreeSitter*/Package.swift') }}
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ThirdParty/TreeSitter*/Package.swift') }}
           restore-keys: |
-            swiftpm-${{ runner.os }}-${{ matrix.arch }}-
+            swiftpm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Reset global SwiftPM repository cache
         # Xcode may consult ~/Library/Caches/org.swift.swiftpm even when
