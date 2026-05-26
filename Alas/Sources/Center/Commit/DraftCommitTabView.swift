@@ -47,7 +47,7 @@ struct DraftCommitTabView: View {
             .sorted(by: { $0.path < $1.path })
             .map { "\($0.path):\($0.add):\($0.del)" }
             .joined(separator: "|")
-        return "\(rps.changes.count):\(staged)"
+        return "\(rps.changes.count):\(staged):\(rps.indexFingerprint)"
     }
 
     private var diffKey: String { "\(stagedKey):\(selectedPath ?? "")" }

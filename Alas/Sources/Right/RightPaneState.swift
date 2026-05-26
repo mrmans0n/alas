@@ -10,6 +10,11 @@ enum RightPaneTab: String { case changes, files }
 final class RightPaneState {
     let worktree: Worktree
     var changes: [ChangedFile] = []
+    /// Fingerprint of the staged index contents (concatenated blob SHAs of
+    /// staged files). Changes whenever any staged file's contents change,
+    /// even when add/del totals are identical. Used by views that need to
+    /// re-fire async work when the staged patch shifts under them.
+    var indexFingerprint: String = ""
     /// Per-worktree in-progress merge / rebase / cherry-pick state.
     /// Refreshed alongside `changes` from `refresh()`.
     let mergeOp: MergeOperationState
@@ -232,6 +237,21 @@ final class RightPaneState {
             let (commits, ref) = try await c
             _ = await mergeRefresh
             self.changes = entries
+            if let lsResult = try? await Process.git(
+                ["ls-files", "-s", "-z"],
+                cwd: worktree.path
+            ), lsResult.exitCode == 0 {
+                // Each NUL-delimited token is "<mode> <sha> <stage>\t<path>".
+                // The blob SHA changes whenever the staged content for that path
+                // changes; concatenating sorted blob SHAs gives a cheap fingerprint.
+                let tokens = lsResult.stdout
+                    .split(separator: "\0", omittingEmptySubsequences: true)
+                    .map(String.init)
+                    .sorted()
+                self.indexFingerprint = tokens.joined(separator: "|")
+            } else {
+                self.indexFingerprint = ""
+            }
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
