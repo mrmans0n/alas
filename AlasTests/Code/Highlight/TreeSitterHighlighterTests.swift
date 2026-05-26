@@ -13,6 +13,22 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.function))
     }
 
+    @Test("TypeScript and TSX get keyword + type + string captures")
+    func typescriptBasics() throws {
+        let ts = TreeSitterHighlighter.highlight(
+            source: "interface User { name: string } const u: User = { name: \"a\" };",
+            fileExtension: "ts"
+        )
+        let tsx = TreeSitterHighlighter.highlight(
+            source: "type Props = { name: string }; const G = (p: Props) => <h1>{p.name}</h1>;",
+            fileExtension: "tsx"
+        )
+        #expect(ts.contains(where: { $0.capture == .keyword }))
+        #expect(ts.contains(where: { $0.capture == .string }))
+        #expect(!tsx.isEmpty)
+        #expect(tsx.contains(where: { $0.capture == .keyword }))
+    }
+
     @Test("JavaScript and JSX get keyword + string + function captures")
     func javascriptBasics() throws {
         let js = TreeSitterHighlighter.highlight(

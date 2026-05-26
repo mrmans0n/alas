@@ -56,6 +56,11 @@ packages:
     # has the same broken `FileManager.fileExists` scanner conditional as
     # tree-sitter-yaml.
     path: ThirdParty/TreeSitterJavaScript
+  TreeSitterTypeScript:
+    # Single package, two targets (TreeSitterTypeScript for .ts,
+    # TreeSitterTSX for .tsx). The umbrella product pulls in both.
+    url: https://github.com/tree-sitter/tree-sitter-typescript
+    from: 0.23.2
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -114,6 +119,8 @@ targets:
         product: TreeSitterBash
       - package: TreeSitterJavaScript
         product: TreeSitterJavaScript
+      - package: TreeSitterTypeScript
+        product: TreeSitterTypeScript
       - package: Markdown
         product: Markdown
     settings:
