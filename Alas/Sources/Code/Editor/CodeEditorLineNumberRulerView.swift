@@ -4,7 +4,6 @@ import SwiftUI
 final class CodeEditorLineNumberRulerView: NSRulerView {
     private weak var codeTextView: CodeTextView?
     private var theme: Theme
-    private var textChangeObserver: NSObjectProtocol?
     private var storageEditObserver: NSObjectProtocol?
     private var boundsObserver: NSObjectProtocol?
     private var lineStarts: [Int] = [0]
@@ -127,17 +126,6 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
     private func observe(textView: CodeTextView, scrollView: NSScrollView) {
         removeObservers()
 
-        textChangeObserver = NotificationCenter.default.addObserver(
-            forName: NSText.didChangeNotification,
-            object: textView,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.rebuildLineStartsAndUpdateThickness()
-                self?.needsDisplay = true
-            }
-        }
-
         observeTextStorage(textView.textStorage)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -153,10 +141,6 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
     }
 
     private func removeObservers() {
-        if let textChangeObserver {
-            NotificationCenter.default.removeObserver(textChangeObserver)
-            self.textChangeObserver = nil
-        }
         if let storageEditObserver {
             NotificationCenter.default.removeObserver(storageEditObserver)
             self.storageEditObserver = nil
@@ -178,7 +162,11 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
             forName: NSTextStorage.didProcessEditingNotification,
             object: storage,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            guard
+                let storage = notification.object as? NSTextStorage,
+                storage.editedMask.contains(.editedCharacters)
+            else { return }
             Task { @MainActor [weak self] in
                 self?.rebuildLineStartsAndUpdateThickness()
                 self?.needsDisplay = true
