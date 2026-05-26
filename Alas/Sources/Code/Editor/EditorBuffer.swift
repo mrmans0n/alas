@@ -207,12 +207,12 @@ final class EditorBuffer {
     /// document would leave a dangling ref the next `didClose` couldn't
     /// balance.
     func reopenLSPDocument() {
-        guard !isExternal, let lsp, let language else { return }
+        guard !isExternal, let lsp, let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
-        openedLanguage = language
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
+        openedLanguage = effective
+        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, text: text) }
     }
 
     func reopenLSPDocument(afterRegistering language: String, forFileExtensions extensions: Set<String>) {
@@ -325,7 +325,6 @@ final class EditorBuffer {
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let oldRelativePath = relativePath
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
-        let oldLanguage = language
         let wasDirty = dirty
         guard shouldFollowPathChange?(oldRelativePath, newRelativePath) ?? true else {
             if wasDirty {
@@ -345,7 +344,7 @@ final class EditorBuffer {
             discardSnapshot()
             handleEdit(edit: nil)
         }
-        notifyDidClose(url: oldURL, language: oldLanguage)
+        notifyDidClose(url: oldURL)
         notifyDidOpen(url: newURL, text: storage.string)
         onPathChanged?(oldRelativePath, newRelativePath)
         startWatching()
@@ -399,7 +398,6 @@ final class EditorBuffer {
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
-        let oldLanguage = language
         let canonical = storage.string
         stopWatching()
         do {
@@ -410,7 +408,7 @@ final class EditorBuffer {
             updateOriginalMtime(from: newURL)
             updateOriginalFileIdentity(from: newURL)
             discardSnapshot()
-            notifyDidClose(url: oldURL, language: oldLanguage)
+            notifyDidClose(url: oldURL)
             notifyDidOpen(url: newURL, text: canonical)
             notifyDidSave(url: newURL)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
@@ -429,7 +427,6 @@ final class EditorBuffer {
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
-        let oldLanguage = language
         stopWatching()
         do {
             try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -450,7 +447,7 @@ final class EditorBuffer {
             } else {
                 discardSnapshot()
             }
-            notifyDidClose(url: oldURL, language: oldLanguage)
+            notifyDidClose(url: oldURL)
             notifyDidOpen(url: newURL, text: storage.string)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
@@ -622,12 +619,15 @@ final class EditorBuffer {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let previous = openedLanguage
         openedLanguage = new
-        if let previous {
-            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: previous) }
-        }
-        if let new {
-            let text = storage.string
-            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: new, text: text) }
+        let worktreeRootCapture = worktreeRoot
+        let text = storage.string
+        Task {
+            if let previous {
+                await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: previous)
+            }
+            if let new {
+                await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: new, text: text)
+            }
         }
     }
 
@@ -637,7 +637,7 @@ final class EditorBuffer {
         }
     }
 
-    private func notifyDidClose(url: URL, language: String?) {
+    private func notifyDidClose(url: URL) {
         if let lsp, let opened = openedLanguage {
             Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
             openedLanguage = nil

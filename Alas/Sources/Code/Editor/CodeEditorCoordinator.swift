@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 
 /// Lifecycle adapter between a `CodeTextView` (per-mount, recreated by
 /// SwiftUI) and an `EditorBuffer` (per-tab, owned by `TabsManager`). The
@@ -390,6 +391,24 @@ final class CodeEditorCoordinator {
     /// Wire the coordinator and the text view to `buffer`. If a previous
     /// buffer is already bound, its layout manager and edit observer are torn
     /// down first so the text view stops rendering the old storage.
+    private func observeEffectiveLanguage(_ buffer: EditorBuffer) {
+        // One-shot `withObservationTracking` re-arms itself from `onChange`.
+        // This observer only mirrors `buffer.effectiveLanguage` into
+        // `currentLanguage` — LSP open/close lives in `EditorBuffer`.
+        // Keeping `currentLanguage` accurate is critical because hover,
+        // definition, completion, diagnostics, didChange, and indentation
+        // all route through it.
+        _ = withObservationTracking {
+            _ = buffer.effectiveLanguage
+        } onChange: { [weak self, weak buffer] in
+            Task { @MainActor [weak self, weak buffer] in
+                guard let self, let buffer, self.buffer === buffer else { return }
+                self.currentLanguage = buffer.effectiveLanguage
+                self.observeEffectiveLanguage(buffer)
+            }
+        }
+    }
+
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
         pullDiagnosticsTask?.cancel()
         pullDiagnosticsTask = nil
@@ -408,6 +427,10 @@ final class CodeEditorCoordinator {
         self.currentRelativePath = buffer.relativePath
         let ext = (buffer.relativePath as NSString).pathExtension
         currentLanguage = appState.lsp.language(forFileExtension: ext)
+        // Reconcile against any pre-existing override before arming the
+        // observer (the observer only fires on subsequent changes).
+        currentLanguage = buffer.effectiveLanguage
+        observeEffectiveLanguage(buffer)
         applyIndentationMode()
         if let layoutManager {
             buffer.storage.addLayoutManager(layoutManager)
