@@ -1,6 +1,7 @@
 import Foundation
 import SwiftTreeSitter
 import TreeSitterSwift
+import TreeSitterYAML
 
 /// Maps a file extension to a `SwiftTreeSitter.Language` and the
 /// matching `highlights.scm` `Query`. `Language` and `Query` are immutable
@@ -20,8 +21,9 @@ enum LanguageRegistry {
         if let cached = languageCache[key] { return cached }
         let lang: Language?
         switch key {
-        case "swift": lang = Language(language: tree_sitter_swift())
-        default:      lang = nil
+        case "swift":         lang = Language(language: tree_sitter_swift())
+        case "yaml", "yml":   lang = Language(language: tree_sitter_yaml())
+        default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
         return lang
@@ -43,6 +45,10 @@ enum LanguageRegistry {
         case "swift":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterSwift",
+                              language: lang)
+        case "yaml", "yml":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterYAML",
                               language: lang)
         default:
             query = nil

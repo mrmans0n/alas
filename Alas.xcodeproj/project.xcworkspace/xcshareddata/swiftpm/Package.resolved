@@ -1,5 +1,4 @@
 {
-  "originHash" : "470d4cfda5e64f6b510902e8e38178339db39391db2dd4b7a0a622f6fb223517",
   "pins" : [
     {
       "identity" : "swift-cmark",
@@ -46,5 +45,5 @@
       }
     }
   ],
-  "version" : 3
+  "version" : 2
 }

@@ -25,6 +25,12 @@ packages:
     # gitignores generated parser files, so SPM consumers must
     # pin to a `*-with-generated-files` revision.
     revision: 7b7909f2f6b9414be0958275f4c8e5d69c3bca43
+  TreeSitterYAML:
+    # Vendored at ThirdParty/TreeSitterYAML — upstream's Package.swift
+    # conditionally adds src/scanner.c via a relative-path FileManager
+    # check that returns false during SPM resolution, dropping the
+    # external scanner and breaking the link.
+    path: ThirdParty/TreeSitterYAML
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -67,6 +73,8 @@ targets:
         product: SwiftTreeSitter
       - package: TreeSitterSwift
         product: TreeSitterSwift
+      - package: TreeSitterYAML
+        product: TreeSitterYAML
       - package: Markdown
         product: Markdown
     settings:
