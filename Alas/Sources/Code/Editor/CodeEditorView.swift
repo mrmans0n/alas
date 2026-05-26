@@ -114,10 +114,6 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
-        if let textView = nsView.documentView as? CodeTextView {
-            configureLineNumberRuler(for: nsView, textView: textView)
-        }
-
         context.coordinator.updateIfNeeded(
             worktreeId: worktreeId,
             worktreeRoot: worktreeRoot,
@@ -129,6 +125,10 @@ struct CodeEditorView: NSViewRepresentable {
             externalAbsolutePath: externalAbsolutePath,
             originatingRelativePath: originatingRelativePath
         )
+
+        if let textView = nsView.documentView as? CodeTextView {
+            configureLineNumberRuler(for: nsView, textView: textView)
+        }
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: CodeEditorCoordinator) {
