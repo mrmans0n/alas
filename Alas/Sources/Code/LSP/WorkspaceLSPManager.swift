@@ -56,6 +56,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// `ready` is a one-shot Task that returns `true` when initialize
     /// succeeded and `false` on failure; both open and close await it
     /// before sending notifications.
+    private enum HolderLifeState { case starting, ready, dead }
+
     private struct Holder {
         let client: LSPClient
         let ready: Task<Bool, Never>
@@ -64,10 +66,44 @@ final class WorkspaceLSPManager: DocumentFormatter {
         var versions: [String: Int]   // last didChange version per URI
         var pendingOpenText: [String: String]  // latest text supplied to a not-yet-sent didOpen
         var texts: [String: String]  // last text version sent to the server per URI
+        // One holder can serve multiple LSP languageIds (typescript-language-server
+        // serves typescript/typescriptreact/javascript/javascriptreact under a
+        // single binary). Per-URI tracking lets `restartHolder` reopen each
+        // file with the languageId it was originally opened under, instead
+        // of forcing every file onto the languageId of the tab that
+        // triggered the restart.
+        var languagesByURI: [String: String]
+        var lifeState: HolderLifeState
+    }
+
+    /// Coarse status of a document's serving holder. The resolver folds this
+    /// into `EditorLSPStatus.loading` (.none and .loading), `.ready`, or
+    /// `.problem(.dead)`.
+    enum DocumentStatus: Equatable {
+        case none
+        case loading
+        case ready
+        case dead
     }
 
     private var holders: [Key: Holder] = [:]
+
+    /// Bumping counter that lets `@Observable` consumers (the status badge)
+    /// re-run derivations when a holder transitions starting → ready → dead.
+    /// Incremented under `@MainActor` so SwiftUI sees changes without a hop.
+    private(set) var stateTick: Int = 0
+
+    private func bumpStateTick() { stateTick &+= 1 }
+
     private var registry: LanguageServerRegistry
+
+    /// Cached per-language availability so the status badge doesn't re-run
+    /// `LanguageServerAvailability.status(for:)` — which can spawn
+    /// `xcrun --find sourcekit-lsp` synchronously on the main actor — on
+    /// every SwiftUI breadcrumb re-render. Cleared whenever the registry
+    /// changes (the only thing that can change the answer).
+    private var cachedAvailability = LanguageServerAvailability()
+    private var availabilityCache: [String: LanguageServerAvailability.Status] = [:]
 
     init(registry: LanguageServerRegistry) {
         self.registry = registry
@@ -75,6 +111,30 @@ final class WorkspaceLSPManager: DocumentFormatter {
 
     func updateRegistry(_ registry: LanguageServerRegistry) {
         self.registry = registry
+        cachedAvailability = LanguageServerAvailability()
+        availabilityCache.removeAll()
+    }
+
+    /// Returns the cached availability status for `language`, falling back
+    /// to a single `LanguageServerAvailability.status(for:)` probe and
+    /// caching the result. Designed for hot-path callers like the status
+    /// badge resolver.
+    ///
+    /// Only stable results (`.available`, `.disabled`) are cached — those
+    /// don't change without a registry update. `.notInstalled` is re-probed
+    /// on every call so a runtime install (e.g. the install nudge flow) is
+    /// picked up without an explicit cache invalidation hook. The fast-path
+    /// PATH walk is cheap; the `xcrun --find` fallback for `sourcekit-lsp`
+    /// only fires when the binary isn't on PATH, which is uncommon on dev
+    /// machines.
+    func availabilityStatus(forLanguage language: String) -> LanguageServerAvailability.Status? {
+        if let cached = availabilityCache[language] { return cached }
+        guard let entry = registry.allEntries().first(where: { $0.language == language }) else { return nil }
+        let status = cachedAvailability.status(for: entry)
+        if status != .notInstalled {
+            availabilityCache[language] = status
+        }
+        return status
     }
 
     /// Register an open editor tab for `(worktreeRoot, fileURL)`. Spawns
@@ -101,6 +161,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             let dead = await existing.client.state == .dead
             if dead, let cur = holders[key], cur.client === existing.client {
                 holders.removeValue(forKey: key)
+                bumpStateTick()
             }
         }
         let client: LSPClient
@@ -116,7 +177,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             // content while the server was still initializing.)
             var pending = existing.pendingOpenText
             if !existing.openedURIs.contains(uri) { pending[uri] = text }
-            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts)
+            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts, languagesByURI: existing.languagesByURI, lifeState: existing.lifeState)
             client = existing.client
             ready = existing.ready
             isFirstOpener = false
@@ -142,24 +203,28 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 do { try await newClient.initialize()
                 return true } catch { return false }
             }
-            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:])
+            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:], languagesByURI: [:], lifeState: .starting)
+            bumpStateTick()
             client = newClient
             ready = task
             isFirstOpener = true
         }
 
         let initOk = await ready.value
+        if var h = holders[key], h.client === client {
+            h.lifeState = initOk ? .ready : .dead
+            holders[key] = h
+            bumpStateTick()
+        }
         if !initOk {
-            // Init failed. The opener that spawned the client owns its
-            // teardown — if `shutdown()` only ran on `.ready` the failed
-            // `Process` would be left behind. Identity-guard the dictionary
-            // entry too, so a fresh holder swapped in by a later opener
-            // isn't removed alongside.
+            // Init failed. The opener that spawned the client owns the
+            // shutdown call to release the failed `Process`. Leave the
+            // holder entry in place with `lifeState = .dead` so the badge
+            // can show "problem" and offer "Restart" — removing the holder
+            // here would make `documentStatus` report `.none`, indistinguishable
+            // from "never opened". `restartHolder` is the proper cleanup path.
             if isFirstOpener {
                 await client.shutdown()
-                if let cur = holders[key], cur.client === client {
-                    holders.removeValue(forKey: key)
-                }
             }
             return nil
         }
@@ -191,7 +256,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 holder.versions[uri] = 1
                 holder.pendingOpenText.removeValue(forKey: uri)
                 holder.texts[uri] = openText
+                holder.languagesByURI[uri] = languageId
                 holders[key] = holder
+                bumpStateTick()
             }
             try? await client.didOpen(
                 uri: uri,
@@ -250,6 +317,17 @@ final class WorkspaceLSPManager: DocumentFormatter {
         holder.refsByURI = refs
         holders[key] = holder
 
+        // If the holder never reached `.ready` (init failed), it lingers
+        // in the dict so the badge can show `.problem(.dead)` and offer
+        // restart. Once the last user-intent ref is released, sweep the
+        // dead entry — otherwise repeated open-then-close attempts on a
+        // misconfigured server would accumulate stale holders.
+        if holder.lifeState == .dead, refs.isEmpty {
+            holders.removeValue(forKey: key)
+            bumpStateTick()
+            return
+        }
+
         let initOk = await holder.ready.value
         guard let cur = holders[key] else { return }
         if !initOk { return }
@@ -266,6 +344,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 c.versions.removeValue(forKey: uri)
                 c.pendingOpenText.removeValue(forKey: uri)
                 c.texts.removeValue(forKey: uri)
+                c.languagesByURI.removeValue(forKey: uri)
                 holders[key] = c
             }
         }
@@ -274,6 +353,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         if let c = holders[key], c.refsByURI.isEmpty {
             await c.client.shutdown()
             holders.removeValue(forKey: key)
+            bumpStateTick()
         }
     }
 
@@ -330,8 +410,42 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// the worktree root.
     func client(forFile fileURL: URL, worktreeRoot: URL, language: String) -> LSPClient? {
         let uri = fileURL.lspURI
-        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return nil }
-        return holders[key]?.client
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key],
+              holder.lifeState != .dead else { return nil }
+        return holder.client
+    }
+
+    /// Coarse holder lifecycle for the file's serving holder, suitable for
+    /// the editor status badge. Collapses "no holder yet" and "holder still
+    /// initializing" into `.loading` because the user-visible reading is
+    /// identical.
+    func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> DocumentStatus {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key] else {
+            return .none
+        }
+        switch holder.lifeState {
+        case .starting: return .loading
+        case .ready:
+            return holder.openedURIs.contains(uri) ? .ready : .loading
+        case .dead: return .dead
+        }
+    }
+
+    /// Read-only access to the active registry for derivation by views.
+    var activeRegistry: LanguageServerRegistry { registry }
+
+    /// Number of open file URIs currently served by the holder serving
+    /// `fileURL`. Used by the badge to warn when restarting would affect
+    /// multiple tabs. Looks up the holder via the file URI (not the
+    /// worktree root) so nested-package holders are matched correctly —
+    /// pre-resolving the LSP root from `worktreeRoot` would miss them.
+    func openFilesUsing(forFile fileURL: URL, worktreeRoot: URL) -> Int {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return 0 }
+        return holders[key]?.openedURIs.count ?? 0
     }
 
     /// Returns the client only after the specific file has completed the
@@ -346,6 +460,92 @@ final class WorkspaceLSPManager: DocumentFormatter {
             return nil
         }
         return holder.client
+    }
+
+    /// Tear down the holder currently serving `fileURL` under `worktreeRoot`
+    /// and re-open every URI it had open. Holder-scoped (not tab-scoped) so
+    /// all tabs sharing the holder benefit from one restart — which matches
+    /// the user intuition "restart the Swift server".
+    ///
+    /// Looks the holder up via `holderKey(forURI:withinWorktreeRoot:)` so a
+    /// nested-package holder keyed under a sub-directory of `worktreeRoot`
+    /// is found correctly — pre-resolving the LSP root from `worktreeRoot`
+    /// would miss nested-package holders.
+    ///
+    /// No-op when no matching holder exists.
+    func restartHolder(forFile fileURL: URL, worktreeRoot: URL, languageId: String) async {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let existing = holders[key] else { return }
+        await restartHolder(key: key, existing: existing, language: languageId)
+    }
+
+    /// Tear down the holder serving `language` under `rootURL` and re-open
+    /// every URI it had open. `rootURL` must be the LSP root the holder is
+    /// keyed under; for nested packages, prefer `restartHolder(forFile:worktreeRoot:languageId:)`
+    /// which resolves the key via the file URI.
+    ///
+    /// No-op when no matching holder exists.
+    func restartHolder(forLanguage language: String, rootURL: URL) async {
+        guard let entry = registry.entry(forLanguage: language) else { return }
+        let lspRoot = Self.resolveLSPRoot(fileURL: rootURL, worktreeRoot: rootURL, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        guard let existing = holders[key] else { return }
+        await restartHolder(key: key, existing: existing, language: language)
+    }
+
+    private func restartHolder(key: Key, existing: Holder, language: String) async {
+        // Mark the holder dead synchronously so the badge transitions through
+        // `.dead` and concurrent `openDocument` calls see a dying holder
+        // rather than bumping refs on the one we're about to shut down.
+        if var h = holders[key], h.client === existing.client {
+            h.lifeState = .dead
+            holders[key] = h
+            bumpStateTick()
+        }
+
+        await existing.client.shutdown()
+
+        // Reopen state is sampled AFTER shutdown completes. This @MainActor
+        // method is reentrant across the await, so other open/close calls
+        // can have mutated `refsByURI`, `texts`, `languagesByURI`, etc. We
+        // want to base the reopen on the latest snapshot — otherwise a tab
+        // closed during the shutdown await would still get its document
+        // reopened, and a tab opened during the await would get dropped.
+        //
+        // Refcount multiplicity is preserved: a URI held by two tabs has
+        // refsByURI[uri] = 2, and `openDocument` increments refs by 1 per
+        // call. We call `openDocument` once per reference so the post-
+        // restart holder ends with the same refcount.
+        //
+        // Per-URI languageId is honored on shared servers
+        // (typescript-language-server serves typescript / typescriptreact /
+        // javascript / javascriptreact under one binary).
+        let refsToReopen: [String: Int]
+        let textsByURI: [String: String]
+        let languagesByURI: [String: String]
+        if let cur = holders[key], cur.client === existing.client {
+            refsToReopen = cur.refsByURI
+            textsByURI = cur.texts.merging(cur.pendingOpenText) { current, _ in current }
+            languagesByURI = cur.languagesByURI
+            holders.removeValue(forKey: key)
+            bumpStateTick()
+        } else {
+            // The holder was already replaced (e.g. by the dead-client
+            // detection path in a concurrent `openDocument`). Nothing for
+            // us to reopen — the live holder owns its own state.
+            return
+        }
+
+        let reopenRoot = URL(fileURLWithPath: key.root)
+        for (uri, refCount) in refsToReopen {
+            guard refCount > 0, let fileURL = URL(string: uri) else { continue }
+            let text = textsByURI[uri] ?? ""
+            let reopenLanguage = languagesByURI[uri] ?? language
+            for _ in 0 ..< refCount {
+                _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: text)
+            }
+        }
     }
 
     /// True when `fileURL` has already been delivered to a live (non-dead)
@@ -460,6 +660,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
         guard let key, var holder = holders[key] else { return false }
 
+        // Skip dead holders so an external-tab reopen/retry loop doesn't
+        // accumulate refs on a server that's never going to answer. The
+        // caller treats `false` as "retry later"; the in-worktree
+        // `openDocument` path will respawn a fresh holder when a real tab
+        // opens, and the badge can offer Restart in the meantime.
+        guard holder.lifeState != .dead else { return false }
+
         // Bump refcount and record pending text in case the server is still
         // initializing — the same approach used by openDocument for in-worktree
         // files.
@@ -482,7 +689,16 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 h.versions[uri] = 1
                 h.pendingOpenText.removeValue(forKey: uri)
                 h.texts[uri] = openText
+                // Record the languageId so `restartHolder` can reopen
+                // this URI under the right language on shared servers
+                // (typescript-language-server, etc).
+                h.languagesByURI[uri] = language
                 holders[key] = h
+                // Match in-worktree `openDocument`: bump the tick so the
+                // badge transitions from `.loading` to `.ready` (and the
+                // restart-impact count refreshes) without waiting for an
+                // unrelated UI change.
+                bumpStateTick()
             }
             try? await cur.client.didOpen(
                 uri: uri,
@@ -555,6 +771,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 c.versions.removeValue(forKey: uri)
                 c.pendingOpenText.removeValue(forKey: uri)
                 c.texts.removeValue(forKey: uri)
+                c.languagesByURI.removeValue(forKey: uri)
                 holders[key] = c
             }
         }
@@ -566,6 +783,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         if let c = holders[key], c.refsByURI.isEmpty {
             await c.client.shutdown()
             holders.removeValue(forKey: key)
+            bumpStateTick()
         }
     }
 

@@ -73,6 +73,49 @@ final class EditorBuffer {
     private let lsp: WorkspaceLSPManager?
     @ObservationIgnored
     private(set) var language: String?
+
+    /// Language identifier the buffer last instructed the LSP server to
+    /// open this document under. Tracks what the *server* knows, which
+    /// can lag `effectiveLanguage` across the async close/open hop on
+    /// override change. Initialized when the buffer's init-time `didOpen`
+    /// is scheduled; updated synchronously when an override transition
+    /// fires. Used by every LSP path (didClose, didSave, close()) so
+    /// notifications always reference the holder that's actually open.
+    @ObservationIgnored
+    private var openedLanguage: String?
+
+    /// Serializes the async close+open hop fired by `applyEffectiveLanguageToLSP`
+    /// across rapid override changes. Without this, a chain like
+    /// swift→typescript→python could land its tasks out of order — an older
+    /// task reopens the stale language *after* the newer one, leaving the
+    /// document attached to the wrong holder and unbalancing future close/ref
+    /// bookkeeping. Each new override change awaits the previous chain
+    /// before issuing its own close+open.
+    @ObservationIgnored
+    private var languageReopenTask: Task<Void, Never>?
+
+    /// Per-tab, per-session override of the inferred language. Setting this
+    /// drives the buffer to close the document on the previous language
+    /// holder and reopen it under the new effective language. Cleared
+    /// automatically when the buffer is torn down at tab close.
+    var languageOverride: String? {
+        didSet {
+            guard languageOverride != oldValue else { return }
+            applyEffectiveLanguageToLSP()
+        }
+    }
+
+    /// Language used for LSP routing, syntax highlighting, and the status
+    /// badge. `languageOverride` (set by the badge popover) wins; otherwise
+    /// the inferred `language` from the file extension is used.
+    var effectiveLanguage: String? { languageOverride ?? language }
+
+    #if DEBUG
+    /// Test-only setter so unit tests can simulate a buffer whose
+    /// inferred language has already been computed.
+    func setLanguageForTest(_ value: String?) { language = value }
+    #endif
+
     @ObservationIgnored
     var shouldFollowPathChange: ((String, String) -> Bool)?
     @ObservationIgnored
@@ -158,6 +201,7 @@ final class EditorBuffer {
         if !isExternal, let lsp, let language {
             let url = worktreeRoot.appendingPathComponent(self.relativePath)
             let text = storage.string
+            openedLanguage = language
             Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
         }
     }
@@ -173,11 +217,12 @@ final class EditorBuffer {
     /// document would leave a dangling ref the next `didClose` couldn't
     /// balance.
     func reopenLSPDocument() {
-        guard !isExternal, let lsp, let language else { return }
+        guard !isExternal, let lsp, let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
+        openedLanguage = effective
+        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, text: text) }
     }
 
     func reopenLSPDocument(afterRegistering language: String, forFileExtensions extensions: Set<String>) {
@@ -290,7 +335,6 @@ final class EditorBuffer {
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let oldRelativePath = relativePath
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
-        let oldLanguage = language
         let wasDirty = dirty
         guard shouldFollowPathChange?(oldRelativePath, newRelativePath) ?? true else {
             if wasDirty {
@@ -299,6 +343,11 @@ final class EditorBuffer {
             return
         }
         stopWatching()
+        // Cancel any in-flight language-override transition so its captured
+        // URL (the pre-rename path) can't fire a stale didOpen at the old
+        // URI after we've already moved on.
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         relativePath = newRelativePath
         language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
         if wasDirty {
@@ -310,7 +359,7 @@ final class EditorBuffer {
             discardSnapshot()
             handleEdit(edit: nil)
         }
-        notifyDidClose(url: oldURL, language: oldLanguage)
+        notifyDidClose(url: oldURL)
         notifyDidOpen(url: newURL, text: storage.string)
         onPathChanged?(oldRelativePath, newRelativePath)
         startWatching()
@@ -364,9 +413,10 @@ final class EditorBuffer {
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
-        let oldLanguage = language
         let canonical = storage.string
         stopWatching()
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         do {
             try write(canonical: canonical, to: newURL, createDirectories: true)
             relativePath = newRelativePath
@@ -375,7 +425,7 @@ final class EditorBuffer {
             updateOriginalMtime(from: newURL)
             updateOriginalFileIdentity(from: newURL)
             discardSnapshot()
-            notifyDidClose(url: oldURL, language: oldLanguage)
+            notifyDidClose(url: oldURL)
             notifyDidOpen(url: newURL, text: canonical)
             notifyDidSave(url: newURL)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
@@ -394,8 +444,9 @@ final class EditorBuffer {
         }
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
-        let oldLanguage = language
         stopWatching()
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         do {
             try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: newURL.path) {
@@ -415,7 +466,7 @@ final class EditorBuffer {
             } else {
                 discardSnapshot()
             }
-            notifyDidClose(url: oldURL, language: oldLanguage)
+            notifyDidClose(url: oldURL)
             notifyDidOpen(url: newURL, text: storage.string)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
@@ -576,21 +627,81 @@ final class EditorBuffer {
         relativePath(for: url) ?? relativePath
     }
 
-    private func notifyDidSave(url: URL) {
-        if let lsp, let language {
-            Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+    /// Reconcile `openedLanguage` with `effectiveLanguage`. Closes the
+    /// document on the previous holder (if any) and reopens it on the new
+    /// language (if any). Skipped for external buffers — those route via a
+    /// different external-document API.
+    private func applyEffectiveLanguageToLSP() {
+        guard !isExternal, lsp != nil else { return }
+        let prior = languageReopenTask
+        // Cancel the prior queued transition before we await it — this
+        // propagates cancellation through the chain. `close()` only cancels
+        // the latest `languageReopenTask`, but since each new task cancels
+        // its predecessor at start, an older queued task gets cancelled too
+        // and never reaches its LSP hops post-teardown.
+        prior?.cancel()
+        // `openedLanguage` is intentionally NOT mutated synchronously here.
+        // If we did, a concurrent `close()` (e.g. tab closed immediately
+        // after the override flip) would read the *new* languageId from
+        // `openedLanguage` and try to didClose it on a holder that never
+        // received didOpen — leaving the old holder's refcount unbalanced.
+        // The Task body below updates `openedLanguage` only after each LSP
+        // hop actually completes, and re-reads `effectiveLanguage` and
+        // `previous` at execution time so chained transitions observe the
+        // real post-prior-task state.
+        languageReopenTask = Task { [weak self] in
+            await prior?.value
+            if Task.isCancelled { return }
+            guard let self, let lsp = self.lsp else { return }
+            let previous = self.openedLanguage
+            let target = self.effectiveLanguage
+            guard target != previous else { return }
+            // Re-read the URL inside the Task so a rename/move that landed
+            // during the prior-task / close await still targets the current
+            // path. Snapshotting outside the Task would leave the reopen
+            // attached to the pre-rename URI, leaking refs.
+            let url = self.worktreeRoot.appendingPathComponent(self.relativePath)
+            let worktreeRootCapture = self.worktreeRoot
+            if let previous {
+                await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: previous)
+                if Task.isCancelled { return }
+                self.openedLanguage = nil
+            }
+            if let target {
+                let text = self.storage.string
+                await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target, text: text)
+                if Task.isCancelled {
+                    // openDocument has already bumped refs on the server
+                    // (the ref bump happens synchronously inside the
+                    // manager before its first await). `close()` would
+                    // have read `openedLanguage == nil` and skipped its
+                    // didClose, so without this compensation the doc
+                    // would be left referenced with no owning buffer.
+                    await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target)
+                    return
+                }
+                self.openedLanguage = target
+            }
         }
     }
 
-    private func notifyDidClose(url: URL, language: String?) {
-        if let lsp, let language {
-            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+    private func notifyDidSave(url: URL) {
+        if let lsp, let opened = openedLanguage {
+            Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+        }
+    }
+
+    private func notifyDidClose(url: URL) {
+        if let lsp, let opened = openedLanguage {
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+            openedLanguage = nil
         }
     }
 
     private func notifyDidOpen(url: URL, text: String) {
-        if let lsp, let language {
-            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language, text: text) }
+        if let lsp, let effective = effectiveLanguage {
+            openedLanguage = effective
+            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: effective, text: text) }
         }
     }
 
@@ -626,7 +737,16 @@ final class EditorBuffer {
             try save()
             return
         }
-        let resolvedLanguage = language ?? lsp.language(forFileExtension: ((relativePath as NSString).pathExtension))
+        // Prefer the user's runtime override, then whatever the server
+        // currently has open (which already accounts for override and
+        // post-init transitions), then fall back to the inferred language
+        // or a fresh registry lookup. Without this, an overridden tab
+        // would silently format against the original language's server
+        // (or no server at all for unknown-extension overrides).
+        let resolvedLanguage = languageOverride
+            ?? openedLanguage
+            ?? language
+            ?? lsp.language(forFileExtension: ((relativePath as NSString).pathExtension))
         guard let resolvedLanguage else {
             try save()
             return
@@ -797,15 +917,21 @@ final class EditorBuffer {
     /// for hot-exit restore; explicit tab removal discards it.
     func close(persistDirtySnapshot: Bool = true) {
         snapshotTask?.cancel()
+        // Cancel any in-flight language-override reopen so it can't run
+        // `openDocument` after close() has already torn down the buffer —
+        // that would leak an LSP holder ref nobody owns.
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         if persistDirtySnapshot {
             if dirty { snapshotNow() }
         } else {
             discardSnapshot()
         }
         stopWatching()
-        if let lsp, let language {
+        if let lsp, let opened = openedLanguage {
             let url = worktreeRoot.appendingPathComponent(relativePath)
-            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+            openedLanguage = nil
         }
     }
 

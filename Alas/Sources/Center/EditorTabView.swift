@@ -1,6 +1,35 @@
 import SwiftUI
 import AppKit
 
+private struct LSPStatusProbes {
+    struct Manager: EditorLSPStatusResolver.ManagerProbe {
+        let inner: WorkspaceLSPManager
+        @MainActor
+        func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus {
+            inner.documentStatus(forFile: fileURL, worktreeRoot: worktreeRoot)
+        }
+    }
+
+    struct Availability: EditorLSPStatusResolver.AvailabilityProbe {
+        let manager: WorkspaceLSPManager
+        let registry: LanguageServerRegistry
+        @MainActor
+        func status(forLanguage language: String) -> LanguageServerAvailability.Status? {
+            manager.availabilityStatus(forLanguage: language)
+        }
+        func command(forLanguage language: String) -> String? {
+            registry.allEntries().first(where: { $0.language == language })?.command
+        }
+    }
+
+    struct Registry: EditorLSPStatusResolver.RegistryProbe {
+        let inner: LanguageServerRegistry
+        func language(forFileExtension ext: String) -> String? {
+            inner.language(forFileExtension: ext)
+        }
+    }
+}
+
 struct EditorTabView: View {
     let worktreePath: URL
     let relativePath: String
@@ -13,6 +42,7 @@ struct EditorTabView: View {
     let originatingRelativePath: String?
     let onRevealInFiles: (String) -> Void
     @Environment(\.theme) var theme
+    @Environment(\.openWindow) private var openWindow
 
     @State private var findBarVisible: Bool = false
     @State private var findController = EditorFindController()
@@ -169,9 +199,89 @@ struct EditorTabView: View {
                 }
             }
             Spacer()
+            statusBadge
         }
         .padding(.horizontal, 12).frame(height: 28)
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+    }
+
+    private var statusBadge: some View {
+        // External editor tabs (SDK files, opened via cmd-click) don't
+        // support runtime override: `EditorBuffer.applyEffectiveLanguageToLSP`
+        // bails for `isExternal == true`, so the override wouldn't actually
+        // re-route LSP traffic. We also avoid calling `tabs.externalBuffer`
+        // here because it has side effects (startWatching, ensureExternalLSPOpen)
+        // that would refire on every breadcrumb re-render. The override
+        // picker is hidden via `supportsOverride: false` so the user isn't
+        // offered a no-op action.
+        let isExternal = externalAbsolutePath != nil
+        let buffer: EditorBuffer? = isExternal ? nil : appState.tabs.buffer(
+            worktreeId: worktreeId, tabId: tabId,
+            worktreeRoot: worktreePath, relativePath: relativePath
+        )
+        let absolutePath = externalAbsolutePath ?? worktreePath.appendingPathComponent(relativePath).path
+        let registry = appState.lsp.activeRegistry
+        let resolver = EditorLSPStatusResolver(
+            manager: LSPStatusProbes.Manager(inner: appState.lsp),
+            availability: LSPStatusProbes.Availability(manager: appState.lsp, registry: registry),
+            registry: LSPStatusProbes.Registry(inner: registry)
+        )
+        // Touch `stateTick` so SwiftUI re-renders on holder transitions even
+        // when the buffer-side state hasn't changed.
+        _ = appState.lsp.stateTick
+
+        let status = resolver.resolve(
+            absolutePath: absolutePath,
+            override: buffer?.languageOverride,
+            worktreeRoot: worktreePath
+        )
+
+        // Compute the override picker's language list only when the popover
+        // opens, not on every breadcrumb re-render. Filtering installed
+        // languages involves PATH walks and (for sourcekit-lsp) an `xcrun`
+        // subprocess — too expensive for a view body that runs many times
+        // per second.
+        let manager = appState.lsp
+        let availableLanguagesProvider: @MainActor () -> [(language: String, displayName: String)] = {
+            registry.allEntries()
+                .filter { manager.availabilityStatus(forLanguage: $0.language) == .available }
+                .map { ($0.language, RecommendedLanguageCatalog.entry(forLanguage: $0.language)?.displayName ?? $0.language) }
+                .sorted { $0.displayName < $1.displayName }
+        }
+
+        let openFilesUsingLanguage: Int = status.language == nil
+            ? 0
+            : appState.lsp.openFilesUsing(forFile: URL(fileURLWithPath: absolutePath), worktreeRoot: worktreePath)
+
+        return EditorLSPStatusBadge(
+            status: status,
+            supportsOverride: !isExternal,
+            availableLanguages: availableLanguagesProvider,
+            openFilesUsingLanguage: openFilesUsingLanguage,
+            onRestart: {
+                guard let lang = status.language else { return }
+                let fileURL = URL(fileURLWithPath: absolutePath)
+                Task { @MainActor in
+                    await appState.lsp.restartHolder(
+                        forFile: fileURL,
+                        worktreeRoot: worktreePath,
+                        languageId: lang
+                    )
+                }
+            },
+            onOverride: { newLanguage in
+                buffer?.languageOverride = newLanguage
+            },
+            onOpenSettings: {
+                openWindow(id: "settings")
+            },
+            onInstall: {
+                // The existing InstallNudgeBanner below the breadcrumb already
+                // handles inline install flows; from the badge popover we
+                // surface the install entry via Settings → Code.
+                openWindow(id: "settings")
+            }
+        )
     }
 }
