@@ -34,6 +34,15 @@ struct ChangesTabView: View {
 
     private var scrollContent: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let err = rps.sidebarError {
+                InlineErrorStrip(
+                    message: err,
+                    onDismiss: { rps.sidebarError = nil }
+                )
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+            }
+
             if let op = rps.mergeOp.current {
                 OperationCard(
                     operation: op,
