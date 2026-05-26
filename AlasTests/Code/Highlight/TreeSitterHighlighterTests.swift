@@ -26,36 +26,42 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.string))
     }
 
-    @Test("TypeScript and TSX get keyword + type + string captures")
+    @Test("TypeScript captures types; TSX captures JSX attributes")
     func typescriptBasics() throws {
         let ts = TreeSitterHighlighter.highlight(
             source: "interface User { name: string } const u: User = { name: \"a\" };",
             fileExtension: "ts"
         )
         let tsx = TreeSitterHighlighter.highlight(
-            source: "type Props = { name: string }; const G = (p: Props) => <h1>{p.name}</h1>;",
+            source: #"const G = (p: {n: string}) => <Button primary onClick={() => p.n}>Hi</Button>;"#,
             fileExtension: "tsx"
         )
         #expect(ts.contains(where: { $0.capture == .keyword }))
-        #expect(ts.contains(where: { $0.capture == .string }))
-        #expect(!tsx.isEmpty)
-        #expect(tsx.contains(where: { $0.capture == .keyword }))
+        // `User` parses as `type_identifier @type` — a TS-only capture the
+        // regex fallback would never emit, so this proves the tree-sitter
+        // query path is wired.
+        #expect(ts.contains(where: { $0.capture == .type }))
+        // `primary` / `onClick` are `jsx_attribute (property_identifier) @attribute`
+        // from the JSX overlay — emitted only when the JSX query is loaded.
+        #expect(tsx.contains(where: { $0.capture == .attribute }))
     }
 
-    @Test("JavaScript and JSX get keyword + string + function captures")
+    @Test("JavaScript captures functions; JSX captures attributes via overlay")
     func javascriptBasics() throws {
         let js = TreeSitterHighlighter.highlight(
             source: #"const greet = (name) => `hello, ${name}`;"#,
             fileExtension: "js"
         )
         let jsx = TreeSitterHighlighter.highlight(
-            source: #"const Greeting = ({name}) => <h1>Hi, {name}</h1>;"#,
+            source: #"const G = ({name}) => <Button primary onClick={() => name}>Hi</Button>;"#,
             fileExtension: "jsx"
         )
         #expect(js.contains(where: { $0.capture == .keyword }))
         #expect(js.contains(where: { $0.capture == .string }))
-        #expect(!jsx.isEmpty)
-        #expect(jsx.contains(where: { $0.capture == .keyword }))
+        // `primary` / `onClick` are JSX attribute names — `@attribute` capture
+        // from the JSX overlay. The regex fallback never emits `.attribute`,
+        // so this proves the JSX overlay was merged into the .jsx query.
+        #expect(jsx.contains(where: { $0.capture == .attribute }))
     }
 
     @Test("Bash variable expansion and keywords are captured")
@@ -83,6 +89,7 @@ struct TreeSitterHighlighterTests {
         let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "go")
         let captures = Set(spans.map { $0.capture })
         #expect(captures.contains(.keyword))
+        #expect(captures.contains(.function))
         #expect(captures.contains(.string))
     }
 
@@ -95,12 +102,15 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.string))
     }
 
-    @Test("JSON strings and numbers are captured")
+    @Test("JSON strings, numbers, and literal constants are captured")
     func jsonBasics() throws {
-        let spans = TreeSitterHighlighter.highlight(source: #"{"ok": true, "n": 1, "name": "alas"}"#, fileExtension: "json")
+        let spans = TreeSitterHighlighter.highlight(source: #"{"ok": true, "n": 1, "name": "alas", "x": null}"#, fileExtension: "json")
         #expect(!spans.isEmpty)
         #expect(spans.contains(where: { $0.capture == .string }))
         #expect(spans.contains(where: { $0.capture == .number }))
+        // `true`/`false`/`null` come through as `@constant.builtin` → .constant.
+        // EditorTheme routes .constant to the keyword color so they render.
+        #expect(spans.contains(where: { $0.capture == .constant }))
     }
 
     @Test("Python `def foo()` is captured as keyword + function")
