@@ -37,6 +37,11 @@ packages:
   TreeSitterTOML:
     url: https://github.com/tree-sitter-grammars/tree-sitter-toml
     from: 0.7.0
+  TreeSitterPython:
+    # Vendored at ThirdParty/TreeSitterPython — upstream's Package.swift
+    # has the same broken `FileManager.fileExists` scanner conditional
+    # as tree-sitter-yaml.
+    path: ThirdParty/TreeSitterPython
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -85,6 +90,8 @@ targets:
         product: TreeSitterJSON
       - package: TreeSitterTOML
         product: TreeSitterTOML
+      - package: TreeSitterPython
+        product: TreeSitterPython
       - package: Markdown
         product: Markdown
     settings:
