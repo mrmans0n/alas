@@ -74,11 +74,26 @@ final class EditorBuffer {
     @ObservationIgnored
     private(set) var language: String?
 
+    /// Language identifier the buffer last instructed the LSP server to
+    /// open this document under. Tracks what the *server* knows, which
+    /// can lag `effectiveLanguage` across the async close/open hop on
+    /// override change. Initialized when the buffer's init-time `didOpen`
+    /// is scheduled; updated synchronously when an override transition
+    /// fires. Used by every LSP path (didClose, didSave, close()) so
+    /// notifications always reference the holder that's actually open.
+    @ObservationIgnored
+    private var openedLanguage: String?
+
     /// Per-tab, per-session override of the inferred language. Setting this
-    /// triggers `CodeEditorCoordinator` to close the document on the current
-    /// holder and re-open it under the new language. Cleared automatically
-    /// when the buffer is torn down at tab close.
-    var languageOverride: String?
+    /// drives the buffer to close the document on the previous language
+    /// holder and reopen it under the new effective language. Cleared
+    /// automatically when the buffer is torn down at tab close.
+    var languageOverride: String? {
+        didSet {
+            guard languageOverride != oldValue else { return }
+            applyEffectiveLanguageToLSP()
+        }
+    }
 
     /// Language used for LSP routing, syntax highlighting, and the status
     /// badge. `languageOverride` (set by the badge popover) wins; otherwise
@@ -176,6 +191,7 @@ final class EditorBuffer {
         if !isExternal, let lsp, let language {
             let url = worktreeRoot.appendingPathComponent(self.relativePath)
             let text = storage.string
+            openedLanguage = language
             Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
         }
     }
@@ -195,6 +211,7 @@ final class EditorBuffer {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
+        openedLanguage = language
         Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
     }
 
@@ -594,21 +611,43 @@ final class EditorBuffer {
         relativePath(for: url) ?? relativePath
     }
 
+    /// Reconcile `openedLanguage` with `effectiveLanguage`. Closes the
+    /// document on the previous holder (if any) and reopens it on the new
+    /// language (if any). Skipped for external buffers — those route via a
+    /// different external-document API.
+    private func applyEffectiveLanguageToLSP() {
+        guard !isExternal, let lsp else { return }
+        let new = effectiveLanguage
+        guard new != openedLanguage else { return }
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let previous = openedLanguage
+        openedLanguage = new
+        if let previous {
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: previous) }
+        }
+        if let new {
+            let text = storage.string
+            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: new, text: text) }
+        }
+    }
+
     private func notifyDidSave(url: URL) {
-        if let lsp, let language {
-            Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+        if let lsp, let opened = openedLanguage {
+            Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
         }
     }
 
     private func notifyDidClose(url: URL, language: String?) {
-        if let lsp, let language {
-            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+        if let lsp, let opened = openedLanguage {
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+            openedLanguage = nil
         }
     }
 
     private func notifyDidOpen(url: URL, text: String) {
-        if let lsp, let language {
-            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language, text: text) }
+        if let lsp, let effective = effectiveLanguage {
+            openedLanguage = effective
+            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: effective, text: text) }
         }
     }
 
@@ -821,9 +860,10 @@ final class EditorBuffer {
             discardSnapshot()
         }
         stopWatching()
-        if let lsp, let language {
+        if let lsp, let opened = openedLanguage {
             let url = worktreeRoot.appendingPathComponent(relativePath)
-            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language) }
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+            openedLanguage = nil
         }
     }
 
