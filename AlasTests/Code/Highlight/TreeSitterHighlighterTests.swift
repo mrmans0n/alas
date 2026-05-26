@@ -13,6 +13,22 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.function))
     }
 
+    @Test("JavaScript and JSX get keyword + string + function captures")
+    func javascriptBasics() throws {
+        let js = TreeSitterHighlighter.highlight(
+            source: #"const greet = (name) => `hello, ${name}`;"#,
+            fileExtension: "js"
+        )
+        let jsx = TreeSitterHighlighter.highlight(
+            source: #"const Greeting = ({name}) => <h1>Hi, {name}</h1>;"#,
+            fileExtension: "jsx"
+        )
+        #expect(js.contains(where: { $0.capture == .keyword }))
+        #expect(js.contains(where: { $0.capture == .string }))
+        #expect(!jsx.isEmpty)
+        #expect(jsx.contains(where: { $0.capture == .keyword }))
+    }
+
     @Test("Bash variable expansion and keywords are captured")
     func bashBasics() throws {
         let src = """

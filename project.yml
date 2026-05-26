@@ -51,6 +51,11 @@ packages:
   TreeSitterBash:
     url: https://github.com/tree-sitter/tree-sitter-bash
     from: 0.25.1
+  TreeSitterJavaScript:
+    # Vendored at ThirdParty/TreeSitterJavaScript — upstream's Package.swift
+    # has the same broken `FileManager.fileExists` scanner conditional as
+    # tree-sitter-yaml.
+    path: ThirdParty/TreeSitterJavaScript
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -107,6 +112,8 @@ targets:
         product: TreeSitterGo
       - package: TreeSitterBash
         product: TreeSitterBash
+      - package: TreeSitterJavaScript
+        product: TreeSitterJavaScript
       - package: Markdown
         product: Markdown
     settings:
