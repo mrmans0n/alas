@@ -8,6 +8,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case diff(DiffTabState)
     case commit(CommitTabState)
     case commitEditor(CommitEditorTabState)
+    case draftCommit(DraftCommitTabState)
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
 
@@ -18,6 +19,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff(let s):         return s.id
         case .commit(let s):       return s.id
         case .commitEditor(let s): return s.id
+        case .draftCommit(let s):  return s.id
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         }
@@ -30,6 +32,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff(let s):         return s.title
         case .commit(let s):       return s.title
         case .commitEditor(let s): return s.title
+        case .draftCommit:         return "Draft commit"
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         }
@@ -42,6 +45,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .diff:         return "diff"
         case .commit:       return "commit"
         case .commitEditor: return "commit"
+        case .draftCommit:  return "commit"
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
         }
@@ -86,6 +90,30 @@ struct CommitEditorTabState: Codable, Equatable, Identifiable {
         self.originalSha = originalSha
         self.currentSha = currentSha
         self.title = title
+    }
+}
+
+struct DraftCommitTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    var subject: String
+    var bodyText: String
+    var amend: Bool
+    var selectedPath: String?
+
+    init(
+        worktreeId: String,
+        subject: String = "",
+        bodyText: String = "",
+        amend: Bool = false,
+        selectedPath: String? = nil
+    ) {
+        self.id = "draft-commit:\(worktreeId)"
+        self.worktreeId = worktreeId
+        self.subject = subject
+        self.bodyText = bodyText
+        self.amend = amend
+        self.selectedPath = selectedPath
     }
 }
 
