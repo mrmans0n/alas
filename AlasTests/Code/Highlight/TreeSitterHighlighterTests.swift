@@ -13,6 +13,21 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.function))
     }
 
+    @Test("Bash variable expansion and keywords are captured")
+    func bashBasics() throws {
+        let src = """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [[ -z "$NAME" ]]; then echo "anon"; fi
+        """
+        let sh = TreeSitterHighlighter.highlight(source: src, fileExtension: "sh")
+        let bash = TreeSitterHighlighter.highlight(source: src, fileExtension: "bash")
+        #expect(!sh.isEmpty)
+        #expect(!bash.isEmpty)
+        #expect(sh.contains(where: { $0.capture == .keyword }))
+        #expect(sh.contains(where: { $0.capture == .comment }))
+    }
+
     @Test("Go `func main()` is captured as keyword + function")
     func goFunction() throws {
         let src = """
