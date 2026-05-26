@@ -809,7 +809,12 @@ final class TabsManager {
         guard let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return }
         let tab = file.tabs[idx]
         if case .draftCommit(let state) = tab {
-            file.stashedDraft = state
+            // Only stash drafts the user actually authored. Closing an
+            // untouched draft tab should NOT plant a sticky "Open draft"
+            // affordance for an empty message.
+            let hasSubject = !state.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasBody = !state.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            file.stashedDraft = (hasSubject || hasBody) ? state : nil
         }
         let wasActive = file.activeTabId == tabId
         file.tabs.remove(at: idx)

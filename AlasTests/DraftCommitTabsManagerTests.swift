@@ -153,4 +153,31 @@ struct DraftCommitTabsManagerTests {
         #expect(fresh.subject == "")
         #expect(fresh.bodyText == "")
     }
+
+    @Test func closingEmptyDraftTab_doesNotStash() {
+        let worktreeId = "draft-empty-no-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        // Don't write subject/body. Close immediately.
+        mgr.close(worktreeId: worktreeId, tabId: tab.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
+    }
+
+    @Test func closingWhitespaceOnlyDraftTab_doesNotStash() {
+        let worktreeId = "draft-whitespace-no-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: tab.id) { state in
+            state.subject = "   "
+            state.bodyText = "\n\n"
+        }
+        mgr.close(worktreeId: worktreeId, tabId: tab.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
+    }
 }

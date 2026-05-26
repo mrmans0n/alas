@@ -819,7 +819,10 @@ extension GitService {
         var ni = 0
         while ni < numstatTokens.count {
             let token = numstatTokens[ni]
-            let parts = token.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            // Split on the first two tabs only so paths containing tab
+            // characters survive intact. Format is `<adds>\t<dels>\t<path>`;
+            // the trailing path field may itself contain tabs.
+            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
             guard parts.count >= 3 else { ni += 1
             continue }
             let addStr = parts[0]
