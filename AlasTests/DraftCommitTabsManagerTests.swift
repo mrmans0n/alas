@@ -83,4 +83,56 @@ struct DraftCommitTabsManagerTests {
         #expect(s.currentSha == "abc1234")
         #expect(s.baseRef == "main")
     }
+
+    @Test func closingDraftTab_stashesStateAcrossReopen() {
+        let worktreeId = "draft-stash-roundtrip"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: first.id) { state in
+            state.subject = "wip: persist me"
+            state.bodyText = "Draft body that should survive close"
+            state.amend = true
+        }
+
+        mgr.close(worktreeId: worktreeId, tabId: first.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).isEmpty)
+
+        let reopened = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        guard case .draftCommit(let restored) = reopened else {
+            Issue.record("expected draftCommit tab after reopen")
+            return
+        }
+        #expect(restored.subject == "wip: persist me")
+        #expect(restored.bodyText == "Draft body that should survive close")
+        #expect(restored.amend == true)
+    }
+
+    @Test func replaceDraftWithCommitEditor_clearsStash() {
+        let worktreeId = "draft-stash-cleared-on-commit"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "feat: thing"
+        }
+        _ = mgr.replaceDraftWithCommitEditor(
+            worktreeId: worktreeId,
+            draftTabId: draft.id,
+            baseRef: "main",
+            newSha: "abcdef0",
+            title: "abcdef0 feat: thing"
+        )
+
+        // Open a new draft — should be empty, not restored from a stale stash.
+        let next = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        guard case .draftCommit(let fresh) = next else {
+            Issue.record("expected draftCommit tab")
+            return
+        }
+        #expect(fresh.subject == "")
+        #expect(fresh.bodyText == "")
+    }
 }
