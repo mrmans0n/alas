@@ -27,6 +27,7 @@ struct CodeEditorView: NSViewRepresentable {
     /// causes `updateNSView` to fire when the user changes the font.
     let fontFamily: String
     let fontSize: Int
+    let showLineNumbers: Bool
     @Environment(\.theme) var theme
 
     func makeCoordinator() -> CodeEditorCoordinator {
@@ -94,6 +95,7 @@ struct CodeEditorView: NSViewRepresentable {
         textView.autoresizingMask = []
 
         scroll.documentView = textView
+        configureLineNumberRuler(for: scroll, textView: textView)
 
         context.coordinator.attach(
             textView: textView,
@@ -123,11 +125,41 @@ struct CodeEditorView: NSViewRepresentable {
             externalAbsolutePath: externalAbsolutePath,
             originatingRelativePath: originatingRelativePath
         )
+
+        if let textView = nsView.documentView as? CodeTextView {
+            configureLineNumberRuler(for: nsView, textView: textView)
+        }
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: CodeEditorCoordinator) {
         // Detach the coordinator from the text view, but DO NOT close the
         // buffer's LSP document or watcher — the buffer outlives this view.
         coordinator.detach()
+    }
+
+    private func configureLineNumberRuler(for scrollView: NSScrollView, textView: CodeTextView) {
+        guard showLineNumbers else {
+            scrollView.verticalRulerView = nil
+            scrollView.hasVerticalRuler = false
+            scrollView.rulersVisible = false
+            return
+        }
+
+        let ruler: CodeEditorLineNumberRulerView
+        if let existingRuler = scrollView.verticalRulerView as? CodeEditorLineNumberRulerView {
+            existingRuler.update(textView: textView, theme: theme)
+            ruler = existingRuler
+        } else {
+            ruler = CodeEditorLineNumberRulerView(
+                scrollView: scrollView,
+                textView: textView,
+                theme: theme
+            )
+            scrollView.verticalRulerView = ruler
+        }
+
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
+        ruler.needsDisplay = true
     }
 }

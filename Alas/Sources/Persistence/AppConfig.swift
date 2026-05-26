@@ -107,12 +107,14 @@ struct AppConfig: Codable, Equatable {
         var fontFamily: String      // "" = system monospaced fallback
         var fontSize: Int           // clamped [8, 64] on decode/write
         var formatOnSave: Bool
+        var showLineNumbers: Bool
         var languageServers: [LanguageServerConfig]
         var dismissedInstallNudges: [String]
         var userDefinedRecipes: [String: [InstallRecipe]]
 
         enum CodingKeys: String, CodingKey {
-            case fontFamily, fontSize, formatOnSave, languageServers, dismissedInstallNudges, userDefinedRecipes
+            case fontFamily, fontSize, formatOnSave, showLineNumbers,
+                 languageServers, dismissedInstallNudges, userDefinedRecipes
         }
     }
 
@@ -214,6 +216,7 @@ struct AppConfig: Codable, Equatable {
             fontFamily: "SF Mono",
             fontSize: 13,
             formatOnSave: false,
+            showLineNumbers: true,
             languageServers: [],
             dismissedInstallNudges: [],
             userDefinedRecipes: [:]
@@ -379,6 +382,7 @@ extension AppConfig {
             let rawSize = (try? codeContainer.decode(Int.self, forKey: .fontSize)) ?? 13
             let fontSize = max(8, min(64, rawSize))
             let formatOnSave = (try? codeContainer.decode(Bool.self, forKey: .formatOnSave)) ?? false
+            let showLineNumbers = (try? codeContainer.decode(Bool.self, forKey: .showLineNumbers)) ?? true
             let servers = (try? codeContainer.decode([LanguageServerConfig].self, forKey: .languageServers)) ?? []
             let dismissed = (try? codeContainer.decode([String].self, forKey: .dismissedInstallNudges)) ?? []
             let userRecipes = (try? codeContainer.decode([String: [InstallRecipe]].self, forKey: .userDefinedRecipes)) ?? [:]
@@ -386,6 +390,7 @@ extension AppConfig {
                 fontFamily: fontFamily,
                 fontSize: fontSize,
                 formatOnSave: formatOnSave,
+                showLineNumbers: showLineNumbers,
                 languageServers: servers,
                 dismissedInstallNudges: dismissed,
                 userDefinedRecipes: userRecipes
@@ -395,6 +400,7 @@ extension AppConfig {
                 fontFamily: "SF Mono",
                 fontSize: 13,
                 formatOnSave: false,
+                showLineNumbers: true,
                 languageServers: [],
                 dismissedInstallNudges: [],
                 userDefinedRecipes: [:]

@@ -33,6 +33,10 @@ struct CodePane: View {
                             }
                         ), monospaced: true).frame(width: 80)
                     }
+                    SettingsRow(name: "Show line numbers",
+                                desc: "Display a non-selectable gutter in editor panes.") {
+                        AlasToggle(on: state.bind(\.code.showLineNumbers))
+                    }
                     SettingsRow(name: "Format on save",
                                 desc: "Request document formatting from the language server before writing to disk.") {
                         AlasToggle(on: state.bind(\.code.formatOnSave))
