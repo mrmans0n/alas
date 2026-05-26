@@ -59,6 +59,16 @@ final class WorkspaceLSPManager: DocumentFormatter {
         var texts: [String: String]  // last text version sent to the server per URI
     }
 
+    /// Coarse status of a document's serving holder. The resolver folds this
+    /// into `EditorLSPStatus.loading` (.none and .loading), `.ready`, or
+    /// `.problem(.dead)`.
+    enum DocumentStatus: Equatable {
+        case none
+        case loading
+        case ready
+        case dead
+    }
+
     private var holders: [Key: Holder] = [:]
     private var registry: LanguageServerRegistry
 
