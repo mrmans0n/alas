@@ -86,8 +86,8 @@ struct DraftCommitTabView: View {
                 CommitFilesListView(
                     files: stagedFiles,
                     selectedPath: $selectedPath,
-                    onDropFile: { _ in },       // wired in Task 6
-                    dropFileEnabled: { _ in false }
+                    onDropFile: { file in unstageFile(file) },
+                    dropFileEnabled: { _ in !busy }
                 )
                 .frame(width: leftWidth)
                 DragHandle(axis: .horizontal, onDrag: { delta in
@@ -109,8 +109,8 @@ struct DraftCommitTabView: View {
                         codeFontFamily: appState.config.code.fontFamily,
                         codeFontSize: CGFloat(appState.config.code.fontSize),
                         onOpenFile: nil,
-                        onDropHunk: { _ in },        // wired in Task 6
-                        dropHunkEnabled: { _, _ in false }
+                        onDropHunk: { hunk in unstageHunk(path: path, hunk: hunk) },
+                        dropHunkEnabled: { file, hunk in !busy && file.status == "M" && !hunk.lines.isEmpty }
                     )
                 } else {
                     Text(hasStaged ? "Select a file" : "No staged changes yet.\nStage files from the sidebar to start a commit.")
@@ -169,6 +169,40 @@ struct DraftCommitTabView: View {
             diff = loaded
         } catch {
             self.error = (error as NSError).localizedDescription
+        }
+    }
+
+    private func unstageFile(_ file: CommitChangedFile) {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                try await git.unstage(worktreePath: worktreePath, files: [file.path])
+                await loadStaged()
+                await loadDiff()
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+            } catch {
+                self.error = (error as NSError).localizedDescription
+            }
+        }
+    }
+
+    private func unstageHunk(path: String, hunk: ParsedDiff.Hunk) {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                try await git.unstageHunk(worktreePath: worktreePath, path: path, hunk: hunk)
+                await loadStaged()
+                await loadDiff()
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+            } catch {
+                self.error = (error as NSError).localizedDescription
+            }
         }
     }
 

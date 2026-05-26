@@ -65,4 +65,56 @@ struct GitServiceStagedTests {
         #expect(byPath["mod.txt"]?.status == "M")
         #expect(byPath["del.txt"]?.status == "D")
     }
+
+    @Test func unstageHunk_removesOneHunkFromIndex() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        // Establish a baseline commit with a 10-line file so changes at top
+        // and bottom produce two separate hunks.
+        let baseline = """
+            line1
+            line2
+            line3
+            line4
+            line5
+            line6
+            line7
+            line8
+            line9
+            line10
+            """
+        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
+        try baseline.write(to: repo.appendingPathComponent("x.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "x.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "baseline"], cwd: repo)
+
+        // Modify top and bottom lines so git produces two hunks.
+        let modified = """
+            TOP-CHANGED
+            line2
+            line3
+            line4
+            line5
+            line6
+            line7
+            line8
+            line9
+            BOTTOM-CHANGED
+            """
+        try modified.write(to: repo.appendingPathComponent("x.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "x.txt"], cwd: repo)
+
+        // Confirm two staged hunks before unstaging.
+        let before = try await GitService().diff(worktreePath: repo, file: "x.txt", staged: true)
+        #expect(before.hunks.count == 2)
+        let topHunk = before.hunks[0]
+
+        // Unstage only the top hunk.
+        try await GitService().unstageHunk(worktreePath: repo, path: "x.txt", hunk: topHunk)
+
+        // Only the bottom hunk should remain staged.
+        let after = try await GitService().diff(worktreePath: repo, file: "x.txt", staged: true)
+        #expect(after.hunks.count == 1)
+    }
 }

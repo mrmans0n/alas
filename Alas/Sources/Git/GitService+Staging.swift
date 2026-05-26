@@ -35,6 +35,22 @@ extension GitService {
         try await unstage(worktreePath: worktreePath, files: files)
     }
 
+    /// Unstage a single hunk while keeping the working-tree change intact.
+    /// Builds a unified-diff patch and pipes it to `git apply --cached --reverse -`.
+    /// `--cached` limits the apply to the index only (no worktree touch).
+    func unstageHunk(worktreePath: URL, path: String, hunk: ParsedDiff.Hunk) async throws {
+        let patch = HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: true)
+        let result = try await Process.git(["apply", "--cached", "--reverse", "-"], cwd: worktreePath, stdin: patch)
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.unstageHunk",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey:
+                    result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)]
+            )
+        }
+    }
+
     /// Create a new commit (or amend HEAD) with the given subject and optional
     /// body. The body is trimmed; an empty body skips the second `-m` so we
     /// don't leave a trailing blank paragraph in the commit message.
