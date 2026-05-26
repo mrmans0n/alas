@@ -3,6 +3,7 @@ import Testing
 @testable import Alas
 
 @Suite("LanguageServerAvailability")
+@MainActor
 struct LanguageServerAvailabilityTests {
     @Test("disabled entries report disabled")
     func disabled() {
@@ -21,7 +22,7 @@ struct LanguageServerAvailabilityTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
         let entry = config(command: executable.path)
-        let availability = LanguageServerAvailability(environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
         #expect(availability.status(for: entry) == .available)
     }
 
@@ -35,7 +36,7 @@ struct LanguageServerAvailabilityTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
         let entry = config(command: "test-lsp")
-        let availability = LanguageServerAvailability(environment: ["PATH": dir.path], xcrunFind: { _ in nil }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: ["PATH": dir.path], xcrunFind: { _ in nil }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
         #expect(availability.status(for: entry) == .available)
     }
 
@@ -52,7 +53,8 @@ struct LanguageServerAvailabilityTests {
         let availability = LanguageServerAvailability(
             environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"],
             xcrunFind: { _ in nil },
-            additionalPathDirectories: ["\(NSHomeDirectory())/.npm-global/bin", dir.path]
+            additionalPathDirectories: ["\(NSHomeDirectory())/.npm-global/bin", dir.path],
+            gatekeeperAssessor: { _ in .allowed }
         )
 
         #expect(availability.status(for: entry) == .available)
@@ -81,7 +83,7 @@ struct LanguageServerAvailabilityTests {
         let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { tool in
             requestedTool = tool
             return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp"
-        }, additionalPathDirectories: [])
+        }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
 
         #expect(availability.status(for: entry) == .available)
         #expect(requestedTool == "sourcekit-lsp")
@@ -158,7 +160,7 @@ struct LanguageServerAvailabilityTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
         let entry = config(command: "custom-lsp", env: ["PATH": dir.path])
-        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in nil }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in nil }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
         #expect(availability.status(for: entry) == .available)
     }
 
@@ -176,6 +178,86 @@ struct LanguageServerAvailabilityTests {
         #expect(env["CUSTOM"] == "1")
         #expect(env["HOME"] == "/Users/test")
         #expect(env["PATH"] == "/custom/bin:/usr/bin:/bin:/opt/homebrew/bin")
+    }
+
+    @Test("resolved command + gatekeeper rejected → blockedByGatekeeper(realPath:)")
+    func gatekeeperRejected() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let executable = dir.appendingPathComponent("kotlin-lsp")
+        #expect(FileManager.default.createFile(atPath: executable.path, contents: Data()))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let entry = config(language: "kotlin", command: "kotlin-lsp")
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": dir.path],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { _ in .rejected }
+        )
+
+        let status = availability.status(for: entry)
+        guard case .blockedByGatekeeper(let realPath) = status else {
+            Issue.record("Expected .blockedByGatekeeper, got \(status)")
+            return
+        }
+        // realPath should be the executable path with symlinks resolved.
+        #expect(realPath == executable.resolvingSymlinksInPath().path)
+    }
+
+    @Test("resolved command + gatekeeper allowed → available")
+    func gatekeeperAllowed() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let executable = dir.appendingPathComponent("kotlin-lsp")
+        #expect(FileManager.default.createFile(atPath: executable.path, contents: Data()))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let entry = config(language: "kotlin", command: "kotlin-lsp")
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": dir.path],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { _ in .allowed }
+        )
+
+        #expect(availability.status(for: entry) == .available)
+    }
+
+    @Test("resolved command + gatekeeper unknown → available (don't hide LSPs on assessor failure)")
+    func gatekeeperUnknownIsAvailable() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let executable = dir.appendingPathComponent("kotlin-lsp")
+        #expect(FileManager.default.createFile(atPath: executable.path, contents: Data()))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let entry = config(language: "kotlin", command: "kotlin-lsp")
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": dir.path],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { _ in .unknown }
+        )
+
+        #expect(availability.status(for: entry) == .available)
+    }
+
+    @Test("notInstalled commands never reach the gatekeeper assessor")
+    func notInstalledSkipsAssessor() {
+        var assessorCalled = false
+        let entry = config(language: "kotlin", command: "totally-not-installed-lsp")
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": "/tmp/empty"],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { _ in
+                assessorCalled = true
+                return .rejected
+            }
+        )
+        #expect(availability.status(for: entry) == .notInstalled)
+        #expect(assessorCalled == false)
     }
 
     private func config(language: String = "test", command: String, args: [String] = [], env: [String: String] = [:], enabled: Bool = true) -> LanguageServerConfig {
