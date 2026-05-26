@@ -73,6 +73,15 @@
       }
     },
     {
+      "identity" : "tree-sitter-kotlin",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/fwcd/tree-sitter-kotlin",
+      "state" : {
+        "revision" : "e1a2d5ad1f61f5740677183cd4125bb071cd2f30",
+        "version" : "0.3.8"
+      }
+    },
+    {
       "identity" : "tree-sitter-rust",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter/tree-sitter-rust",

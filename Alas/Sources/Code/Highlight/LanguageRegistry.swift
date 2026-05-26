@@ -4,6 +4,7 @@ import TreeSitterBash
 import TreeSitterGo
 import TreeSitterJava
 import TreeSitterJavaScript
+import TreeSitterKotlin
 import TreeSitterJSON
 import TreeSitterPython
 import TreeSitterRust
@@ -44,6 +45,7 @@ enum LanguageRegistry {
         case "ts":            lang = Language(language: tree_sitter_typescript())
         case "tsx":           lang = Language(language: tree_sitter_tsx())
         case "java":          lang = Language(language: tree_sitter_java())
+        case "kt", "kts":     lang = Language(language: tree_sitter_kotlin())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -115,7 +117,11 @@ enum LanguageRegistry {
             )
         case "java":
             query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterJava",
+                              bundleNameContains: "TreeSitterJava_TreeSitterJava",
+                              language: lang)
+        case "kt", "kts":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterKotlin",
                               language: lang)
         default:
             query = nil

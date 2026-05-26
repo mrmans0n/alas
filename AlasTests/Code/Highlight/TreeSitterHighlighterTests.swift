@@ -136,8 +136,8 @@ struct TreeSitterHighlighterTests {
         #expect(spans.isEmpty)
     }
 
-    @Test("fallback highlighter recognizes Kotlin")
-    func fallbackHighlighterRecognizesKotlin() throws {
+    @Test("Kotlin `fun main()` and `val` are captured")
+    func kotlinBasics() throws {
         let kt = TreeSitterHighlighter.highlight(source: "fun main() { println(\"hi\") }", fileExtension: "kt")
         let kts = TreeSitterHighlighter.highlight(source: "val x = 1", fileExtension: "kts")
         #expect(kt.contains(where: { $0.capture == .keyword }))
