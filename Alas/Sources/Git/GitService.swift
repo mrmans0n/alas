@@ -820,7 +820,8 @@ extension GitService {
         while ni < numstatTokens.count {
             let token = numstatTokens[ni]
             let parts = token.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 3 else { ni += 1; continue }
+            guard parts.count >= 3 else { ni += 1
+            continue }
             let addStr = parts[0]
             let delStr = parts[1]
             let pathField = parts[2]
@@ -828,7 +829,8 @@ extension GitService {
             let newPath: String
             if pathField.isEmpty {
                 // Rename/copy: next two tokens are old and new path.
-                guard ni + 2 < numstatTokens.count else { ni += 1; continue }
+                guard ni + 2 < numstatTokens.count else { ni += 1
+                continue }
                 // ni+1 = old path, ni+2 = new path
                 newPath = numstatTokens[ni + 2]
                 ni += 3
@@ -852,10 +854,12 @@ extension GitService {
         var si = 0
         while si < nsTokens.count {
             let statusField = nsTokens[si]
-            guard !statusField.isEmpty else { si += 1; continue }
+            guard !statusField.isEmpty else { si += 1
+            continue }
             let statusLetter = String(statusField.prefix(1))
             if statusLetter == "R" || statusLetter == "C" {
-                guard si + 2 < nsTokens.count else { si += 1; continue }
+                guard si + 2 < nsTokens.count else { si += 1
+                continue }
                 let oldPath = nsTokens[si + 1]
                 let newPath = nsTokens[si + 2]
                 statusByPath[newPath] = statusLetter
@@ -863,7 +867,8 @@ extension GitService {
                 if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
                 si += 3
             } else {
-                guard si + 1 < nsTokens.count else { si += 1; continue }
+                guard si + 1 < nsTokens.count else { si += 1
+                continue }
                 let path = nsTokens[si + 1]
                 statusByPath[path] = statusLetter
                 if orderedSet.insert(path).inserted { ordered.append(path) }
