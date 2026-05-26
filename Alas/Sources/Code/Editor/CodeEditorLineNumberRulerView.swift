@@ -5,6 +5,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
     private weak var codeTextView: CodeTextView?
     private var theme: Theme
     private var textChangeObserver: NSObjectProtocol?
+    private var storageEditObserver: NSObjectProtocol?
     private var boundsObserver: NSObjectProtocol?
     private var lineStarts: [Int] = [0]
     private weak var cachedTextStorage: NSTextStorage?
@@ -31,7 +32,9 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
     }
 
     deinit {
-        removeObservers()
+        MainActor.assumeIsolated {
+            removeObservers()
+        }
     }
 
     func update(textView: CodeTextView, theme: Theme) {
@@ -43,6 +46,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
             }
             rebuildLineStartsAndUpdateThickness()
         } else if cachedTextStorage !== textView.textStorage {
+            observeTextStorage(textView.textStorage)
             rebuildLineStartsAndUpdateThickness()
         } else {
             updateThickness()
@@ -128,9 +132,13 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
             object: textView,
             queue: .main
         ) { [weak self] _ in
-            self?.rebuildLineStartsAndUpdateThickness()
-            self?.needsDisplay = true
+            Task { @MainActor [weak self] in
+                self?.rebuildLineStartsAndUpdateThickness()
+                self?.needsDisplay = true
+            }
         }
+
+        observeTextStorage(textView.textStorage)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(
@@ -138,7 +146,9 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
             object: scrollView.contentView,
             queue: .main
         ) { [weak self] _ in
-            self?.needsDisplay = true
+            Task { @MainActor [weak self] in
+                self?.needsDisplay = true
+            }
         }
     }
 
@@ -147,9 +157,32 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
             NotificationCenter.default.removeObserver(textChangeObserver)
             self.textChangeObserver = nil
         }
+        if let storageEditObserver {
+            NotificationCenter.default.removeObserver(storageEditObserver)
+            self.storageEditObserver = nil
+        }
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
             self.boundsObserver = nil
+        }
+    }
+
+    private func observeTextStorage(_ storage: NSTextStorage?) {
+        if let storageEditObserver {
+            NotificationCenter.default.removeObserver(storageEditObserver)
+            self.storageEditObserver = nil
+        }
+        guard let storage else { return }
+
+        storageEditObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: storage,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.rebuildLineStartsAndUpdateThickness()
+                self?.needsDisplay = true
+            }
         }
     }
 
