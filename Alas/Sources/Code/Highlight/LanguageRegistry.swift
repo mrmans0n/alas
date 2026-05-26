@@ -1,5 +1,6 @@
 import Foundation
 import SwiftTreeSitter
+import TreeSitterGo
 import TreeSitterJSON
 import TreeSitterPython
 import TreeSitterRust
@@ -31,6 +32,7 @@ enum LanguageRegistry {
         case "toml":          lang = Language(language: tree_sitter_toml())
         case "py":            lang = Language(language: tree_sitter_python())
         case "rs":            lang = Language(language: tree_sitter_rust())
+        case "go":            lang = Language(language: tree_sitter_go())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -73,6 +75,10 @@ enum LanguageRegistry {
         case "rs":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterRust",
+                              language: lang)
+        case "go":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterGo",
                               language: lang)
         default:
             query = nil

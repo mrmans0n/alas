@@ -13,6 +13,19 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.function))
     }
 
+    @Test("Go `func main()` is captured as keyword + function")
+    func goFunction() throws {
+        let src = """
+        package main
+        import "fmt"
+        func main() { fmt.Println("hi") }
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "go")
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.keyword))
+        #expect(captures.contains(.string))
+    }
+
     @Test("Rust `fn main()` is captured as keyword + function")
     func rustFunction() throws {
         let spans = TreeSitterHighlighter.highlight(source: #"fn main() { println!("hi") }"#, fileExtension: "rs")
