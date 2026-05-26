@@ -4,6 +4,7 @@
 struct BuiltinAgentState: Codable, Equatable {
     var isEnabled: Bool
     var binaryOverride: String?
+    var extraTerminalArgs: [String]?
 }
 
 /// Runtime view over the agent catalog. Built-ins come first (in catalog
@@ -28,6 +29,7 @@ struct AgentRegistry: Equatable {
             if let state = builtinState[builtin.id] {
                 prefersEnabled = state.isEnabled
                 builtin.binaryOverride = state.binaryOverride
+                builtin.extraTerminalArgs = state.extraTerminalArgs
             } else {
                 prefersEnabled = builtin.isEnabled
             }

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -166,6 +167,21 @@ struct AgentRegistryTests {
         )
         #expect(r.agents.first(where: { $0.id == "c-installed" })!.isEnabled == true)
         #expect(r.agents.first(where: { $0.id == "c-missing"   })!.isEnabled == false)
+    }
+
+    @Test func builtinAgentStateExtraTerminalArgsRoundsTrips() throws {
+        let state = BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: ["--model", "sonnet"])
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(BuiltinAgentState.self, from: data)
+        #expect(decoded.extraTerminalArgs == ["--model", "sonnet"])
+    }
+
+    @Test func builtinAgentStateExtraTerminalArgsDefaultsToNil() throws {
+        let json = """
+        {"isEnabled": true, "binaryOverride": null}
+        """
+        let decoded = try JSONDecoder().decode(BuiltinAgentState.self, from: Data(json.utf8))
+        #expect(decoded.extraTerminalArgs == nil)
     }
 
     @Test func defaultInstallerRegistryExposesOnlyAgentsWithInstallers() {
