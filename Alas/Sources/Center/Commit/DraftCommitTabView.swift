@@ -367,7 +367,20 @@ struct DraftCommitTabView: View {
                 )
                 let shortSha = String(newSha.prefix(7))
                 let title = "\(shortSha) \(subjectSnapshot)"
-                let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? "HEAD~1"
+                let baseRef: String
+                if let ref = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) {
+                    baseRef = ref
+                } else {
+                    // No active comparison — try the new commit's first parent. If the
+                    // new commit has no parent (root commit), fall back to the canonical
+                    // empty-tree SHA so the commit editor can still render a diff.
+                    let parentResult = try? await Process.git(["rev-parse", "--verify", "\(newSha)^"], cwd: worktreePath)
+                    if let pr = parentResult, pr.exitCode == 0 {
+                        baseRef = pr.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                    } else {
+                        baseRef = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+                    }
+                }
                 _ = appState.tabs.replaceDraftWithCommitEditor(
                     worktreeId: worktreeId,
                     draftTabId: tabState.id,
