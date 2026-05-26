@@ -639,6 +639,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
         guard let key, var holder = holders[key] else { return false }
 
+        // Skip dead holders so an external-tab reopen/retry loop doesn't
+        // accumulate refs on a server that's never going to answer. The
+        // caller treats `false` as "retry later"; the in-worktree
+        // `openDocument` path will respawn a fresh holder when a real tab
+        // opens, and the badge can offer Restart in the meantime.
+        guard holder.lifeState != .dead else { return false }
+
         // Bump refcount and record pending text in case the server is still
         // initializing — the same approach used by openDocument for in-worktree
         // files.

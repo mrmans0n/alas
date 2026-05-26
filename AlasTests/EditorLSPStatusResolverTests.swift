@@ -135,4 +135,19 @@ struct EditorLSPStatusResolverTests {
         let result = r.resolve(absolutePath: swiftFile.path, override: nil, worktreeRoot: root)
         #expect(result == .problem(language: "swift", kind: .dead, command: "sourcekit-lsp"))
     }
+
+    /// Regression guard for the `case nil` arm of the resolver. The override
+    /// picker today only surfaces languages with a registry entry, so this
+    /// branch isn't reachable from the badge UI — but the invariant lives in
+    /// the picker, not the resolver, so this seeds the assertion in case a
+    /// future caller (CLI, serialized tab state, tests) sets an override to
+    /// an unregistered language.
+    @Test func problemDisabledWhenAvailabilityReturnsNil() {
+        let r = resolver(
+            availability: FakeAvailability(statusByLanguage: [:], commandByLanguage: [:]),
+            registry: FakeRegistry(languageByExt: [:])
+        )
+        let result = r.resolve(absolutePath: swiftFile.path, override: "unknown", worktreeRoot: root)
+        #expect(result == .problem(language: "unknown", kind: .disabled, command: nil))
+    }
 }

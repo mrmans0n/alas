@@ -938,4 +938,54 @@ struct EditorBufferLanguageOverrideTests {
         buf.languageOverride = nil
         #expect(buf.effectiveLanguage == "swift")
     }
+
+    /// Verifies the reactive plumbing in `CodeEditorCoordinator`: when a tab
+    /// flips its `languageOverride`, the coordinator's `observeEffectiveLanguage`
+    /// observer should fire, update `currentLanguage`, and reapply the
+    /// indentation mode. Checking `textView.indentationMode` is the cheapest
+    /// visible side-effect to assert on (currentLanguage itself is private).
+    @Test func coordinatorObserverRefreshesIndentationOnLanguageOverride() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-lsp-override-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fileURL = root.appendingPathComponent("scratch.unknown")
+        try "x\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let appState = AppState()
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt-override", tabId: "tab-override",
+            worktreeRoot: root, relativePath: "scratch.unknown"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 400, height: 300))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt-override",
+            worktreeRoot: root,
+            tabId: "tab-override",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+        // No registry entry for `.unknown` and no override → currentLanguage nil → plain.
+        #expect(textView.indentationMode == .plain)
+
+        buffer.languageOverride = "swift"
+
+        // The override observer dispatches its updates through a `Task { @MainActor in }`
+        // so we yield until the indentation flips (or the deadline trips).
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, textView.indentationMode != .bracketAware {
+            await Task.yield()
+        }
+        #expect(textView.indentationMode == .bracketAware)
+    }
 }
