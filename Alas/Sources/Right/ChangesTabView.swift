@@ -71,6 +71,7 @@ struct ChangesTabView: View {
                 stagedDel: stagedDel,
                 hasDraft: hasDraftTab,
                 draftNonEmpty: draftNonEmpty,
+                shortcut: appState.shortcut(for: .commitInComposer),
                 onOpen: openDraftTab
             )
             WorkingTreeSectionView(
@@ -202,6 +203,7 @@ private struct DraftCommitTriggerRow: View {
     let stagedDel: Int
     let hasDraft: Bool
     let draftNonEmpty: Bool
+    let shortcut: KeyboardShortcut?
     let onOpen: () -> Void
 
     @Environment(\.theme) private var theme
@@ -250,5 +252,6 @@ private struct DraftCommitTriggerRow: View {
         .buttonStyle(.plain)
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .keyboardShortcut(shortcut)
     }
 }
