@@ -27,6 +27,8 @@ final class RightPaneState {
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
+    var revealPath: String? = nil
+    private(set) var revealTick: Int = 0
     private(set) var loadedFileTreeChildPaths: Set<String> = [""]
     private(set) var loadingFileTreeChildPaths: Set<String> = []
     private(set) var failedFileTreeChildPaths: Set<String> = []
@@ -461,6 +463,20 @@ final class RightPaneState {
                 logger.error("file tree child load failed for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    func reveal(path: String) {
+        activeTab = .files
+        let pathComponents = path.split(separator: "/").map(String.init)
+        for i in 0..<(pathComponents.count - 1) {
+            let ancestor = pathComponents[0...i].joined(separator: "/")
+            openPaths.insert(ancestor)
+            if !loadedFileTreeChildPaths.contains(ancestor) {
+                loadFileTreeChildren(path: ancestor)
+            }
+        }
+        revealPath = path
+        revealTick += 1
     }
 
     /// Paths to discard for the given file path. Expands staged renames into

@@ -44,9 +44,8 @@ struct EditorTheme {
         case .string:                        return nsColor("add")
         case .number:                        return nsColor("mod")
         case .comment:                       return nsColor("fg-faint")
-        case .attribute:                     return nsColor("syntax-keyword")
-        case .constant, .variable,
-             .parameter, .property,
+        case .attribute, .constant:          return nsColor("syntax-keyword")
+        case .variable, .parameter, .property,
              .operator, .punctuation, .plain:
             return defaultFG
         }

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 
 /// Lifecycle adapter between a `CodeTextView` (per-mount, recreated by
 /// SwiftUI) and an `EditorBuffer` (per-tab, owned by `TabsManager`). The
@@ -272,11 +273,24 @@ final class CodeEditorCoordinator {
     }
 
     func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
-        let nextLanguage: String?
+        // Re-query the registry every time so a registry change (e.g. a
+        // server gets installed) still flips this comparison and triggers a
+        // rebind. When the same tab is being re-evaluated and has an
+        // override set, layer the override on top — otherwise the path
+        // identity check would see `currentLanguage = override` vs.
+        // `nextLanguage = inferred` permanently and rebind on every update,
+        // churning undo/selection state.
+        let inferred: String?
         if let abs = externalAbsolutePath {
-            nextLanguage = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
+            inferred = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
         } else {
-            nextLanguage = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+            inferred = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        }
+        let nextLanguage: String?
+        if let buf = self.buffer, currentWorktreeId == worktreeId, currentTabId == tabId {
+            nextLanguage = buf.languageOverride ?? inferred
+        } else {
+            nextLanguage = inferred
         }
 
         let pathChanged: Bool
@@ -390,6 +404,25 @@ final class CodeEditorCoordinator {
     /// Wire the coordinator and the text view to `buffer`. If a previous
     /// buffer is already bound, its layout manager and edit observer are torn
     /// down first so the text view stops rendering the old storage.
+    private func observeEffectiveLanguage(_ buffer: EditorBuffer) {
+        // One-shot `withObservationTracking` re-arms itself from `onChange`.
+        // This observer only mirrors `buffer.effectiveLanguage` into
+        // `currentLanguage` — LSP open/close lives in `EditorBuffer`.
+        // Keeping `currentLanguage` accurate is critical because hover,
+        // definition, completion, diagnostics, didChange, and indentation
+        // all route through it.
+        _ = withObservationTracking {
+            _ = buffer.effectiveLanguage
+        } onChange: { [weak self, weak buffer] in
+            Task { @MainActor [weak self, weak buffer] in
+                guard let self, let buffer, self.buffer === buffer else { return }
+                self.currentLanguage = buffer.effectiveLanguage
+                self.applyIndentationMode()
+                self.observeEffectiveLanguage(buffer)
+            }
+        }
+    }
+
     private func bindBuffer(_ buffer: EditorBuffer, theme: Theme) {
         pullDiagnosticsTask?.cancel()
         pullDiagnosticsTask = nil
@@ -407,7 +440,15 @@ final class CodeEditorCoordinator {
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
         let ext = (buffer.relativePath as NSString).pathExtension
-        currentLanguage = appState.lsp.language(forFileExtension: ext)
+        let freshlyInferred = appState.lsp.language(forFileExtension: ext)
+        // Layer a pre-existing override on top of the freshly inferred
+        // language. We don't read `buffer.effectiveLanguage` directly
+        // because `buffer.language` is captured at buffer-init time and
+        // can be stale after a registry change (e.g. a server gets
+        // installed) — using the fresh registry lookup keeps that
+        // transition working while still honoring override.
+        currentLanguage = buffer.languageOverride ?? freshlyInferred
+        observeEffectiveLanguage(buffer)
         applyIndentationMode()
         if let layoutManager {
             buffer.storage.addLayoutManager(layoutManager)
@@ -554,7 +595,16 @@ final class CodeEditorCoordinator {
         if let edit {
             pendingTextEdits.append(edit)
         } else {
+            // Full reload (watcher-driven revert / discard-from-right-pane):
+            // `loadFromDisk` replaced storage with a plain NSAttributedString,
+            // wiping the font/color attributes. `runHighlight` only paints
+            // syntax-colored spans, so without re-applying the base style the
+            // text view falls back to the system proportional font for any
+            // character outside a highlight capture.
             pendingTextEdits.removeAll()
+            if let theme = currentTheme {
+                applyBaseStyle(theme: theme)
+            }
         }
         didChangeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)

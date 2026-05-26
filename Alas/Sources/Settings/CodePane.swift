@@ -33,6 +33,10 @@ struct CodePane: View {
                             }
                         ), monospaced: true).frame(width: 80)
                     }
+                    SettingsRow(name: "Show line numbers",
+                                desc: "Display a non-selectable gutter in editor panes.") {
+                        AlasToggle(on: state.bind(\.code.showLineNumbers))
+                    }
                     SettingsRow(name: "Format on save",
                                 desc: "Request document formatting from the language server before writing to disk.") {
                         AlasToggle(on: state.bind(\.code.formatOnSave))
@@ -122,6 +126,9 @@ struct CodePane: View {
             color = theme.color("add")
         case .notInstalled:
             label = "Not installed"
+            color = theme.color("warn")
+        case .blockedByGatekeeper:
+            label = "Blocked by Gatekeeper"
             color = theme.color("warn")
         }
         return Text(label).font(.system(size: 10.5)).foregroundColor(color)

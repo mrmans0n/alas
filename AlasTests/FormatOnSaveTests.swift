@@ -24,6 +24,7 @@ struct FormatOnSaveTests {
             fontFamily: "SF Mono",
             fontSize: 13,
             formatOnSave: formatOnSave,
+            showLineNumbers: true,
             languageServers: [],
             dismissedInstallNudges: [],
             userDefinedRecipes: [:]
