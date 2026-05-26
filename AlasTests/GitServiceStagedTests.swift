@@ -117,4 +117,31 @@ struct GitServiceStagedTests {
         let after = try await GitService().diff(worktreePath: repo, file: "x.txt", staged: true)
         #expect(after.hunks.count == 1)
     }
+
+    /// Renames stage as `D <old>` + `A <new>` in the index. Unstaging both
+    /// paths is required to fully clear the rename; passing only the new
+    /// path leaves the deletion-of-old staged.
+    @Test func unstage_fullyClearsStagedRename() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "hello\n".write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "seed"], cwd: repo)
+
+        // Stage a rename: old.txt -> new.txt.
+        _ = try await Process.git(["mv", "old.txt", "new.txt"], cwd: repo)
+
+        // Pre-condition: rename is staged (one or two entries depending on
+        // detection; the important bit is the staged set is non-empty).
+        let before = try await GitService().stagedChangedFiles(at: repo)
+        #expect(!before.isEmpty)
+
+        // Unstage both sides of the rename, mirroring DraftCommitTabView.
+        try await GitService().unstage(worktreePath: repo, files: ["new.txt", "old.txt"])
+
+        // Everything staged should be gone.
+        let after = try await GitService().stagedChangedFiles(at: repo)
+        #expect(after.isEmpty)
+    }
 }

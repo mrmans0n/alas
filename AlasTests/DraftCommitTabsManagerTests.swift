@@ -181,6 +181,30 @@ struct DraftCommitTabsManagerTests {
         #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
     }
 
+    @Test func emptyingAndClosingDraftTab_clearsExistingStash() {
+        let worktreeId = "draft-empty-clears-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        // Plant a meaningful stash via close-with-content.
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: first.id) { state in
+            state.subject = "wip: should be removable"
+        }
+        mgr.close(worktreeId: worktreeId, tabId: first.id)
+        #expect(mgr.stashedDraft(worktreeId: worktreeId)?.subject == "wip: should be removable")
+
+        // Reopen, wipe both fields, close → stash should clear.
+        let reopened = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: reopened.id) { state in
+            state.subject = ""
+            state.bodyText = ""
+        }
+        mgr.close(worktreeId: worktreeId, tabId: reopened.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
+    }
+
     @Test func closeOthers_stashesNonEmptyDraft() {
         let worktreeId = "draft-close-others-stash"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

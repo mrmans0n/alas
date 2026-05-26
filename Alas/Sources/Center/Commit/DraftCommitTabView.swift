@@ -320,7 +320,14 @@ struct DraftCommitTabView: View {
         Task { @MainActor in
             defer { busy = false }
             do {
-                try await git.unstage(worktreePath: worktreePath, files: [file.path])
+                // For staged renames git needs both the old and the new
+                // path; passing only `file.path` leaves the old-path
+                // deletion staged. `originalPath` is non-nil for R/C entries.
+                var paths = [file.path]
+                if let original = file.originalPath, !original.isEmpty {
+                    paths.append(original)
+                }
+                try await git.unstage(worktreePath: worktreePath, files: paths)
                 await loadStaged()
                 await loadDiff()
                 await appState.rightPaneStore.refresh(worktreeId: worktreeId)

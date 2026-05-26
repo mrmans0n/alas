@@ -805,19 +805,16 @@ final class TabsManager {
     }
 
     /// Capture a draft commit tab's state into `file.stashedDraft` before
-    /// removal, but only when the draft has meaningful user content.
+    /// removal. Non-empty drafts stash so they survive close/reopen. Empty
+    /// drafts CLEAR the stash so a user who opens an old stashed draft,
+    /// wipes the text, and closes the tab actually gets rid of it.
     /// Silently does nothing if `removingTabId` is not a draftCommit tab.
     private func captureDraftIfNeeded(_ file: inout TabsFile, removingTabId: TabID) {
         guard let tab = file.tabs.first(where: { $0.id == removingTabId }),
               case .draftCommit(let state) = tab else { return }
         let hasSubject = !state.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasBody = !state.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if hasSubject || hasBody {
-            file.stashedDraft = state
-        }
-        // If both subject and body are empty we intentionally leave
-        // `stashedDraft` unchanged — a previous meaningful stash must not be
-        // clobbered by an untouched draft tab.
+        file.stashedDraft = (hasSubject || hasBody) ? state : nil
     }
 
     func close(worktreeId: String, tabId: TabID) {
