@@ -165,8 +165,7 @@ struct ChangesTabView: View {
     }
 
     private func openDraftTab() {
-        let tab = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id)
-        appState.tabs.activate(worktreeId: rps.worktree.id, tabId: tab.id)
+        _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id)
     }
 
     private func handleGenerate() {
