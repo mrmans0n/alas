@@ -104,6 +104,14 @@ final class GatekeeperAssessor {
             process.terminate()
             return .unknown
         }
-        return process.terminationStatus == 0 ? .allowed : .rejected
+        // spctl(8): exit 0 = allowed, exit 3 = denied (Gatekeeper rejection).
+        // Other non-zero codes are operational errors (file unreadable, policy
+        // DB rebuild, etc.); fail open with .unknown so a flaky spctl doesn't
+        // hide a runnable LSP behind a banner.
+        switch process.terminationStatus {
+        case 0: return .allowed
+        case 3: return .rejected
+        default: return .unknown
+        }
     }
 }
