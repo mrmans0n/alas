@@ -456,7 +456,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // A holder that died during initialize never delivered `didOpen` for
         // anything, but the user's tab intent is recorded in `refsByURI`. We
         // want restart to bring those tabs back up.
-        let urisToReopen = Set(existing.refsByURI.keys)
+        //
+        // Preserve refcount multiplicity: a URI held by two tabs has
+        // refsByURI[uri] = 2, and `openDocument` increments refs by 1 per
+        // call. We call `openDocument` once per reference so the post-restart
+        // holder ends with the same refcount, otherwise the next `closeDocument`
+        // from one of the holders would tear the document down while the
+        // other still expects it open.
+        let refsToReopen = existing.refsByURI
         let textsByURI = existing.texts.merging(existing.pendingOpenText) { current, _ in current }
         // One holder can serve multiple languageIds (typescript-language-server
         // serves typescript/typescriptreact/javascript/javascriptreact). Reopen
@@ -481,11 +488,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
 
         let reopenRoot = URL(fileURLWithPath: key.root)
-        for uri in urisToReopen {
-            guard let fileURL = URL(string: uri) else { continue }
+        for (uri, refCount) in refsToReopen {
+            guard refCount > 0, let fileURL = URL(string: uri) else { continue }
             let text = textsByURI[uri] ?? ""
             let reopenLanguage = languagesByURI[uri] ?? language
-            _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: text)
+            for _ in 0 ..< refCount {
+                _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: text)
+            }
         }
     }
 

@@ -84,6 +84,16 @@ final class EditorBuffer {
     @ObservationIgnored
     private var openedLanguage: String?
 
+    /// Serializes the async close+open hop fired by `applyEffectiveLanguageToLSP`
+    /// across rapid override changes. Without this, a chain like
+    /// swift→typescript→python could land its tasks out of order — an older
+    /// task reopens the stale language *after* the newer one, leaving the
+    /// document attached to the wrong holder and unbalancing future close/ref
+    /// bookkeeping. Each new override change awaits the previous chain
+    /// before issuing its own close+open.
+    @ObservationIgnored
+    private var languageReopenTask: Task<Void, Never>?
+
     /// Per-tab, per-session override of the inferred language. Setting this
     /// drives the buffer to close the document on the previous language
     /// holder and reopen it under the new effective language. Cleared
@@ -621,7 +631,9 @@ final class EditorBuffer {
         openedLanguage = new
         let worktreeRootCapture = worktreeRoot
         let text = storage.string
-        Task {
+        let prior = languageReopenTask
+        languageReopenTask = Task {
+            await prior?.value
             if let previous {
                 await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: previous)
             }
