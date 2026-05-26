@@ -11,6 +11,7 @@ struct AgentLauncherModelTests {
             binaryOverride: nil,
             promptModeArgs: [],
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil

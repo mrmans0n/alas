@@ -12,6 +12,7 @@ struct AgentTerminalLaunchTests {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: flag,
+            extraTerminalArgs: nil,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil

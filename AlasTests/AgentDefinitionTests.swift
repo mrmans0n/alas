@@ -11,6 +11,7 @@ struct AgentDefinitionTests {
             binaryOverride: "/opt/local/bin/x-bin",
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil
@@ -26,6 +27,7 @@ struct AgentDefinitionTests {
             binaryOverride: nil,
             promptModeArgs: [],
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil
@@ -40,6 +42,7 @@ struct AgentDefinitionTests {
             id: "x", displayName: "X", binary: "x-bin",
             binaryOverride: "   ",
             promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         #expect(a.resolvedBinary == "x-bin")
@@ -53,6 +56,7 @@ struct AgentDefinitionTests {
             id: "x", displayName: "X", binary: "x-bin",
             binaryOverride: "~/bin/x-bin",
             promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: true, isEnabled: true, builtinLogoAssetName: nil
         )
         let home = NSString(string: "~").expandingTildeInPath
@@ -64,10 +68,22 @@ struct AgentDefinitionTests {
             id: "x", displayName: "X", binary: "~/bin/x-bin",
             binaryOverride: nil,
             promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let home = NSString(string: "~").expandingTildeInPath
         #expect(a.resolvedBinary == "\(home)/bin/x-bin")
+    }
+
+    @Test func extraTerminalArgsDefaultsToNil() {
+        let agent = AgentDefinition(
+            id: "test", displayName: "Test", binary: "test",
+            binaryOverride: nil, promptModeArgs: [],
+            bypassPermissionsFlag: nil, extraTerminalArgs: nil,
+            isBuiltin: false,
+            isEnabled: true, builtinLogoAssetName: nil
+        )
+        #expect(agent.extraTerminalArgs == nil)
     }
 
     @Test func resolvedBinaryLeavesBareNameAlone() {
@@ -77,6 +93,7 @@ struct AgentDefinitionTests {
             id: "x", displayName: "X", binary: "claude",
             binaryOverride: nil,
             promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: true, isEnabled: true, builtinLogoAssetName: nil
         )
         #expect(a.resolvedBinary == "claude")

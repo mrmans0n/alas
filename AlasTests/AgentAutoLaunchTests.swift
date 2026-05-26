@@ -11,6 +11,7 @@ struct AgentAutoLaunchTests {
             id: id, displayName: id, binary: binary,
             binaryOverride: nil, promptModeArgs: [],
             bypassPermissionsFlag: bypass,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
     }

@@ -24,6 +24,7 @@ struct AgentEditView: View {
                 binaryOverride: nil,
                 promptModeArgs: [],
                 bypassPermissionsFlag: nil,
+                extraTerminalArgs: nil,
                 isBuiltin: false,
                 isEnabled: true,
                 builtinLogoAssetName: nil
@@ -45,6 +46,7 @@ struct AgentEditView: View {
                 agent = AgentDefinition(
                     id: id, displayName: id, binary: "",
                     binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+                    extraTerminalArgs: nil,
                     isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
                 )
             }

@@ -58,6 +58,7 @@ struct AppConfigAgentsCodingTests {
                 id: "uuid-1", displayName: "Mine",
                 binary: "~/bin/mine", binaryOverride: nil,
                 promptModeArgs: ["-p"], bypassPermissionsFlag: "--yolo",
+                extraTerminalArgs: nil,
                 isBuiltin: false, isEnabled: true,
                 builtinLogoAssetName: nil
             )

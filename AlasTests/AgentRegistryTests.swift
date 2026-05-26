@@ -49,6 +49,7 @@ struct AgentRegistryTests {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil
@@ -63,6 +64,7 @@ struct AgentRegistryTests {
         let custom = AgentDefinition(
             id: "c1", displayName: "C", binary: "c-bin",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let r = AgentRegistry(
@@ -96,6 +98,7 @@ struct AgentRegistryTests {
         let custom = AgentDefinition(
             id: "c1", displayName: "C", binary: "c-bin",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: false, builtinLogoAssetName: nil
         )
         let r = AgentRegistry(
@@ -147,11 +150,13 @@ struct AgentRegistryTests {
         let installed = AgentDefinition(
             id: "c-installed", displayName: "C-In", binary: "c-in",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let missing = AgentDefinition(
             id: "c-missing", displayName: "C-Miss", binary: "c-miss",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let r = AgentRegistry(
