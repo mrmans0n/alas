@@ -166,20 +166,20 @@ struct DraftCommitTabView: View {
     }
 
     private func applyAmendPrefill() async {
+        let head = (try? await git.headMessage(worktreePath: worktreePath)) ?? nil
+        guard amend else { return }
+        if let head,
+           subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            subject = head.subject
+            bodyText = head.body
+            amendPrefilledSubject = head.subject
+            amendPrefilledBody = head.body
+            amendPrefilled = true
+        }
         let pushed = (try? await git.isHeadAtOrBehindUpstream(worktreePath: worktreePath)) ?? false
         guard amend else { return }
         amendWarning = pushed
-
-        guard let head = (try? await git.headMessage(worktreePath: worktreePath)) ?? nil else { return }
-        guard amend else { return }
-        guard subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return }
-        subject = head.subject
-        bodyText = head.body
-        amendPrefilledSubject = head.subject
-        amendPrefilledBody = head.body
-        amendPrefilled = true
     }
 
     private func clearAmendPrefillIfUnchanged() {
@@ -198,8 +198,7 @@ struct DraftCommitTabView: View {
     private func handleGenerate() {
         if busy {
             generation?.cancel()
-            generation = nil
-            busy = false
+            // Do not clear generation or busy here — runGenerate's defer handles both.
             return
         }
         runGenerate()
