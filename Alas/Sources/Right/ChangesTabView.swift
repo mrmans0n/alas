@@ -144,11 +144,6 @@ struct ChangesTabView: View {
         }
     }
 
-    private var branchName: String? {
-        let b = rps.worktree.branch
-        return b.isEmpty ? nil : b
-    }
-
     private var hasDraftTab: Bool {
         appState.tabs.tabs(forWorktree: rps.worktree.id).contains { tab in
             if case .draftCommit = tab { return true } else { return false }
@@ -166,15 +161,6 @@ struct ChangesTabView: View {
 
     private func openDraftTab() {
         _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id)
-    }
-
-    private func handleGenerate() {
-        if rps.composer.busy {
-            rps.cancelGenerate()
-            return
-        }
-        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else { return }
-        rps.generate(promptOverride: appState.config.changes.prompt, agent: agent)
     }
 
     private func copyCommitSHA(_ commit: CommitInfo) {
