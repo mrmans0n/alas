@@ -149,6 +149,10 @@ struct CenterPaneView: View {
                         )
                         .id(s.id)
                     case .draftCommit(let draftState):
+                        let _ = state.rightPaneStore.state(
+                            for: worktree,
+                            baseBranch: state.config.worktrees.baseBranch
+                        )
                         DraftCommitTabView(
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
