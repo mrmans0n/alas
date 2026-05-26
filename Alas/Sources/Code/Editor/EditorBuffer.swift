@@ -625,6 +625,12 @@ final class EditorBuffer {
     private func applyEffectiveLanguageToLSP() {
         guard !isExternal, lsp != nil else { return }
         let prior = languageReopenTask
+        // Cancel the prior queued transition before we await it — this
+        // propagates cancellation through the chain. `close()` only cancels
+        // the latest `languageReopenTask`, but since each new task cancels
+        // its predecessor at start, an older queued task gets cancelled too
+        // and never reaches its LSP hops post-teardown.
+        prior?.cancel()
         // `openedLanguage` is intentionally NOT mutated synchronously here.
         // If we did, a concurrent `close()` (e.g. tab closed immediately
         // after the override flip) would read the *new* languageId from
