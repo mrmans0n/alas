@@ -17,9 +17,20 @@ struct EditorLSPStatusBadge: View {
         Button { popoverOpen.toggle() } label: { pill }
             .buttonStyle(.plain)
             .help(tooltip)
+            .accessibilityLabel(Text("Language server status: \(tooltip)"))
+            .accessibilityHint(Text("Shows actions for this file's language server"))
+            .accessibilityAddTraits(.isButton)
             .popover(isPresented: $popoverOpen, arrowEdge: .top) {
                 popoverBody.padding(10).frame(width: 280)
             }
+    }
+
+    private var overridePicker: some View {
+        EditorLSPStatusOverridePicker(
+            availableLanguages: availableLanguages,
+            onPick: { onOverride($0); popoverOpen = false },
+            onOpenSettings: { onOpenSettings(); popoverOpen = false }
+        )
     }
 
     private var pill: some View {
@@ -45,13 +56,13 @@ struct EditorLSPStatusBadge: View {
     private var glyph: some View {
         switch status {
         case .ready:
-            Circle().fill(theme.color("add")).frame(width: 7, height: 7)
+            Circle().fill(theme.color("add")).frame(width: 7, height: 7).accessibilityHidden(true)
         case .loading:
-            ProgressView().controlSize(.mini).frame(width: 9, height: 9)
+            ProgressView().controlSize(.mini).frame(width: 9, height: 9).accessibilityHidden(true)
         case .problem:
-            Circle().fill(theme.color("warn")).frame(width: 7, height: 7)
+            Circle().fill(theme.color("warn")).frame(width: 7, height: 7).accessibilityHidden(true)
         case .noLanguage:
-            Circle().stroke(theme.color("fg-faint"), lineWidth: 1).frame(width: 7, height: 7)
+            Circle().stroke(theme.color("fg-faint"), lineWidth: 1).frame(width: 7, height: 7).accessibilityHidden(true)
         }
     }
 
@@ -105,11 +116,7 @@ struct EditorLSPStatusBadge: View {
                 Button("Open settings") { onOpenSettings(); popoverOpen = false }
             }
             Divider()
-            EditorLSPStatusOverridePicker(
-                availableLanguages: availableLanguages,
-                onPick: { onOverride($0); popoverOpen = false },
-                onOpenSettings: { onOpenSettings(); popoverOpen = false }
-            )
+            overridePicker
         }
     }
 
@@ -136,11 +143,7 @@ struct EditorLSPStatusBadge: View {
                     Button("Open settings") { onOpenSettings(); popoverOpen = false }
                 }
                 Divider()
-                EditorLSPStatusOverridePicker(
-                    availableLanguages: availableLanguages,
-                    onPick: { onOverride($0); popoverOpen = false },
-                    onOpenSettings: { onOpenSettings(); popoverOpen = false }
-                )
+                overridePicker
             case .dead:
                 Text("Server crashed.").font(.system(size: 11))
                 HStack {
@@ -148,11 +151,7 @@ struct EditorLSPStatusBadge: View {
                     Button("Open settings") { onOpenSettings(); popoverOpen = false }
                 }
                 Divider()
-                EditorLSPStatusOverridePicker(
-                    availableLanguages: availableLanguages,
-                    onPick: { onOverride($0); popoverOpen = false },
-                    onOpenSettings: { onOpenSettings(); popoverOpen = false }
-                )
+                overridePicker
             case .disabled:
                 Text("Disabled in settings.").font(.system(size: 11))
                 Button("Open settings") { onOpenSettings(); popoverOpen = false }
@@ -166,11 +165,7 @@ struct EditorLSPStatusBadge: View {
                 .font(.system(size: 11, weight: .semibold))
             Text("No language server for this file. Treat as another language?")
                 .font(.system(size: 11))
-            EditorLSPStatusOverridePicker(
-                availableLanguages: availableLanguages,
-                onPick: { onOverride($0); popoverOpen = false },
-                onOpenSettings: { onOpenSettings(); popoverOpen = false }
-            )
+            overridePicker
         }
     }
 
