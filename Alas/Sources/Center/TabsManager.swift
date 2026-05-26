@@ -555,6 +555,69 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusDraftCommit(worktreeId: String) -> Tab {
+        let state = DraftCommitTabState(worktreeId: worktreeId)
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { $0.id == state.id }),
+           case .draftCommit(let existing) = file.tabs[idx] {
+            file.activeTabId = existing.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return file.tabs[idx]
+        }
+        let tab = Tab.draftCommit(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func updateDraftCommit(
+        worktreeId: String,
+        tabId: TabID,
+        mutate: (inout DraftCommitTabState) -> Void
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .draftCommit(var state) = file.tabs[idx]
+        else { return nil }
+        mutate(&state)
+        let tab = Tab.draftCommit(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func replaceDraftWithCommitEditor(
+        worktreeId: String,
+        draftTabId: TabID,
+        baseRef: String,
+        newSha: String,
+        title: String
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
+              case .draftCommit = file.tabs[idx]
+        else { return nil }
+        let editor = CommitEditorTabState(
+            worktreeId: worktreeId,
+            baseRef: baseRef,
+            originalSha: newSha,
+            currentSha: newSha,
+            title: title
+        )
+        let tab = Tab.commitEditor(editor)
+        file.tabs[idx] = tab
+        if file.activeTabId == draftTabId {
+            file.activeTabId = tab.id
+        }
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func updateCommitEditor(
         worktreeId: String,
         tabId: TabID,
