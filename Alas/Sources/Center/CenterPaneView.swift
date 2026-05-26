@@ -150,6 +150,18 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(s.id)
+                    case .draftCommit(let draftState):
+                        let _ = state.rightPaneStore.state(
+                            for: worktree,
+                            baseBranch: state.config.worktrees.baseBranch
+                        )
+                        DraftCommitTabView(
+                            worktreePath: worktree.path,
+                            worktreeId: worktree.id,
+                            tabState: draftState,
+                            appState: state
+                        )
+                        .id(draftState.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,

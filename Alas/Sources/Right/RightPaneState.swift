@@ -10,10 +10,20 @@ enum RightPaneTab: String { case changes, files }
 final class RightPaneState {
     let worktree: Worktree
     var changes: [ChangedFile] = []
+    /// Fingerprint of the staged index contents (concatenated blob SHAs of
+    /// staged files). Changes whenever any staged file's contents change,
+    /// even when add/del totals are identical. Used by views that need to
+    /// re-fire async work when the staged patch shifts under them.
+    var indexFingerprint: String = ""
     /// Per-worktree in-progress merge / rebase / cherry-pick state.
     /// Refreshed alongside `changes` from `refresh()`.
     let mergeOp: MergeOperationState
-    var composer = CommitComposerState()
+    /// Most recent user-facing error from a sidebar-triggered operation
+    /// (discard, copy-diff, ignore, conflict resolution, etc.). Cleared
+    /// when the next sidebar op starts. Surfaces in `OperationCard` or as
+    /// a future inline strip — for now, set this and rely on existing
+    /// log output for diagnosability.
+    var sidebarError: String? = nil
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
@@ -229,6 +239,21 @@ final class RightPaneState {
             let (commits, ref) = try await c
             _ = await mergeRefresh
             self.changes = entries
+            if let lsResult = try? await Process.git(
+                ["ls-files", "-s", "-z"],
+                cwd: worktree.path
+            ), lsResult.exitCode == 0 {
+                // Each NUL-delimited token is "<mode> <sha> <stage>\t<path>".
+                // The blob SHA changes whenever the staged content for that path
+                // changes; concatenating sorted blob SHAs gives a cheap fingerprint.
+                let tokens = lsResult.stdout
+                    .split(separator: "\0", omittingEmptySubsequences: true)
+                    .map(String.init)
+                    .sorted()
+                self.indexFingerprint = tokens.joined(separator: "|")
+            } else {
+                self.indexFingerprint = ""
+            }
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
@@ -246,12 +271,6 @@ final class RightPaneState {
                 self.behindUpstream = nil
                 Task { @MainActor in await self.refreshSyncStatus() }
             }
-            // Gate the Amend toggle: an unborn branch (no commits yet)
-            // has nothing to amend. If the probe itself throws, default
-            // to `true` so we never wrongly disable the control on a
-            // transient git failure.
-            self.composer.canAmend = (try? await git.hasHead(worktreePath: worktree.path)) ?? true
-
             // Smart first-open default: if there are no working-tree
             // changes AND no commits ahead of upstream, surface Files
             // instead of an empty Changes pane. A clean worktree with
@@ -281,7 +300,7 @@ final class RightPaneState {
     }
 
     func toggleStage(_ file: ChangedFile) {
-        composer.error = nil
+        sidebarError = nil
         Task { @MainActor in
             do {
                 if file.stage == .staged {
@@ -293,7 +312,7 @@ final class RightPaneState {
                     try await git.stage(worktreePath: worktree.path, files: [file.path])
                 }
             } catch {
-                self.composer.error = (error as NSError).localizedDescription
+                self.sidebarError = (error as NSError).localizedDescription
             }
             await self.refresh()
         }
@@ -495,20 +514,20 @@ final class RightPaneState {
 
     func stageAll(_ files: [ChangedFile]) {
         let paths = files.map(\.path)
-        composer.error = nil
+        sidebarError = nil
         Task { @MainActor in
             do { try await git.stageAll(worktreePath: worktree.path, files: paths) }
-            catch { self.composer.error = (error as NSError).localizedDescription }
+            catch { self.sidebarError = (error as NSError).localizedDescription }
             await self.refresh()
         }
     }
 
     func unstageAll(_ files: [ChangedFile]) {
         let paths = files.flatMap(Self.unstagePaths(for:))
-        composer.error = nil
+        sidebarError = nil
         Task { @MainActor in
             do { try await git.unstageAll(worktreePath: worktree.path, files: paths) }
-            catch { self.composer.error = (error as NSError).localizedDescription }
+            catch { self.sidebarError = (error as NSError).localizedDescription }
             await self.refresh()
         }
     }
@@ -567,11 +586,11 @@ final class RightPaneState {
     @MainActor
     private func runDiscard(_ pending: PendingDiscard) async {
         let paths = pending.paths
-        composer.error = nil
+        sidebarError = nil
         do {
             try await git.discardPaths(worktreePath: worktree.path, files: paths)
         } catch {
-            composer.error = (error as NSError).localizedDescription
+            sidebarError = (error as NSError).localizedDescription
             return
         }
         await refresh()
@@ -584,7 +603,7 @@ final class RightPaneState {
     /// (from `ChangedFile.renameFrom`); when present it's included in the
     /// pathspec so `git diff` emits the rename-from/rename-to header
     /// instead of an add-only patch. Best-effort: errors are surfaced via
-    /// `composer.error`. Single source of truth so the context menu and
+    /// `sidebarError`. Single source of truth so the context menu and
     /// any future "Copy Diff" affordances agree.
     func copyDiff(for path: String, renameFrom: String? = nil) {
         let wt = worktree.path
@@ -630,7 +649,7 @@ final class RightPaneState {
                 // `--no-index` exits 1 when there ARE differences (the expected
                 // case for an untracked file).
                 if result.exitCode > 1 {
-                    self.composer.error = result.stderr
+                    self.sidebarError = result.stderr
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     return
                 }
@@ -638,7 +657,7 @@ final class RightPaneState {
                 pb.clearContents()
                 pb.setString(result.stdout, forType: .string)
             } catch {
-                self.composer.error = (error as NSError).localizedDescription
+                self.sidebarError = (error as NSError).localizedDescription
             }
         }
     }
@@ -687,141 +706,6 @@ final class RightPaneState {
             return URL(fileURLWithPath: raw)
         }
         return URL(fileURLWithPath: raw, relativeTo: worktreePath).standardizedFileURL
-    }
-
-    // MARK: - Commit composer wiring
-
-    /// Run an AI commit-message CLI with the staged diff + repo context as
-    /// stdin and the user's prompt as `--prompt`. Cancellable via
-    /// `cancelGenerate()` (or by re-calling `generate` — the new Task
-    /// replaces the old). On success, populates `composer.subject`/`body`
-    /// and expands the composer so the user sees the result.
-    func generate(promptOverride: String, agent: AgentDefinition) {
-        composer.error = nil
-        composer.busy = true
-        let wt = worktree.path
-        let amend = composer.amend
-        let base = self.baseBranch
-        composer.generation = Task { @MainActor in
-            defer { self.composer.busy = false }
-            do {
-                // Pull prior commit message when amending so the AI knows
-                // it's rewriting, not adding. `headMessage` is throwing +
-                // optional (nil = unborn HEAD). Flatten both into a single
-                // optional — failure or unborn both mean "no prior".
-                let priorMessage: GitService.HeadMessage?
-                if amend {
-                    priorMessage = (try? await self.git.headMessage(worktreePath: wt)) ?? nil
-                } else {
-                    priorMessage = nil
-                }
-
-                let diffResult = try await Process.git(
-                    ["diff", "--cached", "--no-color"],
-                    cwd: wt
-                )
-                let recentResult = try await Process.git(
-                    ["log", "-3", "--pretty=format:%s"],
-                    cwd: wt
-                )
-                let branchResult = try await Process.git(
-                    ["rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd: wt
-                )
-
-                try Task.checkCancellation()
-
-                let diff = diffResult.stdout
-                let recentSubjects = recentResult.stdout
-                    .split(separator: "\n", omittingEmptySubsequences: true)
-                    .map(String.init)
-                let branchRaw = branchResult.stdout
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let branch: String? = branchRaw == "HEAD" ? nil : branchRaw
-
-                let payload = CommitContextBuilder.build(
-                    branch: branch,
-                    base: base,
-                    recentSubjects: recentSubjects,
-                    priorMessage: priorMessage,
-                    diff: diff
-                )
-
-                let message = try await AgentRunner.runPrompt(
-                    agent: agent,
-                    input: payload,
-                    prompt: promptOverride,
-                    workingDirectory: wt.path
-                )
-                guard !Task.isCancelled else { return }
-                self.composer.subject = message.subject
-                self.composer.body = message.body
-                self.composer.expanded = true
-            } catch is CancellationError {
-                // user-cancelled
-            } catch {
-                self.composer.error = (error as NSError).localizedDescription
-            }
-        }
-    }
-
-    /// Cancel an in-flight `generate(...)` Task. Safe to call when no
-    /// generation is running.
-    func cancelGenerate() {
-        composer.generation?.cancel()
-        composer.generation = nil
-    }
-
-    /// Create the commit (or amend HEAD) using the current composer draft.
-    /// On success the composer is reset and the pane refreshes. On failure
-    /// the error is surfaced via `composer.error` (the inline error strip).
-    func runCommit() {
-        let subject = composer.subject
-        let body = composer.body
-        let amend = composer.amend
-        let wt = worktree.path
-        Task { @MainActor in
-            do {
-                try await git.commit(
-                    worktreePath: wt,
-                    subject: subject,
-                    body: body,
-                    amend: amend
-                )
-                self.composer.resetAfterCommit()
-            } catch {
-                self.composer.error = (error as NSError).localizedDescription
-            }
-            await self.refresh()
-        }
-    }
-
-    /// Wire the Amend checkbox: toggling on prefills empty drafts with the
-    /// HEAD message and surfaces a "rewrites history" warning when HEAD is
-    /// at/behind its upstream. Toggling off clears the prefill iff it
-    /// hasn't been edited, so the user's typed draft is never clobbered.
-    ///
-    /// Re-checks `composer.amend` between the async hops because the user
-    /// can toggle off mid-flight (slow `git` on a large repo). Without the
-    /// guard, a stale on-task could resume after the off-path has already
-    /// cleared state and still prefill the composer.
-    func amendDidChange(_ on: Bool) {
-        let wt = worktree.path
-        Task { @MainActor in
-            if on {
-                let priorResult = (try? await self.git.headMessage(worktreePath: wt)) ?? nil
-                guard self.composer.amend else { return }
-                if let prior = priorResult {
-                    self.composer.applyAmendPrefill(prior)
-                }
-                let behind = (try? await self.git.isHeadAtOrBehindUpstream(worktreePath: wt)) ?? false
-                guard self.composer.amend else { return }
-                self.composer.amendWarning = behind
-            } else {
-                self.composer.clearAmendPrefillIfUnchanged()
-                self.composer.amendWarning = false
-            }
-        }
     }
 
     /// Probes the worktree's "behind" status against the trunk base AND

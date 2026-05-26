@@ -34,6 +34,15 @@ struct ChangesTabView: View {
 
     private var scrollContent: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let err = rps.sidebarError {
+                InlineErrorStrip(
+                    message: err,
+                    onDismiss: { rps.sidebarError = nil }
+                )
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+            }
+
             if let op = rps.mergeOp.current {
                 OperationCard(
                     operation: op,
@@ -65,21 +74,14 @@ struct ChangesTabView: View {
                 onDismissBulkReport: { rps.dismissBulkResolveReport() }
             )
 
-            if stagedCount > 0 {
-                CommitComposerView(
-                    state: rps.composer,
-                    appState: appState,
-                    stagedCount: stagedCount,
-                    stagedAdd: stagedAdd,
-                    stagedDel: stagedDel,
-                    branchName: branchName,
-                    availableAgents: appState.agentRegistry.enabled(),
-                    aiToolId: appState.bind(\.changes.aiToolId),
-                    onGenerate: handleGenerate,
-                    onCommit: { rps.runCommit() },
-                    onAmendToggle: { rps.amendDidChange($0) }
-                )
-            }
+            DraftCommitTriggerRow(
+                stagedCount: stagedCount,
+                stagedAdd: stagedAdd,
+                stagedDel: stagedDel,
+                hasDraft: hasDraftTab,
+                draftNonEmpty: draftNonEmpty,
+                onOpen: openDraftTab
+            )
             WorkingTreeSectionView(
                 changes: nonConflictChanges,
                 expanded: $rps.workingTreeExpanded,
@@ -151,18 +153,29 @@ struct ChangesTabView: View {
         }
     }
 
-    private var branchName: String? {
-        let b = rps.worktree.branch
-        return b.isEmpty ? nil : b
+    private var hasDraftTab: Bool {
+        let live = appState.tabs.tabs(forWorktree: rps.worktree.id).contains { tab in
+            if case .draftCommit = tab { return true } else { return false }
+        }
+        if live { return true }
+        return appState.tabs.stashedDraft(worktreeId: rps.worktree.id) != nil
     }
 
-    private func handleGenerate() {
-        if rps.composer.busy {
-            rps.cancelGenerate()
-            return
+    private var draftNonEmpty: Bool {
+        let live = appState.tabs.tabs(forWorktree: rps.worktree.id).first { tab in
+            if case .draftCommit = tab { return true } else { return false }
         }
-        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else { return }
-        rps.generate(promptOverride: appState.config.changes.prompt, agent: agent)
+        if case .draftCommit(let s) = live {
+            if !s.subject.isEmpty || !s.bodyText.isEmpty { return true }
+        }
+        if let stashed = appState.tabs.stashedDraft(worktreeId: rps.worktree.id) {
+            return !stashed.subject.isEmpty || !stashed.bodyText.isEmpty
+        }
+        return false
+    }
+
+    private func openDraftTab() {
+        _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id)
     }
 
     private func copyCommitSHA(_ commit: CommitInfo) {
@@ -195,5 +208,62 @@ struct ChangesTabView: View {
         // available.
         return appState.agentRegistry.enabled()
             .first(where: { $0.bypassPermissionsFlag != nil })
+    }
+}
+
+private struct DraftCommitTriggerRow: View {
+    let stagedCount: Int
+    let stagedAdd: Int
+    let stagedDel: Int
+    let hasDraft: Bool
+    let draftNonEmpty: Bool
+    let onOpen: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    private var label: String {
+        hasDraft ? "Open draft" : "Draft commit"
+    }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 8) {
+                Icon(name: "commit", size: 11, color: theme.color("fg-dim"))
+                if stagedCount > 0 {
+                    Text("\(stagedCount) staged")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                    Text("·")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-faint"))
+                    Text("+\(stagedAdd)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("add"))
+                    Text("−\(stagedDel)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("del"))
+                } else {
+                    Text("0 staged")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("fg-faint"))
+                }
+                Spacer()
+                if hasDraft && draftNonEmpty {
+                    Circle()
+                        .fill(theme.color("accent"))
+                        .frame(width: 5, height: 5)
+                }
+                Text(label)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(theme.color("accent"))
+                Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(theme.color("bg-1"))
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 }

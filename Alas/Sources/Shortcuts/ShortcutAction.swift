@@ -1,12 +1,13 @@
 import Foundation
 
 enum ShortcutGroup: String, CaseIterable, Sendable {
-    case global, codeEditor, terminal
+    case global, codeEditor, terminal, commit
     var label: String {
         switch self {
         case .global:     return "Global"
         case .codeEditor: return "Code editor"
         case .terminal:   return "Terminal"
+        case .commit:     return "Commit"
         }
     }
 }
@@ -29,8 +30,10 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
              .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
-        case .splitSelectionIntoLines, .toggleMarkdownPreview, .commitInComposer:
+        case .splitSelectionIntoLines, .toggleMarkdownPreview:
             return .codeEditor
+        case .commitInComposer:
+            return .commit
         case .splitTerminalRight, .splitTerminalDown,
              .focusPaneLeft, .focusPaneRight, .focusPaneUp, .focusPaneDown,
              .resizePaneLeft, .resizePaneRight, .resizePaneUp, .resizePaneDown:
@@ -54,7 +57,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .resetFontSize:            return "Reset Font Size"
         case .splitSelectionIntoLines:  return "Split Selection into Lines"
         case .toggleMarkdownPreview:    return "Toggle Markdown Preview"
-        case .commitInComposer:         return "Commit (in composer)"
+        case .commitInComposer:         return "Commit draft"
         case .splitTerminalRight:       return "Split Right"
         case .splitTerminalDown:        return "Split Down"
         case .focusPaneLeft:            return "Focus Pane Left"
@@ -73,7 +76,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .searchFiles:        return "Open the file search"
         case .switchRepository:   return "Open the repository picker"
         case .launchAgentTerminal: return "Open the agent launcher"
-        case .commitInComposer:   return "In the commit composer"
+        case .commitInComposer:   return "In the draft commit tab"
         default:                  return nil
         }
     }

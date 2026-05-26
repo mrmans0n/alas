@@ -1,0 +1,237 @@
+import Testing
+import Foundation
+@testable import Alas
+
+@MainActor
+struct DraftCommitTabsManagerTests {
+    @Test func openOrFocusDraftCommit_createsTabFirstTime() {
+        let worktreeId = "draft-commit-tabs-mgr-create"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        #expect(tab.id == "draft-commit:\(worktreeId)")
+        guard case .draftCommit(let s) = tab else {
+            Issue.record("expected draftCommit tab")
+            return
+        }
+        #expect(s.worktreeId == worktreeId)
+        #expect(s.subject == "")
+    }
+
+    @Test func openOrFocusDraftCommit_focusesExistingTab() {
+        let worktreeId = "draft-commit-tabs-mgr-focus"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let again = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        #expect(first.id == again.id)
+        let drafts = mgr.tabs(forWorktree: worktreeId).filter {
+            if case .draftCommit = $0 { return true } else { return false }
+        }
+        #expect(drafts.count == 1)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
+    }
+
+    @Test func updateDraftCommit_persistsSubjectAndBody() {
+        let worktreeId = "draft-commit-tabs-mgr-update"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: tab.id) { state in
+            state.subject = "feat: foo"
+            state.bodyText = "Detailed body"
+            state.amend = true
+            state.selectedPath = "src/foo.swift"
+        }
+        guard let found = mgr.tabs(forWorktree: worktreeId).first(where: { $0.id == tab.id }),
+              case .draftCommit(let s) = found else {
+            Issue.record("expected draftCommit tab after update")
+            return
+        }
+        #expect(s.subject == "feat: foo")
+        #expect(s.bodyText == "Detailed body")
+        #expect(s.amend == true)
+        #expect(s.selectedPath == "src/foo.swift")
+    }
+
+    @Test func replaceDraftWithCommitEditor_swapsCaseKeepingTabPosition() {
+        let worktreeId = "draft-commit-tabs-mgr-replace"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let originalIndex = mgr.tabs(forWorktree: worktreeId).firstIndex { $0.id == draft.id }!
+
+        let replaced = mgr.replaceDraftWithCommitEditor(
+            worktreeId: worktreeId,
+            draftTabId: draft.id,
+            baseRef: "main",
+            newSha: "abc1234",
+            title: "abc1234 feat: foo"
+        )
+        #expect(replaced != nil)
+
+        let tabs = mgr.tabs(forWorktree: worktreeId)
+        let newIndex = tabs.firstIndex { $0.id == replaced!.id }!
+        #expect(newIndex == originalIndex)
+        #expect(!tabs.contains { $0.id == draft.id })
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == replaced!.id)
+
+        guard case .commitEditor(let s) = replaced! else {
+            Issue.record("expected commitEditor after replace")
+            return
+        }
+        #expect(s.currentSha == "abc1234")
+        #expect(s.baseRef == "main")
+    }
+
+    @Test func closingDraftTab_stashesStateAcrossReopen() {
+        let worktreeId = "draft-stash-roundtrip"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: first.id) { state in
+            state.subject = "wip: persist me"
+            state.bodyText = "Draft body that should survive close"
+            state.amend = true
+        }
+
+        mgr.close(worktreeId: worktreeId, tabId: first.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).isEmpty)
+
+        let reopened = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        guard case .draftCommit(let restored) = reopened else {
+            Issue.record("expected draftCommit tab after reopen")
+            return
+        }
+        #expect(restored.subject == "wip: persist me")
+        #expect(restored.bodyText == "Draft body that should survive close")
+        #expect(restored.amend == true)
+    }
+
+    @Test func stashedDraft_returnsStateAfterClose() {
+        let worktreeId = "draft-stash-accessor"
+        let mgr = TabsManager()
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: tab.id) { state in
+            state.subject = "wip: stashed"
+            state.bodyText = "body"
+        }
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil) // not stashed while live
+        mgr.close(worktreeId: worktreeId, tabId: tab.id)
+
+        let stashed = mgr.stashedDraft(worktreeId: worktreeId)
+        #expect(stashed?.subject == "wip: stashed")
+        #expect(stashed?.bodyText == "body")
+    }
+
+    @Test func replaceDraftWithCommitEditor_clearsStash() {
+        let worktreeId = "draft-stash-cleared-on-commit"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "feat: thing"
+        }
+        _ = mgr.replaceDraftWithCommitEditor(
+            worktreeId: worktreeId,
+            draftTabId: draft.id,
+            baseRef: "main",
+            newSha: "abcdef0",
+            title: "abcdef0 feat: thing"
+        )
+
+        // Open a new draft — should be empty, not restored from a stale stash.
+        let next = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        guard case .draftCommit(let fresh) = next else {
+            Issue.record("expected draftCommit tab")
+            return
+        }
+        #expect(fresh.subject == "")
+        #expect(fresh.bodyText == "")
+    }
+
+    @Test func closingEmptyDraftTab_doesNotStash() {
+        let worktreeId = "draft-empty-no-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        // Don't write subject/body. Close immediately.
+        mgr.close(worktreeId: worktreeId, tabId: tab.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
+    }
+
+    @Test func closingWhitespaceOnlyDraftTab_doesNotStash() {
+        let worktreeId = "draft-whitespace-no-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: tab.id) { state in
+            state.subject = "   "
+            state.bodyText = "\n\n"
+        }
+        mgr.close(worktreeId: worktreeId, tabId: tab.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
+    }
+
+    @Test func emptyingAndClosingDraftTab_clearsExistingStash() {
+        let worktreeId = "draft-empty-clears-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        // Plant a meaningful stash via close-with-content.
+        let first = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: first.id) { state in
+            state.subject = "wip: should be removable"
+        }
+        mgr.close(worktreeId: worktreeId, tabId: first.id)
+        #expect(mgr.stashedDraft(worktreeId: worktreeId)?.subject == "wip: should be removable")
+
+        // Reopen, wipe both fields, close → stash should clear.
+        let reopened = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: reopened.id) { state in
+            state.subject = ""
+            state.bodyText = ""
+        }
+        mgr.close(worktreeId: worktreeId, tabId: reopened.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
+    }
+
+    @Test func closeOthers_stashesNonEmptyDraft() {
+        let worktreeId = "draft-close-others-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "wip: bulk-close test"
+        }
+        // Open a second tab to keep so closeOthers has something to keep.
+        let other = mgr.appendCommit(worktreeId: worktreeId, sha: "abc123", title: "abc123 init")
+        _ = mgr.closeOthers(worktreeId: worktreeId, keeping: other.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId)?.subject == "wip: bulk-close test")
+    }
+
+    @Test func closeAll_stashesNonEmptyDraft() {
+        let worktreeId = "draft-close-all-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "wip: close-all test"
+        }
+        _ = mgr.closeAll(worktreeId: worktreeId)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId)?.subject == "wip: close-all test")
+    }
+}

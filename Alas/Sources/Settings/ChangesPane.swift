@@ -15,7 +15,7 @@ struct ChangesPane: View {
 
                 SettingsGroup(title: "Commit message") {
                     SettingsRow(name: "Agent",
-                                desc: "Used by the sparkle button in the commit composer.") {
+                                desc: "Used by the sparkle button in the draft commit tab.") {
                         toolPicker
                     }
                     SettingsRow(name: "Prompt",

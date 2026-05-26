@@ -6,16 +6,23 @@ struct CommitMessageEditorView: View {
     @Binding var aiToolId: String
     let title: String
     let busy: Bool
-    let dirty: Bool
     let error: String?
     let availableAgents: [AgentDefinition]
     let onGenerate: () -> Void
-    let onSave: () -> Void
+    let primaryAction: CommitPrimaryAction
+    var accessory: AnyView? = nil
 
     @Environment(\.theme) private var theme
 
-    private var canSave: Bool {
-        dirty && !busy && !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var canRunPrimary: Bool {
+        primaryAction.isEnabled && !busy
+    }
+
+    private var displayedLabel: String {
+        if primaryAction.showSavedState, let saved = primaryAction.savedLabel {
+            return saved
+        }
+        return primaryAction.label
     }
 
     var body: some View {
@@ -26,24 +33,30 @@ struct CommitMessageEditorView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                 Spacer()
+                if let accessory {
+                    accessory
+                }
                 AiSplitButton(
                     availableAgents: availableAgents,
                     selectedToolId: $aiToolId,
                     busy: busy,
                     onGenerate: onGenerate
                 )
-                Button(action: onSave) {
-                    Text(dirty ? "Save message" : "Saved")
+                Button(action: primaryAction.handler) {
+                    Text(displayedLabel)
                         .font(.system(size: 11.5, weight: .semibold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .foregroundColor(theme.color("bg-0"))
-                        .background(canSave ? theme.color("accent") : theme.color("accent").opacity(0.4))
+                        .background(canRunPrimary ? theme.color("accent") : theme.color("accent").opacity(0.4))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
-                .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.plain)
-                .disabled(!canSave)
+                .disabled(!canRunPrimary)
+                // Default to ⌘⏎ so existing-commit callers (which pass
+                // nil) keep their save shortcut. Draft callers pass their
+                // own value (which is also ⌘⏎ via shortcut settings).
+                .keyboardShortcut(primaryAction.keyboardShortcut ?? KeyboardShortcut(.return, modifiers: .command))
             }
 
             TextField("Subject", text: $subject)

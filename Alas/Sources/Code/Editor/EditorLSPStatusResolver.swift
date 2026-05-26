@@ -38,6 +38,12 @@ struct EditorLSPStatusResolver {
             return .problem(language: language, kind: .disabled, command: command)
         case .notInstalled:
             return .problem(language: language, kind: .notInstalled, command: command)
+        case .blockedByGatekeeper:
+            // Surface as disabled — the dedicated Gatekeeper banner
+            // (`BlockedNudgeBanner`) explains the actual root cause; the
+            // breadcrumb badge only needs to communicate that the server
+            // won't run.
+            return .problem(language: language, kind: .disabled, command: command)
         case .available:
             let fileURL = URL(fileURLWithPath: absolutePath)
             switch manager.documentStatus(forFile: fileURL, worktreeRoot: worktreeRoot) {

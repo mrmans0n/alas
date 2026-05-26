@@ -109,4 +109,11 @@ final class RightPaneStore {
         }
         activeId = nil
     }
+
+    /// The cached `RightPaneState` for `worktreeId`, if one exists.
+    /// Does NOT create a new state — returns nil if the worktree isn't active.
+    /// Used by `DraftCommitTabView` to observe staged-set changes.
+    func activeState(worktreeId: String) -> RightPaneState? {
+        states[worktreeId]
+    }
 }

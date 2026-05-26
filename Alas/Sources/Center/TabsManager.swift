@@ -5,6 +5,11 @@ struct TabsFile: Codable {
     var version: Int = 1
     var tabs: [Tab]
     var activeTabId: TabID?
+    /// Draft commit state preserved across tab close/reopen.
+    /// Nil when no draft has been started in this worktree, or when the
+    /// draft has been committed/discarded. Survives close so the user's
+    /// in-progress subject/body isn't lost.
+    var stashedDraft: DraftCommitTabState? = nil
 }
 
 @Observable
@@ -554,6 +559,89 @@ final class TabsManager {
         return tab
     }
 
+    /// Returns the stashed draft commit state for `worktreeId`, if one exists.
+    /// A stash is created when a non-empty draft tab is closed; it's cleared
+    /// when the user explicitly discards or when a commit consumes the draft.
+    func stashedDraft(worktreeId: String) -> DraftCommitTabState? {
+        byWorktree[worktreeId]?.stashedDraft
+    }
+
+    @discardableResult
+    func openOrFocusDraftCommit(worktreeId: String) -> Tab {
+        let baseState = DraftCommitTabState(worktreeId: worktreeId)
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           case .draftCommit(let existing) = file.tabs[idx] {
+            file.activeTabId = existing.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return file.tabs[idx]
+        }
+        // No live tab — restore from the stash if present, otherwise start fresh.
+        let state = byWorktree[worktreeId]?.stashedDraft ?? baseState
+        let tab = Tab.draftCommit(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func updateDraftCommit(
+        worktreeId: String,
+        tabId: TabID,
+        mutate: (inout DraftCommitTabState) -> Void
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .draftCommit(var state) = file.tabs[idx]
+        else { return nil }
+        mutate(&state)
+        let tab = Tab.draftCommit(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    /// Clear any stashed draft commit state for the given worktree.
+    /// Used when the user explicitly discards the draft (via tab context
+    /// menu) or after a successful commit consumes the draft.
+    func discardStashedDraft(worktreeId: String) {
+        guard var file = byWorktree[worktreeId], file.stashedDraft != nil else { return }
+        file.stashedDraft = nil
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
+    @discardableResult
+    func replaceDraftWithCommitEditor(
+        worktreeId: String,
+        draftTabId: TabID,
+        baseRef: String,
+        newSha: String,
+        title: String
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
+              case .draftCommit = file.tabs[idx]
+        else { return nil }
+        let editor = CommitEditorTabState(
+            worktreeId: worktreeId,
+            baseRef: baseRef,
+            originalSha: newSha,
+            currentSha: newSha,
+            title: title
+        )
+        let tab = Tab.commitEditor(editor)
+        file.tabs[idx] = tab
+        if file.activeTabId == draftTabId {
+            file.activeTabId = tab.id
+        }
+        file.stashedDraft = nil
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
     @discardableResult
     func updateCommitEditor(
         worktreeId: String,
@@ -716,10 +804,27 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    /// Capture a draft commit tab's state into `file.stashedDraft` before
+    /// removal. Non-empty drafts stash so they survive close/reopen. Empty
+    /// drafts CLEAR the stash so a user who opens an old stashed draft,
+    /// wipes the text, and closes the tab actually gets rid of it.
+    /// Silently does nothing if `removingTabId` is not a draftCommit tab.
+    private func captureDraftIfNeeded(_ file: inout TabsFile, removingTabId: TabID) {
+        guard let tab = file.tabs.first(where: { $0.id == removingTabId }),
+              case .draftCommit(let state) = tab else { return }
+        let hasSubject = !state.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasBody = !state.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        file.stashedDraft = (hasSubject || hasBody) ? state : nil
+    }
+
     func close(worktreeId: String, tabId: TabID) {
         guard var file = byWorktree[worktreeId] else { return }
         guard let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return }
         let tab = file.tabs[idx]
+        // Only stash drafts the user actually authored. Closing an
+        // untouched draft tab should NOT plant a sticky "Open draft"
+        // affordance for an empty message.
+        captureDraftIfNeeded(&file, removingTabId: tabId)
         let wasActive = file.activeTabId == tabId
         file.tabs.remove(at: idx)
         if case .terminal(let state) = tab {
@@ -743,6 +848,9 @@ final class TabsManager {
         guard var file = byWorktree[worktreeId] else { return [] }
         let closed = file.tabs.filter { $0.id != tabId }.map(\.id)
         guard let kept = file.tabs.first(where: { $0.id == tabId }) else { return [] }
+        for id in closed {
+            captureDraftIfNeeded(&file, removingTabId: id)
+        }
         file.tabs = [kept]
         file.activeTabId = tabId
         byWorktree[worktreeId] = file
@@ -753,6 +861,9 @@ final class TabsManager {
     func closeAll(worktreeId: String) -> [TabID] {
         guard var file = byWorktree[worktreeId] else { return [] }
         let closed = file.tabs.map(\.id)
+        for id in closed {
+            captureDraftIfNeeded(&file, removingTabId: id)
+        }
         file.tabs = []
         file.activeTabId = nil
         byWorktree[worktreeId] = file
@@ -764,6 +875,9 @@ final class TabsManager {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return [] }
         let closed = file.tabs[0..<idx].map(\.id)
+        for id in closed {
+            captureDraftIfNeeded(&file, removingTabId: id)
+        }
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId
         }
@@ -777,6 +891,9 @@ final class TabsManager {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return [] }
         let closed = file.tabs[(idx + 1)...].map(\.id)
+        for id in closed {
+            captureDraftIfNeeded(&file, removingTabId: id)
+        }
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId
         }
