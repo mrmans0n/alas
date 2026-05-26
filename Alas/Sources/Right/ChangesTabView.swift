@@ -145,18 +145,24 @@ struct ChangesTabView: View {
     }
 
     private var hasDraftTab: Bool {
-        appState.tabs.tabs(forWorktree: rps.worktree.id).contains { tab in
+        let live = appState.tabs.tabs(forWorktree: rps.worktree.id).contains { tab in
             if case .draftCommit = tab { return true } else { return false }
         }
+        if live { return true }
+        return appState.tabs.stashedDraft(worktreeId: rps.worktree.id) != nil
     }
 
     private var draftNonEmpty: Bool {
-        appState.tabs.tabs(forWorktree: rps.worktree.id).contains { tab in
-            if case .draftCommit(let s) = tab {
-                return !s.subject.isEmpty || !s.bodyText.isEmpty
-            }
-            return false
+        let live = appState.tabs.tabs(forWorktree: rps.worktree.id).first { tab in
+            if case .draftCommit = tab { return true } else { return false }
         }
+        if case .draftCommit(let s) = live {
+            if !s.subject.isEmpty || !s.bodyText.isEmpty { return true }
+        }
+        if let stashed = appState.tabs.stashedDraft(worktreeId: rps.worktree.id) {
+            return !stashed.subject.isEmpty || !stashed.bodyText.isEmpty
+        }
+        return false
     }
 
     private func openDraftTab() {

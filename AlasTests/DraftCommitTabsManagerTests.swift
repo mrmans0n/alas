@@ -109,6 +109,24 @@ struct DraftCommitTabsManagerTests {
         #expect(restored.amend == true)
     }
 
+    @Test func stashedDraft_returnsStateAfterClose() {
+        let worktreeId = "draft-stash-accessor"
+        let mgr = TabsManager()
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+
+        let tab = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: tab.id) { state in
+            state.subject = "wip: stashed"
+            state.bodyText = "body"
+        }
+        #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil) // not stashed while live
+        mgr.close(worktreeId: worktreeId, tabId: tab.id)
+
+        let stashed = mgr.stashedDraft(worktreeId: worktreeId)
+        #expect(stashed?.subject == "wip: stashed")
+        #expect(stashed?.bodyText == "body")
+    }
+
     @Test func replaceDraftWithCommitEditor_clearsStash() {
         let worktreeId = "draft-stash-cleared-on-commit"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

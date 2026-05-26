@@ -559,6 +559,13 @@ final class TabsManager {
         return tab
     }
 
+    /// Returns the stashed draft commit state for `worktreeId`, if one exists.
+    /// A stash is created when a non-empty draft tab is closed; it's cleared
+    /// when the user explicitly discards or when a commit consumes the draft.
+    func stashedDraft(worktreeId: String) -> DraftCommitTabState? {
+        byWorktree[worktreeId]?.stashedDraft
+    }
+
     @discardableResult
     func openOrFocusDraftCommit(worktreeId: String) -> Tab {
         let baseState = DraftCommitTabState(worktreeId: worktreeId)
