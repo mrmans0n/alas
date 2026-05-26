@@ -215,7 +215,7 @@ struct AppConfig: Codable, Equatable {
         code: Code(
             fontFamily: "SF Mono",
             fontSize: 13,
-            formatOnSave: true,
+            formatOnSave: false,
             showLineNumbers: true,
             languageServers: [],
             dismissedInstallNudges: [],
@@ -381,7 +381,7 @@ extension AppConfig {
             let fontFamily = (try? codeContainer.decode(String.self, forKey: .fontFamily)) ?? "SF Mono"
             let rawSize = (try? codeContainer.decode(Int.self, forKey: .fontSize)) ?? 13
             let fontSize = max(8, min(64, rawSize))
-            let formatOnSave = (try? codeContainer.decode(Bool.self, forKey: .formatOnSave)) ?? true
+            let formatOnSave = (try? codeContainer.decode(Bool.self, forKey: .formatOnSave)) ?? false
             let showLineNumbers = (try? codeContainer.decode(Bool.self, forKey: .showLineNumbers)) ?? true
             let servers = (try? codeContainer.decode([LanguageServerConfig].self, forKey: .languageServers)) ?? []
             let dismissed = (try? codeContainer.decode([String].self, forKey: .dismissedInstallNudges)) ?? []
@@ -399,7 +399,7 @@ extension AppConfig {
             code = Code(
                 fontFamily: "SF Mono",
                 fontSize: 13,
-                formatOnSave: true,
+                formatOnSave: false,
                 showLineNumbers: true,
                 languageServers: [],
                 dismissedInstallNudges: [],

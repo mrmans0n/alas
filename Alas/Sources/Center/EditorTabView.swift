@@ -11,6 +11,7 @@ struct EditorTabView: View {
     let appState: AppState
     let externalAbsolutePath: String?
     let originatingRelativePath: String?
+    let onRevealInFiles: (String) -> Void
     @Environment(\.theme) var theme
 
     @State private var findBarVisible: Bool = false
@@ -144,12 +145,27 @@ struct EditorTabView: View {
         let components = relativePath.split(separator: "/")
         let lastIndex = components.count - 1
         return HStack(spacing: 6) {
-            ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
-                Text(comp)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
-                if i < lastIndex {
-                    Text("/").foregroundColor(theme.color("fg-faint"))
+            if components.isEmpty {
+                Text("").font(.system(size: 11, design: .monospaced))
+            } else {
+                ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
+                    let pathPrefix = components[0...i].joined(separator: "/")
+                    Text(String(comp))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
+                        .onTapGesture {
+                            onRevealInFiles(String(pathPrefix))
+                        }
+                        .onHover { inside in
+                            if inside {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pointingHand.pop()
+                            }
+                        }
+                    if i < lastIndex {
+                        Text("/").foregroundColor(theme.color("fg-faint"))
+                    }
                 }
             }
             Spacer()

@@ -8,17 +8,26 @@ struct FilesTabView: View {
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
     let onLoadChildren: (String) -> Void
     let showIgnored: Bool
+    let revealPath: String?
+    let revealTick: Int
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Self.filteredNodes(nodes, showIgnored: showIgnored)) { node in
-                    renderNode(node, depth: 0)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Self.filteredNodes(nodes, showIgnored: showIgnored)) { node in
+                        renderNode(node, depth: 0)
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+            .onChange(of: revealTick) { _, _ in
+                guard let path = revealPath else { return }
+                proxy.scrollTo("file:\(path)", anchor: .top)
+                proxy.scrollTo("dir:\(path)", anchor: .top)
+            }
         }
     }
 
@@ -84,6 +93,8 @@ struct FilesTabView: View {
                             }
                         }
                         .contentShape(Rectangle())
+                        .background(node.path == revealPath ? theme.color("bg-hover") : Color.clear)
+                        .id(node.id)
                     }
                     .buttonStyle(.plain)
                     if open && canExpand {
@@ -133,6 +144,8 @@ struct FilesTabView: View {
                         }
                     }
                     .contentShape(Rectangle())
+                    .background(node.path == revealPath ? theme.color("bg-hover") : Color.clear)
+                    .id(node.id)
                 }
                 .buttonStyle(.plain)
             )

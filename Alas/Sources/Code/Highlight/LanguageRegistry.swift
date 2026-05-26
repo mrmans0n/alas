@@ -103,21 +103,37 @@ enum LanguageRegistry {
                               bundleNameContains: "TreeSitterBash",
                               language: lang)
         case "js", "mjs", "cjs", "jsx":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterJavaScript",
-                              language: lang)
+            // All JS variants share one grammar (it parses JSX natively).
+            // Merge the JSX overlay so JSX tags/attributes get captured —
+            // for pure-JS files the overlay just doesn't match.
+            query = loadMergedQuery(
+                sources: [
+                    ("TreeSitterJavaScript", "highlights"),
+                    ("TreeSitterJavaScript", "highlights-jsx")
+                ],
+                language: lang
+            )
         case "ts":
             // TS query inherits from JS — merge them so strings, functions,
             // comments etc. are colored alongside the TS-specific captures.
+            // No JSX overlay: the TS grammar lacks `jsx_*` nodes, so loading
+            // the overlay would fail Query compilation.
             query = loadMergedQuery(
-                named: "highlights",
-                bundleNeedles: ["TreeSitterJavaScript", "TreeSitterTypeScript_TreeSitterTypeScript"],
+                sources: [
+                    ("TreeSitterJavaScript", "highlights"),
+                    ("TreeSitterTypeScript_TreeSitterTypeScript", "highlights")
+                ],
                 language: lang
             )
         case "tsx":
+            // TSX has both TS-specific nodes and JSX nodes, so include the
+            // JSX overlay alongside the TS overlay.
             query = loadMergedQuery(
-                named: "highlights",
-                bundleNeedles: ["TreeSitterJavaScript", "TreeSitterTypeScript_TreeSitterTSX"],
+                sources: [
+                    ("TreeSitterJavaScript", "highlights"),
+                    ("TreeSitterJavaScript", "highlights-jsx"),
+                    ("TreeSitterTypeScript_TreeSitterTSX", "highlights")
+                ],
                 language: lang
             )
         case "java":
@@ -137,8 +153,10 @@ enum LanguageRegistry {
             // flow, and preprocessor directives are colored alongside
             // the C++-specific overlay (templates, namespaces, etc.).
             query = loadMergedQuery(
-                named: "highlights",
-                bundleNeedles: ["TreeSitterC_TreeSitterC", "TreeSitterCPP_TreeSitterCPP"],
+                sources: [
+                    ("TreeSitterC_TreeSitterC", "highlights"),
+                    ("TreeSitterCPP_TreeSitterCPP", "highlights")
+                ],
                 language: lang
             )
         default:
@@ -165,28 +183,28 @@ enum LanguageRegistry {
         language: Language
     ) -> Query? {
         loadMergedQuery(
-            named: name,
-            bundleNeedles: [needle],
+            sources: [(needle, name)],
             language: language
         )
     }
 
-    /// Loads `.scm` files from multiple bundles and compiles their
-    /// concatenated text as one Query against `language`. Tree-sitter
-    /// grammars often inherit query patterns from a base grammar (e.g.
-    /// TypeScript inherits from JavaScript via a `;;; inherits:` comment
-    /// the SwiftTreeSitter loader doesn't honor); concatenating the
-    /// inherited base file with the derived overlay reproduces the
-    /// expected behavior. Bundles are looked up in order; any missing one
-    /// is silently skipped, which keeps the call sites tidy when an
-    /// optional overlay isn't present.
+    /// Loads `.scm` files from multiple bundles (each pair selects a
+    /// specific `queryName` inside a `bundleNeedle`-matched bundle) and
+    /// compiles their concatenated text as one Query against `language`.
+    ///
+    /// This serves two needs: (a) grammars that inherit query patterns
+    /// from a base grammar via a `;;; inherits:` directive the
+    /// SwiftTreeSitter loader doesn't honor (TS ⇐ JS, C++ ⇐ C), and (b)
+    /// grammars that ship an extension overlay alongside the base query
+    /// (JS+JSX shipping `highlights.scm` + `highlights-jsx.scm`).
+    /// Sources are loaded in order; any missing bundle or file is
+    /// silently skipped.
     private static func loadMergedQuery(
-        named name: String,
-        bundleNeedles needles: [String],
+        sources: [(bundleNeedle: String, queryName: String)],
         language: Language
     ) -> Query? {
         var combined = Data()
-        for needle in needles {
+        for (needle, name) in sources {
             guard let bundle = grammarBundle(named: needle) else { continue }
             let url = bundle.url(forResource: "queries/\(name)", withExtension: "scm")
                 ?? bundle.url(forResource: name, withExtension: "scm",
