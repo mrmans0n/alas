@@ -42,6 +42,9 @@ packages:
     # has the same broken `FileManager.fileExists` scanner conditional
     # as tree-sitter-yaml.
     path: ThirdParty/TreeSitterPython
+  TreeSitterRust:
+    url: https://github.com/tree-sitter/tree-sitter-rust
+    from: 0.24.2
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -92,6 +95,8 @@ targets:
         product: TreeSitterTOML
       - package: TreeSitterPython
         product: TreeSitterPython
+      - package: TreeSitterRust
+        product: TreeSitterRust
       - package: Markdown
         product: Markdown
     settings:
