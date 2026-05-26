@@ -554,7 +554,16 @@ final class CodeEditorCoordinator {
         if let edit {
             pendingTextEdits.append(edit)
         } else {
+            // Full reload (watcher-driven revert / discard-from-right-pane):
+            // `loadFromDisk` replaced storage with a plain NSAttributedString,
+            // wiping the font/color attributes. `runHighlight` only paints
+            // syntax-colored spans, so without re-applying the base style the
+            // text view falls back to the system proportional font for any
+            // character outside a highlight capture.
             pendingTextEdits.removeAll()
+            if let theme = currentTheme {
+                applyBaseStyle(theme: theme)
+            }
         }
         didChangeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
