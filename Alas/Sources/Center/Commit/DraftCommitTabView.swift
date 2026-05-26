@@ -44,8 +44,8 @@ struct DraftCommitTabView: View {
         }
         let staged = rps.changes
             .filter { $0.stage == .staged }
-            .map(\.path)
-            .sorted()
+            .sorted(by: { $0.path < $1.path })
+            .map { "\($0.path):\($0.add):\($0.del)" }
             .joined(separator: "|")
         return "\(rps.changes.count):\(staged)"
     }
