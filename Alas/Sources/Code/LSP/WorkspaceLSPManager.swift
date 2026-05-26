@@ -1,6 +1,13 @@
 import Foundation
 import Observation
 
+extension Notification.Name {
+    /// Posted from `WorkspaceLSPManager` when a language server spawn was
+    /// skipped because the resolved binary is blocked by Gatekeeper.
+    /// userInfo: ["language": String, "realPath": String].
+    static let lspBlockedByGatekeeper = Notification.Name("lspBlockedByGatekeeper")
+}
+
 @MainActor
 protocol DocumentFormatter: AnyObject {
     func language(forFileExtension ext: String) -> String?
@@ -114,6 +121,20 @@ final class WorkspaceLSPManager: DocumentFormatter {
             ready = existing.ready
             isFirstOpener = false
         } else {
+            let availability = LanguageServerAvailability()
+            switch availability.status(for: entry) {
+            case .disabled, .notInstalled:
+                return nil
+            case .blockedByGatekeeper(let realPath):
+                NotificationCenter.default.post(
+                    name: .lspBlockedByGatekeeper,
+                    object: nil,
+                    userInfo: ["language": entry.language, "realPath": realPath]
+                )
+                return nil
+            case .available:
+                break
+            }
             let spawn = Self.resolveSpawn(command: entry.command, args: entry.args, env: entry.env, language: entry.language)
             let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: spawn.environment)
             let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
