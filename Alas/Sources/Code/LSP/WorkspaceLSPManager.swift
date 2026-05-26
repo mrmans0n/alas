@@ -673,6 +673,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 // (typescript-language-server, etc).
                 h.languagesByURI[uri] = language
                 holders[key] = h
+                // Match in-worktree `openDocument`: bump the tick so the
+                // badge transitions from `.loading` to `.ready` (and the
+                // restart-impact count refreshes) without waiting for an
+                // unrelated UI change.
+                bumpStateTick()
             }
             try? await cur.client.didOpen(
                 uri: uri,

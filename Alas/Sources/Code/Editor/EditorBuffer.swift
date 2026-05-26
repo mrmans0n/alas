@@ -343,6 +343,11 @@ final class EditorBuffer {
             return
         }
         stopWatching()
+        // Cancel any in-flight language-override transition so its captured
+        // URL (the pre-rename path) can't fire a stale didOpen at the old
+        // URI after we've already moved on.
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         relativePath = newRelativePath
         language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
         if wasDirty {
@@ -410,6 +415,8 @@ final class EditorBuffer {
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
         let canonical = storage.string
         stopWatching()
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         do {
             try write(canonical: canonical, to: newURL, createDirectories: true)
             relativePath = newRelativePath
@@ -438,6 +445,8 @@ final class EditorBuffer {
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
         stopWatching()
+        languageReopenTask?.cancel()
+        languageReopenTask = nil
         do {
             try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: newURL.path) {
@@ -647,6 +656,10 @@ final class EditorBuffer {
             let previous = self.openedLanguage
             let target = self.effectiveLanguage
             guard target != previous else { return }
+            // Re-read the URL inside the Task so a rename/move that landed
+            // during the prior-task / close await still targets the current
+            // path. Snapshotting outside the Task would leave the reopen
+            // attached to the pre-rename URI, leaking refs.
             let url = self.worktreeRoot.appendingPathComponent(self.relativePath)
             let worktreeRootCapture = self.worktreeRoot
             if let previous {
