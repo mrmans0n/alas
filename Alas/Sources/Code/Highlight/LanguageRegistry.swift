@@ -1,5 +1,6 @@
 import Foundation
 import SwiftTreeSitter
+import TreeSitterBash
 import TreeSitterGo
 import TreeSitterJSON
 import TreeSitterPython
@@ -33,6 +34,7 @@ enum LanguageRegistry {
         case "py":            lang = Language(language: tree_sitter_python())
         case "rs":            lang = Language(language: tree_sitter_rust())
         case "go":            lang = Language(language: tree_sitter_go())
+        case "sh", "bash":    lang = Language(language: tree_sitter_bash())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -79,6 +81,10 @@ enum LanguageRegistry {
         case "go":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterGo",
+                              language: lang)
+        case "sh", "bash":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterBash",
                               language: lang)
         default:
             query = nil

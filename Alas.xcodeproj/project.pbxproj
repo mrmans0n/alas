@@ -364,6 +364,7 @@
 		9E4B32E154B18BD2285F0D34 /* CommitDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EF18448EDA0DCC8B171F11D /* CommitDiffView.swift */; };
 		9ED684E261871342BA6DFAC9 /* MergeWordDiffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72970A1D2817539DB5243058 /* MergeWordDiffTests.swift */; };
 		9FD539228216762192A02C69 /* DialogChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEDACEB27E6AF219054496E /* DialogChrome.swift */; };
+		A03338AC85E6EC8201D56F95 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
 		A050BAECF89694B0D613C5D2 /* EditorBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E96E26D5F53F217BFD1F49 /* EditorBuffer.swift */; };
 		A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */; };
 		A0F1E46BC1A9E2CC21805EE7 /* FilesTabFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1977C85C3DFD1F232A2755AD /* FilesTabFilterTests.swift */; };
@@ -385,7 +386,7 @@
 		A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */; };
 		AA3024661C46385700D8B3A6 /* TitlelessWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3428750EA8626EEBF3FE928B /* TitlelessWindow.swift */; };
 		AA8FEF94B861001AB643E005 /* FontFamilyPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */; };
-		AB8B755B315E94BDF0BD937B /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
+		AB8B755B315E94BDF0BD937B /* TreeSitterBash in Frameworks */ = {isa = PBXBuildFile; productRef = 0714DCAA9EC181C239773440 /* TreeSitterBash */; };
 		ABB5595A9A39C8AF203B5873 /* AppStateOverlayFocusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6612D1543C76A6EAF38A14F4 /* AppStateOverlayFocusTests.swift */; };
 		AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15E14D45EC3926768DE5BD1 /* DiffTabView.swift */; };
 		AC905947E88C7A2BE39D9B00 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
@@ -1149,7 +1150,8 @@
 				8352A6C0D7AE371907E50217 /* TreeSitterPython in Frameworks */,
 				1D66F354E7488D0CDAC39BE2 /* TreeSitterRust in Frameworks */,
 				7C9B1B7376FE5F651D9127D1 /* TreeSitterGo in Frameworks */,
-				AB8B755B315E94BDF0BD937B /* Markdown in Frameworks */,
+				AB8B755B315E94BDF0BD937B /* TreeSitterBash in Frameworks */,
+				A03338AC85E6EC8201D56F95 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2188,6 +2190,7 @@
 				7D55FFC5D9F65DAD0178FB0E /* TreeSitterPython */,
 				8007CCE96A65B912CE519EF0 /* TreeSitterRust */,
 				DB0D87DDDAD70492540E6906 /* TreeSitterGo */,
+				0714DCAA9EC181C239773440 /* TreeSitterBash */,
 				B69450B224F0C82A52D00662 /* Markdown */,
 			);
 			productName = Alas;
@@ -2220,6 +2223,7 @@
 			packageReferences = (
 				B9008B8C0F5A7E880C250FE4 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				CF72A36467D20A160E653761 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */,
+				64E0650CB5F6FFA2FBE793EA /* XCRemoteSwiftPackageReference "tree-sitter-bash" */,
 				84754D9A43AEB55E1268F11A /* XCRemoteSwiftPackageReference "tree-sitter-go" */,
 				FC44B93BBD7A9BE00A7FADD2 /* XCRemoteSwiftPackageReference "tree-sitter-json" */,
 				AFDA8006DAB856320603269E /* XCRemoteSwiftPackageReference "tree-sitter-rust" */,
@@ -3113,6 +3117,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		64E0650CB5F6FFA2FBE793EA /* XCRemoteSwiftPackageReference "tree-sitter-bash" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-bash";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.25.1;
+			};
+		};
 		7019D0C134F78A3B7F4CF4BB /* XCRemoteSwiftPackageReference "tree-sitter-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/alex-pinkus/tree-sitter-swift";
@@ -3172,6 +3184,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		0714DCAA9EC181C239773440 /* TreeSitterBash */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 64E0650CB5F6FFA2FBE793EA /* XCRemoteSwiftPackageReference "tree-sitter-bash" */;
+			productName = TreeSitterBash;
+		};
 		2B4C3DD473FF121828FD3CA5 /* TreeSitterYAML */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TreeSitterYAML;
