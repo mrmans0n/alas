@@ -51,10 +51,12 @@ struct CommitMessageEditorView: View {
                         .background(canRunPrimary ? theme.color("accent") : theme.color("accent").opacity(0.4))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
-                .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.plain)
                 .disabled(!canRunPrimary)
-                .keyboardShortcut(primaryAction.keyboardShortcut)
+                // Default to ⌘⏎ so existing-commit callers (which pass
+                // nil) keep their save shortcut. Draft callers pass their
+                // own value (which is also ⌘⏎ via shortcut settings).
+                .keyboardShortcut(primaryAction.keyboardShortcut ?? KeyboardShortcut(.return, modifiers: .command))
             }
 
             TextField("Subject", text: $subject)

@@ -52,6 +52,14 @@ struct DraftCommitTabView: View {
 
     private var diffKey: String { "\(stagedKey):\(selectedPath ?? "")" }
 
+    /// Drives `refreshCanAmend()` re-firing when HEAD changes (e.g. an
+    /// external commit on an unborn branch should enable Amend without
+    /// needing a tab reopen). The value itself doesn't matter, only that
+    /// it shifts when HEAD does.
+    private var amendProbeKey: String {
+        appState.rightPaneStore.activeState(worktreeId: worktreeId)?.currentHeadSHA ?? ""
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             CommitMessageEditorView(
@@ -91,7 +99,10 @@ struct DraftCommitTabView: View {
             splitBody
         }
         .onAppear { hydrateFromTabState() }
-        .task { await refreshCanAmend() }
+        // Re-probe HEAD existence whenever the right-pane state observes a
+        // HEAD-changing event (external commit, rebase, reset, etc.). On
+        // mount the key is "" → "<sha>" so the task fires once.
+        .task(id: amendProbeKey) { await refreshCanAmend() }
         .onChange(of: subject) { _, new in persist(subject: new) }
         .onChange(of: bodyText) { _, new in persist(body: new) }
         .onChange(of: amend) { _, new in
