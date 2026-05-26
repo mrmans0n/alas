@@ -59,6 +59,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
         var versions: [String: Int]   // last didChange version per URI
         var pendingOpenText: [String: String]  // latest text supplied to a not-yet-sent didOpen
         var texts: [String: String]  // last text version sent to the server per URI
+        // One holder can serve multiple LSP languageIds (typescript-language-server
+        // serves typescript/typescriptreact/javascript/javascriptreact under a
+        // single binary). Per-URI tracking lets `restartHolder` reopen each
+        // file with the languageId it was originally opened under, instead
+        // of forcing every file onto the languageId of the tab that
+        // triggered the restart.
+        var languagesByURI: [String: String]
         var lifeState: HolderLifeState
     }
 
@@ -83,12 +90,34 @@ final class WorkspaceLSPManager: DocumentFormatter {
 
     private var registry: LanguageServerRegistry
 
+    /// Cached per-language availability so the status badge doesn't re-run
+    /// `LanguageServerAvailability.status(for:)` — which can spawn
+    /// `xcrun --find sourcekit-lsp` synchronously on the main actor — on
+    /// every SwiftUI breadcrumb re-render. Cleared whenever the registry
+    /// changes (the only thing that can change the answer).
+    private var cachedAvailability = LanguageServerAvailability()
+    private var availabilityCache: [String: LanguageServerAvailability.Status] = [:]
+
     init(registry: LanguageServerRegistry) {
         self.registry = registry
     }
 
     func updateRegistry(_ registry: LanguageServerRegistry) {
         self.registry = registry
+        cachedAvailability = LanguageServerAvailability()
+        availabilityCache.removeAll()
+    }
+
+    /// Returns the cached availability status for `language`, falling back
+    /// to a single `LanguageServerAvailability.status(for:)` probe and
+    /// caching the result. Designed for hot-path callers like the status
+    /// badge resolver.
+    func availabilityStatus(forLanguage language: String) -> LanguageServerAvailability.Status? {
+        if let cached = availabilityCache[language] { return cached }
+        guard let entry = registry.allEntries().first(where: { $0.language == language }) else { return nil }
+        let status = cachedAvailability.status(for: entry)
+        availabilityCache[language] = status
+        return status
     }
 
     /// Register an open editor tab for `(worktreeRoot, fileURL)`. Spawns
@@ -131,7 +160,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             // content while the server was still initializing.)
             var pending = existing.pendingOpenText
             if !existing.openedURIs.contains(uri) { pending[uri] = text }
-            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts, lifeState: existing.lifeState)
+            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts, languagesByURI: existing.languagesByURI, lifeState: existing.lifeState)
             client = existing.client
             ready = existing.ready
             isFirstOpener = false
@@ -143,7 +172,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 do { try await newClient.initialize()
                 return true } catch { return false }
             }
-            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:], lifeState: .starting)
+            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:], languagesByURI: [:], lifeState: .starting)
             bumpStateTick()
             client = newClient
             ready = task
@@ -196,6 +225,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 holder.versions[uri] = 1
                 holder.pendingOpenText.removeValue(forKey: uri)
                 holder.texts[uri] = openText
+                holder.languagesByURI[uri] = languageId
                 holders[key] = holder
                 bumpStateTick()
             }
@@ -272,6 +302,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 c.versions.removeValue(forKey: uri)
                 c.pendingOpenText.removeValue(forKey: uri)
                 c.texts.removeValue(forKey: uri)
+                c.languagesByURI.removeValue(forKey: uri)
                 holders[key] = c
             }
         }
@@ -427,6 +458,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // want restart to bring those tabs back up.
         let urisToReopen = Set(existing.refsByURI.keys)
         let textsByURI = existing.texts.merging(existing.pendingOpenText) { current, _ in current }
+        // One holder can serve multiple languageIds (typescript-language-server
+        // serves typescript/typescriptreact/javascript/javascriptreact). Reopen
+        // each URI under the languageId it was originally opened with;
+        // fall back to the caller-provided `language` for never-opened URIs.
+        let languagesByURI = existing.languagesByURI
 
         // Mark the holder dead synchronously so the badge transitions through
         // `.dead` and concurrent `openDocument` calls see a dying holder
@@ -448,7 +484,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         for uri in urisToReopen {
             guard let fileURL = URL(string: uri) else { continue }
             let text = textsByURI[uri] ?? ""
-            _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: language, text: text)
+            let reopenLanguage = languagesByURI[uri] ?? language
+            _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: text)
         }
     }
 
@@ -659,6 +696,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 c.versions.removeValue(forKey: uri)
                 c.pendingOpenText.removeValue(forKey: uri)
                 c.texts.removeValue(forKey: uri)
+                c.languagesByURI.removeValue(forKey: uri)
                 holders[key] = c
             }
         }

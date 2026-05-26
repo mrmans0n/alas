@@ -11,11 +11,11 @@ private struct LSPStatusProbes {
     }
 
     struct Availability: EditorLSPStatusResolver.AvailabilityProbe {
+        let manager: WorkspaceLSPManager
         let registry: LanguageServerRegistry
-        let availability: LanguageServerAvailability
+        @MainActor
         func status(forLanguage language: String) -> LanguageServerAvailability.Status? {
-            guard let entry = registry.allEntries().first(where: { $0.language == language }) else { return nil }
-            return availability.status(for: entry)
+            manager.availabilityStatus(forLanguage: language)
         }
         func command(forLanguage language: String) -> String? {
             registry.allEntries().first(where: { $0.language == language })?.command
@@ -212,10 +212,9 @@ struct EditorTabView: View {
         )
         let absolutePath = externalAbsolutePath ?? worktreePath.appendingPathComponent(relativePath).path
         let registry = appState.lsp.activeRegistry
-        let availability = LanguageServerAvailability()
         let resolver = EditorLSPStatusResolver(
             manager: LSPStatusProbes.Manager(inner: appState.lsp),
-            availability: LSPStatusProbes.Availability(registry: registry, availability: availability),
+            availability: LSPStatusProbes.Availability(manager: appState.lsp, registry: registry),
             registry: LSPStatusProbes.Registry(inner: registry)
         )
         // Touch `stateTick` so SwiftUI re-renders on holder transitions even
@@ -233,10 +232,10 @@ struct EditorTabView: View {
         // languages involves PATH walks and (for sourcekit-lsp) an `xcrun`
         // subprocess — too expensive for a view body that runs many times
         // per second.
-        let availableLanguagesProvider: () -> [(language: String, displayName: String)] = {
-            let availability = LanguageServerAvailability()
-            return registry.allEntries()
-                .filter { availability.status(for: $0) == .available }
+        let manager = appState.lsp
+        let availableLanguagesProvider: @MainActor () -> [(language: String, displayName: String)] = {
+            registry.allEntries()
+                .filter { manager.availabilityStatus(forLanguage: $0.language) == .available }
                 .map { ($0.language, RecommendedLanguageCatalog.entry(forLanguage: $0.language)?.displayName ?? $0.language) }
                 .sorted { $0.displayName < $1.displayName }
         }
