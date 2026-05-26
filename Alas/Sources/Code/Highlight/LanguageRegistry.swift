@@ -2,6 +2,7 @@ import Foundation
 import SwiftTreeSitter
 import TreeSitterJSON
 import TreeSitterSwift
+import TreeSitterTOML
 import TreeSitterYAML
 
 /// Maps a file extension to a `SwiftTreeSitter.Language` and the
@@ -25,6 +26,7 @@ enum LanguageRegistry {
         case "swift":         lang = Language(language: tree_sitter_swift())
         case "yaml", "yml":   lang = Language(language: tree_sitter_yaml())
         case "json":          lang = Language(language: tree_sitter_json())
+        case "toml":          lang = Language(language: tree_sitter_toml())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -55,6 +57,10 @@ enum LanguageRegistry {
         case "json":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterJSON",
+                              language: lang)
+        case "toml":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterTOML",
                               language: lang)
         default:
             query = nil
