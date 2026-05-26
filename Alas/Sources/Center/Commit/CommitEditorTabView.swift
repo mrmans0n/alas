@@ -46,11 +46,16 @@ struct CommitEditorTabView: View {
                     aiToolId: appState.bind(\.changes.aiToolId),
                     title: tabState.title,
                     busy: busy,
-                    dirty: dirty,
                     error: error,
                     availableAgents: appState.agentRegistry.enabled(),
                     onGenerate: generateMessage,
-                    onSave: saveMessage
+                    primaryAction: CommitPrimaryAction(
+                        label: "Save message",
+                        savedLabel: "Saved",
+                        isEnabled: dirty && !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        showSavedState: !dirty,
+                        handler: saveMessage
+                    )
                 )
                 splitBody(details: details)
             } else if loadingDetails {
