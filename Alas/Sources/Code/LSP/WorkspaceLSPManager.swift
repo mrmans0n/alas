@@ -49,6 +49,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// `ready` is a one-shot Task that returns `true` when initialize
     /// succeeded and `false` on failure; both open and close await it
     /// before sending notifications.
+    private enum HolderLifeState { case starting, ready, dead }
+
     private struct Holder {
         let client: LSPClient
         let ready: Task<Bool, Never>
@@ -57,6 +59,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         var versions: [String: Int]   // last didChange version per URI
         var pendingOpenText: [String: String]  // latest text supplied to a not-yet-sent didOpen
         var texts: [String: String]  // last text version sent to the server per URI
+        var lifeState: HolderLifeState
     }
 
     /// Coarse status of a document's serving holder. The resolver folds this
@@ -70,6 +73,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
     }
 
     private var holders: [Key: Holder] = [:]
+
+    /// Bumping counter that lets `@Observable` consumers (the status badge)
+    /// re-run derivations when a holder transitions starting → ready → dead.
+    /// Incremented under `@MainActor` so SwiftUI sees changes without a hop.
+    private(set) var stateTick: Int = 0
+
+    private func bumpStateTick() { stateTick &+= 1 }
+
     private var registry: LanguageServerRegistry
 
     init(registry: LanguageServerRegistry) {
@@ -104,6 +115,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             let dead = await existing.client.state == .dead
             if dead, let cur = holders[key], cur.client === existing.client {
                 holders.removeValue(forKey: key)
+                bumpStateTick()
             }
         }
         let client: LSPClient
@@ -119,7 +131,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             // content while the server was still initializing.)
             var pending = existing.pendingOpenText
             if !existing.openedURIs.contains(uri) { pending[uri] = text }
-            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts)
+            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts, lifeState: existing.lifeState)
             client = existing.client
             ready = existing.ready
             isFirstOpener = false
@@ -131,13 +143,19 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 do { try await newClient.initialize()
                 return true } catch { return false }
             }
-            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:])
+            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:], lifeState: .starting)
+            bumpStateTick()
             client = newClient
             ready = task
             isFirstOpener = true
         }
 
         let initOk = await ready.value
+        if var h = holders[key], h.client === client {
+            h.lifeState = initOk ? .ready : .dead
+            holders[key] = h
+            bumpStateTick()
+        }
         if !initOk {
             // Init failed. The opener that spawned the client owns its
             // teardown — if `shutdown()` only ran on `.ready` the failed
@@ -263,6 +281,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         if let c = holders[key], c.refsByURI.isEmpty {
             await c.client.shutdown()
             holders.removeValue(forKey: key)
+            bumpStateTick()
         }
     }
 
@@ -321,6 +340,24 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = fileURL.lspURI
         guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return nil }
         return holders[key]?.client
+    }
+
+    /// Coarse holder lifecycle for the file's serving holder, suitable for
+    /// the editor status badge. Collapses "no holder yet" and "holder still
+    /// initializing" into `.loading` because the user-visible reading is
+    /// identical.
+    func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> DocumentStatus {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key] else {
+            return .none
+        }
+        switch holder.lifeState {
+        case .starting: return .loading
+        case .ready:
+            return holder.openedURIs.contains(uri) ? .ready : .loading
+        case .dead: return .dead
+        }
     }
 
     /// Returns the client only after the specific file has completed the
