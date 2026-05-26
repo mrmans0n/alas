@@ -13,6 +13,19 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.function))
     }
 
+    @Test("Java class and method are captured")
+    func javaBasics() throws {
+        let src = """
+        public class Greeter {
+          public String greet(String name) { return "hello, " + name; }
+        }
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "java")
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.keyword))
+        #expect(captures.contains(.string))
+    }
+
     @Test("TypeScript and TSX get keyword + type + string captures")
     func typescriptBasics() throws {
         let ts = TreeSitterHighlighter.highlight(
