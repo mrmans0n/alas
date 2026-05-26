@@ -38,6 +38,24 @@ struct TreeSitterHighlighterTests {
         #expect(kts.contains(where: { $0.capture == .keyword }))
     }
 
+    @Test("YAML keys, strings, and numbers are captured")
+    func yamlBasics() throws {
+        let src = """
+        name: alas
+        port: 8080
+        tags:
+          - "swift"
+          - "macos"
+        """
+        let yaml = TreeSitterHighlighter.highlight(source: src, fileExtension: "yaml")
+        let yml = TreeSitterHighlighter.highlight(source: src, fileExtension: "yml")
+        #expect(!yaml.isEmpty)
+        #expect(!yml.isEmpty)
+        #expect(yaml.contains(where: { $0.capture == .string }))
+        #expect(yaml.contains(where: { $0.capture == .number }))
+        #expect(yaml.contains(where: { $0.capture == .property }))
+    }
+
     @Test("string literal captured")
     func stringLiteral() throws {
         let src = #"let x = "hi""#
