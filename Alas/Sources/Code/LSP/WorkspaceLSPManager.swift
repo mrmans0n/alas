@@ -112,11 +112,21 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// to a single `LanguageServerAvailability.status(for:)` probe and
     /// caching the result. Designed for hot-path callers like the status
     /// badge resolver.
+    ///
+    /// Only stable results (`.available`, `.disabled`) are cached — those
+    /// don't change without a registry update. `.notInstalled` is re-probed
+    /// on every call so a runtime install (e.g. the install nudge flow) is
+    /// picked up without an explicit cache invalidation hook. The fast-path
+    /// PATH walk is cheap; the `xcrun --find` fallback for `sourcekit-lsp`
+    /// only fires when the binary isn't on PATH, which is uncommon on dev
+    /// machines.
     func availabilityStatus(forLanguage language: String) -> LanguageServerAvailability.Status? {
         if let cached = availabilityCache[language] { return cached }
         guard let entry = registry.allEntries().first(where: { $0.language == language }) else { return nil }
         let status = cachedAvailability.status(for: entry)
-        availabilityCache[language] = status
+        if status != .notInstalled {
+            availabilityCache[language] = status
+        }
         return status
     }
 

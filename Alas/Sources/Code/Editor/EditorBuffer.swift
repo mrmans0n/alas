@@ -630,9 +630,8 @@ final class EditorBuffer {
         let previous = openedLanguage
         openedLanguage = new
         let worktreeRootCapture = worktreeRoot
-        let text = storage.string
         let prior = languageReopenTask
-        languageReopenTask = Task {
+        languageReopenTask = Task { [weak self] in
             await prior?.value
             if Task.isCancelled { return }
             if let previous {
@@ -640,6 +639,11 @@ final class EditorBuffer {
             }
             if Task.isCancelled { return }
             if let new {
+                // Snapshot text right before the open call so edits made
+                // during the prior-task / close await aren't dropped.
+                // `EditorBuffer` is `@MainActor`-isolated, so this read is
+                // serialized against incoming edits.
+                let text = await MainActor.run { self?.storage.string ?? "" }
                 await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: new, text: text)
             }
         }
