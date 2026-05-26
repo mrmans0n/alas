@@ -31,6 +31,9 @@ packages:
     # check that returns false during SPM resolution, dropping the
     # external scanner and breaking the link.
     path: ThirdParty/TreeSitterYAML
+  TreeSitterJSON:
+    url: https://github.com/tree-sitter/tree-sitter-json
+    from: 0.24.8
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -75,6 +78,8 @@ targets:
         product: TreeSitterSwift
       - package: TreeSitterYAML
         product: TreeSitterYAML
+      - package: TreeSitterJSON
+        product: TreeSitterJSON
       - package: Markdown
         product: Markdown
     settings:

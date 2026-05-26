@@ -16,11 +16,16 @@ struct TreeSitterHighlighterTests {
     @Test("fallback highlighter preserves non-Swift spans")
     func fallbackHighlighterForKnownExtensions() throws {
         let rust = TreeSitterHighlighter.highlight(source: #"fn main() { println!("hi") }"#, fileExtension: "rs")
-        let json = TreeSitterHighlighter.highlight(source: #"{"ok": true, "n": 1}"#, fileExtension: "json")
         #expect(rust.contains(where: { $0.capture == .keyword }))
         #expect(rust.contains(where: { $0.capture == .string }))
-        #expect(json.contains(where: { $0.capture == .string }))
-        #expect(json.contains(where: { $0.capture == .number }))
+    }
+
+    @Test("JSON strings and numbers are captured")
+    func jsonBasics() throws {
+        let spans = TreeSitterHighlighter.highlight(source: #"{"ok": true, "n": 1, "name": "alas"}"#, fileExtension: "json")
+        #expect(!spans.isEmpty)
+        #expect(spans.contains(where: { $0.capture == .string }))
+        #expect(spans.contains(where: { $0.capture == .number }))
     }
 
     @Test("unknown extension returns no spans")
