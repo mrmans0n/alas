@@ -8,7 +8,7 @@ struct LanguageServerAvailabilityTests {
     @Test("disabled entries report disabled")
     func disabled() {
         let entry = config(language: "swift", command: "sourcekit-lsp", enabled: false)
-        let availability = LanguageServerAvailability(environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
         #expect(availability.status(for: entry) == .disabled)
     }
 
@@ -67,7 +67,8 @@ struct LanguageServerAvailabilityTests {
         let availability = LanguageServerAvailability(
             environment: ["PATH": "/usr/bin:/bin"],
             xcrunFind: { _ in nil },
-            additionalPathDirectories: ["\(NSHomeDirectory())/.npm-global/bin", "/opt/homebrew/bin"]
+            additionalPathDirectories: ["\(NSHomeDirectory())/.npm-global/bin", "/opt/homebrew/bin"],
+            gatekeeperAssessor: { _ in .allowed }
         )
 
         let env = availability.launchEnvironment(for: entry)
@@ -96,7 +97,7 @@ struct LanguageServerAvailabilityTests {
         let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in
             didCallXcrun = true
             return "/usr/local/bin/rust-analyzer"
-        }, additionalPathDirectories: [])
+        }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
 
         #expect(availability.status(for: entry) == .notInstalled)
         #expect(didCallXcrun == false)
@@ -106,7 +107,7 @@ struct LanguageServerAvailabilityTests {
     func resolvedCommandXcrun() {
         let entry = config(language: "swift", command: "sourcekit-lsp")
         let xcrunPath = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp"
-        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in xcrunPath }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in xcrunPath }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
 
         #expect(availability.resolvedCommand(for: entry) == xcrunPath)
     }
@@ -115,7 +116,7 @@ struct LanguageServerAvailabilityTests {
     func spawnArgumentsXcrun() {
         let entry = config(language: "swift", command: "sourcekit-lsp", args: ["--flag"])
         let xcrunPath = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp"
-        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in xcrunPath }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in xcrunPath }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
         let spawn = availability.spawnArguments(for: entry)
 
         #expect(spawn != nil)
@@ -133,7 +134,7 @@ struct LanguageServerAvailabilityTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
         let entry = config(command: "test-lsp", args: ["--verbose"])
-        let availability = LanguageServerAvailability(environment: ["PATH": dir.path], xcrunFind: { _ in nil }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: ["PATH": dir.path], xcrunFind: { _ in nil }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
         let spawn = availability.spawnArguments(for: entry)
 
         #expect(spawn != nil)
@@ -144,7 +145,7 @@ struct LanguageServerAvailabilityTests {
     @Test("spawnArguments wraps unresolvable bare command with env")
     func spawnArgumentsEnvFallback() {
         let entry = config(command: "missing-lsp", args: ["--flag"])
-        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in nil }, additionalPathDirectories: [])
+        let availability = LanguageServerAvailability(environment: ["PATH": ""], xcrunFind: { _ in nil }, additionalPathDirectories: [], gatekeeperAssessor: { _ in .allowed })
         let spawn = availability.spawnArguments(for: entry)
 
         #expect(spawn == nil)
@@ -170,7 +171,8 @@ struct LanguageServerAvailabilityTests {
         let availability = LanguageServerAvailability(
             environment: ["PATH": "/usr/bin:/bin", "HOME": "/Users/test"],
             xcrunFind: { _ in nil },
-            additionalPathDirectories: ["/opt/homebrew/bin", "/custom/bin"]
+            additionalPathDirectories: ["/opt/homebrew/bin", "/custom/bin"],
+            gatekeeperAssessor: { _ in .allowed }
         )
 
         let env = availability.launchEnvironment(for: entry)
@@ -198,7 +200,7 @@ struct LanguageServerAvailabilityTests {
 
         let status = availability.status(for: entry)
         guard case .blockedByGatekeeper(let realPath) = status else {
-            Issue.record("Expected .blockedByGatekeeper, got \(status)")
+            #expect(Bool(false), "Expected .blockedByGatekeeper, got \(status)")
             return
         }
         // realPath should be the executable path with symlinks resolved.
