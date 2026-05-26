@@ -2,6 +2,7 @@ import Foundation
 import SwiftTreeSitter
 import TreeSitterBash
 import TreeSitterC
+import TreeSitterCPP
 import TreeSitterGo
 import TreeSitterJava
 import TreeSitterJavaScript
@@ -48,6 +49,8 @@ enum LanguageRegistry {
         case "java":          lang = Language(language: tree_sitter_java())
         case "kt", "kts":     lang = Language(language: tree_sitter_kotlin())
         case "c", "h":        lang = Language(language: tree_sitter_c())
+        case "cpp", "cc", "cxx", "hpp", "hh", "hxx":
+                              lang = Language(language: tree_sitter_cpp())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -129,6 +132,15 @@ enum LanguageRegistry {
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterC_TreeSitterC",
                               language: lang)
+        case "cpp", "cc", "cxx", "hpp", "hh", "hxx":
+            // C++ inherits from C — merge so primitive types, control
+            // flow, and preprocessor directives are colored alongside
+            // the C++-specific overlay (templates, namespaces, etc.).
+            query = loadMergedQuery(
+                named: "highlights",
+                bundleNeedles: ["TreeSitterC_TreeSitterC", "TreeSitterCPP_TreeSitterCPP"],
+                language: lang
+            )
         default:
             query = nil
         }

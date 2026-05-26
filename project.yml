@@ -70,6 +70,9 @@ packages:
   TreeSitterC:
     url: https://github.com/tree-sitter/tree-sitter-c
     from: 0.24.2
+  TreeSitterCPP:
+    url: https://github.com/tree-sitter/tree-sitter-cpp
+    from: 0.23.4
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -136,6 +139,8 @@ targets:
         product: TreeSitterKotlin
       - package: TreeSitterC
         product: TreeSitterC
+      - package: TreeSitterCPP
+        product: TreeSitterCPP
       - package: Markdown
         product: Markdown
     settings:
