@@ -41,6 +41,7 @@ struct CommitMessageEditorView: View {
                         .background(canSave ? theme.color("accent") : theme.color("accent").opacity(0.4))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
+                .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.plain)
                 .disabled(!canSave)
             }
