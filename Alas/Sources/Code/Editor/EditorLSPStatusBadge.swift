@@ -29,8 +29,10 @@ struct EditorLSPStatusBadge: View {
     private var overridePicker: some View {
         EditorLSPStatusOverridePicker(
             availableLanguages: resolvedLanguages,
-            onPick: { onOverride($0); popoverOpen = false },
-            onOpenSettings: { onOpenSettings(); popoverOpen = false }
+            onPick: { onOverride($0)
+            popoverOpen = false },
+            onOpenSettings: { onOpenSettings()
+            popoverOpen = false }
         )
         .onAppear {
             if resolvedLanguages.isEmpty {
@@ -118,8 +120,10 @@ struct EditorLSPStatusBadge: View {
             Text("\(language) · \(command)").font(.system(size: 11, weight: .semibold))
             Text("Connected. Document is open and synced.").font(.system(size: 11))
             HStack(spacing: 8) {
-                Button(restartLabel(language: language)) { onRestart(); popoverOpen = false }
-                Button("Open settings") { onOpenSettings(); popoverOpen = false }
+                Button(restartLabel(language: language)) { onRestart()
+                popoverOpen = false }
+                Button("Open settings") { onOpenSettings()
+                popoverOpen = false }
             }
             Divider()
             overridePicker
@@ -131,8 +135,10 @@ struct EditorLSPStatusBadge: View {
             Text(language).font(.system(size: 11, weight: .semibold))
             Text("Starting…").font(.system(size: 11))
             HStack {
-                Button("Cancel") { onCancel(); popoverOpen = false }
-                Button("Open settings") { onOpenSettings(); popoverOpen = false }
+                Button("Cancel") { onCancel()
+                popoverOpen = false }
+                Button("Open settings") { onOpenSettings()
+                popoverOpen = false }
             }
         }
     }
@@ -145,22 +151,27 @@ struct EditorLSPStatusBadge: View {
             case .notInstalled:
                 Text("Language server not installed.").font(.system(size: 11))
                 HStack {
-                    Button("Install…") { onInstall(); popoverOpen = false }
-                    Button("Open settings") { onOpenSettings(); popoverOpen = false }
+                    Button("Install…") { onInstall()
+                    popoverOpen = false }
+                    Button("Open settings") { onOpenSettings()
+                    popoverOpen = false }
                 }
                 Divider()
                 overridePicker
             case .dead:
                 Text("Server crashed.").font(.system(size: 11))
                 HStack {
-                    Button(restartLabel(language: language)) { onRestart(); popoverOpen = false }
-                    Button("Open settings") { onOpenSettings(); popoverOpen = false }
+                    Button(restartLabel(language: language)) { onRestart()
+                    popoverOpen = false }
+                    Button("Open settings") { onOpenSettings()
+                    popoverOpen = false }
                 }
                 Divider()
                 overridePicker
             case .disabled:
                 Text("Disabled in settings.").font(.system(size: 11))
-                Button("Open settings") { onOpenSettings(); popoverOpen = false }
+                Button("Open settings") { onOpenSettings()
+                popoverOpen = false }
             }
         }
     }
