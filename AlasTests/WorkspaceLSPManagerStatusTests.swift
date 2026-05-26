@@ -46,4 +46,24 @@ struct WorkspaceLSPManagerStatusTests {
         _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
         #expect(mgr.stateTick > before)
     }
+
+    @Test func restartHolderReopensPreviouslyOpenURIs() async {
+        let mgr = manager()
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) != .none)
+        let beforeTick = mgr.stateTick
+        await mgr.restartHolder(forLanguage: "swift", rootURL: root)
+        #expect(mgr.stateTick > beforeTick)
+        // After restart, the document should be tracked again (status is at
+        // least .loading; depending on whether the fake binary "succeeds"
+        // initialize, may be .ready or .dead — but never .none).
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) != .none)
+    }
+
+    @Test func restartHolderOnNoMatchingHolderIsNoOp() async {
+        let mgr = manager()
+        let beforeTick = mgr.stateTick
+        await mgr.restartHolder(forLanguage: "swift", rootURL: root)
+        #expect(mgr.stateTick == beforeTick)
+    }
 }

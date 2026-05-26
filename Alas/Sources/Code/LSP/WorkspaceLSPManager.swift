@@ -157,17 +157,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
             bumpStateTick()
         }
         if !initOk {
-            // Init failed. The opener that spawned the client owns its
-            // teardown — if `shutdown()` only ran on `.ready` the failed
-            // `Process` would be left behind. Identity-guard the dictionary
-            // entry too, so a fresh holder swapped in by a later opener
-            // isn't removed alongside.
+            // Init failed. The opener that spawned the client owns the
+            // shutdown call to release the failed `Process`. Leave the
+            // holder entry in place with `lifeState = .dead` so the badge
+            // can show "problem" and offer "Restart" — removing the holder
+            // here would make `documentStatus` report `.none`, indistinguishable
+            // from "never opened". `restartHolder` is the proper cleanup path.
             if isFirstOpener {
                 await client.shutdown()
-                if let cur = holders[key], cur.client === client {
-                    holders.removeValue(forKey: key)
-                    bumpStateTick()
-                }
             }
             return nil
         }
@@ -374,6 +371,37 @@ final class WorkspaceLSPManager: DocumentFormatter {
             return nil
         }
         return holder.client
+    }
+
+    /// Tear down the holder serving `language` under `rootURL` and re-open
+    /// every URI it had open. Holder-scoped (not tab-scoped) so all tabs
+    /// sharing the holder benefit from one restart — which matches the user
+    /// intuition "restart the Swift server".
+    ///
+    /// No-op when no matching holder exists.
+    func restartHolder(forLanguage language: String, rootURL: URL) async {
+        guard let entry = registry.entry(forLanguage: language) else { return }
+        let lspRoot = Self.resolveLSPRoot(fileURL: rootURL, worktreeRoot: rootURL, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        guard let existing = holders[key] else { return }
+
+        // Reopen every URI a tab is still referencing — not just `openedURIs`.
+        // A holder that died during initialize never delivered `didOpen` for
+        // anything, but the user's tab intent is recorded in `refsByURI`. We
+        // want restart to bring those tabs back up.
+        let urisToReopen = Set(existing.refsByURI.keys)
+        let textsByURI = existing.texts.merging(existing.pendingOpenText) { current, _ in current }
+        await existing.client.shutdown()
+        if let cur = holders[key], cur.client === existing.client {
+            holders.removeValue(forKey: key)
+            bumpStateTick()
+        }
+
+        for uri in urisToReopen {
+            guard let fileURL = URL(string: uri) else { continue }
+            let text = textsByURI[uri] ?? ""
+            _ = await openDocument(worktreeRoot: rootURL, fileURL: fileURL, languageId: language, text: text)
+        }
     }
 
     /// True when `fileURL` has already been delivered to a live (non-dead)
