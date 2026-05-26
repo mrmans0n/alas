@@ -337,8 +337,10 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// the worktree root.
     func client(forFile fileURL: URL, worktreeRoot: URL, language: String) -> LSPClient? {
         let uri = fileURL.lspURI
-        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return nil }
-        return holders[key]?.client
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key],
+              holder.lifeState != .dead else { return nil }
+        return holder.client
     }
 
     /// Coarse holder lifecycle for the file's serving holder, suitable for
@@ -379,6 +381,10 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// intuition "restart the Swift server".
     ///
     /// No-op when no matching holder exists.
+    ///
+    /// `rootURL` must be the LSP root the holder is keyed under (typically
+    /// resolved via `holderKey` or by passing the worktree root for a simple
+    /// workspace). For nested packages, pass the package directory.
     func restartHolder(forLanguage language: String, rootURL: URL) async {
         guard let entry = registry.entry(forLanguage: language) else { return }
         let lspRoot = Self.resolveLSPRoot(fileURL: rootURL, worktreeRoot: rootURL, markers: entry.rootMarkers)
@@ -391,7 +397,18 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // want restart to bring those tabs back up.
         let urisToReopen = Set(existing.refsByURI.keys)
         let textsByURI = existing.texts.merging(existing.pendingOpenText) { current, _ in current }
+
+        // Mark the holder dead synchronously so the badge transitions through
+        // `.dead` and concurrent `openDocument` calls see a dying holder
+        // rather than bumping refs on the one we're about to shut down.
+        if var h = holders[key], h.client === existing.client {
+            h.lifeState = .dead
+            holders[key] = h
+            bumpStateTick()
+        }
+
         await existing.client.shutdown()
+
         if let cur = holders[key], cur.client === existing.client {
             holders.removeValue(forKey: key)
             bumpStateTick()
