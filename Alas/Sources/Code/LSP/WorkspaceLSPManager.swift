@@ -405,13 +405,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// Read-only access to the active registry for derivation by views.
     var activeRegistry: LanguageServerRegistry { registry }
 
-    /// Number of open file URIs currently served by the holder matching
-    /// `language` and `rootURL`. Used by the badge to warn when restarting
-    /// would affect multiple tabs.
-    func openFilesUsing(language: String, rootURL: URL) -> Int {
-        guard let entry = registry.entry(forLanguage: language) else { return 0 }
-        let lspRoot = Self.resolveLSPRoot(fileURL: rootURL, worktreeRoot: rootURL, markers: entry.rootMarkers)
-        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+    /// Number of open file URIs currently served by the holder serving
+    /// `fileURL`. Used by the badge to warn when restarting would affect
+    /// multiple tabs. Looks up the holder via the file URI (not the
+    /// worktree root) so nested-package holders are matched correctly —
+    /// pre-resolving the LSP root from `worktreeRoot` would miss them.
+    func openFilesUsing(forFile fileURL: URL, worktreeRoot: URL) -> Int {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot) else { return 0 }
         return holders[key]?.openedURIs.count ?? 0
     }
 

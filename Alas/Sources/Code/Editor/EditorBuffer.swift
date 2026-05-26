@@ -623,28 +623,36 @@ final class EditorBuffer {
     /// language (if any). Skipped for external buffers — those route via a
     /// different external-document API.
     private func applyEffectiveLanguageToLSP() {
-        guard !isExternal, let lsp else { return }
-        let new = effectiveLanguage
-        guard new != openedLanguage else { return }
-        let url = worktreeRoot.appendingPathComponent(relativePath)
-        let previous = openedLanguage
-        openedLanguage = new
-        let worktreeRootCapture = worktreeRoot
+        guard !isExternal, lsp != nil else { return }
         let prior = languageReopenTask
+        // `openedLanguage` is intentionally NOT mutated synchronously here.
+        // If we did, a concurrent `close()` (e.g. tab closed immediately
+        // after the override flip) would read the *new* languageId from
+        // `openedLanguage` and try to didClose it on a holder that never
+        // received didOpen — leaving the old holder's refcount unbalanced.
+        // The Task body below updates `openedLanguage` only after each LSP
+        // hop actually completes, and re-reads `effectiveLanguage` and
+        // `previous` at execution time so chained transitions observe the
+        // real post-prior-task state.
         languageReopenTask = Task { [weak self] in
             await prior?.value
             if Task.isCancelled { return }
+            guard let self, let lsp = self.lsp else { return }
+            let previous = self.openedLanguage
+            let target = self.effectiveLanguage
+            guard target != previous else { return }
+            let url = self.worktreeRoot.appendingPathComponent(self.relativePath)
+            let worktreeRootCapture = self.worktreeRoot
             if let previous {
                 await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: previous)
+                if Task.isCancelled { return }
+                self.openedLanguage = nil
             }
-            if Task.isCancelled { return }
-            if let new {
-                // Snapshot text right before the open call so edits made
-                // during the prior-task / close await aren't dropped.
-                // `EditorBuffer` is `@MainActor`-isolated, so this read is
-                // serialized against incoming edits.
-                let text = await MainActor.run { self?.storage.string ?? "" }
-                await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: new, text: text)
+            if let target {
+                let text = self.storage.string
+                await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target, text: text)
+                if Task.isCancelled { return }
+                self.openedLanguage = target
             }
         }
     }

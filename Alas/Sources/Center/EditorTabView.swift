@@ -249,12 +249,9 @@ struct EditorTabView: View {
                 .sorted { $0.displayName < $1.displayName }
         }
 
-        let openFilesUsingLanguage: Int
-        if let lang = status.language {
-            openFilesUsingLanguage = appState.lsp.openFilesUsing(language: lang, rootURL: worktreePath)
-        } else {
-            openFilesUsingLanguage = 0
-        }
+        let openFilesUsingLanguage: Int = status.language == nil
+            ? 0
+            : appState.lsp.openFilesUsing(forFile: URL(fileURLWithPath: absolutePath), worktreeRoot: worktreePath)
 
         return EditorLSPStatusBadge(
             status: status,
