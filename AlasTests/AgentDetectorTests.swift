@@ -85,6 +85,7 @@ struct AgentDetectorTests {
         let custom = AgentDefinition(
             id: "uuid-1", displayName: "Mine", binary: "myagent",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let installed = await AgentDetector.scan(
@@ -106,6 +107,7 @@ struct AgentDetectorTests {
             id: "uuid-abs", displayName: "Abs",
             binary: absolutePath,
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let installed = await AgentDetector.scan(
@@ -128,6 +130,7 @@ struct AgentDetectorTests {
             id: "uuid-tilde", displayName: "Tilde",
             binary: "~/\(relative)/myagent",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let installed = await AgentDetector.scan(

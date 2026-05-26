@@ -51,13 +51,14 @@ struct AppConfigAgentsCodingTests {
         var cfg = AppConfig.defaults
         cfg.agents.builtinState = [
             "codex": BuiltinAgentState(isEnabled: false, binaryOverride: nil),
-            "claude": BuiltinAgentState(isEnabled: true, binaryOverride: "/opt/local/bin/claude"),
+            "claude": BuiltinAgentState(isEnabled: true, binaryOverride: "/opt/local/bin/claude", extraTerminalArgs: ["--model", "sonnet"]),
         ]
         cfg.agents.custom = [
             AgentDefinition(
                 id: "uuid-1", displayName: "Mine",
                 binary: "~/bin/mine", binaryOverride: nil,
                 promptModeArgs: ["-p"], bypassPermissionsFlag: "--yolo",
+                extraTerminalArgs: ["--verbose"],
                 isBuiltin: false, isEnabled: true,
                 builtinLogoAssetName: nil
             )
@@ -75,12 +76,21 @@ struct AppConfigAgentsCodingTests {
         #expect(decoded.agents.custom.first?.id == "uuid-1")
         #expect(decoded.agents.worktreeAutoLaunch.agentId == "claude")
         #expect(decoded.agents.worktreeAutoLaunch.useBypassPermissions == true)
+        #expect(decoded.agents.builtinState["claude"]?.extraTerminalArgs == ["--model", "sonnet"])
+        #expect(decoded.agents.custom.first?.extraTerminalArgs == ["--verbose"])
+    }
+
+    @Test func decodesBuiltinStateWithoutExtraTerminalArgs() throws {
+        let json = """
+        {"isEnabled": true, "binaryOverride": "/usr/local/bin/claude"}
+        """
+        let state = try JSONDecoder().decode(BuiltinAgentState.self, from: Data(json.utf8))
+        #expect(state.isEnabled == true)
+        #expect(state.binaryOverride == "/usr/local/bin/claude")
+        #expect(state.extraTerminalArgs == nil)
     }
 
     @Test func decodesPartialAgentsBlockWithMissingInnerFields() throws {
-        // `agents` key is present but empty — exercises the `if let
-        // agentsContainer = ...` branch where each inner field's `try?`
-        // decode falls back to its default independently.
         let json = """
         {
           "themeId": "cool-slate",

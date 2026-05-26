@@ -14,6 +14,7 @@ enum AgentBuiltins {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: "--dangerously-skip-permissions",
+            extraTerminalArgs: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-claude"
@@ -22,7 +23,7 @@ enum AgentBuiltins {
         // (2026-05-16). The `exec` subcommand is the non-interactive entry
         // point; --dangerously-bypass-approvals-and-sandbox disables all
         // sandboxing and approval prompts. (The previously-assumed
-        // `--full-auto` flag does not exist.)
+        // `--full_auto` flag does not exist.)
         AgentDefinition(
             id: "codex",
             displayName: "Codex",
@@ -30,6 +31,7 @@ enum AgentBuiltins {
             binaryOverride: nil,
             promptModeArgs: ["exec"],
             bypassPermissionsFlag: "--dangerously-bypass-approvals-and-sandbox",
+            extraTerminalArgs: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-codex"
@@ -44,6 +46,7 @@ enum AgentBuiltins {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: "--force",
+            extraTerminalArgs: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-cursor"
@@ -58,6 +61,7 @@ enum AgentBuiltins {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-pi"
@@ -76,6 +80,7 @@ enum AgentBuiltins {
             binaryOverride: nil,
             promptModeArgs: ["run"],
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-opencode"
@@ -91,6 +96,7 @@ enum AgentBuiltins {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: "--yolo",
+            extraTerminalArgs: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-gemini"
@@ -104,6 +110,7 @@ enum AgentBuiltins {
             binaryOverride: nil,
             promptModeArgs: ["-i"],
             bypassPermissionsFlag: "--allow-tool=write",
+            extraTerminalArgs: nil,
             isBuiltin: true,
             isEnabled: true,
             builtinLogoAssetName: "agent-copilot"

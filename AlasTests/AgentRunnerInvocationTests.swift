@@ -35,6 +35,7 @@ struct AgentRunnerInvocationTests {
             id: id, displayName: id, binary: binary,
             binaryOverride: nil, promptModeArgs: args,
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
     }

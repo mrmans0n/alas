@@ -63,6 +63,9 @@ enum AgentAutoLaunch {
 
     static func buildCommand(agent: AgentDefinition, useBypass: Bool) -> [String] {
         var argv: [String] = [agent.resolvedBinary]
+        if let extra = agent.extraTerminalArgs, !extra.isEmpty {
+            argv.append(contentsOf: extra)
+        }
         if useBypass, let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
         }

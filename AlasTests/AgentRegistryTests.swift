@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -49,6 +50,7 @@ struct AgentRegistryTests {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil
@@ -63,6 +65,7 @@ struct AgentRegistryTests {
         let custom = AgentDefinition(
             id: "c1", displayName: "C", binary: "c-bin",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let r = AgentRegistry(
@@ -96,6 +99,7 @@ struct AgentRegistryTests {
         let custom = AgentDefinition(
             id: "c1", displayName: "C", binary: "c-bin",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: false, builtinLogoAssetName: nil
         )
         let r = AgentRegistry(
@@ -147,11 +151,13 @@ struct AgentRegistryTests {
         let installed = AgentDefinition(
             id: "c-installed", displayName: "C-In", binary: "c-in",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let missing = AgentDefinition(
             id: "c-missing", displayName: "C-Miss", binary: "c-miss",
             binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
         let r = AgentRegistry(
@@ -161,6 +167,21 @@ struct AgentRegistryTests {
         )
         #expect(r.agents.first(where: { $0.id == "c-installed" })!.isEnabled == true)
         #expect(r.agents.first(where: { $0.id == "c-missing"   })!.isEnabled == false)
+    }
+
+    @Test func builtinAgentStateExtraTerminalArgsRoundsTrips() throws {
+        let state = BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: ["--model", "sonnet"])
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(BuiltinAgentState.self, from: data)
+        #expect(decoded.extraTerminalArgs == ["--model", "sonnet"])
+    }
+
+    @Test func builtinAgentStateExtraTerminalArgsDefaultsToNil() throws {
+        let json = """
+        {"isEnabled": true, "binaryOverride": null}
+        """
+        let decoded = try JSONDecoder().decode(BuiltinAgentState.self, from: Data(json.utf8))
+        #expect(decoded.extraTerminalArgs == nil)
     }
 
     @Test func defaultInstallerRegistryExposesOnlyAgentsWithInstallers() {

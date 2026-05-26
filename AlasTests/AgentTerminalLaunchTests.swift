@@ -4,7 +4,7 @@ import Testing
 
 @MainActor
 struct AgentTerminalLaunchTests {
-    private func agent(flag: String? = "--skip") -> AgentDefinition {
+    private func agent(flag: String? = "--skip", extraArgs: [String]? = nil) -> AgentDefinition {
         AgentDefinition(
             id: "test-agent",
             displayName: "Test Agent",
@@ -12,6 +12,7 @@ struct AgentTerminalLaunchTests {
             binaryOverride: nil,
             promptModeArgs: ["-p"],
             bypassPermissionsFlag: flag,
+            extraTerminalArgs: extraArgs,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil
@@ -292,5 +293,34 @@ struct AgentTerminalLaunchTests {
 
         #expect(!openerCalled)
         #expect(launchErrorTitle == "Launch Agent Failed")
+    }
+
+    @Test func extraTerminalArgsInsertedBeforeBypassFlag() {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
+        let command = state.agentStartupCommand(
+            for: agent(extraArgs: ["--model", "sonnet"]),
+            project: project(mode: .useGlobal, useBypass: false)
+        )
+        #expect(command == "test-agent --model sonnet --skip")
+    }
+
+    @Test func extraTerminalArgsNilDoesNotChangeCommand() {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
+        let command = state.agentStartupCommand(
+            for: agent(),
+            project: project(mode: .useGlobal, useBypass: false)
+        )
+        #expect(command == "test-agent --skip")
+    }
+
+    @Test func extraTerminalArgsAloneWithoutBypass() {
+        let state = AppState(store: MemoryStore())
+        let command = state.agentStartupCommand(
+            for: agent(flag: nil, extraArgs: ["--verbose"]),
+            project: project(mode: .disabled, useBypass: false)
+        )
+        #expect(command == "test-agent --verbose")
     }
 }

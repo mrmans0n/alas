@@ -11,6 +11,7 @@ struct SettingsSaveNormalizationTests {
             binaryOverride: "  ignored  ",
             promptModeArgs: ["--print"],
             bypassPermissionsFlag: " --dangerously-skip-permissions ",
+            extraTerminalArgs: nil,
             isBuiltin: false,
             isEnabled: true,
             builtinLogoAssetName: nil

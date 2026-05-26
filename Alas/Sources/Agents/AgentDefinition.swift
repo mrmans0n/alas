@@ -15,6 +15,7 @@ struct AgentDefinition: Codable, Equatable, Identifiable {
     var binaryOverride: String?
     var promptModeArgs: [String]
     var bypassPermissionsFlag: String?
+    var extraTerminalArgs: [String]?
     var isBuiltin: Bool
     var isEnabled: Bool
     var builtinLogoAssetName: String?

@@ -24,6 +24,7 @@ struct AgentEditView: View {
                 binaryOverride: nil,
                 promptModeArgs: [],
                 bypassPermissionsFlag: nil,
+                extraTerminalArgs: nil,
                 isBuiltin: false,
                 isEnabled: true,
                 builtinLogoAssetName: nil
@@ -40,11 +41,13 @@ struct AgentEditView: View {
                 let persisted = state.config.agents.builtinState[id]
                 builtin.isEnabled = persisted?.isEnabled ?? builtin.isEnabled
                 builtin.binaryOverride = persisted?.binaryOverride
+                builtin.extraTerminalArgs = persisted?.extraTerminalArgs
                 agent = builtin
             } else {
                 agent = AgentDefinition(
                     id: id, displayName: id, binary: "",
                     binaryOverride: nil, promptModeArgs: [], bypassPermissionsFlag: nil,
+                    extraTerminalArgs: nil,
                     isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
                 )
             }
@@ -108,6 +111,18 @@ struct AgentEditView: View {
                 )
                 .disabled(draft.isBuiltin)
             }
+            SettingsRow(name: "Extra terminal args") {
+                AlasField(
+                    text: Binding(
+                        get: { draft.extraTerminalArgs?.joined(separator: " ") ?? "" },
+                        set: { newValue in
+                            let parts = newValue.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+                            draft.extraTerminalArgs = parts.isEmpty ? nil : parts
+                        }
+                    ),
+                    monospaced: true
+                )
+            }
             SettingsRow(name: "Enabled") {
                 AlasToggle(on: $draft.isEnabled)
             }
@@ -166,6 +181,8 @@ struct AgentEditView: View {
             entry.isEnabled = draft.isEnabled
             let trimmed = draft.binaryOverride?.trimmingCharacters(in: .whitespaces)
             entry.binaryOverride = (trimmed?.isEmpty == false) ? trimmed : nil
+            let trimmedExtra = draft.extraTerminalArgs?.filter { !$0.isEmpty }
+            entry.extraTerminalArgs = (trimmedExtra?.isEmpty == false) ? trimmedExtra : nil
             state.config.agents.builtinState[draft.id] = entry
         } else if isNew {
             state.config.agents.custom.append(draft.normalizedForSettingsSave())
@@ -201,6 +218,8 @@ extension AgentDefinition {
         normalized.binaryOverride = nil
         let trimmedBypass = bypassPermissionsFlag?.trimmingCharacters(in: .whitespaces)
         normalized.bypassPermissionsFlag = (trimmedBypass?.isEmpty == false) ? trimmedBypass : nil
+        let trimmedExtra = extraTerminalArgs?.filter { !$0.isEmpty }
+        normalized.extraTerminalArgs = (trimmedExtra?.isEmpty == false) ? trimmedExtra : nil
         return normalized
     }
 }
