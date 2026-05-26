@@ -180,4 +180,34 @@ struct DraftCommitTabsManagerTests {
 
         #expect(mgr.stashedDraft(worktreeId: worktreeId) == nil)
     }
+
+    @Test func closeOthers_stashesNonEmptyDraft() {
+        let worktreeId = "draft-close-others-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "wip: bulk-close test"
+        }
+        // Open a second tab to keep so closeOthers has something to keep.
+        let other = mgr.appendCommit(worktreeId: worktreeId, sha: "abc123", title: "abc123 init")
+        _ = mgr.closeOthers(worktreeId: worktreeId, keeping: other.id)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId)?.subject == "wip: bulk-close test")
+    }
+
+    @Test func closeAll_stashesNonEmptyDraft() {
+        let worktreeId = "draft-close-all-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        mgr.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "wip: close-all test"
+        }
+        _ = mgr.closeAll(worktreeId: worktreeId)
+
+        #expect(mgr.stashedDraft(worktreeId: worktreeId)?.subject == "wip: close-all test")
+    }
 }
