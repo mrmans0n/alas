@@ -23,7 +23,7 @@ struct FilesTabView: View {
                 }
                 .padding(.vertical, 4)
             }
-            .onChange(of: revealTick) { _ in
+            .onChange(of: revealTick) { _, _ in
                 guard let path = revealPath else { return }
                 proxy.scrollTo("file:\(path)", anchor: .top)
                 proxy.scrollTo("dir:\(path)", anchor: .top)
