@@ -70,5 +70,11 @@ struct CommitMessageEditorView: View {
         .padding(12)
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .onKeyPress(.return, phases: .down) { press in
+            guard press.modifiers == .command else { return .ignored }
+            guard canSave else { return .handled }
+            onSave()
+            return .handled
+        }
     }
 }
