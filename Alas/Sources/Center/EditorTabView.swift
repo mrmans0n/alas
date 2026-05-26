@@ -34,6 +34,7 @@ struct EditorTabView: View {
                 EditorConflictBanner(buffer: buffer)
             }
             InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
+            BlockedNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
             if findBarVisible {
                 EditorFindBarView(
                     findText: $findText,
