@@ -166,6 +166,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 await client.shutdown()
                 if let cur = holders[key], cur.client === client {
                     holders.removeValue(forKey: key)
+                    bumpStateTick()
                 }
             }
             return nil
@@ -199,6 +200,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 holder.pendingOpenText.removeValue(forKey: uri)
                 holder.texts[uri] = openText
                 holders[key] = holder
+                bumpStateTick()
             }
             try? await client.didOpen(
                 uri: uri,
@@ -592,6 +594,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         if let c = holders[key], c.refsByURI.isEmpty {
             await c.client.shutdown()
             holders.removeValue(forKey: key)
+            bumpStateTick()
         }
     }
 
