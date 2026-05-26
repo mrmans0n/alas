@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@MainActor
 @Suite("GatekeeperAssessor")
 struct GatekeeperAssessorTests {
     @Test("first lookup invokes the underlying assessor")
@@ -73,6 +74,19 @@ struct GatekeeperAssessorTests {
             throw NSError(domain: "test", code: 1)
         })
         #expect(assessor.assess(realPath: path) == .unknown)
+    }
+
+    @Test("non-existent file runs runner on every call (no cache write)")
+    func missingFileSkipsCache() throws {
+        let path = "/tmp/definitely-does-not-exist-\(UUID().uuidString)"
+        var calls = 0
+        let assessor = GatekeeperAssessor(runner: { _ in
+            calls += 1
+            return .unknown
+        })
+        _ = assessor.assess(realPath: path)
+        _ = assessor.assess(realPath: path)
+        #expect(calls == 2)
     }
 
     private func makeTempExecutable() throws -> String {

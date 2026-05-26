@@ -11,6 +11,7 @@ import Darwin
 /// per session shells out to spctl (~150-300ms); later lookups are µs-fast
 /// cache reads. Callers run on the main actor — see the spec for the
 /// stutter trade-off.
+@MainActor
 final class GatekeeperAssessor {
     enum Result: Equatable { case allowed, rejected, unknown }
 
@@ -28,7 +29,6 @@ final class GatekeeperAssessor {
     }
 
     private let runner: Runner
-    private let lock = NSLock()
     private var cache: [String: CacheEntry] = [:]
 
     init(runner: @escaping Runner = GatekeeperAssessor.defaultRunner) {
@@ -39,17 +39,18 @@ final class GatekeeperAssessor {
     /// (blocking) on cache miss/stale. Never throws — assessment errors
     /// collapse to `.unknown`, which callers treat as `.allowed` so a
     /// broken check doesn't hide an LSP.
+    ///
+    /// Pass the symlink-resolved path. Use `URL.resolvingSymlinksInPath()` or
+    /// equivalent before calling; otherwise cache keys may not match across
+    /// different paths to the same binary.
     func assess(realPath: String) -> Result {
         let stat = currentStat(path: realPath)
-        lock.lock()
         if let entry = cache[realPath],
            let stat,
            entry.mtime == stat.mtime,
            entry.inode == stat.inode {
-            lock.unlock()
             return entry.result
         }
-        lock.unlock()
 
         let result: Result
         do {
@@ -59,31 +60,30 @@ final class GatekeeperAssessor {
         }
 
         if let stat {
-            lock.lock()
             cache[realPath] = CacheEntry(mtime: stat.mtime, inode: stat.inode, result: result)
-            lock.unlock()
         }
         return result
     }
 
     func invalidate(realPath: String) {
-        lock.lock(); defer { lock.unlock() }
         cache.removeValue(forKey: realPath)
     }
 
     func invalidateAll() {
-        lock.lock(); defer { lock.unlock() }
         cache.removeAll(keepingCapacity: true)
     }
 
     private func currentStat(path: String) -> (mtime: TimeInterval, inode: UInt64)? {
         var buf = Darwin.stat()
+        // Callers pass realPath (already symlink-resolved), so lstat and stat
+        // are equivalent here; lstat also keeps the cache key stable if a caller
+        // accidentally hands us an unresolved symlink.
         guard Darwin.lstat(path, &buf) == 0 else { return nil }
         let mtime = TimeInterval(buf.st_mtimespec.tv_sec) + TimeInterval(buf.st_mtimespec.tv_nsec) / 1_000_000_000
         return (mtime: mtime, inode: UInt64(buf.st_ino))
     }
 
-    static func defaultRunner(realPath: String) throws -> Result {
+    nonisolated static func defaultRunner(realPath: String) throws -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/spctl")
         process.arguments = ["--assess", "--type", "execute", realPath]
@@ -94,13 +94,15 @@ final class GatekeeperAssessor {
         try process.run()
         // spctl normally completes in well under a second. We bound the wait
         // with a hard 2s ceiling so a wedged syspolicyd can't hang the UI.
-        let deadline = Date().addingTimeInterval(2.0)
-        while process.isRunning {
-            if Date() > deadline {
-                process.terminate()
-                return .unknown
-            }
-            Thread.sleep(forTimeInterval: 0.01)
+        let sema = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            process.waitUntilExit()
+            sema.signal()
+        }
+        let timedOut = sema.wait(timeout: .now() + 2.0) == .timedOut
+        if timedOut {
+            process.terminate()
+            return .unknown
         }
         return process.terminationStatus == 0 ? .allowed : .rejected
     }
