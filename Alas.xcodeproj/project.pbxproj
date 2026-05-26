@@ -270,6 +270,7 @@
 		71D65CB923752CEDA6E86FCA /* BulkConflictResolveReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7554DEF788B5448132F2B93F /* BulkConflictResolveReport.swift */; };
 		724F35133677956CC64E7466 /* ShortcutChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 410A42B1C46E68965FD36793 /* ShortcutChip.swift */; };
 		730DA64B474FF176336B9E0B /* SettingsNavView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515B67124EA11DDCC29B6E36 /* SettingsNavView.swift */; };
+		7324AD398C5F4168C067F4B0 /* CodeEditorLineNumberRulerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76B767602C3F8E5909A44B7C /* CodeEditorLineNumberRulerView.swift */; };
 		7377F6BACEEA621425E54FBC /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = 69EF3147FDD8F28F8D65D4FC /* TreeSitterTOML */; };
 		737EC7C9A35C9ED61ED67B83 /* RepoSelectorModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220514C66CF29B6FD04EAB0B /* RepoSelectorModelTests.swift */; };
 		7445A58BBCAC1DA8EDB0946B /* TextEditCoordinatesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50737099AA490FAC6BD9F612 /* TextEditCoordinatesTests.swift */; };
@@ -856,6 +857,7 @@
 		7554DEF788B5448132F2B93F /* BulkConflictResolveReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkConflictResolveReport.swift; sourceTree = "<group>"; };
 		768D12909DD5233659AC4E03 /* RepoGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoGroupView.swift; sourceTree = "<group>"; };
 		76942B028C3CBAED16BC4CC1 /* ImageDiffPairResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffPairResolverTests.swift; sourceTree = "<group>"; };
+		76B767602C3F8E5909A44B7C /* CodeEditorLineNumberRulerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeEditorLineNumberRulerView.swift; sourceTree = "<group>"; };
 		76F2498E56CBAF84CB67166C /* HarnessKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessKind.swift; sourceTree = "<group>"; };
 		781B8F6F0A3085FEBFC615C2 /* DefinitionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefinitionPicker.swift; sourceTree = "<group>"; };
 		7831AEE2807254F6BCC5B65B /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = "$(SRCROOT)/.build/ghostty/GhosttyKit.xcframework"; sourceTree = "<group>"; };
@@ -1901,6 +1903,7 @@
 			isa = PBXGroup;
 			children = (
 				30CBB25BA2F2C558713FB0E4 /* CodeEditorCoordinator.swift */,
+				76B767602C3F8E5909A44B7C /* CodeEditorLineNumberRulerView.swift */,
 				FC93F4FB957C2CCD4E1E2326 /* CodeEditorView.swift */,
 				FBC01971BF41E6D0B9B317CF /* CodeTextView.swift */,
 				64E96E26D5F53F217BFD1F49 /* EditorBuffer.swift */,
@@ -2385,6 +2388,7 @@
 				D0F4A4F5BF5F1C3C625F11D9 /* Clipboard.swift in Sources */,
 				EF2540A211FBE06D7B30FC61 /* Code.swift in Sources */,
 				41F6712EA71CC9AF6AB7ED94 /* CodeEditorCoordinator.swift in Sources */,
+				7324AD398C5F4168C067F4B0 /* CodeEditorLineNumberRulerView.swift in Sources */,
 				A9D0D8D94E1D46F35D17DDBA /* CodeEditorView.swift in Sources */,
 				0C54356D0ACEDD5275FFB6EB /* CodeLanguageDetailView.swift in Sources */,
 				28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */,
