@@ -18,7 +18,7 @@ final class RightPaneState {
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
     var revealPath: String? = nil
-    var revealTick: Int = 0
+    private(set) var revealTick: Int = 0
     private(set) var loadedFileTreeChildPaths: Set<String> = [""]
     private(set) var loadingFileTreeChildPaths: Set<String> = []
     private(set) var failedFileTreeChildPaths: Set<String> = []
