@@ -88,6 +88,8 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
                 guard characterRange.location != NSNotFound else { return }
 
                 let lineRange = string.lineRange(for: NSRange(location: characterRange.location, length: 0))
+                guard characterRange.location == lineRange.location else { return }
+
                 let lineIndex = self.lineIndex(containing: lineRange.location)
                 guard lineIndex != lastDrawnLineIndex else { return }
                 lastDrawnLineIndex = lineIndex
