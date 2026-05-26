@@ -430,35 +430,50 @@ final class CodeEditorCoordinator {
             self?.scheduleEditPropagation(edit: edit)
         }
         observeEffectiveLanguage(buffer)
+        // Reconcile any preexisting override on the newly bound buffer.
+        // `withObservationTracking` only fires when the tracked value changes
+        // *after* registration, so a buffer that already has a
+        // `languageOverride` set (e.g. user is switching back to a tab they
+        // previously overrode) would otherwise be silently ignored.
+        handleLanguageChange(for: buffer)
     }
-
-    private var languageObservationArmed = false
 
     private func observeEffectiveLanguage(_ buffer: EditorBuffer) {
         // One-shot `withObservationTracking` re-arms itself from inside
         // `onChange`, so each change drives at most one close+reopen cycle.
+        // The identity guard inside the inner Task prevents a stale
+        // observation (left over from a previous bindBuffer) from firing on
+        // the coordinator after it has rebound to a different buffer.
         _ = withObservationTracking {
             buffer.effectiveLanguage
         } onChange: { [weak self, weak buffer] in
             Task { @MainActor [weak self, weak buffer] in
-                guard let self, let buffer else { return }
+                guard let self, let buffer, self.buffer === buffer else { return }
                 self.handleLanguageChange(for: buffer)
                 self.observeEffectiveLanguage(buffer)
             }
         }
-        languageObservationArmed = true
     }
 
     private func handleLanguageChange(for buffer: EditorBuffer) {
+        // Identity guard: a stale observation from a prior bindBuffer could
+        // fire here against the previous buffer; ignore it so we don't mutate
+        // LSP routing for the currently-bound tab using the old buffer's
+        // effectiveLanguage.
+        guard self.buffer === buffer else { return }
+        // External buffers route LSP through a separate worktree-anchored
+        // holder owned by TabsManager. Routing them through openDocument here
+        // would leak a new worktree-keyed document; for v1 we don't support
+        // overriding language on external buffers.
+        guard !buffer.isExternal else { return }
         let newLanguage = buffer.effectiveLanguage
         let previous = currentLanguage
         guard newLanguage != previous else { return }
         let rootCapture = currentRoot
         let relCapture = currentRelativePath
-        let text = buffer.storage.string
         currentLanguage = newLanguage
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+        Task { @MainActor [weak self, weak buffer] in
+            guard let self, let buffer, self.buffer === buffer else { return }
             if let previous, let root = rootCapture, let rel = relCapture {
                 await self.appState.lsp.closeDocument(
                     worktreeRoot: root,
@@ -467,6 +482,10 @@ final class CodeEditorCoordinator {
                 )
             }
             if let newLanguage, let root = rootCapture, let rel = relCapture {
+                // Recapture text inside the Task so edits the user made
+                // between override toggle and Task execution aren't clobbered
+                // by a stale snapshot.
+                let text = buffer.storage.string
                 _ = await self.appState.lsp.openDocument(
                     worktreeRoot: root,
                     fileURL: root.appendingPathComponent(rel),
