@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-05-26
+
+### ✨ Features
+
+- Add tree-sitter syntax highlighting for YAML, JSON, TOML, Python, Rust, Go, Bash, JavaScript, TypeScript, TSX, Java, Kotlin, C, and C++ (#289, #290, #291, #292, #293, #294, #295, #296, #297, #298, #299, #300, #301).
+- Replace the inline commit composer with a center-pane Draft commit tab (#310).
+- Add a line number gutter to the code editor (#307).
+- Show LSP status in the editor breadcrumb (#302).
+- Handle macOS Gatekeeper-blocked language servers with an install/status nudge (#308).
+- Add extra terminal arguments to agent settings (#312).
+- Make the file breadcrumb clickable to reveal files in the Files tab (#304).
+
+### 🐛 Fixes
+
+- Save commit edits with Cmd+Enter from the title or description fields (#305).
+- Disable format-on-save by default while preserving explicit preferences (#306).
+- Re-apply the editor base style after watcher-driven revert events (#309).
+- Address review feedback across the highlighting language stack (#303).
+
+### 🏗️ Internal
+
+- Cache Xcode SwiftPM packages in CI (#311).
+
 ## [0.3.13] - 2026-05-25
 
 ### ✨ Features
