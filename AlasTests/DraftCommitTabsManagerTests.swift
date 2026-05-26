@@ -29,6 +29,7 @@ struct DraftCommitTabsManagerTests {
             if case .draftCommit = $0 { return true } else { return false }
         }
         #expect(drafts.count == 1)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
     @Test func updateDraftCommit_persistsSubjectAndBody() {
@@ -72,6 +73,8 @@ struct DraftCommitTabsManagerTests {
         let tabs = mgr.tabs(forWorktree: worktreeId)
         let newIndex = tabs.firstIndex { $0.id == replaced!.id }!
         #expect(newIndex == originalIndex)
+        #expect(!tabs.contains { $0.id == draft.id })
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == replaced!.id)
 
         guard case .commitEditor(let s) = replaced! else {
             Issue.record("expected commitEditor after replace")
