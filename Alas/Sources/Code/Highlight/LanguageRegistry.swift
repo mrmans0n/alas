@@ -8,6 +8,8 @@ import TreeSitterPython
 import TreeSitterRust
 import TreeSitterSwift
 import TreeSitterTOML
+import TreeSitterTSX
+import TreeSitterTypeScript
 import TreeSitterYAML
 
 /// Maps a file extension to a `SwiftTreeSitter.Language` and the
@@ -38,6 +40,8 @@ enum LanguageRegistry {
         case "sh", "bash":    lang = Language(language: tree_sitter_bash())
         case "js", "mjs", "cjs", "jsx":
                               lang = Language(language: tree_sitter_javascript())
+        case "ts":            lang = Language(language: tree_sitter_typescript())
+        case "tsx":           lang = Language(language: tree_sitter_tsx())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -93,6 +97,20 @@ enum LanguageRegistry {
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterJavaScript",
                               language: lang)
+        case "ts":
+            // TS query inherits from JS — merge them so strings, functions,
+            // comments etc. are colored alongside the TS-specific captures.
+            query = loadMergedQuery(
+                named: "highlights",
+                bundleNeedles: ["TreeSitterJavaScript", "TreeSitterTypeScript_TreeSitterTypeScript"],
+                language: lang
+            )
+        case "tsx":
+            query = loadMergedQuery(
+                named: "highlights",
+                bundleNeedles: ["TreeSitterJavaScript", "TreeSitterTypeScript_TreeSitterTSX"],
+                language: lang
+            )
         default:
             query = nil
         }
@@ -116,13 +134,40 @@ enum LanguageRegistry {
         bundleNameContains needle: String,
         language: Language
     ) -> Query? {
-        guard let bundle = grammarBundle(named: needle) else { return nil }
-        let url = bundle.url(forResource: "queries/\(name)", withExtension: "scm")
-            ?? bundle.url(forResource: name, withExtension: "scm",
-                          subdirectory: "queries")
-            ?? bundle.url(forResource: name, withExtension: "scm")
-        guard let url, let data = try? Data(contentsOf: url) else { return nil }
-        return try? Query(language: language, data: data)
+        loadMergedQuery(
+            named: name,
+            bundleNeedles: [needle],
+            language: language
+        )
+    }
+
+    /// Loads `.scm` files from multiple bundles and compiles their
+    /// concatenated text as one Query against `language`. Tree-sitter
+    /// grammars often inherit query patterns from a base grammar (e.g.
+    /// TypeScript inherits from JavaScript via a `;;; inherits:` comment
+    /// the SwiftTreeSitter loader doesn't honor); concatenating the
+    /// inherited base file with the derived overlay reproduces the
+    /// expected behavior. Bundles are looked up in order; any missing one
+    /// is silently skipped, which keeps the call sites tidy when an
+    /// optional overlay isn't present.
+    private static func loadMergedQuery(
+        named name: String,
+        bundleNeedles needles: [String],
+        language: Language
+    ) -> Query? {
+        var combined = Data()
+        for needle in needles {
+            guard let bundle = grammarBundle(named: needle) else { continue }
+            let url = bundle.url(forResource: "queries/\(name)", withExtension: "scm")
+                ?? bundle.url(forResource: name, withExtension: "scm",
+                              subdirectory: "queries")
+                ?? bundle.url(forResource: name, withExtension: "scm")
+            guard let url, let data = try? Data(contentsOf: url) else { continue }
+            combined.append(data)
+            combined.append(0x0A)  // newline between files
+        }
+        guard !combined.isEmpty else { return nil }
+        return try? Query(language: language, data: combined)
     }
 
     private static func grammarBundle(named needle: String) -> Bundle? {
