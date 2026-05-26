@@ -136,6 +136,22 @@ struct TreeSitterHighlighterTests {
         #expect(spans.isEmpty)
     }
 
+    @Test("C++ classes, templates, and strings are captured")
+    func cppBasics() throws {
+        let src = """
+        #include <string>
+        template<typename T>
+        class Box { public: T value; };
+        int main() { Box<std::string> b{"hi"}; return 0; }
+        """
+        let cpp = TreeSitterHighlighter.highlight(source: src, fileExtension: "cpp")
+        let hpp = TreeSitterHighlighter.highlight(source: src, fileExtension: "hpp")
+        #expect(cpp.contains(where: { $0.capture == .keyword }))
+        #expect(cpp.contains(where: { $0.capture == .string }))
+        #expect(cpp.contains(where: { $0.capture == .number }))
+        #expect(!hpp.isEmpty)
+    }
+
     @Test("C `int main(void)` is captured as keyword + function")
     func cBasics() throws {
         let src = """
