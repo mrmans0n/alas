@@ -2,7 +2,7 @@ import SwiftUI
 
 struct EditorLSPStatusBadge: View {
     let status: EditorLSPStatus
-    let availableLanguages: [(language: String, displayName: String)]
+    let availableLanguages: () -> [(language: String, displayName: String)]
     let openFilesUsingLanguage: Int
     let onRestart: () -> Void
     let onOverride: (String) -> Void
@@ -11,6 +11,7 @@ struct EditorLSPStatusBadge: View {
     let onInstall: () -> Void
 
     @State private var popoverOpen: Bool = false
+    @State private var resolvedLanguages: [(language: String, displayName: String)] = []
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -27,10 +28,15 @@ struct EditorLSPStatusBadge: View {
 
     private var overridePicker: some View {
         EditorLSPStatusOverridePicker(
-            availableLanguages: availableLanguages,
+            availableLanguages: resolvedLanguages,
             onPick: { onOverride($0); popoverOpen = false },
             onOpenSettings: { onOpenSettings(); popoverOpen = false }
         )
+        .onAppear {
+            if resolvedLanguages.isEmpty {
+                resolvedLanguages = availableLanguages()
+            }
+        }
     }
 
     private var pill: some View {

@@ -228,11 +228,18 @@ struct EditorTabView: View {
             worktreeRoot: worktreePath
         )
 
-        let availableLanguages: [(language: String, displayName: String)] =
-            registry.allEntries()
+        // Compute the override picker's language list only when the popover
+        // opens, not on every breadcrumb re-render. Filtering installed
+        // languages involves PATH walks and (for sourcekit-lsp) an `xcrun`
+        // subprocess — too expensive for a view body that runs many times
+        // per second.
+        let availableLanguagesProvider: () -> [(language: String, displayName: String)] = {
+            let availability = LanguageServerAvailability()
+            return registry.allEntries()
                 .filter { availability.status(for: $0) == .available }
                 .map { ($0.language, RecommendedLanguageCatalog.entry(forLanguage: $0.language)?.displayName ?? $0.language) }
                 .sorted { $0.displayName < $1.displayName }
+        }
 
         let openFilesUsingLanguage: Int
         if let lang = status.language {
@@ -243,7 +250,7 @@ struct EditorTabView: View {
 
         return EditorLSPStatusBadge(
             status: status,
-            availableLanguages: availableLanguages,
+            availableLanguages: availableLanguagesProvider,
             openFilesUsingLanguage: openFilesUsingLanguage,
             onRestart: {
                 guard let lang = status.language else { return }
