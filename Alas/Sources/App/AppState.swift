@@ -1512,6 +1512,14 @@ final class AppState {
         )
     }
 
+    func revealInFiles(worktreeId: String, path: String) {
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        config.rightPaneVisible = true
+        _ = saveConfig()
+        let rps = rightPaneStore.state(for: worktree, baseBranch: config.worktrees.baseBranch)
+        rps.reveal(path: path)
+    }
+
     /// Open a markdown relative-link target as a new editor tab in the same worktree.
     /// Delegates to `openFile` which handles find-or-create, activate, and
     /// worktree-switch if necessary.
