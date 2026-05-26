@@ -206,10 +206,30 @@ struct EditorTabView: View {
     }
 
     private var statusBadge: some View {
-        let buffer = appState.tabs.buffer(
-            worktreeId: worktreeId, tabId: tabId,
-            worktreeRoot: worktreePath, relativePath: relativePath
-        )
+        // External editor tabs (SDK files, opened via cmd-click) have an
+        // absolute path and an empty `relativePath` — fetching them via
+        // `tabs.buffer(...)` would create a parallel in-worktree buffer
+        // and watcher alongside the real external buffer, leaking state.
+        let buffer: EditorBuffer
+        if let abs = externalAbsolutePath {
+            let absoluteURL = URL(fileURLWithPath: abs)
+            let ext = (abs as NSString).pathExtension
+            let language = appState.lsp.language(forFileExtension: ext)
+            let originatingFileURL: URL? = originatingRelativePath.map { worktreePath.appendingPathComponent($0) }
+            buffer = appState.tabs.externalBuffer(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                absoluteURL: absoluteURL,
+                worktreeRoot: worktreePath,
+                originatingFileURL: originatingFileURL,
+                language: language
+            )
+        } else {
+            buffer = appState.tabs.buffer(
+                worktreeId: worktreeId, tabId: tabId,
+                worktreeRoot: worktreePath, relativePath: relativePath
+            )
+        }
         let absolutePath = externalAbsolutePath ?? worktreePath.appendingPathComponent(relativePath).path
         let registry = appState.lsp.activeRegistry
         let resolver = EditorLSPStatusResolver(

@@ -404,6 +404,7 @@ final class CodeEditorCoordinator {
             Task { @MainActor [weak self, weak buffer] in
                 guard let self, let buffer, self.buffer === buffer else { return }
                 self.currentLanguage = buffer.effectiveLanguage
+                self.applyIndentationMode()
                 self.observeEffectiveLanguage(buffer)
             }
         }

@@ -34,9 +34,11 @@ struct EditorLSPStatusBadge: View {
             popoverOpen = false }
         )
         .onAppear {
-            if resolvedLanguages.isEmpty {
-                resolvedLanguages = availableLanguages()
-            }
+            // Recompute on each popover open so settings changes (server
+            // installed/enabled/disabled) show up without recreating the
+            // tab. The manager memoizes the underlying availability probe,
+            // so this is cheap.
+            resolvedLanguages = availableLanguages()
         }
     }
 
