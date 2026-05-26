@@ -41,6 +41,7 @@ struct AgentEditView: View {
                 let persisted = state.config.agents.builtinState[id]
                 builtin.isEnabled = persisted?.isEnabled ?? builtin.isEnabled
                 builtin.binaryOverride = persisted?.binaryOverride
+                builtin.extraTerminalArgs = persisted?.extraTerminalArgs
                 agent = builtin
             } else {
                 agent = AgentDefinition(
