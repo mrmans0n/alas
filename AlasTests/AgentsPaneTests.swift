@@ -32,4 +32,16 @@ struct AgentsPaneTests {
         pane.onNavigate(.terminal)
         #expect(navigated == .terminal)
     }
+
+    @Test func agentExtraTerminalArgsStoredCorrectly() {
+        var agent = AgentDefinition(
+            id: "test", displayName: "Test", binary: "test",
+            binaryOverride: nil, promptModeArgs: [],
+            bypassPermissionsFlag: nil, extraTerminalArgs: ["--model", "sonnet"],
+            isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
+        )
+        #expect(agent.extraTerminalArgs == ["--model", "sonnet"])
+        agent.extraTerminalArgs = nil
+        #expect(agent.extraTerminalArgs == nil)
+    }
 }
