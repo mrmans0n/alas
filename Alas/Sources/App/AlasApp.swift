@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -19,6 +20,17 @@ struct AlasApp: App {
 
     init() {
         BundledFontRegistrar.registerFonts()
+        // Refresh Gatekeeper cache when the user returns from System Settings
+        // after granting permission to a blocked LSP binary.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                GatekeeperAssessor.shared.invalidateAll()
+            }
+        }
         if Self.isRunningUnitTests {
             NSApplication.shared.setActivationPolicy(.accessory)
             NSWindow.allowsAutomaticWindowTabbing = false

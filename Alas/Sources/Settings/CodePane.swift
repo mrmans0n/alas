@@ -127,6 +127,9 @@ struct CodePane: View {
         case .notInstalled:
             label = "Not installed"
             color = theme.color("warn")
+        case .blockedByGatekeeper:
+            label = "Blocked by Gatekeeper"
+            color = theme.color("warn")
         }
         return Text(label).font(.system(size: 10.5)).foregroundColor(color)
     }

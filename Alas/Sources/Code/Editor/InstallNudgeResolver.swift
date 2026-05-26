@@ -36,6 +36,7 @@ struct InstallNudgeData {
     }
 }
 
+@MainActor
 struct InstallNudgeResolver {
     let registry: LanguageServerRegistry
     let userDefinedRecipes: [String: [InstallRecipe]]

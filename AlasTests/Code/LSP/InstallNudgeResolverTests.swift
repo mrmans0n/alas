@@ -3,6 +3,7 @@ import Testing
 @testable import Alas
 
 @Suite("InstallNudgeResolver")
+@MainActor
 struct InstallNudgeResolverTests {
     @Test("unknown extension resolves to installable Mason package")
     func masonFallbackForUnknownExtension() {

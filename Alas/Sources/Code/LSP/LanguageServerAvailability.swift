@@ -1,32 +1,44 @@
 import Foundation
 
+@MainActor
 struct LanguageServerAvailability {
     enum Status: Equatable {
         case disabled
         case available
         case notInstalled
+        case blockedByGatekeeper(realPath: String)
     }
 
     private let environment: [String: String]
     private let fileManager: FileManager
     private let xcrunFind: (String) -> String?
     private let additionalPathDirectories: [String]
+    private let gatekeeperAssessor: (String) -> GatekeeperAssessor.Result
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
         xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.xcrunFind,
-        additionalPathDirectories: [String] = LanguageServerAvailability.defaultAdditionalPathDirectories()
+        additionalPathDirectories: [String] = LanguageServerAvailability.defaultAdditionalPathDirectories(),
+        gatekeeperAssessor: @escaping (String) -> GatekeeperAssessor.Result = { GatekeeperAssessor.shared.assess(realPath: $0) }
     ) {
         self.environment = environment
         self.fileManager = fileManager
         self.xcrunFind = xcrunFind
         self.additionalPathDirectories = additionalPathDirectories
+        self.gatekeeperAssessor = gatekeeperAssessor
     }
 
     func status(for entry: LanguageServerConfig) -> Status {
         guard entry.enabled else { return .disabled }
-        return resolvedCommand(for: entry) != nil ? .available : .notInstalled
+        guard let resolved = resolvedCommand(for: entry) else { return .notInstalled }
+        let realPath = (resolved as NSString).resolvingSymlinksInPath
+        switch gatekeeperAssessor(realPath) {
+        case .rejected:
+            return .blockedByGatekeeper(realPath: realPath)
+        case .allowed, .unknown:
+            return .available
+        }
     }
 
     func resolvedCommand(for entry: LanguageServerConfig) -> String? {
@@ -94,7 +106,7 @@ struct LanguageServerAvailability {
         return path.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
     }
 
-    private static func defaultAdditionalPathDirectories() -> [String] {
+    nonisolated private static func defaultAdditionalPathDirectories() -> [String] {
         var dirs: [String] = [
             "/usr/local/bin",
             "/opt/homebrew/bin",
@@ -120,7 +132,7 @@ struct LanguageServerAvailability {
         return dirs.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
-    private static func pathFileEntries(at path: String) -> [String] {
+    nonisolated private static func pathFileEntries(at path: String) -> [String] {
         guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
         return contents
             .split(whereSeparator: \.isNewline)
@@ -128,7 +140,7 @@ struct LanguageServerAvailability {
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
-    private static func xcrunFind(_ tool: String) -> String? {
+    nonisolated private static func xcrunFind(_ tool: String) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["--find", tool]
