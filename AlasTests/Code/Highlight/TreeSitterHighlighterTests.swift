@@ -13,11 +13,13 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.function))
     }
 
-    @Test("fallback highlighter preserves non-Swift spans")
-    func fallbackHighlighterForKnownExtensions() throws {
-        let rust = TreeSitterHighlighter.highlight(source: #"fn main() { println!("hi") }"#, fileExtension: "rs")
-        #expect(rust.contains(where: { $0.capture == .keyword }))
-        #expect(rust.contains(where: { $0.capture == .string }))
+    @Test("Rust `fn main()` is captured as keyword + function")
+    func rustFunction() throws {
+        let spans = TreeSitterHighlighter.highlight(source: #"fn main() { println!("hi") }"#, fileExtension: "rs")
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.keyword))
+        #expect(captures.contains(.function))
+        #expect(captures.contains(.string))
     }
 
     @Test("JSON strings and numbers are captured")
