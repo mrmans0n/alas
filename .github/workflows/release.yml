@@ -67,6 +67,21 @@ jobs:
       - name: Generate project
         run: xcodegen
 
+      - name: Compute Xcode package cache key inputs
+        run: |
+          xcodebuild -version > .xcode-cache-toolchain
+          swift --version >> .xcode-cache-toolchain
+          cat .xcode-cache-toolchain
+
+      - name: Restore SwiftPM package cache
+        id: swiftpm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .build/xcode/SourcePackages
+          key: swiftpm-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ThirdParty/TreeSitter*/Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-${{ matrix.arch }}-
+
       - name: Compute version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
@@ -87,11 +102,26 @@ jobs:
           path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
+      - name: Resolve SwiftPM packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Alas.xcodeproj \
+            -scheme Alas \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages
+
+      - name: Save SwiftPM package cache
+        if: success() && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .build/xcode/SourcePackages
+          key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
+
       - name: Build release app (${{ matrix.arch }})
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -configuration Release \
             -derivedDataPath build \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=${{ matrix.arch }}' \
             -quiet build
 

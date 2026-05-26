@@ -121,12 +121,48 @@ jobs:
         if: steps.skip-check.outputs.skip != 'true'
         run: xcodegen
 
+      - name: Compute Xcode package cache key inputs
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          xcodebuild -version > .xcode-cache-toolchain
+          swift --version >> .xcode-cache-toolchain
+          cat .xcode-cache-toolchain
+
+      - name: Restore SwiftPM package cache
+        if: steps.skip-check.outputs.skip != 'true'
+        id: swiftpm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .build/xcode/SourcePackages
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ThirdParty/TreeSitter*/Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Resolve SwiftPM packages
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Alas.xcodeproj \
+            -scheme Alas \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages
+
+      - name: Save SwiftPM package cache
+        if: success()
+          && steps.skip-check.outputs.skip != 'true'
+          && steps.swiftpm-cache.outputs.cache-hit != 'true'
+          && (inputs.ref == '' || inputs.ref == 'main')
+        uses: actions/cache/save@v5
+        with:
+          path: .build/xcode/SourcePackages
+          key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
+
       - name: Build release app
         if: steps.skip-check.outputs.skip != 'true'
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -configuration Release \
             -derivedDataPath build \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
