@@ -366,3 +366,57 @@ struct RightPaneStateFileTreeTests {
         ))
     }
 }
+
+@MainActor
+struct RightPaneStateRevealTests {
+    @Test func revealSetsActiveTabToFiles() {
+        let state = makeTestState()
+        state.reveal(path: "Sources/App.swift")
+        #expect(state.activeTab == .files)
+    }
+
+    @Test func revealExpandsAncestorDirsAndSetsRevealPath() {
+        let state = makeTestState()
+        state.reveal(path: "Sources/Center/App.swift")
+        #expect(state.openPaths.contains("Sources"))
+        #expect(state.openPaths.contains("Sources/Center"))
+        #expect(state.revealPath == "Sources/Center/App.swift")
+    }
+
+    @Test func revealBumpsRevealTick() {
+        let state = makeTestState()
+        let before = state.revealTick
+        state.reveal(path: "Sources/App.swift")
+        #expect(state.revealTick == before + 1)
+    }
+
+    @Test func revealForDirectoryDoesNotIncludeSelfInAncestors() {
+        let state = makeTestState()
+        state.reveal(path: "Sources/Center")
+        #expect(state.openPaths.contains("Sources"))
+        #expect(state.openPaths.contains("Sources/Center") == false)
+        #expect(state.revealPath == "Sources/Center")
+    }
+
+    @Test func revealForTopLevelDirHasNoAncestors() {
+        let state = makeTestState()
+        state.reveal(path: "Sources")
+        #expect(state.openPaths.isEmpty)
+        #expect(state.revealPath == "Sources")
+    }
+
+    private func makeTestState() -> RightPaneState {
+        RightPaneState(
+            worktree: Worktree(
+                id: "test",
+                projectId: "proj",
+                name: "main",
+                branch: "main",
+                path: URL(fileURLWithPath: "/tmp/test"),
+                status: .clean,
+                lastActivity: Date()
+            ),
+            baseBranch: "main"
+        )
+    }
+}
