@@ -10,6 +10,7 @@ struct CommitMessageEditorView: View {
     let availableAgents: [AgentDefinition]
     let onGenerate: () -> Void
     let primaryAction: CommitPrimaryAction
+    var accessory: AnyView? = nil
 
     @Environment(\.theme) private var theme
 
@@ -32,6 +33,9 @@ struct CommitMessageEditorView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                 Spacer()
+                if let accessory {
+                    accessory
+                }
                 AiSplitButton(
                     availableAgents: availableAgents,
                     selectedToolId: $aiToolId,

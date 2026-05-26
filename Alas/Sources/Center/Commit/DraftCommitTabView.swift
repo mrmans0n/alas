@@ -16,6 +16,11 @@ struct DraftCommitTabView: View {
     @State private var error: String?
     @State private var loadingFiles = false
     @State private var loadingDiff = false
+    @State private var amendPrefilled: Bool = false
+    @State private var amendPrefilledSubject: String = ""
+    @State private var amendPrefilledBody: String = ""
+    @State private var amendWarning: Bool = false
+    @State private var generation: Task<Void, Never>? = nil
 
     @Environment(\.theme) private var theme
     private let git = GitService()
@@ -56,21 +61,43 @@ struct DraftCommitTabView: View {
                 busy: busy,
                 error: error,
                 availableAgents: appState.agentRegistry.enabled(),
-                onGenerate: {},     // wired in Task 7
+                onGenerate: handleGenerate,
                 primaryAction: CommitPrimaryAction(
                     label: amend ? "Amend" : "Commit",
                     savedLabel: nil,
                     isEnabled: canCommit,
                     showSavedState: false,
                     handler: runCommit
+                ),
+                accessory: AnyView(
+                    Toggle(isOn: $amend) {
+                        Text("Amend").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                    }
+                    .toggleStyle(.checkbox)
+                    .disabled(busy)
                 )
             )
+            if amend && amendWarning {
+                Text("Amending a pushed commit will rewrite history.")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(theme.color("warn"))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             splitBody
         }
         .onAppear { hydrateFromTabState() }
         .onChange(of: subject) { _, new in persist(subject: new) }
         .onChange(of: bodyText) { _, new in persist(body: new) }
-        .onChange(of: amend) { _, new in persist(amend: new) }
+        .onChange(of: amend) { _, new in
+            persist(amend: new)
+            if new {
+                Task { await applyAmendPrefill() }
+            } else {
+                clearAmendPrefillIfUnchanged()
+            }
+        }
         .onChange(of: selectedPath) { _, new in persist(selectedPath: new) }
         .task(id: stagedKey) { await loadStaged() }
         .task(id: diffKey) { await loadDiff() }
@@ -135,6 +162,105 @@ struct DraftCommitTabView: View {
             if let body { s.bodyText = body }
             if let amend { s.amend = amend }
             if let selectedPath { s.selectedPath = selectedPath }
+        }
+    }
+
+    private func applyAmendPrefill() async {
+        let pushed = (try? await git.isHeadAtOrBehindUpstream(worktreePath: worktreePath)) ?? false
+        guard amend else { return }
+        amendWarning = pushed
+
+        guard let head = (try? await git.headMessage(worktreePath: worktreePath)) ?? nil else { return }
+        guard amend else { return }
+        guard subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        subject = head.subject
+        bodyText = head.body
+        amendPrefilledSubject = head.subject
+        amendPrefilledBody = head.body
+        amendPrefilled = true
+    }
+
+    private func clearAmendPrefillIfUnchanged() {
+        amendWarning = false
+        guard amendPrefilled,
+              subject == amendPrefilledSubject,
+              bodyText == amendPrefilledBody
+        else { return }
+        subject = ""
+        bodyText = ""
+        amendPrefilled = false
+        amendPrefilledSubject = ""
+        amendPrefilledBody = ""
+    }
+
+    private func handleGenerate() {
+        if busy {
+            generation?.cancel()
+            generation = nil
+            busy = false
+            return
+        }
+        runGenerate()
+    }
+
+    private func runGenerate() {
+        guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
+            error = "Select an AI tool to generate a commit message."
+            return
+        }
+        let amendSnapshot = amend
+        let wt = worktreePath
+        let prompt = appState.config.changes.prompt
+        let baseBranch = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? "HEAD"
+
+        busy = true
+        error = nil
+
+        generation = Task { @MainActor in
+            defer {
+                busy = false
+                generation = nil
+            }
+            do {
+                let priorMessage: GitService.HeadMessage?
+                if amendSnapshot {
+                    priorMessage = (try? await git.headMessage(worktreePath: wt)) ?? nil
+                } else {
+                    priorMessage = nil
+                }
+                let diffResult = try await Process.git(["diff", "--cached", "--no-color"], cwd: wt)
+                let recentResult = try await Process.git(["log", "-3", "--pretty=format:%s"], cwd: wt)
+                let branchResult = try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: wt)
+                try Task.checkCancellation()
+                let recentSubjects = recentResult.stdout
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .map(String.init)
+                let branchRaw = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                let branch: String? = branchRaw == "HEAD" ? nil : branchRaw
+
+                let payload = CommitContextBuilder.build(
+                    branch: branch,
+                    base: baseBranch,
+                    recentSubjects: recentSubjects,
+                    priorMessage: priorMessage,
+                    diff: diffResult.stdout
+                )
+                let message = try await AgentRunner.runPrompt(
+                    agent: agent,
+                    input: payload,
+                    prompt: prompt,
+                    workingDirectory: wt.path
+                )
+                guard !Task.isCancelled else { return }
+                subject = message.subject
+                bodyText = message.body
+            } catch is CancellationError {
+                // user-cancelled
+            } catch {
+                self.error = (error as NSError).localizedDescription
+            }
         }
     }
 
