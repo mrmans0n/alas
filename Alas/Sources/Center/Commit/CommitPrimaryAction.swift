@@ -1,9 +1,12 @@
-import SwiftUI
+import Foundation
 
 struct CommitPrimaryAction {
     let label: String
     let savedLabel: String?     // shown when showSavedState is true (and non-nil)
     let isEnabled: Bool
+    /// True when the button should show `savedLabel` instead of `label`.
+    /// Distinct from `!isEnabled` because some disabled states (e.g. valid edits with empty subject)
+    /// should keep showing the primary `label`, not the "Saved" alternative.
     let showSavedState: Bool
     let handler: () -> Void
 
