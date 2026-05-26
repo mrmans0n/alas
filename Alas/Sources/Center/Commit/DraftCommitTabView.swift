@@ -184,22 +184,12 @@ struct DraftCommitTabView: View {
         Task { @MainActor in
             defer { busy = false }
             do {
-                try await git.commit(
+                let newSha = try await git.commit(
                     worktreePath: worktreePath,
                     subject: subjectSnapshot,
                     body: bodySnapshot,
                     amend: amendSnapshot
                 )
-                // git.commit doesn't return the sha; resolve HEAD now.
-                let result = try await Process.git(["rev-parse", "HEAD"], cwd: worktreePath)
-                guard result.exitCode == 0 else {
-                    throw NSError(
-                        domain: "DraftCommitTabView.runCommit",
-                        code: Int(result.exitCode),
-                        userInfo: [NSLocalizedDescriptionKey: result.stderr.isEmpty ? "git rev-parse failed" : result.stderr]
-                    )
-                }
-                let newSha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
                 let shortSha = String(newSha.prefix(7))
                 let title = "\(shortSha) \(subjectSnapshot)"
                 let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? "HEAD~1"

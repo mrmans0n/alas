@@ -766,7 +766,7 @@ final class RightPaneState {
         let wt = worktree.path
         Task { @MainActor in
             do {
-                try await git.commit(
+                _ = try await git.commit(
                     worktreePath: wt,
                     subject: subject,
                     body: body,

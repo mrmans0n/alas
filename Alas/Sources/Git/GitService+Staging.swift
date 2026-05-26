@@ -43,7 +43,7 @@ extension GitService {
         subject: String,
         body: String,
         amend: Bool
-    ) async throws {
+    ) async throws -> String {
         var args: [String] = ["commit"]
         if amend { args.append("--amend") }
         args.append("-m")
@@ -55,6 +55,16 @@ extension GitService {
         }
         let result = try await Process.git(args, cwd: worktreePath)
         try Self.assertSuccess(result, op: amend ? "amend" : "commit")
+        let shaResult = try await Process.git(["rev-parse", "HEAD"], cwd: worktreePath)
+        guard shaResult.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.commit",
+                code: Int(shaResult.exitCode),
+                userInfo: [NSLocalizedDescriptionKey:
+                    shaResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)]
+            )
+        }
+        return shaResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     struct HeadMessage: Equatable {
