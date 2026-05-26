@@ -2,6 +2,12 @@ import SwiftUI
 
 struct EditorLSPStatusBadge: View {
     let status: EditorLSPStatus
+    /// When `false`, the override picker is hidden everywhere in the popover.
+    /// External editor tabs (SDK files opened via cmd-click) pass `false`
+    /// because `EditorBuffer.applyEffectiveLanguageToLSP` bails for
+    /// `isExternal == true`, so an override pick wouldn't actually re-route
+    /// LSP — better to hide the no-op action than to mislead.
+    var supportsOverride: Bool = true
     let availableLanguages: () -> [(language: String, displayName: String)]
     let openFilesUsingLanguage: Int
     let onRestart: () -> Void
@@ -25,20 +31,23 @@ struct EditorLSPStatusBadge: View {
             }
     }
 
+    @ViewBuilder
     private var overridePicker: some View {
-        EditorLSPStatusOverridePicker(
-            availableLanguages: resolvedLanguages,
-            onPick: { onOverride($0)
-            popoverOpen = false },
-            onOpenSettings: { onOpenSettings()
-            popoverOpen = false }
-        )
-        .onAppear {
-            // Recompute on each popover open so settings changes (server
-            // installed/enabled/disabled) show up without recreating the
-            // tab. The manager memoizes the underlying availability probe,
-            // so this is cheap.
-            resolvedLanguages = availableLanguages()
+        if supportsOverride {
+            EditorLSPStatusOverridePicker(
+                availableLanguages: resolvedLanguages,
+                onPick: { onOverride($0)
+                popoverOpen = false },
+                onOpenSettings: { onOpenSettings()
+                popoverOpen = false }
+            )
+            .onAppear {
+                // Recompute on each popover open so settings changes (server
+                // installed/enabled/disabled) show up without recreating the
+                // tab. The manager memoizes the underlying availability probe,
+                // so this is cheap.
+                resolvedLanguages = availableLanguages()
+            }
         }
     }
 
