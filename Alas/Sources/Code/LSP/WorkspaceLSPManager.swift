@@ -388,22 +388,39 @@ final class WorkspaceLSPManager: DocumentFormatter {
         return holder.client
     }
 
-    /// Tear down the holder serving `language` under `rootURL` and re-open
-    /// every URI it had open. Holder-scoped (not tab-scoped) so all tabs
-    /// sharing the holder benefit from one restart — which matches the user
-    /// intuition "restart the Swift server".
+    /// Tear down the holder currently serving `fileURL` under `worktreeRoot`
+    /// and re-open every URI it had open. Holder-scoped (not tab-scoped) so
+    /// all tabs sharing the holder benefit from one restart — which matches
+    /// the user intuition "restart the Swift server".
+    ///
+    /// Looks the holder up via `holderKey(forURI:withinWorktreeRoot:)` so a
+    /// nested-package holder keyed under a sub-directory of `worktreeRoot`
+    /// is found correctly — pre-resolving the LSP root from `worktreeRoot`
+    /// would miss nested-package holders.
     ///
     /// No-op when no matching holder exists.
+    func restartHolder(forFile fileURL: URL, worktreeRoot: URL, languageId: String) async {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let existing = holders[key] else { return }
+        await restartHolder(key: key, existing: existing, language: languageId)
+    }
+
+    /// Tear down the holder serving `language` under `rootURL` and re-open
+    /// every URI it had open. `rootURL` must be the LSP root the holder is
+    /// keyed under; for nested packages, prefer `restartHolder(forFile:worktreeRoot:languageId:)`
+    /// which resolves the key via the file URI.
     ///
-    /// `rootURL` must be the LSP root the holder is keyed under (typically
-    /// resolved via `holderKey` or by passing the worktree root for a simple
-    /// workspace). For nested packages, pass the package directory.
+    /// No-op when no matching holder exists.
     func restartHolder(forLanguage language: String, rootURL: URL) async {
         guard let entry = registry.entry(forLanguage: language) else { return }
         let lspRoot = Self.resolveLSPRoot(fileURL: rootURL, worktreeRoot: rootURL, markers: entry.rootMarkers)
         let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
         guard let existing = holders[key] else { return }
+        await restartHolder(key: key, existing: existing, language: language)
+    }
 
+    private func restartHolder(key: Key, existing: Holder, language: String) async {
         // Reopen every URI a tab is still referencing — not just `openedURIs`.
         // A holder that died during initialize never delivered `didOpen` for
         // anything, but the user's tab intent is recorded in `refsByURI`. We
@@ -427,10 +444,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
             bumpStateTick()
         }
 
+        let reopenRoot = URL(fileURLWithPath: key.root)
         for uri in urisToReopen {
             guard let fileURL = URL(string: uri) else { continue }
             let text = textsByURI[uri] ?? ""
-            _ = await openDocument(worktreeRoot: rootURL, fileURL: fileURL, languageId: language, text: text)
+            _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: language, text: text)
         }
     }
 

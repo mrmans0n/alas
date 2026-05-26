@@ -254,8 +254,13 @@ struct EditorTabView: View {
             openFilesUsingLanguage: openFilesUsingLanguage,
             onRestart: {
                 guard let lang = status.language else { return }
+                let fileURL = URL(fileURLWithPath: absolutePath)
                 Task { @MainActor in
-                    await appState.lsp.restartHolder(forLanguage: lang, rootURL: worktreePath)
+                    await appState.lsp.restartHolder(
+                        forFile: fileURL,
+                        worktreeRoot: worktreePath,
+                        languageId: lang
+                    )
                 }
             },
             onOverride: { newLanguage in
@@ -263,16 +268,6 @@ struct EditorTabView: View {
             },
             onOpenSettings: {
                 openWindow(id: "settings")
-            },
-            onCancel: {
-                guard let lang = status.language else { return }
-                Task { @MainActor in
-                    await appState.lsp.closeDocument(
-                        worktreeRoot: worktreePath,
-                        fileURL: URL(fileURLWithPath: absolutePath),
-                        languageId: lang
-                    )
-                }
             },
             onInstall: {
                 // The existing InstallNudgeBanner below the breadcrumb already

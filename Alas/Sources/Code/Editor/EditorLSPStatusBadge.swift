@@ -7,7 +7,6 @@ struct EditorLSPStatusBadge: View {
     let onRestart: () -> Void
     let onOverride: (String) -> Void
     let onOpenSettings: () -> Void
-    let onCancel: () -> Void
     let onInstall: () -> Void
 
     @State private var popoverOpen: Bool = false
@@ -134,11 +133,9 @@ struct EditorLSPStatusBadge: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(language).font(.system(size: 11, weight: .semibold))
             Text("Starting…").font(.system(size: 11))
-            HStack {
-                Button("Cancel") { onCancel()
-                popoverOpen = false }
-                Button("Open settings") { onOpenSettings()
-                popoverOpen = false }
+            Button("Open settings") {
+                onOpenSettings()
+                popoverOpen = false
             }
         }
     }
