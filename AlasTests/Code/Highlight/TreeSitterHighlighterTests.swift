@@ -136,6 +136,20 @@ struct TreeSitterHighlighterTests {
         #expect(spans.isEmpty)
     }
 
+    @Test("C `int main(void)` is captured as keyword + function")
+    func cBasics() throws {
+        let src = """
+        #include <stdio.h>
+        int main(void) { printf("hi\\n"); return 0; }
+        """
+        let c = TreeSitterHighlighter.highlight(source: src, fileExtension: "c")
+        let h = TreeSitterHighlighter.highlight(source: src, fileExtension: "h")
+        #expect(c.contains(where: { $0.capture == .keyword }))
+        #expect(c.contains(where: { $0.capture == .string }))
+        #expect(c.contains(where: { $0.capture == .number }))
+        #expect(!h.isEmpty)
+    }
+
     @Test("Kotlin `fun main()` and `val` are captured")
     func kotlinBasics() throws {
         let kt = TreeSitterHighlighter.highlight(source: "fun main() { println(\"hi\") }", fileExtension: "kt")

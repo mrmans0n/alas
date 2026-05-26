@@ -67,6 +67,9 @@ packages:
   TreeSitterKotlin:
     url: https://github.com/fwcd/tree-sitter-kotlin
     from: 0.3.8
+  TreeSitterC:
+    url: https://github.com/tree-sitter/tree-sitter-c
+    from: 0.24.2
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -131,6 +134,8 @@ targets:
         product: TreeSitterJava
       - package: TreeSitterKotlin
         product: TreeSitterKotlin
+      - package: TreeSitterC
+        product: TreeSitterC
       - package: Markdown
         product: Markdown
     settings:
