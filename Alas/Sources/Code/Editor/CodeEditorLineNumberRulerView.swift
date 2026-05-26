@@ -7,6 +7,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
     private var textChangeObserver: NSObjectProtocol?
     private var boundsObserver: NSObjectProtocol?
     private var lineStarts: [Int] = [0]
+    private weak var cachedTextStorage: NSTextStorage?
 
     private let minimumThickness: CGFloat = 44
     private let horizontalPadding: CGFloat = 10
@@ -41,6 +42,8 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
                 observe(textView: textView, scrollView: scrollView)
             }
             rebuildLineStartsAndUpdateThickness()
+        } else if cachedTextStorage !== textView.textStorage {
+            rebuildLineStartsAndUpdateThickness()
         } else {
             updateThickness()
         }
@@ -61,18 +64,17 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
         else { return }
 
         updateThickness()
-        layoutManager.ensureLayout(for: textContainer)
 
         let visibleRect = scrollView.contentView.bounds
         let inset = textView.textContainerInset
-        let usedRect = layoutManager.usedRect(for: textContainer)
-        let fullWidth = max(textView.bounds.width, usedRect.maxX, visibleRect.maxX, 1)
+        let fullWidth = max(textContainer.size.width, textView.bounds.width, visibleRect.maxX, 1)
         let visibleTextContainerRect = NSRect(
             x: 0,
             y: visibleRect.minY - inset.height,
             width: fullWidth,
             height: visibleRect.height
         )
+        layoutManager.ensureLayout(forBoundingRect: visibleTextContainerRect, in: textContainer)
         let visibleGlyphRange = layoutManager.glyphRange(
             forBoundingRect: visibleTextContainerRect,
             in: textContainer
@@ -177,10 +179,12 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
     private func rebuildLineStartsAndUpdateThickness() {
         guard let textView = codeTextView else {
             lineStarts = [0]
+            cachedTextStorage = nil
             ruleThickness = minimumThickness
             return
         }
 
+        cachedTextStorage = textView.textStorage
         let string = textView.string as NSString
         var starts = [0]
         var searchLocation = 0
