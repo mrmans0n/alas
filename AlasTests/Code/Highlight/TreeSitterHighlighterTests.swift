@@ -28,6 +28,20 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .number }))
     }
 
+    @Test("TOML keys, strings, and numbers are captured")
+    func tomlBasics() throws {
+        let src = """
+        name = "alas"
+        port = 8080
+        [server]
+        host = "localhost"
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "toml")
+        #expect(!spans.isEmpty)
+        #expect(spans.contains(where: { $0.capture == .string }))
+        #expect(spans.contains(where: { $0.capture == .number }))
+    }
+
     @Test("unknown extension returns no spans")
     func unknownExtension() throws {
         let spans = TreeSitterHighlighter.highlight(source: "print()", fileExtension: "abc")
