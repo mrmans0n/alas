@@ -6,12 +6,12 @@ import Foundation
 struct AgentAutoLaunchTests {
     // Use non-builtin IDs so the test registry doesn't collide with the
     // AgentBuiltins.catalog entries that AgentRegistry always prepends.
-    private func mkAgent(id: String, binary: String, bypass: String?) -> AgentDefinition {
+    private func mkAgent(id: String, binary: String, bypass: String?, extraArgs: [String]? = nil) -> AgentDefinition {
         AgentDefinition(
             id: id, displayName: id, binary: binary,
             binaryOverride: nil, promptModeArgs: [],
             bypassPermissionsFlag: bypass,
-            extraTerminalArgs: nil,
+            extraTerminalArgs: extraArgs,
             isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
         )
     }
@@ -186,5 +186,29 @@ struct AgentAutoLaunchTests {
 
         #expect(defaultResolved == nil)
         #expect(explicitResolved?.argv == ["claude", "--dangerously-skip-permissions"])
+    }
+
+    @Test func buildCommandInsertsExtraArgsBeforeBypass() {
+        let agent = mkAgent(id: "test-claude", binary: "claude", bypass: "--dangerously-skip-permissions", extraArgs: ["--model", "sonnet"])
+        let argv = AgentAutoLaunch.buildCommand(agent: agent, useBypass: true)
+        #expect(argv == ["claude", "--model", "sonnet", "--dangerously-skip-permissions"])
+    }
+
+    @Test func buildCommandOmitsExtraArgsWhenNil() {
+        let agent = mkAgent(id: "test-claude", binary: "claude", bypass: "--dangerously-skip-permissions")
+        let argv = AgentAutoLaunch.buildCommand(agent: agent, useBypass: true)
+        #expect(argv == ["claude", "--dangerously-skip-permissions"])
+    }
+
+    @Test func buildCommandOmitsExtraArgsWhenEmpty() {
+        let agent = mkAgent(id: "test-claude", binary: "claude", bypass: nil, extraArgs: [])
+        let argv = AgentAutoLaunch.buildCommand(agent: agent, useBypass: false)
+        #expect(argv == ["claude"])
+    }
+
+    @Test func buildCommandWithExtraArgsAndNoBypass() {
+        let agent = mkAgent(id: "test-claude", binary: "claude", bypass: nil, extraArgs: ["--verbose"])
+        let argv = AgentAutoLaunch.buildCommand(agent: agent, useBypass: true)
+        #expect(argv == ["claude", "--verbose"])
     }
 }

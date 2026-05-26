@@ -546,6 +546,9 @@ final class AppState {
 
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
         var argv = [agent.resolvedBinary]
+        if let extra = agent.extraTerminalArgs, !extra.isEmpty {
+            argv.append(contentsOf: extra)
+        }
         if agentBypassPermissionsEnabled(for: project),
            let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
