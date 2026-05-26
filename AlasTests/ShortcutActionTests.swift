@@ -60,18 +60,22 @@ struct ShortcutActionTests {
             .increaseFontSize, .decreaseFontSize, .resetFontSize,
         ]
         let codeEditor: Set<ShortcutAction> = [
-            .splitSelectionIntoLines, .toggleMarkdownPreview, .commitInComposer,
+            .splitSelectionIntoLines, .toggleMarkdownPreview,
         ]
         let terminal: Set<ShortcutAction> = [
             .splitTerminalRight, .splitTerminalDown,
             .focusPaneLeft, .focusPaneRight, .focusPaneUp, .focusPaneDown,
             .resizePaneLeft, .resizePaneRight, .resizePaneUp, .resizePaneDown,
         ]
+        let commit: Set<ShortcutAction> = [
+            .commitInComposer,
+        ]
         for a in ShortcutAction.allCases {
             switch a.group {
             case .global:     #expect(global.contains(a), "\(a) miscategorized")
             case .codeEditor: #expect(codeEditor.contains(a), "\(a) miscategorized")
             case .terminal:   #expect(terminal.contains(a), "\(a) miscategorized")
+            case .commit:     #expect(commit.contains(a), "\(a) miscategorized")
             }
         }
     }

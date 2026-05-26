@@ -110,7 +110,7 @@ extension GitService {
     }
 
     /// Returns true when HEAD is at the upstream's tip, or strictly behind it.
-    /// Used by the commit composer to show a soft "rewrites history" warning
+    /// Used by the draft commit tab to show a soft "rewrites history" warning
     /// on the Amend checkbox. False when no upstream is configured (nothing
     /// to compare against) or on detached HEAD.
     func isHeadAtOrBehindUpstream(worktreePath: URL) async throws -> Bool {

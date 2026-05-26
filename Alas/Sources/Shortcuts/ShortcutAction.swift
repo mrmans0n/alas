@@ -1,12 +1,13 @@
 import Foundation
 
 enum ShortcutGroup: String, CaseIterable, Sendable {
-    case global, codeEditor, terminal
+    case global, codeEditor, terminal, commit
     var label: String {
         switch self {
         case .global:     return "Global"
         case .codeEditor: return "Code editor"
         case .terminal:   return "Terminal"
+        case .commit:     return "Commit"
         }
     }
 }
@@ -29,8 +30,10 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
              .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
-        case .splitSelectionIntoLines, .toggleMarkdownPreview, .commitInComposer:
+        case .splitSelectionIntoLines, .toggleMarkdownPreview:
             return .codeEditor
+        case .commitInComposer:
+            return .commit
         case .splitTerminalRight, .splitTerminalDown,
              .focusPaneLeft, .focusPaneRight, .focusPaneUp, .focusPaneDown,
              .resizePaneLeft, .resizePaneRight, .resizePaneUp, .resizePaneDown:
