@@ -24,11 +24,16 @@ struct CommitMessageEditorViewTests {
             aiToolId: .constant(""),
             title: "Edit abc1234",
             busy: busy,
-            dirty: dirty,
             error: error,
             availableAgents: [],
             onGenerate: {},
-            onSave: onSave
+            primaryAction: CommitPrimaryAction(
+                label: "Save message",
+                savedLabel: "Saved",
+                isEnabled: dirty && !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                showSavedState: !dirty,
+                handler: onSave
+            )
         )
         .environment(\.theme, currentTheme())
     }
