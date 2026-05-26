@@ -99,7 +99,8 @@ struct CenterPaneView: View {
                                             originatingRelativePath: s.originatingRelativePath,
                                             revealLine: s.revealLine,
                                             revealCharacter: s.revealCharacter,
-                                            appState: state)
+                                            appState: state,
+                                            onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                         } else {
                             EditorTabView(worktreePath: worktree.path,
                                           relativePath: s.relativePath,
@@ -109,7 +110,8 @@ struct CenterPaneView: View {
                                           revealCharacter: s.revealCharacter,
                                           appState: state,
                                           externalAbsolutePath: s.externalAbsolutePath,
-                                          originatingRelativePath: s.originatingRelativePath)
+                                          originatingRelativePath: s.originatingRelativePath,
+                                          onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                         }
                     case .diff(let s):
                         let openAvailable = DiffOpenFileAvailability.isAvailable(
@@ -150,7 +152,8 @@ struct CenterPaneView: View {
                         .id(s.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
-                                             relativePath: s.relativePath)
+                                             relativePath: s.relativePath,
+                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                     case .mergeConflict(let s):
                         MergeConflictTabView(
                             state: state,
