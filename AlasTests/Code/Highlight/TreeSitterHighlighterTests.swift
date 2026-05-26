@@ -28,6 +28,19 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .number }))
     }
 
+    @Test("Python `def foo()` is captured as keyword + function")
+    func pythonFunction() throws {
+        let src = """
+        def greet(name):
+            return f"hello, {name}"
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "py")
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.keyword))
+        #expect(captures.contains(.function))
+        #expect(captures.contains(.string))
+    }
+
     @Test("TOML keys, strings, and numbers are captured")
     func tomlBasics() throws {
         let src = """
