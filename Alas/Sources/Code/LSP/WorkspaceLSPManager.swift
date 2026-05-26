@@ -463,25 +463,6 @@ final class WorkspaceLSPManager: DocumentFormatter {
     }
 
     private func restartHolder(key: Key, existing: Holder, language: String) async {
-        // Reopen every URI a tab is still referencing — not just `openedURIs`.
-        // A holder that died during initialize never delivered `didOpen` for
-        // anything, but the user's tab intent is recorded in `refsByURI`. We
-        // want restart to bring those tabs back up.
-        //
-        // Preserve refcount multiplicity: a URI held by two tabs has
-        // refsByURI[uri] = 2, and `openDocument` increments refs by 1 per
-        // call. We call `openDocument` once per reference so the post-restart
-        // holder ends with the same refcount, otherwise the next `closeDocument`
-        // from one of the holders would tear the document down while the
-        // other still expects it open.
-        let refsToReopen = existing.refsByURI
-        let textsByURI = existing.texts.merging(existing.pendingOpenText) { current, _ in current }
-        // One holder can serve multiple languageIds (typescript-language-server
-        // serves typescript/typescriptreact/javascript/javascriptreact). Reopen
-        // each URI under the languageId it was originally opened with;
-        // fall back to the caller-provided `language` for never-opened URIs.
-        let languagesByURI = existing.languagesByURI
-
         // Mark the holder dead synchronously so the badge transitions through
         // `.dead` and concurrent `openDocument` calls see a dying holder
         // rather than bumping refs on the one we're about to shut down.
@@ -493,9 +474,35 @@ final class WorkspaceLSPManager: DocumentFormatter {
 
         await existing.client.shutdown()
 
+        // Reopen state is sampled AFTER shutdown completes. This @MainActor
+        // method is reentrant across the await, so other open/close calls
+        // can have mutated `refsByURI`, `texts`, `languagesByURI`, etc. We
+        // want to base the reopen on the latest snapshot — otherwise a tab
+        // closed during the shutdown await would still get its document
+        // reopened, and a tab opened during the await would get dropped.
+        //
+        // Refcount multiplicity is preserved: a URI held by two tabs has
+        // refsByURI[uri] = 2, and `openDocument` increments refs by 1 per
+        // call. We call `openDocument` once per reference so the post-
+        // restart holder ends with the same refcount.
+        //
+        // Per-URI languageId is honored on shared servers
+        // (typescript-language-server serves typescript / typescriptreact /
+        // javascript / javascriptreact under one binary).
+        let refsToReopen: [String: Int]
+        let textsByURI: [String: String]
+        let languagesByURI: [String: String]
         if let cur = holders[key], cur.client === existing.client {
+            refsToReopen = cur.refsByURI
+            textsByURI = cur.texts.merging(cur.pendingOpenText) { current, _ in current }
+            languagesByURI = cur.languagesByURI
             holders.removeValue(forKey: key)
             bumpStateTick()
+        } else {
+            // The holder was already replaced (e.g. by the dead-client
+            // detection path in a concurrent `openDocument`). Nothing for
+            // us to reopen — the live holder owns its own state.
+            return
         }
 
         let reopenRoot = URL(fileURLWithPath: key.root)
