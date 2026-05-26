@@ -11,6 +11,7 @@ struct MarkdownTabView: View {
     let revealLine: Int?
     let revealCharacter: Int?
     @Bindable var appState: AppState
+    let onRevealInFiles: (String) -> Void
     @Environment(\.theme) var theme
 
     @State private var renderResult: MarkdownRenderResult?
@@ -174,12 +175,22 @@ struct MarkdownTabView: View {
         let components = relativePath.split(separator: "/")
         let lastIndex = components.count - 1
         return HStack(spacing: 6) {
-            ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
-                Text(comp)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
-                if i < lastIndex {
-                    Text("/").foregroundColor(theme.color("fg-faint"))
+            if components.isEmpty {
+                Text("").font(.system(size: 11, design: .monospaced))
+            } else {
+                ForEach(Array(components.enumerated()), id: \.offset) { (i, comp) in
+                    let pathPrefix = components[0...i].joined(separator: "/")
+                    Text(String(comp))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(i == lastIndex ? theme.color("fg") : theme.color("fg-muted"))
+                        .onTapGesture { onRevealInFiles(String(pathPrefix)) }
+                        .onHover { inside in
+                            if inside { NSCursor.pointingHand.push() }
+                            else { NSCursor.pointingHand.pop() }
+                        }
+                    if i < lastIndex {
+                        Text("/").foregroundColor(theme.color("fg-faint"))
+                    }
                 }
             }
         }
