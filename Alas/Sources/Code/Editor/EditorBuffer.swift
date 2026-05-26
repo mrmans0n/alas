@@ -697,7 +697,16 @@ final class EditorBuffer {
             try save()
             return
         }
-        let resolvedLanguage = language ?? lsp.language(forFileExtension: ((relativePath as NSString).pathExtension))
+        // Prefer the user's runtime override, then whatever the server
+        // currently has open (which already accounts for override and
+        // post-init transitions), then fall back to the inferred language
+        // or a fresh registry lookup. Without this, an overridden tab
+        // would silently format against the original language's server
+        // (or no server at all for unknown-extension overrides).
+        let resolvedLanguage = languageOverride
+            ?? openedLanguage
+            ?? language
+            ?? lsp.language(forFileExtension: ((relativePath as NSString).pathExtension))
         guard let resolvedLanguage else {
             try save()
             return

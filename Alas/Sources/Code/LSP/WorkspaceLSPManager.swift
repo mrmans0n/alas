@@ -632,6 +632,10 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 h.versions[uri] = 1
                 h.pendingOpenText.removeValue(forKey: uri)
                 h.texts[uri] = openText
+                // Record the languageId so `restartHolder` can reopen
+                // this URI under the right language on shared servers
+                // (typescript-language-server, etc).
+                h.languagesByURI[uri] = language
                 holders[key] = h
             }
             try? await cur.client.didOpen(
