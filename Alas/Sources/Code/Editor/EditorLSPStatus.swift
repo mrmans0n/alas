@@ -15,3 +15,14 @@ enum ProblemKind: Equatable {
     case dead
     case disabled
 }
+
+extension EditorLSPStatus {
+    /// Language id for this status, if any. `.noLanguage` returns nil.
+    var language: String? {
+        switch self {
+        case .ready(let lang, _), .loading(let lang), .problem(let lang, _, _):
+            return lang
+        case .noLanguage: return nil
+        }
+    }
+}

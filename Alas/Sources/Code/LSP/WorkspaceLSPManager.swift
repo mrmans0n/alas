@@ -361,6 +361,19 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
     }
 
+    /// Read-only access to the active registry for derivation by views.
+    var activeRegistry: LanguageServerRegistry { registry }
+
+    /// Number of open file URIs currently served by the holder matching
+    /// `language` and `rootURL`. Used by the badge to warn when restarting
+    /// would affect multiple tabs.
+    func openFilesUsing(language: String, rootURL: URL) -> Int {
+        guard let entry = registry.entry(forLanguage: language) else { return 0 }
+        let lspRoot = Self.resolveLSPRoot(fileURL: rootURL, worktreeRoot: rootURL, markers: entry.rootMarkers)
+        let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        return holders[key]?.openedURIs.count ?? 0
+    }
+
     /// Returns the client only after the specific file has completed the
     /// initialize + didOpen path. Request/notification features should use
     /// this instead of `client(forFile:)` so they never talk to a server that
