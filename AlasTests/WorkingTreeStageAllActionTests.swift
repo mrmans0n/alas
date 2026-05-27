@@ -1,6 +1,7 @@
 import Testing
 @testable import Alas
 
+@MainActor
 struct WorkingTreeStageAllActionTests {
     @Test func subHeaderStagedVariantUsesStagedChevronColor() {
         // The visual change (chevron color) cannot be asserted without

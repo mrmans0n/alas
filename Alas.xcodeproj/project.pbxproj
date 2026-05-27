@@ -367,6 +367,7 @@
 		9B2B055195430A5A40BC7659 /* TreeSitterJSON in Frameworks */ = {isa = PBXBuildFile; productRef = 5130D28B6980AF12D2256A6D /* TreeSitterJSON */; };
 		9B51DB62236B865AB86AA0F1 /* TreeSitterKotlin in Frameworks */ = {isa = PBXBuildFile; productRef = 69B81D6B7546F6A8AF3207E9 /* TreeSitterKotlin */; };
 		9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */; };
+		9BA16B0D5FC26501D54B5192 /* WorkingTreeStageAllActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F931B1EEA7F04855BAE5A43 /* WorkingTreeStageAllActionTests.swift */; };
 		9C20E8B060C753308748CE05 /* ProjectsManagerProjectOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0315FB9B537C0A240CFA32 /* ProjectsManagerProjectOrderingTests.swift */; };
 		9C394F07FDB8E398A034B778 /* SessionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B142F2A747C7F2D96E8BAD1 /* SessionRegistry.swift */; };
 		9C4246D4FEE6C6A7D3C738A8 /* UnionCanvasGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD29EE0AFA5232B1ED728514 /* UnionCanvasGeometryTests.swift */; };
@@ -826,6 +827,7 @@
 		5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileType.swift; sourceTree = "<group>"; };
 		5DD723B8C15EF2413C5D935D /* BlockedLanguageServerNudgeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedLanguageServerNudgeResolver.swift; sourceTree = "<group>"; };
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
+		5F931B1EEA7F04855BAE5A43 /* WorkingTreeStageAllActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkingTreeStageAllActionTests.swift; sourceTree = "<group>"; };
 		6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeInstallerTests.swift; sourceTree = "<group>"; };
 		6033DBD8BF13A76978A653A3 /* EditorFindControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFindControllerTests.swift; sourceTree = "<group>"; };
 		606DD97D8F66AC2B5883F984 /* TerminalIntegrationActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalIntegrationActionsTests.swift; sourceTree = "<group>"; };
@@ -1444,6 +1446,7 @@
 				AE0A6F237480EE72CB8DBE28 /* TitlelessWindowTests.swift */,
 				56D1AC9E1E00C3C5C234382C /* TouchTargetSmokeTests.swift */,
 				AD29EE0AFA5232B1ED728514 /* UnionCanvasGeometryTests.swift */,
+				5F931B1EEA7F04855BAE5A43 /* WorkingTreeStageAllActionTests.swift */,
 				AB4C1B7737A289066E01C444 /* WorkspaceLSPManagerStatusTests.swift */,
 				C6C27094E7804D975635EB11 /* WorktreeRowHeightTests.swift */,
 				D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */,
@@ -2945,6 +2948,7 @@
 				9C65A1E2757C2503C02CD081 /* TouchTargetSmokeTests.swift in Sources */,
 				67981D1D60512503BFD901C8 /* TreeSitterHighlighterTests.swift in Sources */,
 				9C4246D4FEE6C6A7D3C738A8 /* UnionCanvasGeometryTests.swift in Sources */,
+				9BA16B0D5FC26501D54B5192 /* WorkingTreeStageAllActionTests.swift in Sources */,
 				BE70DBB10DB7106860886AD7 /* WorkspaceLSPManagerStatusTests.swift in Sources */,
 				E6C5CD34C39ECF114DC3D4B4 /* WorktreeRowHeightTests.swift in Sources */,
 				CB549B27BB0E578776AA7ED0 /* WorktreeServiceTests.swift in Sources */,
