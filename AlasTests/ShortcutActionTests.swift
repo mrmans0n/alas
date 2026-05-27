@@ -27,6 +27,7 @@ struct ShortcutActionTests {
             (.toggleRightPane,      "b",          [.command, .option]),
             (.createProject,        "n",          [.command, .shift]),
             (.newWorktree,          "n",          [.command, .option]),
+            (.focusMainWorktree,    "m",          [.command, .control]),
             (.newTerminalTab,       "t",          [.command]),
             (.launchAgentTerminal,  "t",          [.command, .option]),
             (.increaseFontSize,     "=",          [.command]),
@@ -57,7 +58,7 @@ struct ShortcutActionTests {
         let global: Set<ShortcutAction> = [
             .searchFiles, .switchRepository, .findAndReplace, .toggleSidebar, .toggleRightPane,
             .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal,
-            .increaseFontSize, .decreaseFontSize, .resetFontSize,
+            .focusMainWorktree, .increaseFontSize, .decreaseFontSize, .resetFontSize,
         ]
         let codeEditor: Set<ShortcutAction> = [
             .splitSelectionIntoLines, .toggleMarkdownPreview,

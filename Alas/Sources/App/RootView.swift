@@ -353,67 +353,71 @@ private struct RootBaseHandlers: ViewModifier {
                 showNewWorktree = true
             }
         let d = c
+            .onReceive(NotificationCenter.default.publisher(for: .alasFocusMainWorktree)) { _ in
+                state.focusMainWorktreeForCurrentProject()
+            }
+        let e = d
             .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
                 if let wt = selectedWorktree() { _ = try? state.openTerminalTab(for: wt) }
             }
-        let e = d
+        let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
                 if let wt = selectedWorktree() {
                     state.handleCloseShortcut(worktreeId: wt.id)
                 }
             }
-        let f = e
+        let g = f
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
                 guard let number = notification.object as? Int,
                       let wt = selectedWorktree() else { return }
                 state.tabs.activateTabNumber(number, worktreeId: wt.id)
             }
-        let g = f
+        let h = g
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
                 if let wt = selectedWorktree() {
                     state.saveActiveTab(worktreeId: wt.id)
                 }
             }
-        let h = g
+        let i = h
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTabAs)) { _ in
                 if let wt = selectedWorktree() {
                     state.saveActiveTabAs(worktreeId: wt.id)
                 }
             }
-        let i = h
+        let j = i
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveAllTabs)) { _ in
                 state.saveAllTabs()
             }
-        let j = i
+        let k = j
             .onReceive(NotificationCenter.default.publisher(for: .alasRevertActiveTab)) { _ in
                 if let wt = selectedWorktree() {
                     state.revertActiveTab(worktreeId: wt.id)
                 }
             }
-        let k = j
+        let l = k
             .onReceive(NotificationCenter.default.publisher(for: .alasNewFile)) { _ in
                 if let wt = selectedWorktree() {
                     state.newFile(in: wt.id)
                 }
             }
-        let l = k
+        let m = l
             .onReceive(NotificationCenter.default.publisher(for: .alasRenameActiveFile)) { _ in
                 if let wt = selectedWorktree() {
                     state.renameActiveFile(worktreeId: wt.id)
                 }
             }
-        let m = l
+        let n = m
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { _ in
                 openSettings()
             }
-        let n = m
+        let o = n
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenSearch)) { _ in
                 // Close the repo selector so the two overlays never overlap;
                 // RepoSelectorDialog is mounted after FileSearchDialog and
                 // would otherwise keep capturing keys.
                 state.openSearchOverlay()
             }
-        let o = n
+        let p = o
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenRepoSelector)) { _ in
                 // Toggle: closing if already open, opening (and closing the
                 // file searcher) if not. We also call `search.close()` so an
@@ -421,11 +425,11 @@ private struct RootBaseHandlers: ViewModifier {
                 // continuing in the background under the new overlay.
                 state.toggleRepoSelectorOverlay()
             }
-        let p = o
+        let q = p
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { _ in
                 state.toggleAgentLauncherOverlay(canOpen: selectedWorktree() != nil)
             }
-        let q = p
+        let r = q
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in
                 let beforeIds = state.allWorktreeIds()
                 Task {
@@ -436,7 +440,7 @@ private struct RootBaseHandlers: ViewModifier {
                     state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
-        return q
+        return r
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
@@ -495,6 +499,7 @@ extension Notification.Name {
     static let alasToggleRightPane   = Notification.Name("AlasToggleRightPane")
     static let alasCreateProject     = Notification.Name("AlasCreateProject")
     static let alasNewWorktree       = Notification.Name("AlasNewWorktree")
+    static let alasFocusMainWorktree = Notification.Name("AlasFocusMainWorktree")
     static let alasRefreshWorktrees  = Notification.Name("AlasRefreshWorktrees")
     static let alasNewTerminalTab  = Notification.Name("AlasNewTerminalTab")
     static let alasOpenAgentLauncher = Notification.Name("AlasOpenAgentLauncher")

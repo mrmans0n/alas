@@ -237,6 +237,26 @@ struct ProjectsManagerWorktreeOrderingTests {
         #expect(mgr.visibleWorktrees(projectId: project.id).map(\.branch) == ["main", "feat", "fix"])
     }
 
+    @Test func visibleMainWorktreeReturnsUnarchivedMainOnly() {
+        let main = wt(path: "/repo", branch: "main")
+        let feat = wt(path: "/repo/wts/feat", branch: "feat")
+        let project = ProjectConfig(
+            id: "p1",
+            name: "p1",
+            path: "/repo",
+            color: "blue",
+            addedAt: Date()
+        )
+        let mgr = ProjectsManager(persistedProjects: [project])
+        seed(mgr, projectId: project.id, [feat, main])
+
+        #expect(mgr.visibleMainWorktree(projectId: project.id)?.id == main.id)
+
+        mgr.setWorktreeHidden(projectId: project.id, path: main.path, hidden: true)
+
+        #expect(mgr.visibleMainWorktree(projectId: project.id) == nil)
+    }
+
     @Test func archivedWorktreesAlsoHaveMainFirst() {
         let main = wt(path: "/repo", branch: "main")
         let feat = wt(path: "/repo/wts/feat", branch: "feat")

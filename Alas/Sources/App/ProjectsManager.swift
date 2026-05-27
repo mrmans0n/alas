@@ -125,6 +125,11 @@ final class ProjectsManager {
         return worktrees(projectId: projectId).filter { hidden.contains(canonical($0.path)) }
     }
 
+    func visibleMainWorktree(projectId: String) -> Worktree? {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+        return visibleWorktrees(projectId: projectId).first { isMainWorktree($0, project: project) }
+    }
+
     func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {
         guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
               var rows = worktreesByProject[projectId],

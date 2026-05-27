@@ -1492,6 +1492,25 @@ final class AppState {
         return nil
     }
 
+    var canFocusMainWorktreeForCurrentProject: Bool {
+        mainWorktreeForCurrentProject() != nil
+    }
+
+    func focusMainWorktreeForCurrentProject() {
+        guard let main = mainWorktreeForCurrentProject() else { return }
+        selectedWorktreeId = main.id
+    }
+
+    private func mainWorktreeForCurrentProject() -> Worktree? {
+        guard let current = selectedWorktreeId else { return nil }
+        for project in projects {
+            let visible = projectsManager.visibleWorktrees(projectId: project.id)
+            guard visible.contains(where: { $0.id == current }) else { continue }
+            return projectsManager.visibleMainWorktree(projectId: project.id)
+        }
+        return nil
+    }
+
     private func makeSearchEnvironment() -> SearchEnvironment {
         // Invariant: the two synchronous closures below are only invoked
         // from `SearchModel`, which is `@MainActor` — so `assumeIsolated`
