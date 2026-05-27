@@ -8,7 +8,7 @@ struct ACPComposer: View {
     let manager: ACPSessionManager
     let worktreeRoot: URL
     let agentLookup: (String) -> AgentDefinition?
-    let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Void
+    let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
 
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool

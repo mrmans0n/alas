@@ -268,7 +268,14 @@ extension ACPSessionRunner {
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
                 try await self.connection.prompt(sessionId: remoteId, blocks: blocks)
-                await MainActor.run { self.session.streamingState = .streaming }
+                // The `session/prompt` response is the END of the
+                // turn — by the time `prompt` returns the agent has
+                // emitted every update for this turn and the response
+                // carries the stop reason. Flip back to `.idle` so the
+                // composer accepts the next prompt; leaving it on
+                // `.streaming` froze the UI on Stop after every
+                // successful reply.
+                await MainActor.run { self.session.streamingState = .idle }
             } catch {
                 await MainActor.run {
                     self.session.lastError = "prompt failed: \(error.localizedDescription)"

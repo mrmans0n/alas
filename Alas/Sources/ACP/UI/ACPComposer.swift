@@ -5,7 +5,10 @@ struct ACPInputField: NSViewRepresentable {
     @ObservedObject var session: ACPSession
     let worktreeRoot: URL
     let actions: ACPComposerActions
-    let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Void
+    /// Returns `true` when the host accepted the submission (and the
+    /// textview should be cleared) or `false` to keep the draft in
+    /// place (e.g. session not ready, prompt already in flight).
+    let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -53,14 +56,14 @@ struct ACPInputField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         let worktreeRoot: URL
-        let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Void
+        let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
         var promptSuggestions: [ACPPromptSuggestion] = []
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
         var theme: Theme?
         weak var textView: NSTextView?
 
-        init(worktreeRoot: URL, onSubmit: @escaping (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Void) {
+        init(worktreeRoot: URL, onSubmit: @escaping (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool) {
             self.worktreeRoot = worktreeRoot
             self.onSubmit = onSubmit
         }
@@ -104,8 +107,13 @@ struct ACPInputField: NSViewRepresentable {
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            onSubmit(text, attachments)
-            textView.string = ""
+            // Only clear the draft when the host accepts the
+            // submission. Pressing ⏎ while the agent is connecting /
+            // disconnected / streaming used to wipe the textview even
+            // though the callback rejected the prompt.
+            if onSubmit(text, attachments) {
+                textView.string = ""
+            }
         }
 
         /// Walks the attributed string. Mention chips (attachments tagged

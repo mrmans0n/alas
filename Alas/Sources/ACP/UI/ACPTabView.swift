@@ -125,19 +125,21 @@ private struct ACPSessionView: View {
                 manager: manager,
                 worktreeRoot: worktree.path,
                 agentLookup: { state.agent(id: $0) }
-            ) { text, attachments in
+            ) { text, attachments -> Bool in
                 // Gate: if the runner isn't ready (initial attach in
                 // flight, agent crashed, etc.) or a prompt turn is
                 // already in flight (streaming/sending — send button
-                // is showing Stop), silently drop the submission. The
-                // send button is disabled in the same conditions, so
-                // this is the keyboard-path mirror — ⏎ should be a
-                // no-op when the button is too.
+                // is showing Stop), reject the submission and KEEP
+                // the draft. Returning `false` tells the textview not
+                // to clear, which is the difference from a no-op:
+                // we don't want ⏎ to silently erase the user's
+                // unsent prompt.
                 guard session.attached, !session.disconnected,
                       session.streamingState != .streaming,
                       session.streamingState != .sending,
-                      let runner = manager.runners[sessionId] else { return }
+                      let runner = manager.runners[sessionId] else { return false }
                 runner.send(text: text, attachments: attachments)
+                return true
             }
         }
     }
