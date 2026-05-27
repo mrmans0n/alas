@@ -181,6 +181,7 @@ extension ACPSessionManager {
             session.promptSuggestions = result.promptSuggestions
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
+                                          worktreePath: worktreePath,
                                           onDirtyCheck: onDirtyCheck)
             runner.start()
             runners[sessionId] = runner

@@ -10,6 +10,11 @@ final class ACPSessionRunner {
     /// (remote) session id lives on `session.remoteSessionId` and is what
     /// we pass to every `session/*` JSON-RPC call.
     let sessionId: String
+    /// Absolute filesystem path of the worktree this session is anchored
+    /// to. Distinct from `session.worktreeId`, which is a stable opaque
+    /// identifier used for persistence. Every agent file request is
+    /// validated against this path before being honoured.
+    let worktreePath: String
     /// Single policy instance shared between the runner (where the agent's
     /// `requestPermission` resumes a continuation) and the UI (where the
     /// user's click resolves it). Storing it here is the single source of
@@ -27,11 +32,14 @@ final class ACPSessionRunner {
     private var seq: Int64 = 0
 
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
-         sessionId: String, onDirtyCheck: ((String) -> Bool)? = nil) {
+         sessionId: String, worktreePath: String,
+         onDirtyCheck: ((String) -> Bool)? = nil)
+    {
         self.session = session
         self.connection = connection
         self.store = store
         self.sessionId = sessionId
+        self.worktreePath = worktreePath
         self.onDirtyCheck = onDirtyCheck
         self.policy = ACPPermissionPolicy(
             session: session,
@@ -72,19 +80,33 @@ final class ACPSessionRunner {
 
         filesTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let writer = ACPFileWriter(worktreeRoot: URL(fileURLWithPath: self.session.worktreeId))
+            let writer = ACPFileWriter(
+                worktreeRoot: URL(fileURLWithPath: self.worktreePath)
+            )
             for await req in self.connection.client.fileRequests {
                 switch req {
                 case .read(let id, let params):
                     do {
-                        let data = try Data(contentsOf: URL(fileURLWithPath: params.path))
+                        // Same containment check as the write path —
+                        // without this an adapter could request any
+                        // absolute path (e.g. `~/.ssh/config`) and
+                        // exfiltrate it without a permission prompt.
+                        let target = try writer.resolveInsideWorktree(path: params.path)
+                        let data = try Data(contentsOf: target)
                         let result = ACPFsReadResult(content: String(data: data, encoding: .utf8) ?? "")
                         let body = try JSONEncoder().encode(result)
                         self.connection.client.respondToFileRequest(id: id, result: .success(body))
+                    } catch ACPFileWriter.Error.outsideWorktree(let p) {
+                        self.appendAndPersistSystemNotice("Blocked read outside worktree: \(p)")
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32001, message: "path outside worktree", data: nil))
+                        )
                     } catch {
                         self.connection.client.respondToFileRequest(
                             id: id,
-                            result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
+                            result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil))
+                        )
                     }
                 case .write(let id, let params):
                     if self.onDirtyCheck?(params.path) == true {

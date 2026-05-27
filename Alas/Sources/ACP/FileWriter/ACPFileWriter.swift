@@ -10,11 +10,7 @@ struct ACPFileWriter {
     let path: String }
 
     func write(path: String, content: String) throws -> Result {
-        let target = URL(fileURLWithPath: path).standardizedFileURL
-        let root = worktreeRoot.standardizedFileURL
-        guard target.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/") ||
-              target.resolvingSymlinksInPath().path == root.resolvingSymlinksInPath().path
-        else { throw Error.outsideWorktree(path: target.path) }
+        let target = try resolveInsideWorktree(path: path)
 
         let pre = (try? String(contentsOf: target, encoding: .utf8)) ?? ""
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
@@ -22,6 +18,21 @@ struct ACPFileWriter {
         try content.write(to: target, atomically: true, encoding: .utf8)
         let (added, removed) = Self.diffLineCount(pre: pre, post: content)
         return Result(added: added, removed: removed, path: target.path)
+    }
+
+    /// Throws `outsideWorktree` if `path` resolves outside the
+    /// worktree root after symlink expansion. Returned URL is the
+    /// resolved absolute target — safe to read or write. Used by both
+    /// the write path AND the read path so the worktree boundary is
+    /// enforced symmetrically.
+    func resolveInsideWorktree(path: String) throws -> URL {
+        let target = URL(fileURLWithPath: path).standardizedFileURL
+        let root = worktreeRoot.standardizedFileURL
+        let resolvedTarget = target.resolvingSymlinksInPath().path
+        let resolvedRoot = root.resolvingSymlinksInPath().path
+        guard resolvedTarget.hasPrefix(resolvedRoot + "/") || resolvedTarget == resolvedRoot
+        else { throw Error.outsideWorktree(path: target.path) }
+        return target
     }
 
     /// Cheap +N/-M counts via line-set symmetric difference. Good enough for the

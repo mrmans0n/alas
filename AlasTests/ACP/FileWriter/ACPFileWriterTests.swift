@@ -42,4 +42,24 @@ struct ACPFileWriterTests {
             _ = try writer.write(path: "/etc/passwd", content: "x")
         }
     }
+
+    @Test("resolveInsideWorktree rejects paths outside the worktree")
+    func resolveOutside() throws {
+        let wt = try makeWorktree()
+        defer { try? FileManager.default.removeItem(at: wt) }
+        let writer = ACPFileWriter(worktreeRoot: wt)
+        #expect(throws: ACPFileWriter.Error.self) {
+            _ = try writer.resolveInsideWorktree(path: "/etc/passwd")
+        }
+    }
+
+    @Test("resolveInsideWorktree accepts files inside the worktree")
+    func resolveInside() throws {
+        let wt = try makeWorktree()
+        defer { try? FileManager.default.removeItem(at: wt) }
+        let writer = ACPFileWriter(worktreeRoot: wt)
+        let target = wt.appendingPathComponent("inside.txt").path
+        let resolved = try writer.resolveInsideWorktree(path: target)
+        #expect(resolved.path == target)
+    }
 }

@@ -22,7 +22,8 @@ struct ACPMessageTests {
     func toolRoundtrip() throws {
         let m = ACPMessage.toolCall(.init(
             toolCallId: "tc-1", title: "read_file", kind: "read",
-            status: "completed", contentSummary: "8.2k", locations: ["file://x"]))
+            status: "completed", content: "8.2k bytes", preview: "8.2k",
+            locations: ["file://x"]))
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
         #expect(back == m)

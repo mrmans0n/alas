@@ -15,7 +15,13 @@ struct ACPSessionRunnerTests {
 
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        let runner = ACPSessionRunner(session: session, connection: ACPConnection(client: mock), store: store, sessionId: "s")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
         runner.start()
 
         mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("hello"))))
