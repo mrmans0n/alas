@@ -1323,6 +1323,9 @@ final class AppState {
             if case .editor = tab {
                 tabs.discardBuffer(worktreeId: worktreeId, tabId: tabId)
             }
+            if case .acpSession(let s) = tab {
+                cleanupACPSession(worktreeId: worktreeId, sessionId: s.sessionId)
+            }
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
@@ -1348,11 +1351,34 @@ final class AppState {
         }
     }
 
+    private func cleanupACPSessions(worktreeId: String, allTabs: [Tab], closedIds: [TabID]) {
+        for id in closedIds {
+            if let tab = allTabs.first(where: { $0.id == id }),
+               case .acpSession(let s) = tab {
+                cleanupACPSession(worktreeId: worktreeId, sessionId: s.sessionId)
+            }
+        }
+    }
+
+    /// Detach a single ACP session's runner and remove it from the
+    /// worktree's manager. Different from `disposeACPManager`, which
+    /// tears down the whole worktree's manager — this leaves the
+    /// manager (and any sibling sessions) running.
+    private func cleanupACPSession(worktreeId: String, sessionId: String) {
+        guard let manager = acpManagers[worktreeId],
+              let runner = manager.runners[sessionId] else { return }
+        runner.stop()
+        Task { @MainActor in
+            await manager.detach(sessionId: sessionId)
+        }
+    }
+
     func closeOtherTabs(worktreeId: String, keeping tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeOthers(worktreeId: worktreeId, keeping: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     /// Tear down every tab/terminal/harness reference for a worktree id without
@@ -1375,6 +1401,7 @@ final class AppState {
         let closed = tabs.closeToLeft(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     func closeTabsToRight(worktreeId: String, of tabId: TabID) {
@@ -1382,6 +1409,7 @@ final class AppState {
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     private func defaultTerminalTitle(for worktree: Worktree) -> String {

@@ -131,7 +131,13 @@ final class ACPSessionRunner {
                     }
                     do {
                         let res = try writer.write(path: params.path, content: params.content)
-                        self.appendAndPersistFileEdit(.init(path: params.path, added: res.added, removed: res.removed))
+                        // Persist the worktree-relative path so the
+                        // "Open diff" button can pass it straight to
+                        // `git.diff(file:)` (which keys by relative
+                        // path). Storing the absolute path silently
+                        // produced empty diffs.
+                        let storedPath = self.relativeToWorktree(params.path) ?? params.path
+                        self.appendAndPersistFileEdit(.init(path: storedPath, added: res.added, removed: res.removed))
                         // ACP `fs/write_text_file` is defined as
                         // returning `result: null`. Encoding an empty
                         // Swift struct produced `{}`, which spec-strict
@@ -158,6 +164,34 @@ final class ACPSessionRunner {
         updatesTask?.cancel()
         permissionsTask?.cancel()
         filesTask?.cancel()
+    }
+
+    /// Re-upsert the session's persistence row to capture changes to
+    /// title / model / mode / autoRun that the runner mutated directly.
+    /// `ACPSessionManager.persist` does the same thing plus a recent-
+    /// list refresh; the runner skips that because it has no manager
+    /// handle, and the next open via the manager picks up the new row.
+    func persistSessionRow() {
+        guard let row = try? store.loadSession(id: sessionId) else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        try? store.upsertSession(.init(
+            id: row.id, agentId: row.agentId, title: session.title,
+            currentModel: session.currentModel, currentMode: session.currentMode,
+            autoRun: session.autoRunEnabled,
+            createdAt: row.createdAt, updatedAt: now,
+            lastOpenedAt: row.lastOpenedAt, archived: row.archived
+        ))
+    }
+
+    /// Returns `absolutePath` relative to the runner's worktree, or
+    /// `nil` if the path escapes it. Used by the file-edit card so the
+    /// diff opener can hand the value straight to `git.diff(file:)`.
+    func relativeToWorktree(_ absolutePath: String) -> String? {
+        let root = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        let target = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
+        guard target.hasPrefix(prefix) else { return nil }
+        return String(target.dropFirst(prefix.count))
     }
 
     /// ACP `fs/read_text_file` accepts optional `line` (1-indexed
@@ -213,8 +247,17 @@ extension ACPSessionRunner {
             guard let self else { return }
             await MainActor.run {
                 let before = self.session.messages.count
+                let titleBefore = self.session.title
                 self.session.recordUserPrompt(text: text, attachments: attachments)
                 self.persistFromIndex(before)
+                // First-prompt path auto-renames the session to the
+                // prompt prefix. Persist the row so the new title
+                // survives a reload — without this the toolbar showed
+                // the derived name in-memory but the SQLite row stayed
+                // on "New session" until the user manually renamed.
+                if self.session.title != titleBefore {
+                    self.persistSessionRow()
+                }
                 self.session.streamingState = .sending
             }
             do {
