@@ -127,11 +127,15 @@ private struct ACPSessionView: View {
                 agentLookup: { state.agent(id: $0) }
             ) { text, attachments in
                 // Gate: if the runner isn't ready (initial attach in
-                // flight, agent crashed, etc.) silently drop the
-                // submission. The composer's send button is disabled in
-                // the same conditions, so this is the keyboard-path
-                // mirror — ⏎ should be a no-op when the button is too.
+                // flight, agent crashed, etc.) or a prompt turn is
+                // already in flight (streaming/sending — send button
+                // is showing Stop), silently drop the submission. The
+                // send button is disabled in the same conditions, so
+                // this is the keyboard-path mirror — ⏎ should be a
+                // no-op when the button is too.
                 guard session.attached, !session.disconnected,
+                      session.streamingState != .streaming,
+                      session.streamingState != .sending,
                       let runner = manager.runners[sessionId] else { return }
                 runner.send(text: text, attachments: attachments)
             }

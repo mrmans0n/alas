@@ -66,7 +66,12 @@ final class ACPSessionRunner {
                     self.persistFromIndex(before)
                 }
             }
-            // Stream finished — process exited unexpectedly.
+            // The for-await also exits when the task gets cancelled —
+            // that's the intentional detach path (tab close, worktree
+            // teardown). Don't pollute the persisted transcript with
+            // an "Agent disconnected" notice in that case; only flag
+            // the unexpected stream-end.
+            if Task.isCancelled { return }
             await MainActor.run {
                 self.session.disconnected = true
                 self.session.attached = false
