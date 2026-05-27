@@ -344,6 +344,12 @@ final class AppState {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
         tabs.loadAll(worktreeIds: allWorktreeIds)
+        // Persisted terminal-tab leaves are now in memory — refresh their
+        // hook symlinks so zmx-persisted shells in undisplayed tabs deliver
+        // hooks/CLI requests to the live harness immediately, rather than
+        // waiting for `restoreTerminalTabIfNeeded` (driven by
+        // TerminalTabView.task) to fire when the user opens the tab.
+        refreshPersistedHookSymlinks()
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
@@ -901,18 +907,38 @@ final class AppState {
                 for s in self.terminal.registry.all where s.id == sessionId {
                     return (projectId: s.projectId, worktreeId: s.worktreeId)
                 }
-                return nil
+                // Registry miss can happen for zmx-persisted leaves the
+                // user hasn't displayed yet (restoreTerminalTabIfNeeded
+                // is driven by TerminalTabView.task). Fall back to a
+                // persisted-tab scan so background agents still get
+                // notifications routed to the right worktree.
+                return self.persistedLeafLocation(leafId: sessionId)
             },
             shouldNotifyOnAwaiting: { [weak self] in
                 self?.config.harness.notifyOnAwaiting ?? true
             }
         )
-        terminal.socketPath = harness.socketServer.socketPath
+        // Per-leaf symlink: stays valid across Alas restarts (the next
+        // launch's `linkSession` repoints the same `/tmp/alas-<uid>/sock-
+        // <leafId>` path), and per-leaf scoping avoids collisions between
+        // concurrent Alas processes.
+        terminal.socketPathProvider = { [weak self] leafId in
+            self?.harness.socketServer.linkSession(leafId: leafId)
+        }
+        terminal.socketReleaseHandler = { [weak self] leafId in
+            self?.harness.socketServer.unlinkSession(leafId: leafId)
+        }
         harness.socketServer.onCLIRequest = { [weak self] request in
             await MainActor.run {
                 guard let self else { return .error("Alas is not available.") }
                 let router = self.makeCLICommandRouter { [weak self] sessionId in
-                    self?.terminal.registry.session(for: sessionId)?.worktreeId
+                    if let s = self?.terminal.registry.session(for: sessionId) {
+                        return s.worktreeId
+                    }
+                    // Fall back to persisted-tab scan so `alas open` etc.
+                    // still resolve a worktree for zmx-persisted leaves
+                    // whose `TerminalSession` hasn't been restored yet.
+                    return self?.persistedLeafLocation(leafId: sessionId)?.worktreeId
                 }
                 return router.handle(request)
             }
@@ -921,6 +947,49 @@ final class AppState {
             self?.activateHarnessSession(
                 projectId: projectId, worktreeId: worktreeId, sessionId: sessionId
             )
+        }
+        // Symlink refresh runs from `reloadTabs()` instead of here —
+        // `startHarness()` is called before the tab JSONs have been read,
+        // so projectsManager.worktrees(...) would be empty.
+    }
+
+    /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
+    /// owning a given leaf. Used as the fallback for harness lookups
+    /// (`stateLookup` and the CLI router) when a hook arrives from a
+    /// zmx-persisted shell whose `TerminalSession` hasn't been restored
+    /// yet — restoration is lazy on `TerminalTabView.task`, but hooks
+    /// can fire before the user opens the tab.
+    func persistedLeafLocation(leafId: String) -> (projectId: String, worktreeId: String)? {
+        for project in projects {
+            for worktree in projectsManager.worktrees(projectId: project.id) {
+                for tab in tabs.tabs(forWorktree: worktree.id) {
+                    guard case .terminal(let state) = tab else { continue }
+                    if state.root.leaves().contains(where: { $0.id == leafId }) {
+                        return (project.id, worktree.id)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Walks every persisted terminal-tab leaf across every worktree and
+    /// (re)points its per-leaf hook symlink at the current bind path. Run
+    /// from `reloadTabs()` once persisted state is in memory so background
+    /// zmx-persisted shells (whose tabs the user hasn't displayed yet —
+    /// `restoreTerminalTabIfNeeded` would otherwise only fire from
+    /// `TerminalTabView.task`) can deliver hooks/CLI requests to the live
+    /// harness immediately.
+    private func refreshPersistedHookSymlinks() {
+        for project in projects {
+            for worktree in projectsManager.worktrees(projectId: project.id) {
+                for tab in tabs.tabs(forWorktree: worktree.id) {
+                    guard case .terminal(let state) = tab else { continue }
+                    for leaf in state.root.leaves() {
+                        _ = harness.socketServer.linkSession(leafId: leaf.id)
+                    }
+                }
+            }
         }
     }
 
@@ -994,6 +1063,11 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
+        // Single identity for this pane: used as the zmx session name
+        // suffix, the SessionRegistry key, the leaf id, the persisted
+        // sessionId (mirrored to id on encode), and ALAS_SESSION_ID. Generated
+        // here so every downstream call site receives the same value.
+        let leafId = UUID().uuidString
         let opened: OpenedTerminalSession
         if let terminalSessionOpener {
             opened = try terminalSessionOpener(
@@ -1008,7 +1082,8 @@ final class AppState {
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
-                startupScriptSuffix: startupScriptSuffix
+                startupScriptSuffix: startupScriptSuffix,
+                leafId: leafId
             )
             opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in
                 session?.surface.foregroundPid
@@ -1019,6 +1094,10 @@ final class AppState {
             worktreeId: worktree.id,
             baseTitle: defaultTerminalTitle(for: worktree)
         )
+        // `opened.id` is the live session id; for the default opener path
+        // above that equals `leafId` (we passed it in). The injected
+        // `terminalSessionOpener` (test-only) generates its own id and we
+        // honor it for backward-compat with existing tests.
         return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
     }
 
@@ -1041,24 +1120,30 @@ final class AppState {
               let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
               let worktree = worktree(withId: worktreeId),
               let project = projects.first(where: { $0.id == worktree.projectId }),
-              let focusedSession = terminal.registry.session(for: focused.sessionId) else { return }
+              let focusedSession = terminal.registry.session(for: focused.id) else { return }
 
         let cwd = focusedSession.surface.currentWorkingDirectory
             ?? focused.lastCwd.map { URL(fileURLWithPath: $0) }
             ?? worktree.path
 
         do {
+            // Single identity for the new pane: zmx session name suffix,
+            // SessionRegistry key, leaf id, persisted sessionId, ALAS_SESSION_ID.
+            // Generated here so the registry key `terminal.openSession`
+            // registers under matches the `newLeafId` the split tree stores.
+            let newLeafId = UUID().uuidString
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
-                forcedCwd: cwd
+                forcedCwd: cwd,
+                leafId: newLeafId
             )
             harness.detector.register(sessionId: session.id) { [weak session] in
                 session?.surface.foregroundPid
             }
             _ = tabs.splitFocusedLeaf(
                 worktreeId: worktreeId, tabId: activeId, axis: axis,
-                newLeafId: UUID().uuidString, newSessionId: session.id
+                newLeafId: newLeafId, newSessionId: newLeafId
             )
         } catch {
             AlasGhostty.logger.error("splitFocusedPane failed: \(String(describing: error), privacy: .public)")
@@ -1076,10 +1161,62 @@ final class AppState {
         if case .tabRemoved = outcome {
             closeTab(worktreeId: worktreeId, tabId: activeId)
         } else {
-            let closedSessionId = outcome.closedSessionId
-            terminal.closeSession(id: closedSessionId)
-            harness.detector.unregister(sessionId: closedSessionId)
-            harness.forgetSession(closedSessionId)
+            let closedLeafId = outcome.closedLeafId
+            terminal.closeSession(id: closedLeafId)
+            harness.detector.unregister(sessionId: closedLeafId)
+            harness.forgetSession(closedLeafId)
+        }
+    }
+
+    /// "Terminate All Terminal Sessions" menu action. Confirms with the user,
+    /// then closes every terminal tab across every worktree (which kills
+    /// the underlying zmx session) and sweeps any persisted-but-not-yet-
+    /// restored leaves this instance owns.
+    func terminateAllTerminalSessions() {
+        // Snapshot which terminal tabs exist so the confirm sheet count stays
+        // accurate even if state changes between rendering and confirming.
+        let terminalTabs: [(worktreeId: String, tabId: TabID)] = projects
+            .flatMap { projectsManager.worktrees(projectId: $0.id) }
+            .flatMap { worktree in
+                tabs.tabs(forWorktree: worktree.id).compactMap { tab -> (String, TabID)? in
+                    guard case .terminal = tab else { return nil }
+                    return (worktree.id, tab.id)
+                }
+            }
+        let persistedLeafIds = allPersistedTerminalLeafIds()
+        // Count individual leaves, not tabs — a single tab with split panes
+        // contains multiple leaves and `terminateAll` kills every one. Union
+        // with the live registry catches any session not yet flushed to disk.
+        let sessionCount = Set(persistedLeafIds).union(terminal.registry.all.map(\.id)).count
+
+        let alert = NSAlert()
+        alert.messageText = "Terminate All Terminal Sessions"
+        alert.informativeText = "Terminate \(sessionCount) terminal session(s)? This will kill any agent or process currently running in them."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Terminate")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        for (worktreeId, tabId) in terminalTabs {
+            closeTab(worktreeId: worktreeId, tabId: tabId)
+        }
+        // Also kill persisted leaves whose tab the user never displayed
+        // this run — closeTab only handles registered sessions, but we
+        // own those persisted leaves too. Scoped to OUR instance's known
+        // leaves so we don't trample sessions owned by a concurrently-
+        // running Alas process under the same ZMX_DIR.
+        terminal.terminateAll(additionalLeafIds: persistedLeafIds)
+    }
+
+    /// All terminal-leaf ids persisted under this Alas instance's projects.
+    private func allPersistedTerminalLeafIds() -> [String] {
+        projects.flatMap { project in
+            projectsManager.worktrees(projectId: project.id).flatMap { worktree in
+                tabs.tabs(forWorktree: worktree.id).flatMap { tab -> [String] in
+                    guard case .terminal(let state) = tab else { return [] }
+                    return state.root.leaves().map(\.id)
+                }
+            }
         }
     }
 
@@ -1181,21 +1318,22 @@ final class AppState {
               let project = projects.first(where: { $0.id == worktree.projectId }) else { return nil }
 
         for leaf in state.root.leaves() {
-            if terminal.registry.session(for: leaf.sessionId) != nil { continue }
+            // Idempotent: skip leaves whose session is already alive in the
+            // registry. The leaf's id is the stable identity used as both
+            // the registry key and the zmx session name suffix; we no longer
+            // generate a fresh sessionId on each restore.
+            if terminal.registry.session(for: leaf.id) != nil { continue }
+
             let forcedCwd = leaf.lastCwd.map { URL(fileURLWithPath: $0) }
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
-                forcedCwd: forcedCwd
+                forcedCwd: forcedCwd,
+                leafId: leaf.id
             )
-            harness.detector.unregister(sessionId: leaf.sessionId)
-            harness.forgetSession(leaf.sessionId)
             harness.detector.register(sessionId: session.id) { [weak session] in
                 session?.surface.foregroundPid
             }
-            _ = tabs.replaceLeafSession(
-                worktreeId: worktreeId, tabId: tabId, leafId: leaf.id, sessionId: session.id
-            )
         }
         return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
     }
@@ -1321,9 +1459,9 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    harness.detector.unregister(sessionId: leaf.sessionId)
-                    harness.forgetSession(leaf.sessionId)
-                    terminal.closeSession(id: leaf.sessionId)
+                    harness.detector.unregister(sessionId: leaf.id)
+                    harness.forgetSession(leaf.id)
+                    terminal.closeSession(id: leaf.id)
                 }
             }
             if case .editor = tab {
@@ -1341,9 +1479,9 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    harness.detector.unregister(sessionId: leaf.sessionId)
-                    harness.forgetSession(leaf.sessionId)
-                    terminal.closeSession(id: leaf.sessionId)
+                    harness.detector.unregister(sessionId: leaf.id)
+                    harness.forgetSession(leaf.id)
+                    terminal.closeSession(id: leaf.id)
                 }
             }
         }

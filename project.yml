@@ -157,6 +157,9 @@ targets:
       - name: Build GhosttyKit
         script: '"${SRCROOT}/scripts/build-ghostty.sh"'
         basedOnDependencyAnalysis: false
+      - name: Build zmx
+        script: '"${SRCROOT}/scripts/build-zmx.sh"'
+        basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Embed Ghostty Resources
         script: '"${SRCROOT}/scripts/embed-ghostty-resources.sh"'

@@ -449,6 +449,9 @@ private struct RootBaseHandlers: ViewModifier {
                     state.cleanupMissingWorktrees(beforeIds: beforeIds)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .alasTerminateAllTerminals)) { _ in
+                state.terminateAllTerminalSessions()
+            }
         return r
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopAllProjectGitWatchers()
@@ -533,6 +536,7 @@ extension Notification.Name {
     static let alasResizePaneRight  = Notification.Name("AlasResizePaneRight")
     static let alasResizePaneUp     = Notification.Name("AlasResizePaneUp")
     static let alasResizePaneDown   = Notification.Name("AlasResizePaneDown")
+    static let alasTerminateAllTerminals = Notification.Name("AlasTerminateAllTerminals")
     static let alasShowFindReplace  = Notification.Name("AlasShowFindReplace")
     static let codeEditorDidAttach  = Notification.Name("CodeEditorDidAttach")
     static let codeEditorDidDetach  = Notification.Name("CodeEditorDidDetach")

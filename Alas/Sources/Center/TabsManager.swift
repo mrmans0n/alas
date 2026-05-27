@@ -251,11 +251,11 @@ final class TabsManager {
 
     enum RemoveFocusedLeafOutcome {
         /// A non-focused-leaf sibling collapsed up; the tab persists.
-        case leafRemoved(tab: Tab, closedSessionId: String)
+        case leafRemoved(tab: Tab, closedLeafId: String)
         /// The focused leaf was the last leaf; caller must run the regular close-tab path.
-        case tabRemoved(closedSessionId: String)
+        case tabRemoved(closedLeafId: String)
 
-        var closedSessionId: String {
+        var closedLeafId: String {
             switch self {
             case .leafRemoved(_, let id), .tabRemoved(let id): return id
             }
@@ -272,7 +272,7 @@ final class TabsManager {
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .terminal(var state) = file.tabs[idx],
               let focused = state.root.find(leafId: state.focusedLeafId)?.leaf else { return nil }
-        let closedSessionId = focused.sessionId
+        let closedLeafId = focused.id
         if let newRoot = state.root.removingLeaf(id: state.focusedLeafId) {
             state.root = newRoot
             state.focusedLeafId = newRoot.firstLeaf().id
@@ -280,9 +280,9 @@ final class TabsManager {
             file.tabs[idx] = tab
             byWorktree[worktreeId] = file
             persist(worktreeId)
-            return .leafRemoved(tab: tab, closedSessionId: closedSessionId)
+            return .leafRemoved(tab: tab, closedLeafId: closedLeafId)
         } else {
-            return .tabRemoved(closedSessionId: closedSessionId)
+            return .tabRemoved(closedLeafId: closedLeafId)
         }
     }
 

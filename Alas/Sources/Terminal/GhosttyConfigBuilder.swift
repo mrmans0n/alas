@@ -64,6 +64,13 @@ enum GhosttyConfigBuilder {
         lines.append("background = \(bg)")
         lines.append("foreground = \(fg)")
 
+        // Disable Ghostty's shell integration globally. Every interactive
+        // pane in Alas launches through `zmx attach …`, and Ghostty's bash
+        // shell-integration rewrites argv in a way `zmx attach` rejects.
+        // We accept the loss of Ghostty's OSC-7 cwd auto-tracking as a
+        // known v1 tradeoff; revisit if `lastCwd` drift becomes a problem.
+        lines.append("shell-integration = none")
+
         // Defense-in-depth: prevent libghostty from acting on shortcuts Alas owns.
         // SurfaceView.isReservedAppKeyEquivalent already intercepts these before
         // they reach libghostty, but emitting unbinds ensures Ghostty's own

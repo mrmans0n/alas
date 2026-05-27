@@ -68,4 +68,17 @@ struct GhosttyConfigBuilderTests {
             #expect(body.contains(line), "config missing line: \(line)")
         }
     }
+
+    @Test @MainActor func writeGlobalConfigDisablesShellIntegration() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ghostty-config-shell-integration-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let cfg = AppConfig.defaults.terminal
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        try GhosttyConfigBuilder.writeGlobalConfigFile(cfg: cfg, theme: theme, to: url)
+        let body = try String(contentsOf: url, encoding: .utf8)
+
+        #expect(body.contains("shell-integration = none"))
+    }
 }
