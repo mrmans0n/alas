@@ -204,7 +204,15 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON]
             switch result {
             case .success(let data):
-                dict["result"] = try JSONSerialization.jsonObject(with: data)
+                // Allow top-level `null` (the ACP spec for
+                // `fs/write_text_file`'s success result) by passing
+                // `.fragmentsAllowed`. Without it Foundation throws,
+                // the surrounding catch swallows the error, and we
+                // never send back any reply — leaving the agent
+                // waiting on a successful write.
+                dict["result"] = try JSONSerialization.jsonObject(
+                    with: data, options: [.fragmentsAllowed]
+                )
             case .failure(let err):
                 dict["error"] = ["code": err.code, "message": err.message]
             }
