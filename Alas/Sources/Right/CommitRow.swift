@@ -24,7 +24,7 @@ struct CommitRow: View {
                 }
                 .padding(.bottom, isLast ? 6 : 8)
             }
-            .padding(.leading, 14)
+            .padding(.leading, 18)
             .padding(.trailing, 12)
             .padding(.top, 4)
             .contentShape(Rectangle())
@@ -59,20 +59,46 @@ struct CommitRow: View {
     private var rail: some View {
         GeometryReader { geo in
             let dotSize: CGFloat = 8
-            // Aligned with the vertical center of the subject text (system size 12).
+            let outerHalo: CGFloat = 14
             let dotCenterY: CGFloat = 8
-            let bottom: CGFloat = isLast ? dotCenterY + dotSize / 2 : geo.size.height
-            Path { p in
-                p.move(to: CGPoint(x: 4, y: dotCenterY + dotSize / 2))
-                p.addLine(to: CGPoint(x: 4, y: bottom))
+            let centerX: CGFloat = 7
+            let lineTop = dotCenterY + dotSize / 2 + 2
+            let lineBottom: CGFloat = isLast ? lineTop : geo.size.height
+
+            // Vertical gradient line (only when not last)
+            if !isLast {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                theme.color("accent-glow"),
+                                theme.color("accent-glow-soft").opacity(0.5),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 1.5, height: max(0, lineBottom - lineTop))
+                    .position(x: centerX, y: lineTop + max(0, lineBottom - lineTop) / 2)
             }
-            .stroke(theme.color("line"), lineWidth: 1)
+
+            // Outer halo ring
             Circle()
-                .fill(isHistorical ? theme.color("warn") : theme.color("accent"))
+                .stroke(theme.color("accent-glow-soft"), lineWidth: 2)
+                .frame(width: outerHalo, height: outerHalo)
+                .position(x: centerX, y: dotCenterY)
+
+            // Inner colored ring + bg-1 fill (hole-punch look)
+            Circle()
+                .fill(theme.color("bg-1"))
+                .overlay(
+                    Circle()
+                        .stroke(isHistorical ? theme.color("warn") : theme.color("accent"), lineWidth: 1.5)
+                )
                 .frame(width: dotSize, height: dotSize)
-                .position(x: 4, y: dotCenterY)
+                .position(x: centerX, y: dotCenterY)
         }
-        .frame(width: 8)
+        .frame(width: 14)
     }
 
     private var subjectLine: some View {
