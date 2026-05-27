@@ -73,7 +73,8 @@ struct WorkingTreeSectionView: View {
                         expanded: $stagedExpanded,
                         collapseNamespace: "staged",
                         actionLabel: "Unstage all",
-                        onAction: { onUnstageAll?(staged) }
+                        onAction: { onUnstageAll?(staged) },
+                        staged: true
                     )
                     if !unstaged.isEmpty {
                         subsection(
@@ -105,13 +106,18 @@ struct WorkingTreeSectionView: View {
         expanded: Binding<Bool>,
         collapseNamespace: String,
         actionLabel: String?,
-        onAction: (() -> Void)?
+        onAction: (() -> Void)?,
+        staged: Bool = false
     ) -> some View {
+        let add = files.reduce(0) { $0 + $1.add }
+        let del = files.reduce(0) { $0 + $1.del }
         SubHeader(
             title: title,
             count: files.count,
             expanded: expanded.wrappedValue,
             onToggle: { expanded.wrappedValue.toggle() },
+            staged: staged,
+            stats: (add, del),
             trailing: actionLabel.map { label in
                 AnyView(
                     AlasButton(title: label, style: .subtle, action: { onAction?() })
