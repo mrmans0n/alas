@@ -161,6 +161,18 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         return try JSONSerialization.data(withJSONObject: dict)
     }
 
+    /// JSON-RPC notification envelope — no `id` field, so no response
+    /// is expected and the caller doesn't suspend on a continuation.
+    func notify(_ request: ACPRequest) async throws {
+        var dict: [String: Any] = ["jsonrpc": "2.0", "method": request.method]
+        if let p = request.params {
+            let pData = try JSONEncoder().encode(AnyEncodableBox(p))
+            dict["params"] = try JSONSerialization.jsonObject(with: pData)
+        }
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        try transport.send(body)
+    }
+
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
         Task { [weak self] in
             guard let self else { return }

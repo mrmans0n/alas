@@ -132,7 +132,12 @@ final class ACPSessionRunner {
                     do {
                         let res = try writer.write(path: params.path, content: params.content)
                         self.appendAndPersistFileEdit(.init(path: params.path, added: res.added, removed: res.removed))
-                        let body = try JSONEncoder().encode(ACPFsWriteResult())
+                        // ACP `fs/write_text_file` is defined as
+                        // returning `result: null`. Encoding an empty
+                        // Swift struct produced `{}`, which spec-strict
+                        // SDKs reject as a protocol error even though
+                        // the write succeeded.
+                        let body = Data("null".utf8)
                         self.connection.client.respondToFileRequest(id: id, result: .success(body))
                     } catch ACPFileWriter.Error.outsideWorktree(let p) {
                         self.appendAndPersistSystemNotice("Blocked write outside worktree: \(p)")

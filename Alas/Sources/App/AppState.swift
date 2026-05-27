@@ -2070,8 +2070,18 @@ final class AppState {
     }
 
     /// Release the ACP session manager for the given worktree id.
-    /// Called from `cleanupWorktreeState` when a worktree is removed/archived.
+    /// Called from `cleanupWorktreeState` when a worktree is
+    /// removed/archived. Stops every attached runner (which cancels
+    /// its async tasks and shuts down the child agent process) before
+    /// the manager is dropped — otherwise the runner's `for await`
+    /// loops would keep the agent + permission / file handlers alive
+    /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
+        guard let manager = acpManagers[worktreeId] else { return }
+        let sessionIds = Array(manager.runners.keys)
+        Task { @MainActor in
+            for sid in sessionIds { await manager.detach(sessionId: sid) }
+        }
         acpManagers[worktreeId] = nil
     }
 

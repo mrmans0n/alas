@@ -31,6 +31,11 @@ protocol ACPClient: AnyObject {
     /// Sends a request and awaits a JSON-RPC response (raw bytes of the `result` field).
     func send(_ request: ACPRequest) async throws -> ACPResponse
 
+    /// Sends a fire-and-forget JSON-RPC notification. Used for spec-
+    /// compliant methods that don't reply, e.g. `session/cancel`,
+    /// where awaiting a reply would suspend the caller indefinitely.
+    func notify(_ request: ACPRequest) async throws
+
     /// Streaming `session/update` notifications.
     var incomingUpdates: AsyncStream<ACPSessionUpdateParams> { get }
 

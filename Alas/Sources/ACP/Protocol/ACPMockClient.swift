@@ -31,6 +31,13 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         return ACPResponse(body: try script(request))
     }
 
+    /// Mock notifications just record the call. Tests can inspect
+    /// `sent` (which holds both requests and notifications in arrival
+    /// order) without needing to script a reply.
+    func notify(_ request: ACPRequest) async throws {
+        sent.append(request)
+    }
+
     func emit(_ update: ACPSessionUpdateParams) { updatesCont.yield(update) }
     func emitPermission(id: JSONRPCID, params: ACPPermissionRequestParams) { permsCont.yield((id, params)) }
     func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }

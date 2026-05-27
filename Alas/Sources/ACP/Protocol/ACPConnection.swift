@@ -30,8 +30,12 @@ final class ACPConnection: @unchecked Sendable {
     }
 
     func cancel(sessionId: String) async throws {
-        _ = try await client.send(ACPRequest(method: "session/cancel",
-                                             params: ACPSessionCancelParams(sessionId: sessionId)))
+        // ACP defines `session/cancel` as a JSON-RPC NOTIFICATION
+        // (no `id`, no reply). Sending it as a request and awaiting a
+        // response left `userCancel()` suspended forever against
+        // spec-compliant agents, so the UI never returned to idle.
+        try await client.notify(ACPRequest(method: "session/cancel",
+                                           params: ACPSessionCancelParams(sessionId: sessionId)))
     }
 
     // ACP wire methods use snake_case (`session/set_mode`,
