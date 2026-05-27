@@ -1334,6 +1334,13 @@ extension GitService {
     /// anything without a known `<remote>/` prefix.
     func remoteForFetch(worktreePath: URL, ref: String) async throws -> (remote: String, branch: String)? {
         guard ref.contains("/") else { return nil }
+        // Guard against local branches whose name happens to match a remote
+        // prefix (e.g. a local branch literally named "origin/main").
+        let localCheck = try await Process.git(
+            ["show-ref", "--verify", "--quiet", "refs/heads/\(ref)"],
+            cwd: worktreePath
+        )
+        if localCheck.exitCode == 0 { return nil }
         let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
         guard remotesResult.exitCode == 0 else { return nil }
         let remotes = remotesResult.stdout

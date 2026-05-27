@@ -87,6 +87,8 @@ struct GitServiceRemoteForFetchTests {
         defer { try? FileManager.default.removeItem(at: repo) }
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: repo)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: repo)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
 
         let svc = GitService()
@@ -141,6 +143,8 @@ struct WorktreeCreateFetchTests {
             .appendingPathComponent("remote-clone-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: remoteClone) }
         _ = try await Process.git(["clone", "-q", remote.path, remoteClone.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: remoteClone)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: remoteClone)
         try "new remote content\n".write(to: remoteClone.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["commit", "-q", "-am", "remote update"], cwd: remoteClone)
         _ = try await Process.git(["push", "-q", "origin", "main"], cwd: remoteClone)
