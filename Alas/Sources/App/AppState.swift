@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Observation
+import os
 
 @Observable
 @MainActor
@@ -18,6 +19,8 @@ final class AppState {
         return manager
     }
     let terminal = TerminalService()
+    @ObservationIgnored
+    private static let logger = Logger(subsystem: "io.nlopez.alas", category: "AppState")
     struct OpenedTerminalSession {
         let id: String
         let foregroundPid: () -> pid_t?
@@ -473,6 +476,19 @@ final class AppState {
 
         Task { @MainActor in
             do {
+                if self.config.worktrees.fetchRemoteBeforeCreate {
+                    if let fetchInfo = try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base) {
+                        do {
+                            _ = try await GitService().fetchRef(
+                                worktreePath: repoPath,
+                                remote: fetchInfo.remote,
+                                branch: fetchInfo.branch
+                            )
+                        } catch {
+                            Self.logger.error("Fetch failed before creating worktree: \(String(describing: error), privacy: .public)")
+                        }
+                    }
+                }
                 let newWorktree = try await Self.performCreateWorktree(
                     repoPath: repoPath,
                     base: base, branch: branch, destination: canonicalDestination, projectId: projectId

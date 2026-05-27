@@ -57,6 +57,51 @@ struct AppConfig: Codable, Equatable {
         var autoFetch: Bool
         var fetchIntervalMinutes: Int
         var pruneStale: Bool
+        var fetchRemoteBeforeCreate: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case rootPath, pathTemplate, branchPrefix, baseBranch,
+                 trackUpstream, deleteBranchOnRemove, autoFetch,
+                 fetchIntervalMinutes, pruneStale, fetchRemoteBeforeCreate
+        }
+
+        init(
+            rootPath: String,
+            pathTemplate: String,
+            branchPrefix: String,
+            baseBranch: String,
+            trackUpstream: Bool,
+            deleteBranchOnRemove: Bool,
+            autoFetch: Bool,
+            fetchIntervalMinutes: Int,
+            pruneStale: Bool,
+            fetchRemoteBeforeCreate: Bool = false
+        ) {
+            self.rootPath = rootPath
+            self.pathTemplate = pathTemplate
+            self.branchPrefix = branchPrefix
+            self.baseBranch = baseBranch
+            self.trackUpstream = trackUpstream
+            self.deleteBranchOnRemove = deleteBranchOnRemove
+            self.autoFetch = autoFetch
+            self.fetchIntervalMinutes = fetchIntervalMinutes
+            self.pruneStale = pruneStale
+            self.fetchRemoteBeforeCreate = fetchRemoteBeforeCreate
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            rootPath = try c.decode(String.self, forKey: .rootPath)
+            pathTemplate = try c.decode(String.self, forKey: .pathTemplate)
+            branchPrefix = try c.decode(String.self, forKey: .branchPrefix)
+            baseBranch = try c.decode(String.self, forKey: .baseBranch)
+            trackUpstream = try c.decode(Bool.self, forKey: .trackUpstream)
+            deleteBranchOnRemove = try c.decode(Bool.self, forKey: .deleteBranchOnRemove)
+            autoFetch = try c.decode(Bool.self, forKey: .autoFetch)
+            fetchIntervalMinutes = try c.decode(Int.self, forKey: .fetchIntervalMinutes)
+            pruneStale = try c.decode(Bool.self, forKey: .pruneStale)
+            fetchRemoteBeforeCreate = (try? c.decode(Bool.self, forKey: .fetchRemoteBeforeCreate)) ?? false
+        }
     }
 
     struct Terminal: Codable, Equatable {
@@ -195,7 +240,8 @@ struct AppConfig: Codable, Equatable {
             deleteBranchOnRemove: true,
             autoFetch: true,
             fetchIntervalMinutes: 5,
-            pruneStale: false
+            pruneStale: false,
+            fetchRemoteBeforeCreate: false
         ),
         terminal: Terminal(
             shell: "/bin/zsh",
