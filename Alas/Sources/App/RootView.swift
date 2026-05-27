@@ -214,7 +214,14 @@ struct RootView: View {
                 }
             )
         case .empty:
-            EmptyTabView(onNewTerminal: {})
+            EmptyTabView(
+                onNewTerminal: {},
+                onNewAgentTerminal: {},
+                onNewAgentChat: {},
+                newTerminalShortcut: nil,
+                newAgentTerminalShortcut: nil,
+                newAgentChatShortcut: nil
+            )
         }
     }
 
@@ -426,8 +433,10 @@ private struct RootBaseHandlers: ViewModifier {
                 state.toggleRepoSelectorOverlay()
             }
         let q = p
-            .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { _ in
-                state.toggleAgentLauncherOverlay(canOpen: selectedWorktree() != nil)
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { notification in
+                guard selectedWorktree() != nil else { return }
+                let mode = notification.object as? AppConfig.LauncherMode
+                state.openAgentLauncherOverlay(mode: mode)
             }
         let r = q
             .onReceive(NotificationCenter.default.publisher(for: .alasRefreshWorktrees)) { _ in

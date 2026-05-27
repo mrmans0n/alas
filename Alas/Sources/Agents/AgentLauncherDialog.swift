@@ -36,9 +36,6 @@ struct AgentLauncherDialog: View {
             }
             .transition(.opacity.combined(with: .offset(y: -6)))
             .onAppear {
-                appState.agentLauncher.prepareForOpen(
-                    defaultMode: appState.config.agents.defaultLauncherMode
-                )
                 requestInputFocus()
             }
             .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in

@@ -89,7 +89,14 @@ struct CenterPaneView: View {
             )
             Group {
                 if tabs.isEmpty {
-                    EmptyTabView(onNewTerminal: openTerminal)
+                    EmptyTabView(
+                        onNewTerminal: openTerminal,
+                        onNewAgentTerminal: { state.openAgentLauncherOverlay(mode: .terminal) },
+                        onNewAgentChat: { state.openAgentLauncherOverlay(mode: .acp) },
+                        newTerminalShortcut: state.binding(for: .newTerminalTab)?.displayString,
+                        newAgentTerminalShortcut: state.binding(for: .launchAgentTerminal)?.displayString,
+                        newAgentChatShortcut: state.binding(for: .launchAgentChat)?.displayString
+                    )
                 } else if let activeId = active,
                           let tab = tabs.first(where: { $0.id == activeId }) {
                     switch tab {

@@ -30,6 +30,7 @@ struct ShortcutActionTests {
             (.focusMainWorktree,    "m",          [.command, .control]),
             (.newTerminalTab,       "t",          [.command]),
             (.launchAgentTerminal,  "t",          [.command, .option]),
+            (.launchAgentChat,      "t",          [.command, .option, .shift]),
             (.increaseFontSize,     "=",          [.command]),
             (.decreaseFontSize,     "-",          [.command]),
             (.resetFontSize,        "0",          [.command]),
@@ -57,7 +58,7 @@ struct ShortcutActionTests {
     @Test func groupAssignmentsMatchSpec() {
         let global: Set<ShortcutAction> = [
             .searchFiles, .switchRepository, .findAndReplace, .toggleSidebar, .toggleRightPane,
-            .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal,
+            .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
             .focusMainWorktree, .increaseFontSize, .decreaseFontSize, .resetFontSize,
         ]
         let codeEditor: Set<ShortcutAction> = [

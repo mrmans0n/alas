@@ -74,18 +74,24 @@ final class AppState {
         }
     }
 
+    func openAgentLauncherOverlay(mode: AppConfig.LauncherMode? = nil) {
+        search.close()
+        isSearchOpen = false
+        repoSelector.close()
+        isRepoSelectorOpen = false
+        agentLauncher.prepareForOpen(
+            defaultMode: mode ?? config.agents.defaultLauncherMode
+        )
+        isAgentLauncherOpen = true
+    }
+
     func toggleAgentLauncherOverlay(canOpen: Bool) {
         guard canOpen else { return }
         if isAgentLauncherOpen {
             agentLauncher.reset()
             isAgentLauncherOpen = false
         } else {
-            search.close()
-            isSearchOpen = false
-            repoSelector.close()
-            isRepoSelectorOpen = false
-            agentLauncher.reset()
-            isAgentLauncherOpen = true
+            openAgentLauncherOverlay(mode: nil)
         }
     }
 

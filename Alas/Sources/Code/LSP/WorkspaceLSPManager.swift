@@ -102,16 +102,22 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// `xcrun --find sourcekit-lsp` synchronously on the main actor — on
     /// every SwiftUI breadcrumb re-render. Cleared whenever the registry
     /// changes (the only thing that can change the answer).
-    private var cachedAvailability = LanguageServerAvailability()
+    private let makeAvailability: () -> LanguageServerAvailability
+    private var cachedAvailability: LanguageServerAvailability
     private var availabilityCache: [String: LanguageServerAvailability.Status] = [:]
 
-    init(registry: LanguageServerRegistry) {
+    init(
+        registry: LanguageServerRegistry,
+        makeAvailability: @escaping () -> LanguageServerAvailability = { LanguageServerAvailability() }
+    ) {
         self.registry = registry
+        self.makeAvailability = makeAvailability
+        self.cachedAvailability = makeAvailability()
     }
 
     func updateRegistry(_ registry: LanguageServerRegistry) {
         self.registry = registry
-        cachedAvailability = LanguageServerAvailability()
+        cachedAvailability = makeAvailability()
         availabilityCache.removeAll()
     }
 
@@ -182,7 +188,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             ready = existing.ready
             isFirstOpener = false
         } else {
-            let availability = LanguageServerAvailability()
+            let availability = makeAvailability()
             switch availability.status(for: entry) {
             case .disabled, .notInstalled:
                 return nil
@@ -196,7 +202,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
             case .available:
                 break
             }
-            let spawn = Self.resolveSpawn(command: entry.command, args: entry.args, env: entry.env, language: entry.language)
+            let spawn = Self.resolveSpawn(
+                command: entry.command,
+                args: entry.args,
+                env: entry.env,
+                language: entry.language,
+                availability: availability
+            )
             let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: spawn.environment)
             let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
             let task = Task<Bool, Never> {
@@ -808,12 +820,17 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// returns an absolute path, we use it directly instead of wrapping
     /// with `/usr/bin/env` — that ensures `sourcekit-lsp` launches even
     /// when it lives inside Xcode.app and isn't on PATH.
-    private static func resolveSpawn(command: String, args: [String], env: [String: String], language: String) -> Spawn {
+    private static func resolveSpawn(
+        command: String,
+        args: [String],
+        env: [String: String],
+        language: String,
+        availability: LanguageServerAvailability
+    ) -> Spawn {
         let probe = LanguageServerConfig(
             language: language, extensions: [], command: command, args: args,
             env: env, rootMarkers: [], enabled: true
         )
-        let availability = LanguageServerAvailability()
         if command.contains("/") {
             return Spawn(
                 executable: URL(fileURLWithPath: command),
