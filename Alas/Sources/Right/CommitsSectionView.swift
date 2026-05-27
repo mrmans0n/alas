@@ -41,7 +41,11 @@ struct CommitsSectionView: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(spacing: 0) {
+        Section {
+            if expanded {
+                expandedBody
+            }
+        } header: {
             SectionHeader(
                 title: "Commits",
                 count: totalCount,
@@ -66,10 +70,6 @@ struct CommitsSectionView: View {
                     )
                     BranchOpsMenu(rps: rps)
                 }
-            }
-
-            if expanded {
-                expandedBody
             }
         }
     }

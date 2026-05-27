@@ -30,33 +30,7 @@ struct WorkingTreeSectionView: View {
     private var totalDel: Int { changes.reduce(0) { $0 + $1.del } }
 
     var body: some View {
-        VStack(spacing: 0) {
-            SectionHeader(
-                title: "Working tree",
-                count: changes.count,
-                expanded: expanded,
-                onToggle: { expanded.toggle() }
-            ) {
-                HStack(spacing: 8) {
-                    if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
-                        HStack(spacing: 6) {
-                            Text("+\(totalAdd)").foregroundColor(theme.color("add"))
-                            Text("−\(totalDel)").foregroundColor(theme.color("del"))
-                        }
-                        .font(.system(size: 11, design: .monospaced))
-                    }
-                    if staged.isEmpty, !unstaged.isEmpty {
-                        AlasButton(title: "Stage all", style: .subtle, action: { onStageAll?(unstaged) })
-                    }
-                }
-            }
-            .contextMenu {
-                Button("Discard all working tree changes...") {
-                    onDiscardAll?()
-                }
-                .disabled(changes.isEmpty)
-            }
-
+        Section {
             if expanded {
                 if changes.isEmpty {
                     Text("no changes")
@@ -87,6 +61,24 @@ struct WorkingTreeSectionView: View {
                         )
                     }
                 }
+            }
+        } header: {
+            SectionHeader(
+                title: "Working tree",
+                count: changes.count,
+                expanded: expanded,
+                onToggle: { expanded.toggle() },
+                stats: (add: totalAdd, del: totalDel)
+            ) {
+                if staged.isEmpty, !unstaged.isEmpty {
+                    AlasButton(title: "Stage all", style: .subtle, action: { onStageAll?(unstaged) })
+                }
+            }
+            .contextMenu {
+                Button("Discard all working tree changes...") {
+                    onDiscardAll?()
+                }
+                .disabled(changes.isEmpty)
             }
         }
     }

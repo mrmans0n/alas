@@ -33,7 +33,7 @@ struct ChangesTabView: View {
     }
 
     private var scrollContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
             if let err = rps.sidebarError {
                 InlineErrorStrip(
                     message: err,
