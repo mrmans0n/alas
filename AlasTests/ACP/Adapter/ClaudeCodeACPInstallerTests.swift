@@ -4,7 +4,7 @@ import Testing
 
 @Suite("ClaudeCodeACPInstaller")
 struct ClaudeCodeACPInstallerTests {
-    @Test("install runs `npm install -g @zed-industries/claude-code-acp`")
+    @Test("install runs `npm install -g @agentclientprotocol/claude-agent-acp`")
     func install() async {
         var capturedCommand: [String] = []
         let installer = ClaudeCodeACPInstaller(runner: { cmd, args in
@@ -15,6 +15,6 @@ struct ClaudeCodeACPInstallerTests {
         #expect(capturedCommand.contains("npm"))
         #expect(capturedCommand.contains("install"))
         #expect(capturedCommand.contains("-g"))
-        #expect(capturedCommand.contains("@zed-industries/claude-code-acp"))
+        #expect(capturedCommand.contains("@agentclientprotocol/claude-agent-acp"))
     }
 }

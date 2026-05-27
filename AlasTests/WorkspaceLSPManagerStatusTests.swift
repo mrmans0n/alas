@@ -27,7 +27,17 @@ struct WorkspaceLSPManagerStatusTests {
                 enabled: true
             )
         ])
-        return WorkspaceLSPManager(registry: registry)
+        return WorkspaceLSPManager(
+            registry: registry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: [:],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in .allowed }
+                )
+            }
+        )
     }
 
     @Test func documentStatusIsNoneBeforeOpen() {

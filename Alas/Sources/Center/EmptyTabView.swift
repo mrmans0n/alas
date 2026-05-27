@@ -2,10 +2,15 @@ import SwiftUI
 
 struct EmptyTabView: View {
     let onNewTerminal: () -> Void
+    let onNewAgentTerminal: () -> Void
+    let onNewAgentChat: () -> Void
+    let newTerminalShortcut: String?
+    let newAgentTerminalShortcut: String?
+    let newAgentChatShortcut: String?
     @Environment(\.theme) var theme
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             ZStack {
                 LinearGradient(colors: [theme.color("bg-3"), theme.color("bg-2")],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -15,15 +20,100 @@ struct EmptyTabView: View {
                     .font(.system(size: 30))
                     .foregroundColor(theme.color("accent"))
             }
-            Text("No tabs open")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(theme.color("fg"))
-            Text("Open a terminal to start working in this worktree.")
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg-dim"))
-            AlasButton(title: "New terminal", icon: "terminal", style: .primary, action: onNewTerminal)
+            VStack(spacing: 5) {
+                Text("No tabs open")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(theme.color("fg"))
+                Text("Choose how to start working in this worktree.")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            VStack(spacing: 8) {
+                EmptyTabActionRow(
+                    icon: "terminal",
+                    title: "New Terminal",
+                    subtitle: "Open a shell in this worktree",
+                    shortcut: newTerminalShortcut,
+                    action: onNewTerminal
+                )
+                EmptyTabActionRow(
+                    icon: "sparkle",
+                    title: "New Agent Terminal",
+                    subtitle: "Pick an enabled agent to run in a terminal",
+                    shortcut: newAgentTerminalShortcut,
+                    action: onNewAgentTerminal
+                )
+                EmptyTabActionRow(
+                    icon: "sparkle",
+                    title: "New Agent Chat",
+                    subtitle: "Pick an ACP-capable agent for chat",
+                    shortcut: newAgentChatShortcut,
+                    action: onNewAgentChat
+                )
+            }
+            .frame(maxWidth: 420)
+            .padding(.horizontal, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
+    }
+}
+
+private struct EmptyTabActionRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let shortcut: String?
+    let action: () -> Void
+    @Environment(\.theme) var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Icon(name: icon, size: 14,
+                     color: hovering ? theme.color("fg") : theme.color("fg-muted"))
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .layoutPriority(1)
+                Spacer(minLength: 12)
+                if let shortcut {
+                    Text(shortcut)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .padding(.horizontal, 6)
+                        .frame(height: 21)
+                        .background(theme.color("bg-2"))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5)
+                                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 48)
+            .background(hovering ? theme.color("bg-3") : theme.color("bg-2").opacity(0.55))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
