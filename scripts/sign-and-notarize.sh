@@ -104,6 +104,20 @@ if ! security find-identity -v -p codesigning "$kc_path" \
   exit 1
 fi
 
+# Standalone executables embedded under Resources are not treated as nested code
+# by `codesign --deep`, so sign them explicitly before sealing the app bundle.
+zmx_path="$app_path/Contents/Resources/zmx/zmx"
+if [ -x "$zmx_path" ]; then
+  echo "==> Signing embedded zmx helper"
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --sign "$MACOS_SIGNING_IDENTITY" \
+    "$zmx_path"
+  codesign --verify --strict --verbose=2 "$zmx_path"
+fi
+
 echo "==> Signing $app_path"
 codesign \
   --force \
