@@ -30,7 +30,8 @@ struct ACPMessageList: View {
                 hasher.combine(tc.status)
                 hasher.combine(tc.content.count)
             case .fileEdit(let e):
-                hasher.combine(e.added); hasher.combine(e.removed)
+                hasher.combine(e.added)
+                hasher.combine(e.removed)
             case .plan(let items):
                 hasher.combine(items.count)
                 for it in items { hasher.combine(it.status) }

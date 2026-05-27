@@ -25,7 +25,8 @@ enum JSONRPCID: Codable, Equatable, Hashable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if let n = try? c.decode(Int.self) { self = .number(n); return }
+        if let n = try? c.decode(Int.self) { self = .number(n)
+        return }
         self = .string(try c.decode(String.self))
     }
     func encode(to encoder: Encoder) throws {
@@ -84,13 +85,20 @@ struct AnyCodable: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if c.decodeNil() { self.value = NSNull(); return }
-        if let v = try? c.decode(Bool.self) { self.value = v; return }
-        if let v = try? c.decode(Int.self) { self.value = v; return }
-        if let v = try? c.decode(Double.self) { self.value = v; return }
-        if let v = try? c.decode(String.self) { self.value = v; return }
-        if let v = try? c.decode([AnyCodable].self) { self.value = v; return }
-        if let v = try? c.decode([String: AnyCodable].self) { self.value = v; return }
+        if c.decodeNil() { self.value = NSNull()
+        return }
+        if let v = try? c.decode(Bool.self) { self.value = v
+        return }
+        if let v = try? c.decode(Int.self) { self.value = v
+        return }
+        if let v = try? c.decode(Double.self) { self.value = v
+        return }
+        if let v = try? c.decode(String.self) { self.value = v
+        return }
+        if let v = try? c.decode([AnyCodable].self) { self.value = v
+        return }
+        if let v = try? c.decode([String: AnyCodable].self) { self.value = v
+        return }
         self.value = NSNull()
     }
     func encode(to encoder: Encoder) throws {
@@ -131,7 +139,9 @@ struct ACPModelInfo: Codable, Equatable, Identifiable, Hashable {
     let description: String?
 
     init(id: String, name: String, description: String? = nil) {
-        self.id = id; self.name = name; self.description = description
+        self.id = id
+        self.name = name
+        self.description = description
     }
 
     // ACP wire format uses `modelId` for the id; accept both shapes.
@@ -160,7 +170,9 @@ struct ACPModeInfo: Codable, Equatable, Identifiable, Hashable {
     let description: String?
 
     init(id: String, name: String, description: String? = nil) {
-        self.id = id; self.name = name; self.description = description
+        self.id = id
+        self.name = name
+        self.description = description
     }
     enum CodingKeys: String, CodingKey { case id, modeId, name, description }
     init(from decoder: Decoder) throws {
@@ -338,13 +350,16 @@ enum ACPContentBlock: Codable, Equatable {
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
         case .text(let s):
-            try c.encode("text", forKey: .type); try c.encode(s, forKey: .text)
+            try c.encode("text", forKey: .type)
+            try c.encode(s, forKey: .text)
         case .resourceLink(let uri, let name):
             try c.encode("resource_link", forKey: .type)
-            try c.encode(uri, forKey: .uri); try c.encodeIfPresent(name, forKey: .name)
+            try c.encode(uri, forKey: .uri)
+            try c.encodeIfPresent(name, forKey: .name)
         case .image(let uri, let mime):
             try c.encode("image", forKey: .type)
-            try c.encode(uri, forKey: .uri); try c.encodeIfPresent(mime, forKey: .mimeType)
+            try c.encode(uri, forKey: .uri)
+            try c.encodeIfPresent(mime, forKey: .mimeType)
         }
     }
 }

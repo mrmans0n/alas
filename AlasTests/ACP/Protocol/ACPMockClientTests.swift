@@ -9,7 +9,8 @@ struct ACPMockClientTests {
         let mock = ACPMockClient()
         let collected = Task {
             var out: [ACPSessionUpdate] = []
-            for await u in mock.incomingUpdates { out.append(u.update); if out.count == 2 { break } }
+            for await u in mock.incomingUpdates { out.append(u.update)
+            if out.count == 2 { break } }
             return out
         }
         mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("hi "))))

@@ -29,10 +29,9 @@ final class ACPSlashPickerModel: ObservableObject {
             let name = s.command.hasPrefix("/")
                 ? String(s.command.dropFirst()).lowercased()
                 : s.command.lowercased()
-            if name == q                  { scored.append((s, 1000)); continue }
-            if name.hasPrefix(q)          { scored.append((s, 900 - name.count)); continue }
-            if name.contains(q)           { scored.append((s, 600 - name.count)); continue }
-            if isSubsequence(q, of: name) { scored.append((s, 300 - name.count)); continue }
+            if let score = matchScore(query: q, name: name) {
+                scored.append((s, score))
+            }
         }
         scored.sort { $0.1 > $1.1 }
         return scored.map(\.0)
@@ -61,6 +60,17 @@ final class ACPSlashPickerModel: ObservableObject {
     func setQuery(_ q: String) {
         query = q
         selectedIndex = 0
+    }
+
+    /// Returns a positive score when `name` matches `query`, or `nil` if
+    /// it doesn't match at all. Ordering: exact > prefix > contains >
+    /// subsequence, with shorter names winning ties.
+    private func matchScore(query: String, name: String) -> Int? {
+        if name == query { return 1000 }
+        if name.hasPrefix(query) { return 900 - name.count }
+        if name.contains(query) { return 600 - name.count }
+        if isSubsequence(query, of: name) { return 300 - name.count }
+        return nil
     }
 
     private func isSubsequence(_ q: String, of name: String) -> Bool {

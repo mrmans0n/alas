@@ -5,7 +5,9 @@ struct ACPFileWriter {
 
     enum Error: Swift.Error, Equatable { case outsideWorktree(path: String) }
 
-    struct Result: Equatable { let added: Int; let removed: Int; let path: String }
+    struct Result: Equatable { let added: Int
+    let removed: Int
+    let path: String }
 
     func write(path: String, content: String) throws -> Result {
         let target = URL(fileURLWithPath: path).standardizedFileURL

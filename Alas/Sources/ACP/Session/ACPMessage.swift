@@ -21,7 +21,8 @@ enum ACPMessage: Equatable {
         }
     }
 
-    struct Attachment: Codable, Equatable, Hashable { let uri: String; let name: String? }
+    struct Attachment: Codable, Equatable, Hashable { let uri: String
+    let name: String? }
 
     struct ToolCall: Codable, Equatable, Hashable {
         let toolCallId: String
@@ -94,7 +95,9 @@ enum ACPMessage: Equatable {
 
 enum ACPMessageCodec {
     private static let encoder: JSONEncoder = {
-        let e = JSONEncoder(); e.outputFormatting = .sortedKeys; return e
+        let e = JSONEncoder()
+        e.outputFormatting = .sortedKeys
+        return e
     }()
 
     static func encode(_ m: ACPMessage) throws -> Data {
@@ -132,6 +135,7 @@ enum ACPMessageCodec {
     }
 
     private struct TextPayload: Codable { let text: String }
-    private struct UserPayload: Codable { let text: String; let attachments: [ACPMessage.Attachment] }
+    private struct UserPayload: Codable { let text: String
+    let attachments: [ACPMessage.Attachment] }
     private struct PlanPayload: Codable { let items: [ACPMessage.PlanItem] }
 }

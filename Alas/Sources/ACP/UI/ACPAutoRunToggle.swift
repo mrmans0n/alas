@@ -7,7 +7,8 @@ struct ACPAutoRunToggle: View {
     var body: some View {
         Toggle(isOn: Binding(
             get: { session.autoRunEnabled },
-            set: { session.autoRunEnabled = $0; manager.persist(session) }
+            set: { session.autoRunEnabled = $0
+            manager.persist(session) }
         )) {
             Text("Auto-run").font(.system(size: 11))
         }

@@ -67,7 +67,8 @@ enum ACPMarkdownLiveStyler {
             // Don't double-style chip mentions.
             var skip = false
             storage.enumerateAttribute(.attachmentURI, in: m.range) { v, _, stop in
-                if v != nil { skip = true; stop.pointee = true }
+                if v != nil { skip = true
+                stop.pointee = true }
             }
             if skip { return }
             storage.addAttributes(attrs, range: m.range)

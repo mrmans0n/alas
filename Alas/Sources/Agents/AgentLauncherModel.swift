@@ -8,7 +8,8 @@ final class AgentLauncherModel {
     /// this swaps which agent list is shown (terminal-capable vs.
     /// ACP-capable) and what Enter does.
     var mode: AppConfig.LauncherMode = .terminal {
-        didSet { selectedIndex = 0; scrollToSelectionTick &+= 1 }
+        didSet { selectedIndex = 0
+        scrollToSelectionTick &+= 1 }
     }
     var query: String = "" {
         didSet { selectedIndex = 0 }
@@ -41,13 +42,15 @@ final class AgentLauncherModel {
     }
 
     func moveSelectionUp(rowCount: Int) {
-        guard rowCount > 0 else { selectedIndex = 0; return }
+        guard rowCount > 0 else { selectedIndex = 0
+        return }
         selectedIndex = max(0, clampedIndex(rowCount: rowCount) - 1)
         scrollToSelectionTick &+= 1
     }
 
     func moveSelectionDown(rowCount: Int) {
-        guard rowCount > 0 else { selectedIndex = 0; return }
+        guard rowCount > 0 else { selectedIndex = 0
+        return }
         selectedIndex = min(rowCount - 1, clampedIndex(rowCount: rowCount) + 1)
         scrollToSelectionTick &+= 1
     }

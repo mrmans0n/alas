@@ -63,12 +63,18 @@ enum ACPSessionUpdate: Codable, Equatable {
         // Encoding not required for v1 (we only receive these). Implement when needed.
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
-        case .userMessageChunk(let b):  try c.encode("user_message_chunk", forKey: .sessionUpdate);  try c.encode(b, forKey: .content)
-        case .agentMessageChunk(let b): try c.encode("agent_message_chunk", forKey: .sessionUpdate); try c.encode(b, forKey: .content)
-        case .agentThoughtChunk(let b): try c.encode("agent_thought_chunk", forKey: .sessionUpdate); try c.encode(b, forKey: .content)
-        case .plan(let e):              try c.encode("plan", forKey: .sessionUpdate); try c.encode(e, forKey: .entries)
-        case .availableModelsUpdate(let m): try c.encode("available_models_update", forKey: .sessionUpdate); try c.encode(m, forKey: .availableModels)
-        case .currentModeUpdate(let m):     try c.encode("current_mode_update", forKey: .sessionUpdate); try c.encode(m, forKey: .modeId)
+        case .userMessageChunk(let b):  try c.encode("user_message_chunk", forKey: .sessionUpdate)
+        try c.encode(b, forKey: .content)
+        case .agentMessageChunk(let b): try c.encode("agent_message_chunk", forKey: .sessionUpdate)
+        try c.encode(b, forKey: .content)
+        case .agentThoughtChunk(let b): try c.encode("agent_thought_chunk", forKey: .sessionUpdate)
+        try c.encode(b, forKey: .content)
+        case .plan(let e):              try c.encode("plan", forKey: .sessionUpdate)
+        try c.encode(e, forKey: .entries)
+        case .availableModelsUpdate(let m): try c.encode("available_models_update", forKey: .sessionUpdate)
+        try c.encode(m, forKey: .availableModels)
+        case .currentModeUpdate(let m):     try c.encode("current_mode_update", forKey: .sessionUpdate)
+        try c.encode(m, forKey: .modeId)
         case .availableCommandsUpdate: break // not produced by us
         case .toolCall, .toolCallUpdate, .unknown: break
         }

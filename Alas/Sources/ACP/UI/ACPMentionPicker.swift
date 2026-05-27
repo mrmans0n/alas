@@ -130,9 +130,11 @@ struct ACPMentionPickerView: View {
             onCancel()
             return .handled
         case .upArrow:
-            highlight = max(0, highlight - 1); return .handled
+            highlight = max(0, highlight - 1)
+            return .handled
         case .downArrow:
-            highlight = min(max(0, count - 1), highlight + 1); return .handled
+            highlight = min(max(0, count - 1), highlight + 1)
+            return .handled
         case .return:
             if ranked.indices.contains(highlight) { onPick(ranked[highlight]) }
             return .handled

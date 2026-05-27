@@ -247,7 +247,8 @@ struct AgentLauncherDialog: View {
     private func launch(_ agent: AgentDefinition) {
         switch appState.agentLauncher.mode {
         case .terminal:
-            guard let worktree = selectedWorktree() else { close(); return }
+            guard let worktree = selectedWorktree() else { close()
+            return }
             _ = try? appState.openAgentTerminalTab(for: worktree, agentId: agent.id)
         case .acp:
             appState.openNewACPSession(agentID: agent.id)

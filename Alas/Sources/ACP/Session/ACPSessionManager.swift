@@ -241,14 +241,16 @@ private final class StderrBuffer: @unchecked Sendable {
     private var bytes = Data()
     private let cap = 2048
     func append(_ d: Data) {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         bytes.append(d)
         if bytes.count > cap {
             bytes.removeSubrange(0..<(bytes.count - cap))
         }
     }
     func tail() -> String {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return String(data: bytes, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }

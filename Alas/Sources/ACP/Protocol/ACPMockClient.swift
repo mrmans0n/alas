@@ -49,6 +49,8 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     }
 
     func shutdown() async {
-        updatesCont.finish(); permsCont.finish(); filesCont.finish()
+        updatesCont.finish()
+        permsCont.finish()
+        filesCont.finish()
     }
 }

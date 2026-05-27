@@ -3,7 +3,8 @@ import Foundation
 struct ACPRequest {
     let method: String
     let params: Encodable?
-    init(method: String, params: Encodable? = nil) { self.method = method; self.params = params }
+    init(method: String, params: Encodable? = nil) { self.method = method
+    self.params = params }
 }
 
 struct ACPResponse {

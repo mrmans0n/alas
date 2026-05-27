@@ -186,8 +186,10 @@ final class ACPNSTextView: NSTextView {
         // submit. Esc closes the picker without canceling the prompt.
         if let panel = slashPanel {
             switch event.keyCode {
-            case 126: panel.model.moveUp();   return    // up
-            case 125: panel.model.moveDown(); return    // down
+            case 126: panel.model.moveUp()
+            return    // up
+            case 125: panel.model.moveDown()
+            return    // down
             case 36, 76, 48:                            // return / enter / tab
                 if let pick = panel.model.selected() {
                     insertSlash(pick)
