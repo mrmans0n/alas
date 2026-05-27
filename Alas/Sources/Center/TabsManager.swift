@@ -1187,6 +1187,18 @@ final class TabsManager {
         return buffers[key]?.dirty == true
     }
 
+    /// Live in-memory contents of the editor buffer at
+    /// `relativePath`, when one is open AND dirty. Returns `nil` when
+    /// the file isn't open in the editor or has no unsaved changes,
+    /// in which case the caller should fall back to disk. Used by the
+    /// ACP `fs/read_text_file` handler so agents see what the user
+    /// sees, not the last saved bytes.
+    func dirtyBufferText(worktreeId: String, relativePath: String) -> String? {
+        let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
+        guard let buffer = buffers[key], buffer.dirty else { return nil }
+        return buffer.storage.string
+    }
+
     /// Tab IDs in `worktreeId` that have unsaved changes — either a live dirty
     /// buffer or a persisted hot-exit snapshot for a buffer that hasn't been
     /// instantiated yet. Returns IDs in tab order (declaration order within the

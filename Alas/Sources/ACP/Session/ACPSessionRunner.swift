@@ -26,6 +26,10 @@ final class ACPSessionRunner {
     /// `systemNotice` is appended to the session so the user is aware the
     /// write landed on top of unsaved changes. `nil` disables the check.
     private let onDirtyCheck: ((String) -> Bool)?
+    /// Optional hook used by the read handler to pull in-memory editor
+    /// contents for an open dirty buffer, falling back to disk when the
+    /// closure returns `nil`. Lets the agent see what the user sees.
+    private let onLiveBufferRead: ((String) -> String?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
@@ -33,7 +37,8 @@ final class ACPSessionRunner {
 
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
          sessionId: String, worktreePath: String,
-         onDirtyCheck: ((String) -> Bool)? = nil)
+         onDirtyCheck: ((String) -> Bool)? = nil,
+         onLiveBufferRead: ((String) -> String?)? = nil)
     {
         self.session = session
         self.connection = connection
@@ -41,6 +46,7 @@ final class ACPSessionRunner {
         self.sessionId = sessionId
         self.worktreePath = worktreePath
         self.onDirtyCheck = onDirtyCheck
+        self.onLiveBufferRead = onLiveBufferRead
         self.policy = ACPPermissionPolicy(
             session: session,
             log: ACPPermissionDecisionLog(store: store)
@@ -92,9 +98,20 @@ final class ACPSessionRunner {
                         // absolute path (e.g. `~/.ssh/config`) and
                         // exfiltrate it without a permission prompt.
                         let target = try writer.resolveInsideWorktree(path: params.path)
-                        let data = try Data(contentsOf: target)
-                        let result = ACPFsReadResult(content: String(data: data, encoding: .utf8) ?? "")
-                        let body = try JSONEncoder().encode(result)
+                        // Prefer the live editor buffer when the file
+                        // is open and dirty so the agent sees what the
+                        // user sees (avoids "agent reads stale disk,
+                        // then writes a replacement that clobbers
+                        // unsaved edits").
+                        let full: String
+                        if let live = self.onLiveBufferRead?(target.path) {
+                            full = live
+                        } else {
+                            let data = try Data(contentsOf: target)
+                            full = String(data: data, encoding: .utf8) ?? ""
+                        }
+                        let sliced = Self.sliceLines(full, line: params.line, limit: params.limit)
+                        let body = try JSONEncoder().encode(ACPFsReadResult(content: sliced))
                         self.connection.client.respondToFileRequest(id: id, result: .success(body))
                     } catch ACPFileWriter.Error.outsideWorktree(let p) {
                         self.appendAndPersistSystemNotice("Blocked read outside worktree: \(p)")
@@ -136,6 +153,25 @@ final class ACPSessionRunner {
         updatesTask?.cancel()
         permissionsTask?.cancel()
         filesTask?.cancel()
+    }
+
+    /// ACP `fs/read_text_file` accepts optional `line` (1-indexed
+    /// start) and `limit` (max lines) parameters. Honouring them lets
+    /// agents fetch bounded slices of large files instead of always
+    /// receiving the whole content (and avoids dumping huge files into
+    /// the agent's context window).
+    static func sliceLines(_ full: String, line: Int?, limit: Int?) -> String {
+        if line == nil, limit == nil { return full }
+        let lines = full.split(separator: "\n", omittingEmptySubsequences: false)
+        let startLine = max(1, line ?? 1)
+        let startIdx = min(startLine - 1, lines.count)
+        let endIdx: Int
+        if let limit, limit > 0 {
+            endIdx = min(startIdx + limit, lines.count)
+        } else {
+            endIdx = lines.count
+        }
+        return lines[startIdx ..< endIdx].joined(separator: "\n")
     }
 
     /// Called from every "user interrupted" code path (Esc, composer Stop

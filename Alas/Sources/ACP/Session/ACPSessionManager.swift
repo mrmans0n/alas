@@ -8,16 +8,24 @@ final class ACPSessionManager: ObservableObject {
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
     let onDirtyCheck: ((String) -> Bool)?
+    /// Read the in-memory editor contents for the absolute `path` when an
+    /// open dirty buffer exists. Returns nil for clean/un-opened files;
+    /// the runner falls back to disk in that case. Lets agent reads see
+    /// the user's unsaved edits rather than stale disk bytes.
+    let onLiveBufferRead: ((String) -> String?)?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
-         onDirtyCheck: ((String) -> Bool)? = nil) {
+         onDirtyCheck: ((String) -> Bool)? = nil,
+         onLiveBufferRead: ((String) -> String?)? = nil)
+    {
         self.worktreeId = worktreeId
         self.worktreePath = worktreePath
         self.store = store
         self.onDirtyCheck = onDirtyCheck
+        self.onLiveBufferRead = onLiveBufferRead
         self.recent = (try? store.recentSessions()) ?? []
     }
 
@@ -182,7 +190,8 @@ extension ACPSessionManager {
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
                                           worktreePath: worktreePath,
-                                          onDirtyCheck: onDirtyCheck)
+                                          onDirtyCheck: onDirtyCheck,
+                                          onLiveBufferRead: onLiveBufferRead)
             runner.start()
             runners[sessionId] = runner
             session.attached = true

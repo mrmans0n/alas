@@ -33,4 +33,21 @@ struct ACPSessionRunnerTests {
         #expect(rows.count == 1)
         #expect(rows[0].kind == "agent")
     }
+
+    @Test("sliceLines honours line + limit parameters")
+    func sliceLinesRange() {
+        let full = "one\ntwo\nthree\nfour\nfive"
+
+        // Both nil → whole file.
+        #expect(ACPSessionRunner.sliceLines(full, line: nil, limit: nil) == full)
+
+        // Bounded slice from the middle.
+        #expect(ACPSessionRunner.sliceLines(full, line: 2, limit: 2) == "two\nthree")
+
+        // `line` past the end clamps cleanly.
+        #expect(ACPSessionRunner.sliceLines(full, line: 99, limit: 5) == "")
+
+        // `limit` exceeding remaining lines returns the tail.
+        #expect(ACPSessionRunner.sliceLines(full, line: 4, limit: 99) == "four\nfive")
+    }
 }

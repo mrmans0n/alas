@@ -34,13 +34,17 @@ final class ACPConnection: @unchecked Sendable {
                                              params: ACPSessionCancelParams(sessionId: sessionId)))
     }
 
+    // ACP wire methods use snake_case (`session/set_mode`,
+    // `session/set_model`). Cursor / Kiro / claude-agent-acp all
+    // method-not-found camelCase variants, which previously left Alas
+    // showing the new selection while the agent stayed on the old one.
     func setMode(sessionId: String, modeId: String) async throws {
-        _ = try await client.send(ACPRequest(method: "session/setMode",
+        _ = try await client.send(ACPRequest(method: "session/set_mode",
                                              params: ACPSessionSetModeParams(sessionId: sessionId, modeId: modeId)))
     }
 
     func setModel(sessionId: String, modelId: String) async throws {
-        _ = try await client.send(ACPRequest(method: "session/setModel",
+        _ = try await client.send(ACPRequest(method: "session/set_model",
                                              params: ACPSessionSetModelParams(sessionId: sessionId, modelId: modelId)))
     }
 

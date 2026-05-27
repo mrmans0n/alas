@@ -2007,13 +2007,25 @@ final class AppState {
     /// Returns `true` when the editor has a live, dirty (unsaved) buffer for
     /// the given absolute path within the given worktree.
     func editorHasDirtyBuffer(for absolutePath: String, worktreeId: String) -> Bool {
-        guard let worktree = worktree(withId: worktreeId) else { return false }
+        guard let relativePath = relativePath(for: absolutePath, in: worktreeId) else { return false }
+        return tabs.hasDirtyBuffer(worktreeId: worktreeId, relativePath: relativePath)
+    }
+
+    /// In-memory editor contents for `absolutePath` when a dirty buffer
+    /// is open, otherwise `nil`. Used by the ACP read handler so agent
+    /// reads include unsaved edits.
+    func editorLiveBufferText(for absolutePath: String, worktreeId: String) -> String? {
+        guard let relativePath = relativePath(for: absolutePath, in: worktreeId) else { return nil }
+        return tabs.dirtyBufferText(worktreeId: worktreeId, relativePath: relativePath)
+    }
+
+    private func relativePath(for absolutePath: String, in worktreeId: String) -> String? {
+        guard let worktree = worktree(withId: worktreeId) else { return nil }
         let root = worktree.path.standardizedFileURL.path
         let prefix = root.hasSuffix("/") ? root : root + "/"
         let target = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
-        guard target.hasPrefix(prefix) else { return false }
-        let relativePath = String(target.dropFirst(prefix.count))
-        return tabs.hasDirtyBuffer(worktreeId: worktreeId, relativePath: relativePath)
+        guard target.hasPrefix(prefix) else { return nil }
+        return String(target.dropFirst(prefix.count))
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
@@ -2029,6 +2041,9 @@ final class AppState {
                 store: store,
                 onDirtyCheck: { [weak self] path in
                     self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
+                },
+                onLiveBufferRead: { [weak self] path in
+                    self?.editorLiveBufferText(for: path, worktreeId: worktree.id)
                 }
             )
             acpManagers[worktree.id] = mgr
