@@ -1,0 +1,11 @@
+{
+  "jsonrpc":"2.0","id":2,
+  "result":{
+    "sessionId":"sess-abc",
+    "availableModels":[{"id":"sonnet","name":"Claude Sonnet"}],
+    "availableModes":[{"id":"plan","name":"Plan"},{"id":"agent","name":"Agent"}],
+    "currentModel":"sonnet",
+    "currentMode":"agent",
+    "promptSuggestions":[{"command":"/clear","description":"Clear context"}]
+  }
+}

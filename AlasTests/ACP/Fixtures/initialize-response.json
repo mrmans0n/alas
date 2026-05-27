@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "promptCapabilities": {
+        "image": false,
+        "audio": false
+      }
+    },
+    "authMethods": []
+  }
+}

@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"sess-abc",
+  "update":{"sessionUpdate":"available_models_update",
+    "availableModels":[{"id":"opus","name":"Claude Opus"},{"id":"sonnet","name":"Claude Sonnet"}]}
+}}

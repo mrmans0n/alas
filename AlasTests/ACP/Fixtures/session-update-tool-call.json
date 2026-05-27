@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"sess-abc",
+  "update":{"sessionUpdate":"tool_call","toolCallId":"tc-1","title":"read_file","kind":"read",
+    "status":"in_progress","content":[{"type":"text","text":"reading…"}]}
+}}

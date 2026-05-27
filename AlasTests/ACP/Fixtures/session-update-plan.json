@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"sess-abc",
+  "update":{"sessionUpdate":"plan","entries":[
+    {"content":"Inspect MergeAgent","priority":"medium","status":"completed"},
+    {"content":"Extract proposal builder","priority":"medium","status":"in_progress"}
+  ]}
+}}
