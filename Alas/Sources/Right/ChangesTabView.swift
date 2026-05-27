@@ -74,14 +74,16 @@ struct ChangesTabView: View {
                 onDismissBulkReport: { rps.dismissBulkResolveReport() }
             )
 
-            DraftCommitTriggerRow(
-                stagedCount: stagedCount,
-                stagedAdd: stagedAdd,
-                stagedDel: stagedDel,
-                hasDraft: hasDraftTab,
-                draftNonEmpty: draftNonEmpty,
-                onOpen: openDraftTab
-            )
+            if stagedCount > 0 {
+                DraftCommitTriggerRow(
+                    stagedCount: stagedCount,
+                    stagedAdd: stagedAdd,
+                    stagedDel: stagedDel,
+                    hasDraft: hasDraftTab,
+                    draftNonEmpty: draftNonEmpty,
+                    onOpen: openDraftTab
+                )
+            }
             WorkingTreeSectionView(
                 changes: nonConflictChanges,
                 expanded: $rps.workingTreeExpanded,
