@@ -129,15 +129,17 @@ struct AppConfig: Codable, Equatable {
         var notifyOnFinish: Bool
         var notifyOnAwaiting: Bool
         var dismissedHookInstallNudges: [String]
+        var dismissedACPSetupNudges: [String]
 
         enum CodingKeys: String, CodingKey {
-            case notifyOnFinish, notifyOnAwaiting, dismissedHookInstallNudges
+            case notifyOnFinish, notifyOnAwaiting, dismissedHookInstallNudges, dismissedACPSetupNudges
         }
 
-        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool, dismissedHookInstallNudges: [String] = []) {
+        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool, dismissedHookInstallNudges: [String] = [], dismissedACPSetupNudges: [String] = []) {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
             self.dismissedHookInstallNudges = dismissedHookInstallNudges
+            self.dismissedACPSetupNudges = dismissedACPSetupNudges
         }
 
         init(from decoder: Decoder) throws {
@@ -145,6 +147,7 @@ struct AppConfig: Codable, Equatable {
             notifyOnFinish = (try? c.decode(Bool.self, forKey: .notifyOnFinish)) ?? true
             notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
             dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
+            dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
         }
     }
 
@@ -193,10 +196,19 @@ struct AppConfig: Codable, Equatable {
         var builtinState: [String: BuiltinAgentState]
         var custom: [AgentDefinition]
         var worktreeAutoLaunch: WorktreeAutoLaunch
+        /// Which surface the ⌥⌘T launcher opens on by default —
+        /// terminal tab or ACP chat. The user can flip with the
+        /// segmented control inside the launcher; this just picks the
+        /// starting mode.
+        var defaultLauncherMode: LauncherMode
 
         enum CodingKeys: String, CodingKey {
-            case builtinState, custom, worktreeAutoLaunch
+            case builtinState, custom, worktreeAutoLaunch, defaultLauncherMode
         }
+    }
+
+    enum LauncherMode: String, Codable, Equatable, CaseIterable {
+        case terminal, acp
     }
 
     struct Files: Codable, Equatable {
@@ -280,7 +292,8 @@ struct AppConfig: Codable, Equatable {
             worktreeAutoLaunch: WorktreeAutoLaunch(
                 agentId: nil,
                 useBypassPermissions: false
-            )
+            ),
+            defaultLauncherMode: .terminal
         ),
         files: Files(showIgnored: true),
         recentProjectIds: [],
@@ -492,10 +505,14 @@ extension AppConfig {
             let autoLaunch = (try? agentsContainer.decode(
                 WorktreeAutoLaunch.self, forKey: .worktreeAutoLaunch
             )) ?? WorktreeAutoLaunch(agentId: nil, useBypassPermissions: false)
+            let defaultMode = (try? agentsContainer.decode(
+                LauncherMode.self, forKey: .defaultLauncherMode
+            )) ?? .terminal
             agents = Agents(
                 builtinState: state,
                 custom: custom,
-                worktreeAutoLaunch: autoLaunch
+                worktreeAutoLaunch: autoLaunch,
+                defaultLauncherMode: defaultMode
             )
         } else {
             agents = Agents(
@@ -503,7 +520,8 @@ extension AppConfig {
                 custom: [],
                 worktreeAutoLaunch: WorktreeAutoLaunch(
                     agentId: nil, useBypassPermissions: false
-                )
+                ),
+                defaultLauncherMode: .terminal
             )
         }
         if let filesContainer = try? c.nestedContainer(

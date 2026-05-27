@@ -8,7 +8,7 @@ struct LSPTransportFramingTests {
     func singleFrame() async throws {
         let body = #"{"jsonrpc":"2.0","id":1,"result":null}"#
         let bytes = makeFrame(body)
-        var decoder = LSPFrameDecoder()
+        var decoder = JSONRPCFramer()
         decoder.append(bytes)
         let frames = decoder.drainFrames()
         #expect(frames.count == 1)
@@ -19,7 +19,7 @@ struct LSPTransportFramingTests {
     func twoFrames() async throws {
         let a = #"{"jsonrpc":"2.0","method":"a"}"#
         let b = #"{"jsonrpc":"2.0","method":"b"}"#
-        var decoder = LSPFrameDecoder()
+        var decoder = JSONRPCFramer()
         decoder.append(makeFrame(a) + makeFrame(b))
         let frames = decoder.drainFrames()
         #expect(frames.count == 2)
@@ -31,7 +31,7 @@ struct LSPTransportFramingTests {
     func splitFrame() async throws {
         let body = #"{"jsonrpc":"2.0","id":7,"result":1}"#
         let frame = makeFrame(body)
-        var decoder = LSPFrameDecoder()
+        var decoder = JSONRPCFramer()
         decoder.append(frame.prefix(10))
         #expect(decoder.drainFrames().isEmpty)
         decoder.append(frame.suffix(from: 10))

@@ -68,6 +68,8 @@ struct TabActivityIconTintTests {
             onNewTerminal: { },
             enabledAgents: [],
             onLaunchAgent: { _ in },
+            onLaunchACPSession: { _ in },
+            acpAgents: [],
             onRevealRightSidebar: { },
             rightSidebarHidden: false,
             onRevealSidebar: { },

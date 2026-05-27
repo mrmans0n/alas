@@ -1323,6 +1323,9 @@ final class AppState {
             if case .editor = tab {
                 tabs.discardBuffer(worktreeId: worktreeId, tabId: tabId)
             }
+            if case .acpSession(let s) = tab {
+                cleanupACPSession(worktreeId: worktreeId, sessionId: s.sessionId)
+            }
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
@@ -1348,11 +1351,34 @@ final class AppState {
         }
     }
 
+    private func cleanupACPSessions(worktreeId: String, allTabs: [Tab], closedIds: [TabID]) {
+        for id in closedIds {
+            if let tab = allTabs.first(where: { $0.id == id }),
+               case .acpSession(let s) = tab {
+                cleanupACPSession(worktreeId: worktreeId, sessionId: s.sessionId)
+            }
+        }
+    }
+
+    /// Detach a single ACP session's runner and remove it from the
+    /// worktree's manager. Different from `disposeACPManager`, which
+    /// tears down the whole worktree's manager — this leaves the
+    /// manager (and any sibling sessions) running.
+    private func cleanupACPSession(worktreeId: String, sessionId: String) {
+        guard let manager = acpManagers[worktreeId],
+              let runner = manager.runners[sessionId] else { return }
+        runner.stop()
+        Task { @MainActor in
+            await manager.detach(sessionId: sessionId)
+        }
+    }
+
     func closeOtherTabs(worktreeId: String, keeping tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeOthers(worktreeId: worktreeId, keeping: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     /// Tear down every tab/terminal/harness reference for a worktree id without
@@ -1363,6 +1389,7 @@ final class AppState {
         let closed = tabs.closeAll(worktreeId: worktreeId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        disposeACPManager(for: worktreeId)
     }
 
     func closeAllTabs(worktreeId: String) {
@@ -1374,6 +1401,7 @@ final class AppState {
         let closed = tabs.closeToLeft(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     func closeTabsToRight(worktreeId: String, of tabId: TabID) {
@@ -1381,6 +1409,7 @@ final class AppState {
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
     private func defaultTerminalTitle(for worktree: Worktree) -> String {
@@ -2011,5 +2040,146 @@ final class AppState {
             return false
         }
         return true
+    }
+
+    // MARK: - ACP
+
+    /// Per-worktree ACP session managers, lazily created on first access.
+    @ObservationIgnored
+    private var acpManagers: [String: ACPSessionManager] = [:]
+
+    /// Returns `true` when the editor has a live, dirty (unsaved) buffer for
+    /// the given absolute path within the given worktree.
+    func editorHasDirtyBuffer(for absolutePath: String, worktreeId: String) -> Bool {
+        guard let relativePath = relativePath(for: absolutePath, in: worktreeId) else { return false }
+        return tabs.hasDirtyBuffer(worktreeId: worktreeId, relativePath: relativePath)
+    }
+
+    /// In-memory editor contents for `absolutePath` when a dirty buffer
+    /// is open, otherwise `nil`. Used by the ACP read handler so agent
+    /// reads include unsaved edits.
+    func editorLiveBufferText(for absolutePath: String, worktreeId: String) -> String? {
+        guard let relativePath = relativePath(for: absolutePath, in: worktreeId) else { return nil }
+        return tabs.dirtyBufferText(worktreeId: worktreeId, relativePath: relativePath)
+    }
+
+    private func relativePath(for absolutePath: String, in worktreeId: String) -> String? {
+        guard let worktree = worktree(withId: worktreeId) else { return nil }
+        let root = worktree.path.standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        let target = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
+        guard target.hasPrefix(prefix) else { return nil }
+        return String(target.dropFirst(prefix.count))
+    }
+
+    /// Returns (or lazily creates) the ACP session manager for the given worktree.
+    /// Returns nil when the SQLite backing store cannot be opened.
+    func acpManager(for worktree: Worktree) -> ACPSessionManager? {
+        if let existing = acpManagers[worktree.id] { return existing }
+        let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
+        do {
+            let store = try ACPSessionStore(path: dbURL.path)
+            let mgr = ACPSessionManager(
+                worktreeId: worktree.id,
+                worktreePath: worktree.path.path,
+                store: store,
+                onDirtyCheck: { [weak self] path in
+                    self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
+                },
+                onLiveBufferRead: { [weak self] path in
+                    self?.editorLiveBufferText(for: path, worktreeId: worktree.id)
+                }
+            )
+            acpManagers[worktree.id] = mgr
+            return mgr
+        } catch {
+            return nil
+        }
+    }
+
+    /// Release the ACP session manager for the given worktree id.
+    /// Called from `cleanupWorktreeState` when a worktree is
+    /// removed/archived. Stops every attached runner (which cancels
+    /// its async tasks and shuts down the child agent process) before
+    /// the manager is dropped — otherwise the runner's `for await`
+    /// loops would keep the agent + permission / file handlers alive
+    /// after the UI was torn down.
+    func disposeACPManager(for worktreeId: String) {
+        guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
+        let sessionIds = Array(manager.runners.keys)
+        // Synchronously cancel the runner's async loops so they stop
+        // pumping the agent's stdout into our handlers immediately —
+        // otherwise the loops hold `self` weakly but keep the
+        // permission / file / update streams flowing until the
+        // detach() task below schedules. The actual child-process
+        // shutdown then happens asynchronously.
+        for sid in sessionIds { manager.runners[sid]?.stop() }
+        Task { @MainActor in
+            for sid in sessionIds { await manager.detach(sessionId: sid) }
+        }
+    }
+
+    /// Open a new ACP session tab for the given agent in the currently-selected worktree.
+    func openNewACPSession(agentID: String) {
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId) else { return }
+        guard let mgr = acpManager(for: worktree) else { return }
+        let session = mgr.createSession(agentId: agentID)
+        let state = ACPSessionTabState(sessionId: session.id, title: session.title)
+        tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    /// Reopen a persisted ACP session as a center-pane tab. If a tab
+    /// for this session is already open in the current worktree we
+    /// just focus it; otherwise we create one and let openSession()
+    /// rehydrate the transcript from disk.
+    func openExistingACPSession(sessionId: ACPSession.ID) {
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId) else { return }
+        guard let mgr = acpManager(for: worktree) else { return }
+
+        // Focus the tab if it's already there.
+        let tabIdToFocus: TabID? = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
+            if case .acpSession(let s) = tab, s.sessionId == sessionId { return tab.id }
+            return nil
+        }.first
+        if let id = tabIdToFocus {
+            tabs.activate(worktreeId: worktree.id, tabId: id)
+            return
+        }
+
+        // Load the row so we can stamp the right title onto the new tab.
+        let title: String
+        if let row = try? mgr.store.loadSession(id: sessionId) {
+            title = row.title
+        } else {
+            title = "ACP session"
+        }
+        _ = mgr.openSession(id: sessionId)
+        let state = ACPSessionTabState(sessionId: sessionId, title: title)
+        tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    /// Open a diff tab for the given worktree-relative path.
+    /// Reuses an existing unstaged diff tab for the same path if one is already open.
+    func openDiffTab(forFileInWorktree worktree: Worktree, relativePath: String) {
+        let worktreeId = worktree.id
+        let staged = false
+        let existing = tabs.tabs(forWorktree: worktreeId).first { tab in
+            if case .diff(let s) = tab { return s.relativePath == relativePath && s.staged == staged }
+            return false
+        }
+        if let existing {
+            tabs.activate(worktreeId: worktreeId, tabId: existing.id)
+        } else {
+            let title = (relativePath as NSString).lastPathComponent
+            let tab = tabs.appendDiff(
+                worktreeId: worktreeId,
+                title: title,
+                relativePath: relativePath,
+                staged: staged
+            )
+            tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+        }
     }
 }

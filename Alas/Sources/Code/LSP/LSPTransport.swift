@@ -1,46 +1,5 @@
 import Foundation
 
-/// Splits a stream of bytes into LSP `Content-Length`-framed JSON payloads.
-/// Caller appends bytes from the read side of stdout; calls `drainFrames()`
-/// to pull decoded JSON bodies (Data) ready for `JSONDecoder`.
-struct LSPFrameDecoder {
-    private var buffer = Data()
-
-    mutating func append<S: Sequence>(_ bytes: S) where S.Element == UInt8 {
-        buffer.append(contentsOf: bytes)
-    }
-
-    mutating func drainFrames() -> [Data] {
-        var out: [Data] = []
-        while let frame = nextFrame() { out.append(frame) }
-        return out
-    }
-
-    private mutating func nextFrame() -> Data? {
-        guard let headerEnd = rangeOfHeaderTerminator() else { return nil }
-        let headerData = buffer[..<headerEnd.lowerBound]
-        guard let header = String(data: headerData, encoding: .utf8) else { return nil }
-        var contentLength = -1
-        for line in header.split(separator: "\r\n") {
-            let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            if parts.count == 2, parts[0].lowercased() == "content-length" {
-                contentLength = Int(parts[1]) ?? -1
-            }
-        }
-        guard contentLength >= 0 else { return nil }
-        let bodyStart = headerEnd.upperBound
-        guard buffer.count - bodyStart >= contentLength else { return nil }
-        let body = buffer.subdata(in: bodyStart..<(bodyStart + contentLength))
-        buffer.removeSubrange(buffer.startIndex..<(bodyStart + contentLength))
-        return body
-    }
-
-    private func rangeOfHeaderTerminator() -> Range<Data.Index>? {
-        let pattern: [UInt8] = [0x0D, 0x0A, 0x0D, 0x0A]   // \r\n\r\n
-        return buffer.firstRange(of: pattern)
-    }
-}
-
 /// Abstraction over the live `LSPTransport` so tests can inject a fake.
 /// Marked `Sendable` because `LSPClient` (an actor) holds a reference and
 /// calls into it across async boundaries; the concrete `LSPTransport` is
@@ -70,7 +29,7 @@ final class LSPTransport: @unchecked Sendable {
     private let stdin = Pipe()
     private let stdout = Pipe()
     private let stderr = Pipe()
-    private var decoder = LSPFrameDecoder()
+    private var decoder = JSONRPCFramer()
     private let lock = NSLock()
     private var continuation: AsyncStream<Incoming>.Continuation?
 
@@ -125,9 +84,8 @@ final class LSPTransport: @unchecked Sendable {
     /// the two writes and corrupt the stream. This class does not lock —
     /// the only sender is `LSPClient` (an actor), which already serializes.
     func send(_ data: Data) throws {
-        let header = "Content-Length: \(data.count)\r\n\r\n".data(using: .utf8)!
-        try stdin.fileHandleForWriting.write(contentsOf: header)
-        try stdin.fileHandleForWriting.write(contentsOf: data)
+        let framed = JSONRPCFramer.encode(data)
+        try stdin.fileHandleForWriting.write(contentsOf: framed)
     }
 
     func terminate() {

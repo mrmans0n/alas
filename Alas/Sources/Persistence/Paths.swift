@@ -33,3 +33,11 @@ extension Paths {
         buffersRoot.appendingPathComponent(id, isDirectory: true)
     }
 }
+
+extension Paths {
+    static var acpSessionsRoot: URL { appSupportRoot.appendingPathComponent("acp-sessions", isDirectory: true) }
+
+    static func acpSessionsDB(forWorktreeId id: String) -> URL {
+        acpSessionsRoot.appendingPathComponent("\(id).sqlite")
+    }
+}

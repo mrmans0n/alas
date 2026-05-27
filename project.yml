@@ -111,6 +111,7 @@ targets:
         codeSign: false
       - sdk: AppIntents.framework
       - sdk: Carbon.framework
+      - sdk: libsqlite3.tbd
       - package: SwiftTreeSitter
         product: SwiftTreeSitter
       - package: TreeSitterSwift

@@ -28,6 +28,22 @@ struct AgentsPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text("AVAILABLE AGENTS")
+                            .font(.system(size: 11, weight: .semibold))
+                            .tracking(0.6)
+                            .foregroundColor(theme.color("fg-dim"))
+                        Spacer()
+                        AlasButton(title: "Add custom agent", style: .subtle) {
+                            editing = .new
+                        }
+                    }
+                    .padding(.bottom, 14)
+                    cardGrid
+                }
+                .padding(.bottom, 18)
+
                 SettingsGroup(title: "Worktree auto-launch") {
                     SettingsRow(
                         name: "Default agent",
@@ -43,21 +59,14 @@ struct AgentsPane: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("AVAILABLE AGENTS")
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(0.6)
-                            .foregroundColor(theme.color("fg-dim"))
-                        Spacer()
-                        AlasButton(title: "Add custom agent", style: .subtle) {
-                            editing = .new
-                        }
+                SettingsGroup(title: "Launcher (⌥⌘T)") {
+                    SettingsRow(
+                        name: "Default launch surface",
+                        desc: "Whether the launcher opens on the Terminal or Chat tab. You can still swap with the segmented control inside the dialog."
+                    ) {
+                        defaultLauncherModePicker
                     }
-                    .padding(.bottom, 14)
-                    cardGrid
                 }
-                .padding(.vertical, 18)
 
                 SettingsGroup(title: "Harness") {
                     HStack(alignment: .top, spacing: 16) {
@@ -92,6 +101,21 @@ struct AgentsPane: View {
                 onDismiss: { editing = nil }
             )
         }
+    }
+
+    private var defaultLauncherModePicker: some View {
+        Picker("", selection: Binding(
+            get: { state.config.agents.defaultLauncherMode },
+            set: { newValue in
+                state.config.agents.defaultLauncherMode = newValue
+                state.saveConfig()
+            }
+        )) {
+            Label("Terminal", systemImage: "terminal").tag(AppConfig.LauncherMode.terminal)
+            Label("Chat", systemImage: "sparkle").tag(AppConfig.LauncherMode.acp)
+        }
+        .pickerStyle(.menu)
+        .frame(width: 240)
     }
 
     private var autoLaunchPicker: some View {

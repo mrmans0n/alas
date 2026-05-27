@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","id":8,"method":"fs/write_text_file","params":{
+  "sessionId":"sess-abc","path":"/Users/me/proj/foo.txt","content":"hi"
+}}

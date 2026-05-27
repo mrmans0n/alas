@@ -1,0 +1,340 @@
+import SwiftUI
+import AppKit
+
+/// Small markdown renderer for ACP chat content. Handles block-level
+/// constructs (headings, fenced code, blockquotes) ourselves and lets
+/// `AttributedString(markdown:)` handle the inline grammar (bold,
+/// italic, inline `code`, links) inside each paragraph.
+///
+/// Not a full CommonMark implementation — the agent output we see is
+/// almost always prose + occasional headings + occasional code blocks.
+/// Anything we don't recognise falls through as plain text so we never
+/// blank out an agent message.
+struct ACPMarkdownText: View {
+    let raw: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(parse(raw).enumerated()), id: \.offset) { _, block in
+                view(for: block)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func view(for block: Block) -> some View {
+        switch block {
+        case .heading(let level, let text):
+            Text(inlineMarkdown(text))
+                .font(.system(size: headingSize(level), weight: .bold))
+                .foregroundStyle(theme.color("fg"))
+                .textSelection(.enabled)
+                .padding(.top, level == 1 ? 4 : 2)
+        case .paragraph(let text):
+            Text(inlineMarkdown(text))
+                .font(.system(size: 13.5))
+                .foregroundStyle(theme.color("fg"))
+                .lineSpacing(3)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .quote(let text):
+            HStack(alignment: .top, spacing: 10) {
+                Rectangle()
+                    .fill(theme.color("accent").opacity(0.55))
+                    .frame(width: 2)
+                Text(inlineMarkdown(text))
+                    .font(.system(size: 13).italic())
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .lineSpacing(2)
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+            }
+        case .code(let lang, let body):
+            CodeBlockView(language: lang, code: body)
+        case .table(let header, let rows):
+            tableView(header: header, rows: rows)
+        }
+    }
+
+    private func tableView(header: [String], rows: [[String]]) -> some View {
+        let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                tableRow(cells: header, isHeader: true, columnCount: columnCount)
+                Rectangle().fill(theme.color("line")).frame(height: 0.5)
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                    tableRow(cells: r, isHeader: false, columnCount: columnCount)
+                    if r != rows.last {
+                        Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
+                    }
+                }
+            }
+        }
+        .background(theme.color("bg-1").opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+    }
+
+    private func tableRow(cells: [String], isHeader: Bool, columnCount: Int) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(0..<columnCount, id: \.self) { i in
+                let value = i < cells.count ? cells[i] : ""
+                Text(inlineMarkdown(value))
+                    .font(.system(size: isHeader ? 11.5 : 12, weight: isHeader ? .semibold : .regular))
+                    .foregroundStyle(isHeader ? theme.color("fg-muted") : theme.color("fg"))
+                    .frame(minWidth: 80, alignment: .leading)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                if i < columnCount - 1 {
+                    Rectangle().fill(theme.color("line-soft")).frame(width: 0.5)
+                }
+            }
+        }
+        .background(isHeader ? theme.color("bg-2").opacity(0.5) : Color.clear)
+    }
+
+    private func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: return 19
+        case 2: return 17
+        case 3: return 15
+        default: return 14
+        }
+    }
+
+    /// Inline parser: bold / italic / inline code / links via the
+    /// system AttributedString initializer.
+    private func inlineMarkdown(_ s: String) -> AttributedString {
+        if let attr = try? AttributedString(
+            markdown: s,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            )
+        ) {
+            return attr
+        }
+        return AttributedString(s)
+    }
+
+    // MARK: - Block parser
+
+    enum Block {
+        case heading(level: Int, text: String)
+        case paragraph(String)
+        case quote(String)
+        case code(language: String?, body: String)
+        case table(header: [String], rows: [[String]])
+    }
+
+    /// Detect a GitHub-flavoured markdown table starting at `start`:
+    ///   | h1 | h2 |
+    ///   |----|----|
+    ///   | a  | b  |
+    /// Returns header cells + body rows + number of consumed lines, or nil.
+    private func matchTable(from lines: [String], at start: Int) -> ([String], [[String]], Int)? {
+        guard start + 1 < lines.count else { return nil }
+        let head = lines[start].trimmingCharacters(in: .whitespaces)
+        let sep = lines[start + 1].trimmingCharacters(in: .whitespaces)
+        guard head.contains("|"), sep.contains("|"),
+              sep.allSatisfy({ "|-: ".contains($0) }),
+              sep.contains("-")
+        else { return nil }
+        let header = splitTableRow(head)
+        let columnCount = header.count
+        guard columnCount > 0 else { return nil }
+        var rows: [[String]] = []
+        var j = start + 2
+        while j < lines.count {
+            let row = lines[j].trimmingCharacters(in: .whitespaces)
+            guard row.contains("|"), !row.isEmpty else { break }
+            var cells = splitTableRow(row)
+            // Normalise width to header length.
+            if cells.count < columnCount {
+                cells += Array(repeating: "", count: columnCount - cells.count)
+            } else if cells.count > columnCount {
+                cells = Array(cells.prefix(columnCount))
+            }
+            rows.append(cells)
+            j += 1
+        }
+        return (header, rows, j - start)
+    }
+
+    private func splitTableRow(_ raw: String) -> [String] {
+        var s = raw
+        if s.hasPrefix("|") { s.removeFirst() }
+        if s.hasSuffix("|") { s.removeLast() }
+        return s.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// Detect `# Heading` / `## Subheading` etc. (1–6 `#`s, then whitespace,
+    /// then content). Returns `(level, text)` or nil.
+    private func matchHeading(_ line: String) -> (Int, String)? {
+        var level = 0
+        var idx = line.startIndex
+        while idx < line.endIndex, line[idx] == "#", level < 6 {
+            level += 1
+            idx = line.index(after: idx)
+        }
+        guard level >= 1, idx < line.endIndex, line[idx].isWhitespace else { return nil }
+        let body = line[idx...].drop(while: { $0.isWhitespace })
+        guard !body.isEmpty else { return nil }
+        return (level, String(body))
+    }
+
+    private func parse(_ text: String) -> [Block] {
+        var blocks: [Block] = []
+        var i = 0
+        let lines = text.components(separatedBy: "\n")
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Fenced code block.
+            if trimmed.hasPrefix("```") {
+                let lang = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+                i += 1
+                var body: [String] = []
+                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                    body.append(lines[i])
+                    i += 1
+                }
+                if i < lines.count { i += 1 } // skip closing fence
+                blocks.append(.code(language: lang.isEmpty ? nil : lang, body: body.joined(separator: "\n")))
+                continue
+            }
+
+            // Heading.
+            if let (level, headingText) = matchHeading(trimmed) {
+                blocks.append(.heading(level: level, text: headingText))
+                i += 1
+                continue
+            }
+
+            // Markdown table: a header row + separator (---|:--:|---) + body rows.
+            if let (header, rows, consumed) = matchTable(from: lines, at: i) {
+                blocks.append(.table(header: header, rows: rows))
+                i += consumed
+                continue
+            }
+
+            // Blockquote: collect contiguous `> ` prefixed lines.
+            if trimmed.hasPrefix(">") {
+                var quoted: [String] = []
+                while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix(">") {
+                    var s = lines[i].trimmingCharacters(in: .whitespaces)
+                    s.removeFirst()
+                    if s.first == " " { s.removeFirst() }
+                    quoted.append(s)
+                    i += 1
+                }
+                blocks.append(.quote(quoted.joined(separator: "\n")))
+                continue
+            }
+
+            // Blank line — paragraph boundary.
+            if trimmed.isEmpty {
+                i += 1
+                continue
+            }
+
+            // Paragraph: collect until blank or block-start.
+            var para: [String] = [line]
+            i += 1
+            while i < lines.count {
+                let next = lines[i].trimmingCharacters(in: .whitespaces)
+                if next.isEmpty { break }
+                if next.hasPrefix("```") || next.hasPrefix(">") || matchHeading(next) != nil { break }
+                para.append(lines[i])
+                i += 1
+            }
+            blocks.append(.paragraph(para.joined(separator: "\n")))
+        }
+        return blocks
+    }
+}
+
+/// Fenced code block with optional language label and a copy button on
+/// the right side of the header. Click flashes a checkmark + "Copied"
+/// for ~1.5s, mirroring the SHA-copy affordance in the commit editor.
+private struct CodeBlockView: View {
+    let language: String?
+    let code: String
+    @Environment(\.theme) private var theme
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(code)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineSpacing(2)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+            }
+        }
+        .background(theme.color("bg-0").opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        HStack(spacing: 8) {
+            if let lang = language, !lang.isEmpty {
+                Text(lang)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(0.4)
+                    .textCase(.uppercase)
+                    .foregroundStyle(theme.color("fg-faint"))
+            } else {
+                Color.clear.frame(height: 1)
+            }
+            Spacer(minLength: 0)
+            copyButton
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(theme.color("bg-2").opacity(0.6))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
+        }
+    }
+
+    private var copyButton: some View {
+        Button(action: copy) {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10, weight: copied ? .bold : .regular))
+                Text(copied ? "Copied" : "Copy")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(copied ? theme.color("add") : theme.color("fg-muted"))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(theme.color("bg-3").opacity(copied ? 0.4 : 0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(copied ? theme.color("add").opacity(0.5) : theme.color("line"), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Copy code")
+    }
+
+    private func copy() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(code, forType: .string)
+        withAnimation(.easeOut(duration: 0.12)) { copied = true }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            withAnimation(.easeIn(duration: 0.2)) { copied = false }
+        }
+    }
+}

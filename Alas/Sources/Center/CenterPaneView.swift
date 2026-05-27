@@ -58,6 +58,17 @@ struct CenterPaneView: View {
                 onLaunchAgent: { agentId in
                     _ = try? state.openAgentTerminalTab(for: worktree, agentId: agentId)
                 },
+                onLaunchACPSession: { agentId in
+                    state.openNewACPSession(agentID: agentId)
+                },
+                acpAgents: {
+                    // Only enabled builtins with a wired ACP launch spec.
+                    let enabledIds = Set(state.agentRegistry.enabled().map(\.id))
+                    return ACPLaunchCatalog.specs.compactMap { spec in
+                        guard enabledIds.contains(spec.agentID) else { return nil }
+                        return AgentBuiltins.entry(id: spec.agentID)
+                    }
+                }(),
                 onRevealRightSidebar: {
                     state.config.rightPaneVisible = true
                     state.saveConfig()
@@ -173,6 +184,9 @@ struct CenterPaneView: View {
                             tabState: s
                         )
                         .id(s.id)
+                    case .acpSession(let s):
+                        ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
+                            .id(s.id)
                     }
                 }
             }
