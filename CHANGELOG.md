@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-27
+
+### ✨ Features
+
+- Add persistent terminal sessions across app quit via bundled zmx (#317).
+- Add a vendor-neutral ACP chat pane (#316).
+- Add a shortcut to focus the current project's main worktree (#318).
+- Add worktree empty state agent entrypoints (#320).
+- Add a fetch-remote-before-create-worktree setting (#315).
+
+### 🐛 Fixes
+
+- Hide the draft commit prompt when no changes are staged (#313).
+- Refine the Changes tab visual design (#314).
+- Show agent logos in harness notifications (#319).
+
 ## [0.3.14] - 2026-05-26
 
 ### ✨ Features
