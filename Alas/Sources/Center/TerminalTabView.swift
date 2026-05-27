@@ -90,7 +90,11 @@ private struct PaneLeafView: View {
 
     var body: some View {
         Group {
-            if let session = state.terminal.registry.session(for: leaf.sessionId) {
+            // Look up by leaf.id (the stable identity used as the registry
+            // key and zmx session name). leaf.sessionId is mirrored to id
+            // for new state and normalized on decode for legacy state, so
+            // both happen to be equal — but `id` is the canonical identity.
+            if let session = state.terminal.registry.session(for: leaf.id) {
                 GhosttyHost(session: session, isFocused: isFocused)
                     .onAppear {
                         wireCwdHandler(session: session)

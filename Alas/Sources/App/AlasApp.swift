@@ -292,6 +292,10 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasResizePaneDown, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .resizePaneDown))
+            Divider()
+            Button("Terminate All Terminal Sessions") {
+                NotificationCenter.default.post(name: .alasTerminateAllTerminals, object: nil)
+            }
         }
         CommandGroup(after: .toolbar) {
             Divider()

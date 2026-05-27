@@ -4,6 +4,8 @@ import Foundation
 
 struct TerminalTabStateCodableTests {
     @Test func newShapeRoundTripsLeafOnly() throws {
+        // When a leaf with legacy divergent sessionId is encoded, sessionId is mirrored to id.
+        // After round-trip, the state will have sessionId == id (the new invariant).
         let state = TerminalTabState(
             id: "tab-1",
             title: "main",
@@ -12,10 +14,19 @@ struct TerminalTabStateCodableTests {
         )
         let data = try JSONEncoder().encode(state)
         let decoded = try JSONDecoder().decode(TerminalTabState.self, from: data)
-        #expect(decoded == state)
+        // The decoded state has sessionId mirrored to id
+        let expectedState = TerminalTabState(
+            id: "tab-1",
+            title: "main",
+            root: .leaf(PaneLeaf(id: "leaf-1", sessionId: "leaf-1", lastCwd: "/tmp")),
+            focusedLeafId: "leaf-1"
+        )
+        #expect(decoded == expectedState)
     }
 
     @Test func newShapeRoundTripsNestedTree() throws {
+        // When leaves with legacy divergent sessionIds are encoded, sessionId is mirrored to id.
+        // After round-trip, each leaf will have sessionId == id (the new invariant).
         let nested: PaneNode = .split(PaneSplit(
             id: "s1", axis: .vertical, fraction: 0.5,
             children: [
@@ -30,10 +41,26 @@ struct TerminalTabStateCodableTests {
         let state = TerminalTabState(id: "tab", title: "t", root: nested, focusedLeafId: "b")
         let data = try JSONEncoder().encode(state)
         let decoded = try JSONDecoder().decode(TerminalTabState.self, from: data)
-        #expect(decoded == state)
+        // After encoding and decoding, sessionIds are mirrored to their respective ids
+        let expectedNested: PaneNode = .split(PaneSplit(
+            id: "s1", axis: .vertical, fraction: 0.5,
+            children: [
+                .leaf(PaneLeaf(id: "a", sessionId: "a", lastCwd: nil)),
+                .split(PaneSplit(id: "s2", axis: .horizontal, fraction: 0.3,
+                                 children: [
+                                    .leaf(PaneLeaf(id: "b", sessionId: "b", lastCwd: "/home")),
+                                    .leaf(PaneLeaf(id: "c", sessionId: "c", lastCwd: nil)),
+                                 ]))
+            ]
+        ))
+        let expectedState = TerminalTabState(id: "tab", title: "t", root: expectedNested, focusedLeafId: "b")
+        #expect(decoded == expectedState)
     }
 
-    @Test func legacyShapeDecodesIntoSingleLeaf() throws {
+    @Test func legacyShapeDecodesIntoSingleLeafWithIdEqualToSessionId() throws {
+        // Legacy persisted state had only a top-level sessionId. Migration
+        // now uses that sessionId as the leaf id so the in-memory leaf
+        // already satisfies the "leaf.id == sessionId" invariant.
         let legacyJSON = #"""
         {"id":"tab-1","title":"main","sessionId":"sess-1"}
         """#.data(using: .utf8)!
@@ -41,12 +68,26 @@ struct TerminalTabStateCodableTests {
         #expect(decoded.id == "tab-1")
         #expect(decoded.title == "main")
         if case .leaf(let l) = decoded.root {
+            #expect(l.id == "sess-1")
             #expect(l.sessionId == "sess-1")
-            #expect(decoded.focusedLeafId == l.id)
+            #expect(decoded.focusedLeafId == "sess-1")
             #expect(l.lastCwd == nil)
         } else {
             Issue.record("legacy state should decode to a single leaf")
         }
+    }
+
+    @Test func convenienceInitUsesSessionIdAsLeafId() {
+        // Regression for the bug where fresh terminal tabs had leaf.id != sessionId,
+        // causing the registry (keyed by leaf.id post-zmx) to miss on Split/close paths.
+        let state = TerminalTabState(id: "tab-1", title: "bash", sessionId: "live-session-UUID")
+        guard case .leaf(let leaf) = state.root else {
+            Issue.record("convenience init must produce a single leaf")
+            return
+        }
+        #expect(leaf.id == "live-session-UUID")
+        #expect(leaf.sessionId == "live-session-UUID")
+        #expect(state.focusedLeafId == "live-session-UUID")
     }
 
     @Test func encodingNeverEmitsTopLevelSessionIdKey() throws {

@@ -134,9 +134,13 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
         self.focusedLeafId = focusedLeafId
     }
 
-    /// Convenience for callers that still create a single-leaf tab.
+    /// Convenience for callers that still create a single-leaf tab. The
+    /// leaf id is set to `sessionId` so that the leaf identity matches the
+    /// registry key and zmx session name (both keyed by leaf id since the
+    /// switch to stable identity). Callers MUST pass the live
+    /// `TerminalSession.id` here, not an unrelated string.
     init(id: TabID, title: String, sessionId: String) {
-        let leafId = UUID().uuidString
+        let leafId = sessionId
         self.id = id
         self.title = title
         self.root = .leaf(PaneLeaf(id: leafId, sessionId: sessionId, lastCwd: nil))
@@ -156,11 +160,14 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
             self.focusedLeafId = try c.decodeIfPresent(String.self, forKey: .focusedLeafId)
                 ?? root.firstLeaf().id
         } else {
-            // Legacy shape: {id, title, sessionId}. Migrate to a single-leaf tree.
+            // Legacy shape: {id, title, sessionId}. Migrate to a single-leaf
+            // tree. Use the persisted sessionId as the leaf id so the leaf
+            // identity already matches the new "leaf.id == session id"
+            // invariant on the first decode (and the next encode is a no-op
+            // since sessionId is now mirrored to id).
             let legacy = try c.decode(String.self, forKey: .sessionId)
-            let leafId = UUID().uuidString
-            self.root = .leaf(PaneLeaf(id: leafId, sessionId: legacy, lastCwd: nil))
-            self.focusedLeafId = leafId
+            self.root = .leaf(PaneLeaf(id: legacy, sessionId: legacy, lastCwd: nil))
+            self.focusedLeafId = legacy
         }
     }
 

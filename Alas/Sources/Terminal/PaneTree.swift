@@ -69,7 +69,10 @@ enum PaneNode: Codable, Equatable, Identifiable {
         var single = encoder.singleValueContainer()
         switch self {
         case .leaf(let l):
-            try single.encode(PaneLeafCodable(kind: .leaf, id: l.id, sessionId: l.sessionId, lastCwd: l.lastCwd))
+            // sessionId is mirrored to id on every encode. The field is retained on
+            // disk for backward decode compatibility with leaves persisted before
+            // zmx-based stable identity (where sessionId was a per-launch UUID).
+            try single.encode(PaneLeafCodable(kind: .leaf, id: l.id, sessionId: l.id, lastCwd: l.lastCwd))
         case .split(let s):
             try single.encode(PaneSplitCodable(
                 kind: .split, id: s.id, axis: s.axis, fraction: s.fraction, children: s.children
@@ -88,7 +91,14 @@ private struct PaneLeafCodable: Codable {
     let lastCwd: String?
 
     var asLeaf: PaneLeaf {
-        PaneLeaf(id: id, sessionId: sessionId, lastCwd: lastCwd)
+        // Normalize sessionId to id at decode time so the in-memory leaf
+        // always satisfies the "leaf.id == session id" invariant — even for
+        // legacy persisted state from before zmx-based stable identity, where
+        // sessionId was a per-launch UUID divergent from id. Downstream
+        // lookups (registry, harness, TerminalTabView, zmx kill) are keyed
+        // off this single identity; allowing divergence on decode would
+        // re-introduce the very mismatch the new invariant was meant to fix.
+        PaneLeaf(id: id, sessionId: id, lastCwd: lastCwd)
     }
 }
 

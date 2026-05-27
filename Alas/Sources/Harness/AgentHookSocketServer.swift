@@ -2,7 +2,14 @@ import Darwin
 import Foundation
 
 final class AgentHookSocketServer {
+    /// Path that callers (and the `ALAS_SOCKET_PATH` env var) should use to
+    /// reach the live socket. May be a symlink pointing at `bindPath` —
+    /// see the convenience init's note on cross-relaunch persistence.
     private(set) var socketPath: String?
+    /// The path the listening socket is actually bound to. Always the
+    /// pid-scoped `/tmp/alas-<uid>/pid-<pid>` file in production; the same
+    /// value as `socketPath` when callers passed an explicit path.
+    private var bindPath: String?
     private var listenTask: Task<Void, Never>?
     var onEvent: ((AgentHookEvent) -> Void)?
     var onCLIRequest: ((AlasCLIRequest) async -> AlasCLIResponse)?
@@ -13,6 +20,7 @@ final class AgentHookSocketServer {
         unlink(socketPath)
         guard startListening(path: socketPath) else { return }
         self.socketPath = socketPath
+        self.bindPath = socketPath
     }
 
     convenience init(uid: uid_t = getuid(), pid: pid_t = ProcessInfo.processInfo.processIdentifier) {
@@ -24,6 +32,35 @@ final class AgentHookSocketServer {
         Self.sweepStaleSockets(in: directory)
         let path = "\(directory)/pid-\(pid)"
         self.init(socketPath: path)
+    }
+
+    /// Creates (or updates) a leaf-scoped symlink at
+    /// `/tmp/alas-<uid>/sock-<leafId>` pointing at the live bind path, and
+    /// returns the symlink path. Used as the per-session `ALAS_SOCKET_PATH`
+    /// so the env var stays valid across Alas relaunches: on the next
+    /// launch we re-bind to a fresh `pid-<pid>` path and `linkSession`
+    /// repoints the same per-leaf symlink, and hook scripts in zmx-
+    /// persisted shells resolve through it on `connect(2)`. Leaf-scoping
+    /// avoids the multi-instance collision a single shared symlink would
+    /// have: two Alas processes only touch the same path if they're
+    /// addressing the same `leafId`, which can't happen because PaneLeaf
+    /// ids are unique UUIDs per pane.
+    ///
+    /// Returns nil if the server isn't bound, or if symlink creation
+    /// failed — the caller can fall back to the raw bind path.
+    func linkSession(leafId: String, uid: uid_t = getuid()) -> String? {
+        guard let bindPath else { return nil }
+        let linkPath = "/tmp/alas-\(uid)/sock-\(leafId)"
+        unlink(linkPath)
+        guard symlink(bindPath, linkPath) == 0 else { return nil }
+        return linkPath
+    }
+
+    /// Best-effort removal of a leaf's per-session symlink. Called when
+    /// `TerminalService` explicitly closes a pane so we don't leave
+    /// orphan symlinks under `/tmp/alas-<uid>/`.
+    func unlinkSession(leafId: String, uid: uid_t = getuid()) {
+        unlink("/tmp/alas-\(uid)/sock-\(leafId)")
     }
 
     /// Ensures `path` is a real directory (no symlink) owned by `ownerUid`
@@ -56,14 +93,15 @@ final class AgentHookSocketServer {
 
     deinit {
         listenTask?.cancel()
-        if let socketPath { unlink(socketPath) }
+        if let bindPath { unlink(bindPath) }
     }
 
     func shutdown() {
         listenTask?.cancel()
         listenTask = nil
-        if let socketPath { unlink(socketPath) }
+        if let bindPath { unlink(bindPath) }
         socketPath = nil
+        bindPath = nil
     }
 
     private func startListening(path: String) -> Bool {

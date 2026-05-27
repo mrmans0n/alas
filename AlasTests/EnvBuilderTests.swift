@@ -88,4 +88,49 @@ struct EnvBuilderTests {
         #expect(env["COLORTERM"] == nil)
         #expect(env["TERMINFO"] == nil)
     }
+
+    @Test func zmxDirIsEmittedWhenProvided() {
+        let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "s",
+            socketPath: nil,
+            inheritParent: false,
+            parent: [:],
+            zmxDir: "/tmp/alas-zmx-501"
+        )
+        #expect(env["ZMX_DIR"] == "/tmp/alas-zmx-501")
+    }
+
+    @Test func zmxDirIsAbsentWhenNotProvided() {
+        let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "s",
+            socketPath: nil,
+            inheritParent: false,
+            parent: [:],
+            zmxDir: nil
+        )
+        #expect(env["ZMX_DIR"] == nil)
+    }
+
+    @Test func alasSessionIdEqualsCallerSuppliedValue() {
+        let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
+        let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
+                          path: URL(fileURLWithPath: "/wt"),
+                          status: .clean, lastActivity: Date())
+        let env = EnvBuilder.build(
+            project: project, worktree: wt, sessionId: "leaf-UUID-ABC",
+            socketPath: nil,
+            inheritParent: false,
+            parent: [:],
+            zmxDir: nil
+        )
+        #expect(env["ALAS_SESSION_ID"] == "leaf-UUID-ABC")
+    }
 }

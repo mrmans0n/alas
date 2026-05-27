@@ -12,7 +12,8 @@ enum EnvBuilder {
         sessionId: String,
         socketPath: String?,
         inheritParent: Bool,
-        parent: [String: String] = ProcessInfo.processInfo.environment
+        parent: [String: String] = ProcessInfo.processInfo.environment,
+        zmxDir: String? = nil
     ) -> [String: String] {
         var env: [String: String] = inheritParent
             ? parent.filter { !strippedKeys.contains($0.key) }
@@ -27,6 +28,9 @@ enum EnvBuilder {
         // process and drive incorrect harness state there.
         env.removeValue(forKey: "ALAS_SOCKET_PATH")
         if let socketPath { env["ALAS_SOCKET_PATH"] = socketPath }
+        // Pin the daemon/socket dir so spawned shells and any subsequent
+        // `zmx kill` from Alas talk to the same daemon instance.
+        if let zmxDir { env["ZMX_DIR"] = zmxDir }
         return env
     }
 }

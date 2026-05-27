@@ -605,7 +605,7 @@ struct TabsManagerPaneTests {
         #expect(persisted.focusedLeafId == "new")
     }
 
-    @Test func removeFocusedLeafReturnsClosedSessionId() throws {
+    @Test func removeFocusedLeafReturnsClosedLeafId() throws {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
         _ = mgr.splitFocusedLeaf(
@@ -613,11 +613,12 @@ struct TabsManagerPaneTests {
             newLeafId: "new", newSessionId: "s2"
         )
         let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
-        guard case .leafRemoved(let outcomeTab, let closedSessionId) = outcome else {
+        guard case .leafRemoved(let outcomeTab, let closedLeafId) = outcome else {
             Issue.record("expected .leafRemoved")
             return
         }
-        #expect(closedSessionId == "s2")
+        // The focused leaf after split is "new" (the new leaf id), so that's what's closed.
+        #expect(closedLeafId == "new")
         if case .terminal(let s) = outcomeTab, case .leaf(let l) = s.root {
             #expect(l.sessionId == "s1")
             #expect(s.focusedLeafId == l.id)
@@ -638,12 +639,18 @@ struct TabsManagerPaneTests {
     @Test func removeFocusedLeafSignalsLastLeafRemoval() throws {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        // Capture the leaf id before removal (it is a stable UUID, not the session id).
+        guard case .terminal(let tabState) = tab, case .leaf(let initialLeaf) = tabState.root else {
+            Issue.record("expected single-leaf terminal tab")
+            return
+        }
+        let expectedLeafId = initialLeaf.id
         let outcome = try #require(mgr.removeFocusedLeaf(worktreeId: "wt", tabId: tab.id))
-        guard case .tabRemoved(let closedSessionId) = outcome else {
+        guard case .tabRemoved(let closedLeafId) = outcome else {
             Issue.record("expected .tabRemoved")
             return
         }
-        #expect(closedSessionId == "s1")
+        #expect(closedLeafId == expectedLeafId)
     }
 
     @Test func setSplitFractionClampsBetween0_1And0_9() {
