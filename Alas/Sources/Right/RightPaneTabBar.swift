@@ -12,15 +12,25 @@ struct RightPaneTabBar: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 6) {
-            segment(.changes, icon: "diff", label: "Changes", count: changesCount)
-            segment(.files,   icon: "folder", label: "Files",  count: nil)
-                .contextMenu {
-                    Toggle("Show ignored or excluded files", isOn: Binding(
-                        get: { showIgnored },
-                        set: { _ in onToggleShowIgnored() }
-                    ))
-                }
+        HStack(spacing: 8) {
+            HStack(spacing: 2) {
+                segment(.changes, icon: "diff", label: "Changes", count: changesCount)
+                segment(.files,   icon: "folder", label: "Files",  count: nil)
+                    .contextMenu {
+                        Toggle("Show ignored or excluded files", isOn: Binding(
+                            get: { showIgnored },
+                            set: { _ in onToggleShowIgnored() }
+                        ))
+                    }
+            }
+            .padding(2)
+            .background(theme.color("seg-container-bg"))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
             Spacer(minLength: 8)
             trailing
             ToolbarBtn(icon: "sidebar.right", action: onHidePane)
@@ -43,15 +53,28 @@ struct RightPaneTabBar: View {
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 10, weight: .semibold))
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(isOn ? theme.color("accent-soft") : theme.color("bg-4"))
-                        .foregroundColor(isOn ? theme.color("accent") : theme.color("fg-muted"))
+                        .frame(minWidth: 16, minHeight: 14)
+                        .padding(.horizontal, 4)
+                        .background(isOn ? theme.color("seg-pill-active-bg") : theme.color("seg-pill-bg"))
+                        .foregroundColor(isOn ? theme.color("seg-pill-active-fg") : theme.color("fg-muted"))
                         .clipShape(Capsule())
                 }
             }
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(isOn ? theme.color("bg-3") : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(
+                ZStack {
+                    if isOn {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(theme.color("bg-3"))
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.white.opacity(0.04), lineWidth: 1)
+                            .blendMode(.plusLighter)
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .shadow(color: isOn ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
