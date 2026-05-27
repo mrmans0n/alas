@@ -1,16 +1,20 @@
 import Foundation
 import Darwin
 
-/// Wraps `spctl --assess` for an LSP binary so we can pre-flight Gatekeeper
-/// before spawning a subprocess from a GUI app. On macOS Tahoe a GUI app
-/// spawning an ad-hoc-signed binary triggers a Gatekeeper popup the user
-/// must dismiss from System Settings; checking spctl first lets us skip the
-/// spawn and surface an in-app banner instead.
+/// Pre-flight Gatekeeper for an LSP binary by inspecting its
+/// `com.apple.quarantine` xattr. Tahoe's GUI-spawn Gatekeeper block fires
+/// for binaries the user "downloaded" (anything with quarantine on it),
+/// not for arbitrary ad-hoc-signed executables: the previous
+/// `spctl --assess --type execute` heuristic produced false positives
+/// across the board (every Homebrew script, every cargo-installed Rust
+/// binary, every node-script LSP comes back `rejected` even though the
+/// system would happily spawn them). Quarantine presence is the narrow,
+/// accurate signal — the same one the OS uses to decide whether to fire
+/// the System Settings prompt.
 ///
-/// Caches results by (realPath, mtime, inode). The first lookup per binary
-/// per session shells out to spctl (~150-300ms); later lookups are µs-fast
-/// cache reads. Callers run on the main actor — see the spec for the
-/// stutter trade-off.
+/// Caches results by (realPath, mtime, inode); the xattr check itself is
+/// already cheap, but caching keeps the cost off the main actor on the
+/// hot path of editor open / tab switch.
 @MainActor
 final class GatekeeperAssessor {
     enum Result: Equatable { case allowed, rejected, unknown }
@@ -18,8 +22,8 @@ final class GatekeeperAssessor {
     static let shared = GatekeeperAssessor()
 
     /// Throwing closure that returns the assessment for `realPath`. The
-    /// default runs `/usr/sbin/spctl --assess --type execute <path>` via
-    /// `Process`. Injected for tests.
+    /// default reads `com.apple.quarantine` via `getxattr(2)`: present →
+    /// `.rejected`, absent → `.allowed`. Injected for tests.
     typealias Runner = (_ realPath: String) throws -> Result
 
     private struct CacheEntry {
@@ -84,34 +88,15 @@ final class GatekeeperAssessor {
     }
 
     nonisolated static func defaultRunner(realPath: String) throws -> Result {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/spctl")
-        process.arguments = ["--assess", "--type", "execute", realPath]
-        let null = Pipe()
-        process.standardOutput = null
-        process.standardError = null
-
-        try process.run()
-        // spctl normally completes in well under a second. We bound the wait
-        // with a hard 2s ceiling so a wedged syspolicyd can't hang the UI.
-        let sema = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            process.waitUntilExit()
-            sema.signal()
+        // getxattr returns the attribute size, or -1 on failure. On
+        // ENOATTR ("no such attribute") the file simply isn't quarantined.
+        // Any other errno is treated as the file being inaccessible —
+        // return .unknown so the availability layer falls open to
+        // .allowed rather than hiding a runnable LSP behind a banner.
+        let size = realPath.withCString { cpath in
+            getxattr(cpath, "com.apple.quarantine", nil, 0, 0, 0)
         }
-        let timedOut = sema.wait(timeout: .now() + 2.0) == .timedOut
-        if timedOut {
-            process.terminate()
-            return .unknown
-        }
-        // spctl(8): exit 0 = allowed, exit 3 = denied (Gatekeeper rejection).
-        // Other non-zero codes are operational errors (file unreadable, policy
-        // DB rebuild, etc.); fail open with .unknown so a flaky spctl doesn't
-        // hide a runnable LSP behind a banner.
-        switch process.terminationStatus {
-        case 0: return .allowed
-        case 3: return .rejected
-        default: return .unknown
-        }
+        if size >= 0 { return .rejected }
+        return errno == ENOATTR ? .allowed : .unknown
     }
 }
