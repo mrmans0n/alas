@@ -75,13 +75,16 @@ struct CommitMessageEditorView: View {
                 busy: busy,
                 onGenerate: onGenerate
             )
+            let effectiveShortcut = primaryAction.keyboardShortcut
+                ?? KeyboardShortcut(.return, modifiers: .command)
             Button(action: primaryAction.handler) {
                 HStack(spacing: 8) {
                     Text(displayedLabel)
                         .font(.system(size: 12, weight: .semibold))
                     HStack(spacing: 2) {
-                        kbdBadge("⌘")
-                        kbdBadge("⏎")
+                        ForEach(Array(kbdGlyphs(for: effectiveShortcut).enumerated()), id: \.offset) { _, g in
+                            kbdBadge(g)
+                        }
                     }
                 }
                 .padding(.leading, 14).padding(.trailing, 12)
@@ -95,7 +98,7 @@ struct CommitMessageEditorView: View {
             // Default to ⌘⏎ so existing-commit callers (which pass
             // nil) keep their save shortcut. Draft callers pass their
             // own value (which is also ⌘⏎ via shortcut settings).
-            .keyboardShortcut(primaryAction.keyboardShortcut ?? KeyboardShortcut(.return, modifiers: .command))
+            .keyboardShortcut(effectiveShortcut)
         }
     }
 
@@ -152,6 +155,36 @@ struct CommitMessageEditorView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .focused($focused, equals: .body)
             .disabled(busy)
+    }
+
+    /// Render the modifier + key glyphs of a `KeyboardShortcut` for display
+    /// in the in-button kbd badges. Order matches macOS menu convention:
+    /// control, option, shift, command, then key. Falls back to the key's
+    /// raw Character (uppercased) when no special glyph is known.
+    private func kbdGlyphs(for shortcut: KeyboardShortcut) -> [String] {
+        var out: [String] = []
+        let mods = shortcut.modifiers
+        if mods.contains(.control) { out.append("⌃") }
+        if mods.contains(.option)  { out.append("⌥") }
+        if mods.contains(.shift)   { out.append("⇧") }
+        if mods.contains(.command) { out.append("⌘") }
+        out.append(glyph(for: shortcut.key))
+        return out
+    }
+
+    private func glyph(for key: KeyEquivalent) -> String {
+        switch key {
+        case .return:     return "⏎"
+        case .tab:        return "⇥"
+        case .space:      return "␣"
+        case .escape:     return "⎋"
+        case .delete:     return "⌫"
+        case .leftArrow:  return "←"
+        case .rightArrow: return "→"
+        case .upArrow:    return "↑"
+        case .downArrow:  return "↓"
+        default:          return String(key.character).uppercased()
+        }
     }
 
     @ViewBuilder
