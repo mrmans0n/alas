@@ -1,7 +1,6 @@
 import Foundation
 import AppKit
 import Observation
-import os
 
 @Observable
 @MainActor
@@ -19,8 +18,6 @@ final class AppState {
         return manager
     }
     let terminal = TerminalService()
-    @ObservationIgnored
-    private static let logger = Logger(subsystem: "io.nlopez.alas", category: "AppState")
     struct OpenedTerminalSession {
         let id: String
         let foregroundPid: () -> pid_t?
@@ -476,19 +473,6 @@ final class AppState {
 
         Task { @MainActor in
             do {
-                if self.config.worktrees.fetchRemoteBeforeCreate {
-                    if let fetchInfo = try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base) {
-                        do {
-                            _ = try await GitService().fetchRef(
-                                worktreePath: repoPath,
-                                remote: fetchInfo.remote,
-                                branch: fetchInfo.branch
-                            )
-                        } catch {
-                            Self.logger.error("Fetch failed before creating worktree: \(String(describing: error), privacy: .public)")
-                        }
-                    }
-                }
                 let newWorktree = try await Self.performCreateWorktree(
                     repoPath: repoPath,
                     base: base, branch: branch, destination: canonicalDestination, projectId: projectId
@@ -1363,6 +1347,7 @@ final class AppState {
         let closed = tabs.closeAll(worktreeId: worktreeId)
         cleanupTerminals(allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        disposeACPManager(for: worktreeId)
     }
 
     func closeAllTabs(worktreeId: String) {
@@ -2011,5 +1996,115 @@ final class AppState {
             return false
         }
         return true
+    }
+
+    // MARK: - ACP
+
+    /// Per-worktree ACP session managers, lazily created on first access.
+    @ObservationIgnored
+    private var acpManagers: [String: ACPSessionManager] = [:]
+
+    /// Returns `true` when the editor has a live, dirty (unsaved) buffer for
+    /// the given absolute path within the given worktree.
+    func editorHasDirtyBuffer(for absolutePath: String, worktreeId: String) -> Bool {
+        guard let worktree = worktree(withId: worktreeId) else { return false }
+        let root = worktree.path.standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        let target = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
+        guard target.hasPrefix(prefix) else { return false }
+        let relativePath = String(target.dropFirst(prefix.count))
+        return tabs.hasDirtyBuffer(worktreeId: worktreeId, relativePath: relativePath)
+    }
+
+    /// Returns (or lazily creates) the ACP session manager for the given worktree.
+    /// Returns nil when the SQLite backing store cannot be opened.
+    func acpManager(for worktree: Worktree) -> ACPSessionManager? {
+        if let existing = acpManagers[worktree.id] { return existing }
+        let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
+        do {
+            let store = try ACPSessionStore(path: dbURL.path)
+            let mgr = ACPSessionManager(
+                worktreeId: worktree.id,
+                worktreePath: worktree.path.path,
+                store: store,
+                onDirtyCheck: { [weak self] path in
+                    self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
+                }
+            )
+            acpManagers[worktree.id] = mgr
+            return mgr
+        } catch {
+            return nil
+        }
+    }
+
+    /// Release the ACP session manager for the given worktree id.
+    /// Called from `cleanupWorktreeState` when a worktree is removed/archived.
+    func disposeACPManager(for worktreeId: String) {
+        acpManagers[worktreeId] = nil
+    }
+
+    /// Open a new ACP session tab for the given agent in the currently-selected worktree.
+    func openNewACPSession(agentID: String) {
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId) else { return }
+        guard let mgr = acpManager(for: worktree) else { return }
+        let session = mgr.createSession(agentId: agentID)
+        let state = ACPSessionTabState(sessionId: session.id, title: session.title)
+        tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    /// Reopen a persisted ACP session as a center-pane tab. If a tab
+    /// for this session is already open in the current worktree we
+    /// just focus it; otherwise we create one and let openSession()
+    /// rehydrate the transcript from disk.
+    func openExistingACPSession(sessionId: ACPSession.ID) {
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId) else { return }
+        guard let mgr = acpManager(for: worktree) else { return }
+
+        // Focus the tab if it's already there.
+        let tabIdToFocus: TabID? = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
+            if case .acpSession(let s) = tab, s.sessionId == sessionId { return tab.id }
+            return nil
+        }.first
+        if let id = tabIdToFocus {
+            tabs.activate(worktreeId: worktree.id, tabId: id)
+            return
+        }
+
+        // Load the row so we can stamp the right title onto the new tab.
+        let title: String
+        if let row = try? mgr.store.loadSession(id: sessionId) {
+            title = row.title
+        } else {
+            title = "ACP session"
+        }
+        _ = mgr.openSession(id: sessionId)
+        let state = ACPSessionTabState(sessionId: sessionId, title: title)
+        tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    /// Open a diff tab for the given worktree-relative path.
+    /// Reuses an existing unstaged diff tab for the same path if one is already open.
+    func openDiffTab(forFileInWorktree worktree: Worktree, relativePath: String) {
+        let worktreeId = worktree.id
+        let staged = false
+        let existing = tabs.tabs(forWorktree: worktreeId).first { tab in
+            if case .diff(let s) = tab { return s.relativePath == relativePath && s.staged == staged }
+            return false
+        }
+        if let existing {
+            tabs.activate(worktreeId: worktreeId, tabId: existing.id)
+        } else {
+            let title = (relativePath as NSString).lastPathComponent
+            let tab = tabs.appendDiff(
+                worktreeId: worktreeId,
+                title: title,
+                relativePath: relativePath,
+                staged: staged
+            )
+            tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+        }
     }
 }

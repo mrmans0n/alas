@@ -57,51 +57,6 @@ struct AppConfig: Codable, Equatable {
         var autoFetch: Bool
         var fetchIntervalMinutes: Int
         var pruneStale: Bool
-        var fetchRemoteBeforeCreate: Bool
-
-        enum CodingKeys: String, CodingKey {
-            case rootPath, pathTemplate, branchPrefix, baseBranch,
-                 trackUpstream, deleteBranchOnRemove, autoFetch,
-                 fetchIntervalMinutes, pruneStale, fetchRemoteBeforeCreate
-        }
-
-        init(
-            rootPath: String,
-            pathTemplate: String,
-            branchPrefix: String,
-            baseBranch: String,
-            trackUpstream: Bool,
-            deleteBranchOnRemove: Bool,
-            autoFetch: Bool,
-            fetchIntervalMinutes: Int,
-            pruneStale: Bool,
-            fetchRemoteBeforeCreate: Bool = false
-        ) {
-            self.rootPath = rootPath
-            self.pathTemplate = pathTemplate
-            self.branchPrefix = branchPrefix
-            self.baseBranch = baseBranch
-            self.trackUpstream = trackUpstream
-            self.deleteBranchOnRemove = deleteBranchOnRemove
-            self.autoFetch = autoFetch
-            self.fetchIntervalMinutes = fetchIntervalMinutes
-            self.pruneStale = pruneStale
-            self.fetchRemoteBeforeCreate = fetchRemoteBeforeCreate
-        }
-
-        init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            rootPath = try c.decode(String.self, forKey: .rootPath)
-            pathTemplate = try c.decode(String.self, forKey: .pathTemplate)
-            branchPrefix = try c.decode(String.self, forKey: .branchPrefix)
-            baseBranch = try c.decode(String.self, forKey: .baseBranch)
-            trackUpstream = try c.decode(Bool.self, forKey: .trackUpstream)
-            deleteBranchOnRemove = try c.decode(Bool.self, forKey: .deleteBranchOnRemove)
-            autoFetch = try c.decode(Bool.self, forKey: .autoFetch)
-            fetchIntervalMinutes = try c.decode(Int.self, forKey: .fetchIntervalMinutes)
-            pruneStale = try c.decode(Bool.self, forKey: .pruneStale)
-            fetchRemoteBeforeCreate = (try? c.decode(Bool.self, forKey: .fetchRemoteBeforeCreate)) ?? false
-        }
     }
 
     struct Terminal: Codable, Equatable {
@@ -129,15 +84,17 @@ struct AppConfig: Codable, Equatable {
         var notifyOnFinish: Bool
         var notifyOnAwaiting: Bool
         var dismissedHookInstallNudges: [String]
+        var dismissedACPSetupNudges: [String]
 
         enum CodingKeys: String, CodingKey {
-            case notifyOnFinish, notifyOnAwaiting, dismissedHookInstallNudges
+            case notifyOnFinish, notifyOnAwaiting, dismissedHookInstallNudges, dismissedACPSetupNudges
         }
 
-        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool, dismissedHookInstallNudges: [String] = []) {
+        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool, dismissedHookInstallNudges: [String] = [], dismissedACPSetupNudges: [String] = []) {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
             self.dismissedHookInstallNudges = dismissedHookInstallNudges
+            self.dismissedACPSetupNudges = dismissedACPSetupNudges
         }
 
         init(from decoder: Decoder) throws {
@@ -145,6 +102,7 @@ struct AppConfig: Codable, Equatable {
             notifyOnFinish = (try? c.decode(Bool.self, forKey: .notifyOnFinish)) ?? true
             notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
             dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
+            dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
         }
     }
 
@@ -193,10 +151,19 @@ struct AppConfig: Codable, Equatable {
         var builtinState: [String: BuiltinAgentState]
         var custom: [AgentDefinition]
         var worktreeAutoLaunch: WorktreeAutoLaunch
+        /// Which surface the ⌥⌘T launcher opens on by default —
+        /// terminal tab or ACP chat. The user can flip with the
+        /// segmented control inside the launcher; this just picks the
+        /// starting mode.
+        var defaultLauncherMode: LauncherMode
 
         enum CodingKeys: String, CodingKey {
-            case builtinState, custom, worktreeAutoLaunch
+            case builtinState, custom, worktreeAutoLaunch, defaultLauncherMode
         }
+    }
+
+    enum LauncherMode: String, Codable, Equatable, CaseIterable {
+        case terminal, acp
     }
 
     struct Files: Codable, Equatable {
@@ -240,8 +207,7 @@ struct AppConfig: Codable, Equatable {
             deleteBranchOnRemove: true,
             autoFetch: true,
             fetchIntervalMinutes: 5,
-            pruneStale: false,
-            fetchRemoteBeforeCreate: false
+            pruneStale: false
         ),
         terminal: Terminal(
             shell: "/bin/zsh",
@@ -280,7 +246,8 @@ struct AppConfig: Codable, Equatable {
             worktreeAutoLaunch: WorktreeAutoLaunch(
                 agentId: nil,
                 useBypassPermissions: false
-            )
+            ),
+            defaultLauncherMode: .terminal
         ),
         files: Files(showIgnored: true),
         recentProjectIds: [],
@@ -492,10 +459,14 @@ extension AppConfig {
             let autoLaunch = (try? agentsContainer.decode(
                 WorktreeAutoLaunch.self, forKey: .worktreeAutoLaunch
             )) ?? WorktreeAutoLaunch(agentId: nil, useBypassPermissions: false)
+            let defaultMode = (try? agentsContainer.decode(
+                LauncherMode.self, forKey: .defaultLauncherMode
+            )) ?? .terminal
             agents = Agents(
                 builtinState: state,
                 custom: custom,
-                worktreeAutoLaunch: autoLaunch
+                worktreeAutoLaunch: autoLaunch,
+                defaultLauncherMode: defaultMode
             )
         } else {
             agents = Agents(
@@ -503,7 +474,8 @@ extension AppConfig {
                 custom: [],
                 worktreeAutoLaunch: WorktreeAutoLaunch(
                     agentId: nil, useBypassPermissions: false
-                )
+                ),
+                defaultLauncherMode: .terminal
             )
         }
         if let filesContainer = try? c.nestedContainer(

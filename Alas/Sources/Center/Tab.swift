@@ -11,6 +11,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case draftCommit(DraftCommitTabState)
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
+    case acpSession(ACPSessionTabState)
 
     var id: TabID {
         switch self {
@@ -22,6 +23,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftCommit(let s):  return s.id
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
+        case .acpSession(let s):   return s.id
         }
     }
 
@@ -35,6 +37,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftCommit:         return "Draft commit"
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
+        case .acpSession(let s):   return s.title
         }
     }
 
@@ -48,6 +51,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftCommit:  return "commit"
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
+        case .acpSession:   return "sparkle"
         }
     }
 
@@ -222,4 +226,16 @@ struct ImagePreviewTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
     var relativePath: String
+}
+
+struct ACPSessionTabState: Codable, Equatable, Identifiable {
+    let id: TabID        // "acp:<sessionId>"
+    let sessionId: ACPSession.ID
+    var title: String
+
+    init(sessionId: ACPSession.ID, title: String) {
+        self.id = "acp:\(sessionId)"
+        self.sessionId = sessionId
+        self.title = title
+    }
 }

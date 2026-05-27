@@ -511,6 +511,13 @@ final class TabsManager {
     }
 
     @discardableResult
+    func append(acpSession state: ACPSessionTabState, to worktreeId: String) -> Tab {
+        let tab = Tab.acpSession(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func appendDiff(worktreeId: String, title: String, relativePath: String, staged: Bool = false) -> Tab {
         let state = DiffTabState(id: UUID().uuidString, title: title, relativePath: relativePath, staged: staged)
         let tab = Tab.diff(state)
@@ -1168,6 +1175,16 @@ final class TabsManager {
         bufferKeys.compactMap { tabId, key in
             buffers[key]?.dirty == true ? tabId : nil
         }
+    }
+
+    /// Returns `true` when the in-worktree buffer at `relativePath` (within
+    /// `worktreeId`) is currently live **and** dirty. External/uninstantiated
+    /// buffers with only a hot-exit snapshot on disk are not considered dirty
+    /// here because the agent write replaces on-disk bytes — the snapshot
+    /// already diverges from disk, so no additional notice is needed.
+    func hasDirtyBuffer(worktreeId: String, relativePath: String) -> Bool {
+        let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
+        return buffers[key]?.dirty == true
     }
 
     /// Tab IDs in `worktreeId` that have unsaved changes — either a live dirty

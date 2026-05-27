@@ -17,6 +17,8 @@ struct TabBarView: View {
     let onNewTerminal: () -> Void
     let enabledAgents: [AgentDefinition]
     let onLaunchAgent: (String) -> Void
+    let onLaunchACPSession: (String) -> Void
+    let acpAgents: [AgentDefinition]
     let onRevealRightSidebar: () -> Void
     let rightSidebarHidden: Bool
     let onRevealSidebar: () -> Void
@@ -97,7 +99,9 @@ struct TabBarView: View {
             .padding(.trailing, 2)
             AgentSparkleMenu(
                 agents: enabledAgents,
-                onLaunchAgent: onLaunchAgent
+                acpAgents: acpAgents,
+                onLaunchAgent: onLaunchAgent,
+                onLaunchACPSession: onLaunchACPSession
             )
             .padding(.trailing, rightSidebarHidden ? 2 : 8)
             if rightSidebarHidden {
@@ -216,26 +220,43 @@ private struct ToolbarIconButton: View {
 
 private struct AgentSparkleMenu: View {
     let agents: [AgentDefinition]
+    let acpAgents: [AgentDefinition]
     let onLaunchAgent: (String) -> Void
+    let onLaunchACPSession: (String) -> Void
     @Environment(\.theme) var theme
 
     var body: some View {
         Menu {
-            if agents.isEmpty {
+            if agents.isEmpty && acpAgents.isEmpty {
                 Text("No enabled agents")
             } else {
-                ForEach(agents) { agent in
-                    Button {
-                        onLaunchAgent(agent.id)
-                    } label: {
-                        Label {
-                            Text(agent.displayName)
-                        } icon: {
-                            // SwiftUI Menu renders items as NSMenuItems and ignores
-                            // SwiftUI frame sizing on custom icon views; it draws the
-                            // backing NSImage at its native pixel size. Hand it an
-                            // NSImage copy whose .size is clamped to 16pt.
-                            Image(nsImage: AgentLogoView.menuImage(for: agent))
+                if !agents.isEmpty {
+                    Section("Terminal") {
+                        ForEach(agents) { agent in
+                            Button {
+                                onLaunchAgent(agent.id)
+                            } label: {
+                                Label {
+                                    Text(agent.displayName)
+                                } icon: {
+                                    Image(nsImage: AgentLogoView.menuImage(for: agent))
+                                }
+                            }
+                        }
+                    }
+                }
+                if !acpAgents.isEmpty {
+                    Section("ACP session") {
+                        ForEach(acpAgents) { agent in
+                            Button {
+                                onLaunchACPSession(agent.id)
+                            } label: {
+                                Label {
+                                    Text(agent.displayName)
+                                } icon: {
+                                    Image(nsImage: AgentLogoView.menuImage(for: agent))
+                                }
+                            }
                         }
                     }
                 }
@@ -248,6 +269,6 @@ private struct AgentSparkleMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(agents.isEmpty ? "No enabled agents" : "Launch agent")
+        .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
     }
 }

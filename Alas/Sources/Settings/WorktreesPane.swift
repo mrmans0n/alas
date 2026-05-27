@@ -38,10 +38,6 @@ struct WorktreesPane: View {
                                 desc: "Default base branch for new worktrees; repo branches can be selected in the create dialog.") {
                         AlasField(text: bind(\.worktrees.baseBranch), monospaced: true)
                     }
-                    SettingsRow(name: "Fetch remote before creating worktree",
-                                desc: "Runs git fetch for the selected remote base branch before creating the worktree.") {
-                        AlasToggle(on: bind(\.worktrees.fetchRemoteBeforeCreate))
-                    }
                 }
                 // trackUpstream / autoFetch / fetchIntervalMinutes / pruneStale
                 // are persisted in AppConfig but no creation or background-sync

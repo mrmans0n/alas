@@ -15,6 +15,7 @@ struct AgentLauncherDialog: View {
 
                 VStack(spacing: 0) {
                     inputRow
+                    modePicker
                     Divider().background(theme.color("line"))
                     rowList
                     footer
@@ -35,7 +36,9 @@ struct AgentLauncherDialog: View {
             }
             .transition(.opacity.combined(with: .offset(y: -6)))
             .onAppear {
-                appState.agentLauncher.reset()
+                appState.agentLauncher.prepareForOpen(
+                    defaultMode: appState.config.agents.defaultLauncherMode
+                )
                 requestInputFocus()
             }
             .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in
@@ -44,28 +47,115 @@ struct AgentLauncherDialog: View {
         }
     }
 
+    private var rows: [AgentDefinition] {
+        appState.agentLauncher.rows(enabledAgents: appState.agentRegistry.enabled())
+    }
+
     private var inputRow: some View {
         HStack(spacing: 8) {
             Icon(name: "sparkle", size: 12, color: theme.color("fg-faint"))
-            TextField("Launch agent…", text: Bindable(appState.agentLauncher).query)
+            TextField(placeholder, text: Bindable(appState.agentLauncher).query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
                 .font(.system(size: 14))
                 .foregroundColor(theme.color("fg"))
+                // Intercept tab BEFORE the TextField hands it to the
+                // system focus traversal. Without this the key would
+                // bounce out of the search field instead of toggling
+                // mode.
+                .onKeyPress(.tab) {
+                    toggleMode(reverse: false)
+                    return .handled
+                }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
     }
 
+    /// Cycle between terminal and ACP modes. `reverse` walks the other
+    /// way (for shift-tab) — currently we only have two modes so it's
+    /// the same flip either way, but the flag keeps the call site honest
+    /// if more modes get added.
+    private func toggleMode(reverse: Bool) {
+        let cycle = AppConfig.LauncherMode.allCases
+        let i = cycle.firstIndex(of: appState.agentLauncher.mode) ?? 0
+        let step = reverse ? -1 : 1
+        let next = (i + step + cycle.count) % cycle.count
+        appState.agentLauncher.mode = cycle[next]
+    }
+
+    private var placeholder: String {
+        switch appState.agentLauncher.mode {
+        case .terminal: return "Launch agent in terminal…"
+        case .acp:      return "Launch ACP chat session…"
+        }
+    }
+
+    /// Segmented control: terminal vs ACP chat. Styled to match the
+    /// existing right-pane tab bar (rounded inset, soft pill on the
+    /// active segment).
+    private var modePicker: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 2) {
+                segment(.terminal, icon: "terminal", label: "Terminal")
+                segment(.acp,      icon: "sparkle",  label: "Chat")
+            }
+            .padding(2)
+            .background(theme.color("seg-container-bg"))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+    }
+
+    private func segment(_ mode: AppConfig.LauncherMode,
+                         icon: String,
+                         label: String) -> some View {
+        let isOn = appState.agentLauncher.mode == mode
+        return Button {
+            appState.agentLauncher.mode = mode
+        } label: {
+            HStack(spacing: 5) {
+                Icon(name: icon, size: 11,
+                     color: isOn ? theme.color("fg") : theme.color("fg-muted"))
+                Text(label)
+                    .font(.system(size: 11.5, weight: isOn ? .semibold : .medium))
+                    .foregroundColor(isOn ? theme.color("fg") : theme.color("fg-muted"))
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(
+                ZStack {
+                    if isOn {
+                        RoundedRectangle(cornerRadius: 4).fill(theme.color("bg-3"))
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.white.opacity(0.04), lineWidth: 1)
+                            .blendMode(.plusLighter)
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .shadow(color: isOn ? Color.black.opacity(0.25) : .clear,
+                    radius: 1, x: 0, y: 1)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var rowList: some View {
-        let rows = appState.agentLauncher.rows(agents: appState.agentRegistry.enabled())
+        let agents = rows
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if rows.isEmpty {
+                    if agents.isEmpty {
                         emptyState
                     } else {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { idx, agent in
+                        ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
                             AgentLauncherRow(
                                 agent: agent,
                                 isSelected: idx == appState.agentLauncher.selectedIndex,
@@ -75,12 +165,13 @@ struct AgentLauncherDialog: View {
                                 },
                                 onHover: { appState.agentLauncher.selectedIndex = idx }
                             )
+                            .id(idx)
                         }
                     }
                 }
                 .padding(.vertical, 4)
             }
-            .frame(minHeight: 180, maxHeight: 340)
+            .frame(minHeight: 180, maxHeight: 320)
             .onChange(of: appState.agentLauncher.scrollToSelectionTick) { _, _ in
                 proxy.scrollTo(appState.agentLauncher.selectedIndex, anchor: .center)
             }
@@ -88,16 +179,32 @@ struct AgentLauncherDialog: View {
     }
 
     private var emptyState: some View {
-        Text("No enabled agents")
-            .font(.system(size: 12))
-            .foregroundColor(theme.color("fg-dim"))
-            .frame(maxWidth: .infinity, minHeight: 160)
+        VStack(spacing: 4) {
+            Text(emptyTitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(theme.color("fg-dim"))
+            if appState.agentLauncher.mode == .acp,
+               appState.agentLauncher.query.isEmpty {
+                Text("Enable an ACP-capable agent in Settings → Agents.")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-faint"))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 160)
+    }
+
+    private var emptyTitle: String {
+        switch appState.agentLauncher.mode {
+        case .terminal: return "No enabled agents"
+        case .acp:      return "No ACP-capable agents enabled"
+        }
     }
 
     private var footer: some View {
         HStack(spacing: 12) {
             label("↑↓ navigate")
             label("↵ launch")
+            label("⇥ swap mode")
             label("esc close")
             Spacer()
         }
@@ -117,19 +224,17 @@ struct AgentLauncherDialog: View {
     }
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        let rows = appState.agentLauncher.rows(agents: appState.agentRegistry.enabled())
         switch press.key {
         case .escape:
             close()
             return .handled
         case .upArrow:
-            appState.agentLauncher.moveSelectionUp(in: rows)
+            appState.agentLauncher.moveSelectionUp(rowCount: rows.count)
             return .handled
         case .downArrow:
-            appState.agentLauncher.moveSelectionDown(in: rows)
+            appState.agentLauncher.moveSelectionDown(rowCount: rows.count)
             return .handled
         case .return:
-            appState.agentLauncher.clampSelection(in: rows)
             if let agent = appState.agentLauncher.selectedAgent(in: rows) {
                 launch(agent)
             }
@@ -140,11 +245,13 @@ struct AgentLauncherDialog: View {
     }
 
     private func launch(_ agent: AgentDefinition) {
-        guard let worktree = selectedWorktree() else {
-            close()
-            return
+        switch appState.agentLauncher.mode {
+        case .terminal:
+            guard let worktree = selectedWorktree() else { close(); return }
+            _ = try? appState.openAgentTerminalTab(for: worktree, agentId: agent.id)
+        case .acp:
+            appState.openNewACPSession(agentID: agent.id)
         }
-        _ = try? appState.openAgentTerminalTab(for: worktree, agentId: agent.id)
         close()
     }
 
@@ -184,9 +291,7 @@ private struct AgentLauncherRow: View {
         .frame(height: 34)
         .background(isSelected ? theme.color("bg-3") : .clear)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
-        .onHover { hovering in
-            if hovering { onHover() }
-        }
+        .onTapGesture { onTap() }
+        .onHover { hovering in if hovering { onHover() } }
     }
 }

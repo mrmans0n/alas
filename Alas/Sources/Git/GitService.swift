@@ -1328,32 +1328,6 @@ extension GitService {
         }
         return Date()
     }
-
-    /// Returns the remote and branch to fetch if `ref` is a remote-tracking
-    /// ref (e.g. `origin/main`). Returns `nil` for local refs, SHAs, or
-    /// anything without a known `<remote>/` prefix.
-    func remoteForFetch(worktreePath: URL, ref: String) async throws -> (remote: String, branch: String)? {
-        guard ref.contains("/") else { return nil }
-        // Guard against local branches whose name happens to match a remote
-        // prefix (e.g. a local branch literally named "origin/main").
-        let localCheck = try await Process.git(
-            ["show-ref", "--verify", "--quiet", "refs/heads/\(ref)"],
-            cwd: worktreePath
-        )
-        if localCheck.exitCode == 0 { return nil }
-        let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
-        guard remotesResult.exitCode == 0 else { return nil }
-        let remotes = remotesResult.stdout
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        guard let remote = remotes
-            .filter({ ref.hasPrefix($0 + "/") })
-            .max(by: { $0.count < $1.count })
-        else { return nil }
-        let branch = String(ref.dropFirst(remote.count + 1))
-        return (remote, branch)
-    }
 }
 
 extension GitService {
