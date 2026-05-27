@@ -21,24 +21,38 @@ struct Seg<Value: Hashable>: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 2) {
             ForEach(options, id: \.0) { item in
+                let isActive = value == item.0
                 Button {
                     value = item.0
                 } label: {
                     label(for: item.1)
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 12).padding(.vertical, 5)
+                        .font(.system(size: 11.5, weight: isActive ? .semibold : .medium))
+                        .padding(.horizontal, 9)
+                        .frame(height: 22)
                         .contentShape(Rectangle())
-                        .background(value == item.0 ? theme.color("bg-3") : .clear)
-                        .foregroundColor(value == item.0 ? theme.color("fg") : theme.color("fg-muted"))
+                        .background(
+                            ZStack {
+                                if isActive {
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(theme.color("bg-3"))
+                                    // Top inner highlight
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .stroke(Color.white.opacity(0.04), lineWidth: 1)
+                                        .blendMode(.plusLighter)
+                                }
+                            }
+                        )
+                        .foregroundColor(isActive ? theme.color("fg") : theme.color("fg-muted"))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .shadow(color: isActive ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(2)
-        .background(theme.color("bg-0"))
+        .background(theme.color("seg-container-bg"))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
