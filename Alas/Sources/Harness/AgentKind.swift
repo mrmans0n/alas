@@ -23,4 +23,16 @@ enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
         case .copilot: return "Copilot"
         }
     }
+
+    var logoAssetName: String {
+        switch self {
+        case .claude:   return "agent-claude"
+        case .codex:    return "agent-codex"
+        case .cursor:   return "agent-cursor"
+        case .gemini:   return "agent-gemini"
+        case .opencode: return "agent-opencode"
+        case .pi:       return "agent-pi"
+        case .copilot:  return "agent-copilot"
+        }
+    }
 }
