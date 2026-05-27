@@ -89,6 +89,29 @@ struct GatekeeperAssessorTests {
         #expect(calls == 2)
     }
 
+    @Test("quarantine flag without approved bit → rejected")
+    func quarantineFlagBlocks() {
+        // 0083: quarantined (bit 0x01), download finished (0x80), no approval.
+        #expect(GatekeeperAssessor.interpretQuarantineValue("0083;abcd;Safari;UUID") == .rejected)
+    }
+
+    @Test("quarantine flag with approved bit (0x40) → allowed")
+    func approvedQuarantineFlagAllows() {
+        // 01c3: previous + LSQuarantineUserApproved (0x40). Sample from the
+        // stackoverflow post Codex linked: 0183 → 01c3 after user approval.
+        #expect(GatekeeperAssessor.interpretQuarantineValue("01c3;abcd;Safari;UUID") == .allowed)
+    }
+
+    @Test("unparseable flag field → unknown")
+    func unparseableFlagsBecomeUnknown() {
+        #expect(GatekeeperAssessor.interpretQuarantineValue("not-hex;abcd;X;Y") == .unknown)
+    }
+
+    @Test("approved-only flag (0x40) → allowed")
+    func approvedFlagAloneAllows() {
+        #expect(GatekeeperAssessor.interpretQuarantineValue("0040") == .allowed)
+    }
+
     private func makeTempExecutable() throws -> String {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("gk-\(UUID().uuidString)", isDirectory: true)
