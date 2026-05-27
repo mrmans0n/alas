@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-28
+
+### 🐛 Fixes
+
+- Fix Gatekeeper detection so only actually quarantined language server binaries are reported as blocked (#321).
+- Re-probe Gatekeeper-blocked LSP availability instead of caching stale blocked states after user approval or quarantine removal (#322).
+
 ## [0.4.0] - 2026-05-27
 
 ### ✨ Features
