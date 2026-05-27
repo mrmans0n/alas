@@ -41,30 +41,18 @@ final class NotificationService {
 
     func notifyHarnessAwaiting(agent: AgentKind, body: String?,
                                projectId: String, worktreeId: String, sessionId: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "\(agent.displayName) needs input"
-        content.body = body ?? "Session is waiting for you."
-        content.sound = .default
-        content.userInfo = [
-            "projectId": projectId,
-            "worktreeId": worktreeId,
-            "sessionId": sessionId
-        ]
+        let content = buildContent(agent: agent, body: body ?? "Session is waiting for you.",
+                                   title: "\(agent.displayName) needs input",
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
         let req = UNNotificationRequest(identifier: "\(sessionId)-awaiting", content: content, trigger: nil)
         notificationAdder(req)
     }
 
     func notifyHarnessPermission(agent: AgentKind, body: String?,
                                  projectId: String, worktreeId: String, sessionId: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "\(agent.displayName) needs permission"
-        content.body = body ?? "Session is waiting for you."
-        content.sound = .default
-        content.userInfo = [
-            "projectId": projectId,
-            "worktreeId": worktreeId,
-            "sessionId": sessionId
-        ]
+        let content = buildContent(agent: agent, body: body ?? "Session is waiting for you.",
+                                   title: "\(agent.displayName) needs permission",
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
         let req = UNNotificationRequest(identifier: "\(sessionId)-permission", content: content, trigger: nil)
         notificationAdder(req)
     }
@@ -72,16 +60,53 @@ final class NotificationService {
     func notifyHarnessFinished(agent: AgentKind, body: String?,
                                projectId: String, worktreeId: String, sessionId: String) {
         guard enabled else { return }
+        let content = buildContent(agent: agent, body: body ?? "Session is done.",
+                                   title: "\(agent.displayName) finished",
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+        let req = UNNotificationRequest(identifier: sessionId, content: content, trigger: nil)
+        notificationAdder(req)
+    }
+
+    // MARK: - Private helpers
+
+    private func buildContent(agent: AgentKind, body: String, title: String,
+                              projectId: String, worktreeId: String, sessionId: String) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
-        content.title = "\(agent.displayName) finished"
-        content.body = body ?? "Session is done."
+        content.title = title
+        content.body = body
         content.sound = .default
         content.userInfo = [
             "projectId": projectId,
             "worktreeId": worktreeId,
             "sessionId": sessionId
         ]
-        let req = UNNotificationRequest(identifier: sessionId, content: content, trigger: nil)
-        notificationAdder(req)
+        if let attachment = makeLogoAttachment(for: agent) {
+            content.attachments = [attachment]
+        }
+        return content
+    }
+
+    private func makeLogoAttachment(for agent: AgentKind) -> UNNotificationAttachment? {
+        guard let image = NSImage(named: NSImage.Name(agent.logoAssetName)) else { return nil }
+        // macOS requires attachments to be plain files on disk.
+        guard let tiffData = image.tiffRepresentation else { return nil }
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-notification-\(agent.rawValue).png", isDirectory: false)
+
+        // Avoid re-writing the same temp file on every notification.
+        if FileManager.default.fileExists(atPath: tmp.path) {
+            return try? UNNotificationAttachment(identifier: "logo", url: tmp, options: nil)
+        }
+
+        guard let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else { return nil }
+
+        do {
+            try pngData.write(to: tmp)
+            return try UNNotificationAttachment(identifier: "logo", url: tmp, options: nil)
+        } catch {
+            return nil
+        }
     }
 }
