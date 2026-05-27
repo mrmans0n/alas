@@ -96,13 +96,13 @@ struct ImageDiffView: View {
     }
 
     private var modeSwitcher: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 2) {
             ForEach(ImageDiffMode.allCases, id: \.self) { m in
                 modeButton(m)
             }
         }
         .padding(2)
-        .background(theme.color("bg-0"))
+        .background(theme.color("seg-container-bg"))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
@@ -128,20 +128,33 @@ struct ImageDiffView: View {
     @ViewBuilder
     private func modeButton(_ m: ImageDiffMode) -> some View {
         let enabled = m.isApplicable(for: pair.kind)
+        let isOn = mode == m && enabled
         Button {
             if enabled { mode = m }
         } label: {
             Image(systemName: m.systemImageName)
                 .font(.system(size: 12))
-                .padding(.horizontal, 10).padding(.vertical, 5)
+                .padding(.horizontal, 9)
+                .frame(height: 22)
                 .contentShape(Rectangle())
-                .background(mode == m && enabled ? theme.color("bg-3") : .clear)
+                .background(
+                    ZStack {
+                        if isOn {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(theme.color("bg-3"))
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.white.opacity(0.04), lineWidth: 1)
+                                .blendMode(.plusLighter)
+                        }
+                    }
+                )
                 .foregroundColor(
                     enabled
-                        ? (mode == m ? theme.color("fg") : theme.color("fg-muted"))
+                        ? (isOn ? theme.color("fg") : theme.color("fg-muted"))
                         : theme.color("fg-faint")
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 4))
+                .shadow(color: isOn ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
