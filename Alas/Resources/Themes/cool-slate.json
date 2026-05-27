@@ -25,6 +25,17 @@
     "warn": "oklch(0.80 0.13 65)",
     "syntax-keyword": "oklch(0.78 0.10 295)",
     "syntax-type": "oklch(0.80 0.09 215)",
-    "syntax-function": "oklch(0.86 0.09 85)"
+    "syntax-function": "oklch(0.86 0.09 85)",
+    "seg-container-bg": "oklch(0.21 0.018 220 / 0.6)",
+    "seg-pill-bg": "oklch(0.345 0.024 220)",
+    "seg-pill-active-bg": "oklch(0.74 0.11 195 / 0.18)",
+    "seg-pill-active-fg": "oklch(0.85 0.10 195)",
+    "composer-bg-top": "oklch(0.295 0.025 200 / 0.5)",
+    "composer-bg-bot": "oklch(0.265 0.022 220 / 0.6)",
+    "accent-glow": "oklch(0.74 0.11 195 / 0.55)",
+    "accent-glow-soft": "oklch(0.74 0.11 195 / 0.22)",
+    "section-head-bg": "oklch(0.235 0.018 220 / 0.55)",
+    "staged-chev": "oklch(0.78 0.14 155)",
+    "field-bg": "oklch(0.20 0.018 220 / 0.55)"
   }
 }
