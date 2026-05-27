@@ -2077,12 +2077,18 @@ final class AppState {
     /// loops would keep the agent + permission / file handlers alive
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
-        guard let manager = acpManagers[worktreeId] else { return }
+        guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
         let sessionIds = Array(manager.runners.keys)
+        // Synchronously cancel the runner's async loops so they stop
+        // pumping the agent's stdout into our handlers immediately —
+        // otherwise the loops hold `self` weakly but keep the
+        // permission / file / update streams flowing until the
+        // detach() task below schedules. The actual child-process
+        // shutdown then happens asynchronously.
+        for sid in sessionIds { manager.runners[sid]?.stop() }
         Task { @MainActor in
             for sid in sessionIds { await manager.detach(sessionId: sid) }
         }
-        acpManagers[worktreeId] = nil
     }
 
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.
