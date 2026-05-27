@@ -15,7 +15,7 @@ enum ShortcutGroup: String, CaseIterable, Sendable {
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
     case searchFiles, switchRepository, findAndReplace, toggleSidebar, toggleRightPane,
-         createProject, newWorktree, newTerminalTab, launchAgentTerminal,
+         createProject, newWorktree, focusMainWorktree, newTerminalTab, launchAgentTerminal,
          increaseFontSize, decreaseFontSize, resetFontSize
     // Code editor
     case splitSelectionIntoLines, toggleMarkdownPreview, commitInComposer
@@ -27,7 +27,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     var group: ShortcutGroup {
         switch self {
         case .searchFiles, .switchRepository, .findAndReplace, .toggleSidebar, .toggleRightPane,
-             .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal,
+             .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab, .launchAgentTerminal,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
         case .splitSelectionIntoLines, .toggleMarkdownPreview:
@@ -50,6 +50,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .toggleRightPane:          return "Toggle Right Sidebar"
         case .createProject:            return "Create Project"
         case .newWorktree:              return "New Worktree"
+        case .focusMainWorktree:        return "Focus Main Worktree"
         case .newTerminalTab:           return "New Terminal Tab"
         case .launchAgentTerminal:      return "Launch Agent Terminal"
         case .increaseFontSize:         return "Increase Font Size"
@@ -104,6 +105,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .toggleRightPane:          return .init(key: "b",          modifiers: [.command, .option])
         case .createProject:            return .init(key: "n",          modifiers: [.command, .shift])
         case .newWorktree:              return .init(key: "n",          modifiers: [.command, .option])
+        // Cmd+Shift+M is Toggle Markdown Preview; Cmd+Option+M is macOS Minimize All.
+        case .focusMainWorktree:        return .init(key: "m",          modifiers: [.command, .control])
         case .newTerminalTab:           return .init(key: "t",          modifiers: [.command])
         case .launchAgentTerminal:      return .init(key: "t",          modifiers: [.command, .option])
         case .increaseFontSize:         return .init(key: "=",          modifiers: [.command])

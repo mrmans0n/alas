@@ -226,6 +226,11 @@ struct AlasApp: App {
             }
             .keyboardShortcut(state.shortcut(for: .newWorktree))
             .disabled(state.projects.isEmpty)
+            Button("Focus Main Worktree") {
+                NotificationCenter.default.post(name: .alasFocusMainWorktree, object: nil)
+            }
+            .keyboardShortcut(state.shortcut(for: .focusMainWorktree))
+            .disabled(!state.canFocusMainWorktreeForCurrentProject)
             Button("Switch Repository…") {
                 NotificationCenter.default.post(name: .alasOpenRepoSelector, object: nil)
             }
