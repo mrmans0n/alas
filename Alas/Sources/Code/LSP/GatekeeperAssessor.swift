@@ -88,15 +88,37 @@ final class GatekeeperAssessor {
     }
 
     nonisolated static func defaultRunner(realPath: String) throws -> Result {
-        // getxattr returns the attribute size, or -1 on failure. On
-        // ENOATTR ("no such attribute") the file simply isn't quarantined.
-        // Any other errno is treated as the file being inaccessible —
-        // return .unknown so the availability layer falls open to
-        // .allowed rather than hiding a runnable LSP behind a banner.
+        // Probe size first. On ENOATTR the file simply isn't quarantined;
+        // any other errno means inaccessible — return .unknown so the
+        // availability layer falls open to .allowed rather than hiding a
+        // runnable LSP behind a banner.
         let size = realPath.withCString { cpath in
             getxattr(cpath, "com.apple.quarantine", nil, 0, 0, 0)
         }
-        if size >= 0 { return .rejected }
-        return errno == ENOATTR ? .allowed : .unknown
+        if size < 0 { return errno == ENOATTR ? .allowed : .unknown }
+        if size == 0 { return .unknown }
+
+        var buffer = [UInt8](repeating: 0, count: size)
+        let read = buffer.withUnsafeMutableBufferPointer { bufPtr -> Int in
+            realPath.withCString { cpath in
+                getxattr(cpath, "com.apple.quarantine", bufPtr.baseAddress, size, 0, 0)
+            }
+        }
+        if read < 0 { return .unknown }
+        guard let value = String(bytes: buffer[0..<read], encoding: .utf8) else { return .unknown }
+        return interpretQuarantineValue(value)
+    }
+
+    /// Parse the `com.apple.quarantine` xattr value. Format is
+    /// `flags;timestamp;agent;uuid` where `flags` is a hex bitfield.
+    /// Bit `0x40` (`LSQuarantineUserApproved`) is set after the user
+    /// approves the item via macOS Gatekeeper — the OS keeps the xattr
+    /// in place and only flips the flag, so treating "attribute present"
+    /// as a block would re-nudge after the user already approved.
+    nonisolated static func interpretQuarantineValue(_ value: String) -> Result {
+        let firstField = value.split(separator: ";", maxSplits: 1).first.map(String.init) ?? value
+        let trimmed = firstField.trimmingCharacters(in: .whitespaces)
+        guard let flags = UInt32(trimmed, radix: 16) else { return .unknown }
+        return (flags & 0x0040) != 0 ? .allowed : .rejected
     }
 }
