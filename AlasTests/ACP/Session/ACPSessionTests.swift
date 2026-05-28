@@ -105,4 +105,40 @@ struct ACPSessionTests {
         #expect(state.thinking?.currentId == "high")
         #expect(state.autoRun == .ignored)
     }
+
+    @Test("tool_call_update with wrapped text content populates tc.content")
+    func toolCallUpdateContent() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // Initial tool_call with empty content
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-1", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        // Streaming update carries the real output
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-1", status: "completed",
+            content: [.content(.text("file contents\nline two"))],
+            rawOutput: nil)))
+        #expect(session.messages.count == 1)
+        if case .toolCall(let tc) = session.messages[0] {
+            #expect(tc.content == "file contents\nline two")
+            #expect(tc.preview == "file contents")
+            #expect(tc.status == "completed")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("diff content flattens to a readable text representation")
+    func toolCallUpdateDiff() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-2", title: "edit", kind: "edit", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-2", status: "completed",
+            content: [.diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n")],
+            rawOutput: nil)))
+        #expect(session.messages.count == 1)
+        if case .toolCall(let tc) = session.messages[0] {
+            #expect(tc.content == "--- a.swift\n-let x = 1\n+let x = 2")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

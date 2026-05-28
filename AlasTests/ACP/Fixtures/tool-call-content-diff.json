@@ -1,0 +1,4 @@
+[
+  {"type":"diff","path":"src/foo.swift","oldText":"let a = 1\n","newText":"let a = 2\n"},
+  {"type":"diff","path":"src/bar.swift","newText":"// new file\n"}
+]

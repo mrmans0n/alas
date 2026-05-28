@@ -368,3 +368,61 @@ enum ACPContentBlock: Codable, Equatable {
         }
     }
 }
+
+/// Per the ACP spec, a `tool_call.content` entry is a tagged union, not a
+/// plain content block. The wrapper carries either a regular content
+/// block, a file diff, or a terminal reference. Decoding the inner shape
+/// directly (which our older code did) silently drops every real tool
+/// result because they all arrive as `{"type": "content", ...}` and miss
+/// `ACPContentBlock`'s text/resource_link/image discriminator.
+enum ACPToolCallContent: Codable, Equatable {
+    case content(ACPContentBlock)
+    case diff(path: String, oldText: String?, newText: String)
+    case terminal(terminalId: String)
+    /// Forward-compatibility bucket so a future spec variant doesn't get
+    /// misdecoded as empty text (the previous bug pattern).
+    case unknown
+
+    private enum Keys: String, CodingKey {
+        case type, content, path, oldText, newText, terminalId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "content":
+            self = .content(try c.decode(ACPContentBlock.self, forKey: .content))
+        case "diff":
+            self = .diff(
+                path: try c.decode(String.self, forKey: .path),
+                oldText: try? c.decode(String.self, forKey: .oldText),
+                newText: try c.decode(String.self, forKey: .newText))
+        case "terminal":
+            self = .terminal(terminalId: try c.decode(String.self, forKey: .terminalId))
+        default:
+            self = .unknown
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        switch self {
+        case .content(let b):
+            try c.encode("content", forKey: .type)
+            try c.encode(b, forKey: .content)
+        case .diff(let path, let old, let new):
+            try c.encode("diff", forKey: .type)
+            try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(old, forKey: .oldText)
+            try c.encode(new, forKey: .newText)
+        case .terminal(let id):
+            try c.encode("terminal", forKey: .type)
+            try c.encode(id, forKey: .terminalId)
+        case .unknown:
+            // Unknown variants are receive-only forward-compat; they
+            // never round-trip, so encoding them as a discriminator-only
+            // object is acceptable.
+            try c.encode("unknown", forKey: .type)
+        }
+    }
+}
