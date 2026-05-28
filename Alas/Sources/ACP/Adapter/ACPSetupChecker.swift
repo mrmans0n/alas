@@ -2,6 +2,15 @@ import Foundation
 
 struct ACPSetupChecker {
     let env: [String: String]
+    let additionalPathDirectories: [String]
+
+    init(
+        env: [String: String],
+        additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
+    ) {
+        self.env = env
+        self.additionalPathDirectories = additionalPathDirectories
+    }
 
     func evaluate(_ check: ACPSetupCheck) async -> ACPSetupResult {
         switch check {
@@ -21,7 +30,9 @@ struct ACPSetupChecker {
     }
 
     private func resolve(_ name: String) -> String? {
-        let pathValue = env["PATH"] ?? ""
+        let pathValue = AgentPath.augment(
+            base: env["PATH"] ?? "",
+            wellKnown: additionalPathDirectories)
         for dir in pathValue.split(separator: ":") {
             let candidate = "\(dir)/\(name)"
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
@@ -35,6 +46,9 @@ struct ACPSetupChecker {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: npm)
         proc.arguments = ["root", "-g"]
+        proc.environment = ACPProcessEnvironment.augmented(
+            env,
+            additionalPathDirectories: additionalPathDirectories)
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = Pipe()

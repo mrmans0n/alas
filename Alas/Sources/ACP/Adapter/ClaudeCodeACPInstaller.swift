@@ -24,6 +24,7 @@ struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [cmd] + args
+        proc.environment = ACPProcessEnvironment.augmented()
         let err = Pipe()
         proc.standardError = err
         proc.standardOutput = Pipe()
