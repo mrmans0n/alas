@@ -5,11 +5,13 @@ struct ACPInputField: NSViewRepresentable {
     @ObservedObject var session: ACPSession
     let worktreeRoot: URL
     let actions: ACPComposerActions
+    /// Persists the current composer draft after text storage changes.
+    let onDraftChange: (ACPComposerDraft) -> Void
+    /// Clears the persisted draft after an accepted submission.
+    let onDraftClear: () -> Void
     /// Returns `true` when the host accepted the submission (and the
     /// textview should be cleared) or `false` to keep the draft in
     /// place (e.g. session not ready, prompt already in flight).
-    let onDraftChange: (ACPComposerDraft) -> Void
-    let onDraftClear: () -> Void
     let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
 
     func makeNSView(context: Context) -> NSScrollView {
