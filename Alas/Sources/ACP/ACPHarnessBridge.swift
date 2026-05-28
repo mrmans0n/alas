@@ -38,6 +38,45 @@ final class ACPHarnessBridge {
         harness.forgetSession(sessionId)
     }
 
+    /// Attach a manager. Subscribes to its `$sessions` so every session
+    /// that ever enters the dict gets observed, and every session that
+    /// leaves gets forgotten. Idempotent per worktree.
+    func attach(manager: ACPSessionManager) {
+        let worktreeId = manager.worktreeId
+        // Drop any prior attachment for the same worktree to avoid double-subs.
+        detach(worktreeId: worktreeId)
+
+        managerCancellables[worktreeId] = manager.$sessions
+            .sink { [weak self] sessions in
+                guard let self else { return }
+                self.reconcile(worktreeId: worktreeId, sessions: sessions)
+            }
+    }
+
+    /// Detach a manager. Cancels the sessions-dict subscription and forgets
+    /// every session previously observed for that worktree.
+    func detach(worktreeId: String) {
+        managerCancellables[worktreeId] = nil
+        if let ids = observedSessionsByManager.removeValue(forKey: worktreeId) {
+            for id in ids { forget(sessionId: id) }
+        }
+    }
+
+    private func reconcile(worktreeId: String, sessions: [ACPSession.ID: ACPSession]) {
+        let current = Set(sessions.keys)
+        let previous = observedSessionsByManager[worktreeId] ?? []
+
+        // Newly added: observe.
+        for id in current.subtracting(previous) {
+            if let session = sessions[id] { observe(session: session) }
+        }
+        // Removed: forget.
+        for id in previous.subtracting(current) {
+            forget(sessionId: id)
+        }
+        observedSessionsByManager[worktreeId] = current
+    }
+
     private func apply(state: ACPSession.StreamingState, session: ACPSession) {
         let agent = Self.agentKind(for: session.agentId)
         switch state {

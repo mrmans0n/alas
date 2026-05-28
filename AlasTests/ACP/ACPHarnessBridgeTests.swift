@@ -82,4 +82,83 @@ struct ACPHarnessBridgeTests {
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.agent == .claude)
     }
+
+    @Test("attach observes existing sessions and writes their state")
+    func attachObservesExistingSessions() async throws {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bridge-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(agentId: "claude")
+
+        bridge.attach(manager: manager)
+        session.streamingState = .streaming
+        await Task.yield()
+
+        #expect(harness.activityBySession[session.id]?.state == .busy)
+    }
+
+    @Test("attach observes sessions added after attach")
+    func attachObservesSessionsAddedLater() async throws {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bridge-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        bridge.attach(manager: manager)
+
+        let session = manager.createSession(agentId: "claude")
+        await Task.yield()
+        session.streamingState = .streaming
+        await Task.yield()
+
+        #expect(harness.activityBySession[session.id]?.state == .busy)
+    }
+
+    @Test("removing a session from the manager forgets its harness entry")
+    func removingSessionForgetsHarnessEntry() async throws {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bridge-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(agentId: "claude")
+        bridge.attach(manager: manager)
+        session.streamingState = .streaming
+        await Task.yield()
+        #expect(harness.activityBySession[session.id]?.state == .busy)
+
+        manager.closeSession(id: session.id)
+        await Task.yield()
+
+        #expect(harness.activityBySession[session.id] == nil)
+    }
+
+    @Test("detach stops observing and clears all the manager's sessions")
+    func detachStopsObservation() async throws {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bridge-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(agentId: "claude")
+        bridge.attach(manager: manager)
+        session.streamingState = .streaming
+        await Task.yield()
+
+        bridge.detach(worktreeId: "wt")
+        await Task.yield()
+
+        #expect(harness.activityBySession[session.id] == nil)
+
+        // Further streamingState changes are not mirrored.
+        session.streamingState = .awaitingPermission
+        await Task.yield()
+        #expect(harness.activityBySession[session.id] == nil)
+    }
 }
