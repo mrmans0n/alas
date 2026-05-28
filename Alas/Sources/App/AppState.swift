@@ -2263,6 +2263,12 @@ final class AppState {
     @ObservationIgnored
     private var acpManagers: [String: ACPSessionManager] = [:]
 
+    /// Mirrors `ACPSession.streamingState` into `HarnessService.activityBySession`
+    /// so the sidebar work badge surfaces ACP activity. Attached for every
+    /// manager created via `acpManager(for:)`; detached from `disposeACPManager(for:)`.
+    @ObservationIgnored
+    private lazy var acpHarnessBridge = ACPHarnessBridge(harness: harness)
+
     /// Returns `true` when the editor has a live, dirty (unsaved) buffer for
     /// the given absolute path within the given worktree.
     func editorHasDirtyBuffer(for absolutePath: String, worktreeId: String) -> Bool {
@@ -2306,6 +2312,7 @@ final class AppState {
                 }
             )
             acpManagers[worktree.id] = mgr
+            acpHarnessBridge.attach(manager: mgr)
             return mgr
         } catch {
             return nil
@@ -2321,6 +2328,7 @@ final class AppState {
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
         guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
+        acpHarnessBridge.detach(worktreeId: worktreeId)
         let sessionIds = Array(manager.runners.keys)
         // Synchronously cancel the runner's async loops so they stop
         // pumping the agent's stdout into our handlers immediately —
