@@ -462,6 +462,8 @@
 		A2E0A755C2854FE489530FE3 /* ImageDiffDifferenceComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 881B46F8FCAF830239357372 /* ImageDiffDifferenceComputer.swift */; };
 		A39D44E69D8BEF98C8934DF7 /* AppStateCLIRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08F7B16F39935718801DAA95 /* AppStateCLIRoutingTests.swift */; };
 		A3EE2DE5C01EB87DE7BCC801 /* ACPStdioClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D20C843AB88A6EB14D2A1BD /* ACPStdioClient.swift */; };
+		E186D6B677FCC3311E94A44975A4C93E /* ACPConfigOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0610D059BE91D8B4E751D536EA162F /* ACPConfigOption.swift */; };
+		E80E1B639F57DB01E0792FE449AAA845 /* ACPConfigOptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5412B9E2F2AFAD4B33AE960EAF9D1D40 /* ACPConfigOptionTests.swift */; };
 		A4AB930CA0EEA2CEF0302646 /* ImageCheckerboardBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206F1DBCB1C34D71BEBB7DE4 /* ImageCheckerboardBackground.swift */; };
 		A5742BE7348C02324B8119D0 /* BaseBranchSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB9643BE01E416D3D2F4454 /* BaseBranchSelectorTests.swift */; };
 		A58568C1EFF4A274FBDC83A4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CA3930F30444A51FB2393D /* Theme.swift */; };
@@ -1149,6 +1151,8 @@
 		A52FE6A88564AD523AC577CC /* CodeTextViewMultiCursorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextViewMultiCursorTests.swift; sourceTree = "<group>"; };
 		A5848B9AAD7985BF7BFB87F6 /* MergeConflictAnnotationStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictAnnotationStrip.swift; sourceTree = "<group>"; };
 		A5D62D907375A5CBAED1E698 /* ACPSessionUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionUpdateTests.swift; sourceTree = "<group>"; };
+		DF0610D059BE91D8B4E751D536EA162F /* ACPConfigOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPConfigOption.swift; sourceTree = "<group>"; };
+		5412B9E2F2AFAD4B33AE960EAF9D1D40 /* ACPConfigOptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPConfigOptionTests.swift; sourceTree = "<group>"; };
 		A6926DACD1903E1AAAF66F48 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		A6C0DDAE33A9928438C65182 /* DebounceTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimer.swift; sourceTree = "<group>"; };
 		A727D24652E45B98C10917F8 /* CodeLanguageDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeLanguageDetailView.swift; sourceTree = "<group>"; };
@@ -1757,6 +1761,7 @@
 				2B932ED9D5A485AE1545223C /* ACPPermissionFSTests.swift */,
 				2EB39DE3614B5BEC4D3EBF13 /* ACPSessionLifecycleTests.swift */,
 				A5D62D907375A5CBAED1E698 /* ACPSessionUpdateTests.swift */,
+				5412B9E2F2AFAD4B33AE960EAF9D1D40 /* ACPConfigOptionTests.swift */,
 				5302E56E1C16EDECDB45CB20 /* ACPStdioClientTests.swift */,
 			);
 			path = Protocol;
@@ -1991,6 +1996,7 @@
 				67E03BF5DB4E6BFF8C2FA6A2 /* ACPPermissionRequest.swift */,
 				BEBCF3820A017BBF33B0AB07 /* ACPProtocolVersion.swift */,
 				DD1F34E025D235A5CECCE36E /* ACPSessionUpdate.swift */,
+				DF0610D059BE91D8B4E751D536EA162F /* ACPConfigOption.swift */,
 				4D20C843AB88A6EB14D2A1BD /* ACPStdioClient.swift */,
 			);
 			path = Protocol;
@@ -2957,6 +2963,7 @@
 				3F54F0437585F96F5774A3BD /* ACPSetupNudgeBanner.swift in Sources */,
 				C5644E1144140B99E8676064 /* ACPSlashPicker.swift in Sources */,
 				A3EE2DE5C01EB87DE7BCC801 /* ACPStdioClient.swift in Sources */,
+				E186D6B677FCC3311E94A44975A4C93E /* ACPConfigOption.swift in Sources */,
 				8510C6B68C2CF6664574C161 /* ACPSystemNoticeView.swift in Sources */,
 				F66BDC777D0BFDE306E8880A /* ACPTabView.swift in Sources */,
 				48040D7ABD4A23B3947E945F /* ACPThoughtView.swift in Sources */,
@@ -3326,6 +3333,7 @@
 				08DF3AC4BA50775940371445 /* ACPSessionStoreTests.swift in Sources */,
 				B472D692A8D8D1C664EAC467 /* ACPSessionTests.swift in Sources */,
 				33376EB37508D556E2385D33 /* ACPSessionUpdateTests.swift in Sources */,
+				E80E1B639F57DB01E0792FE449AAA845 /* ACPConfigOptionTests.swift in Sources */,
 				AC2574A26E931F0881F560C6 /* ACPSetupCheckerTests.swift in Sources */,
 				E239749EA0CB37C2C12B3591 /* ACPStdioClientTests.swift in Sources */,
 				162A6ABEAE92BB3AD1511567 /* AdvancedSettingsVisibilityTests.swift in Sources */,
