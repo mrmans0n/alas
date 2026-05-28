@@ -76,12 +76,16 @@ final class ACPSession: ObservableObject, Identifiable {
     func apply(_ update: ACPSessionUpdate) {
         switch update {
         case .agentMessageChunk(let block):
-            append(text: text(of: block), into: { lastAgent() }, fallback: .agent(id: UUID(), text: ""))
+            let txt = text(of: block)
+            appendStreaming(text: txt, locate: { lastAgent() },
+                            makeNew: { .agent(id: UUID(), StreamingText(txt)) })
         case .userMessageChunk(let block):
             // Agents rarely emit these; treat as informational.
             transcript.messages.append(.systemNotice(id: UUID(), text: text(of: block)))
         case .agentThoughtChunk(let block):
-            append(text: text(of: block), into: { lastThought() }, fallback: .thought(id: UUID(), text: ""))
+            let txt = text(of: block)
+            appendStreaming(text: txt, locate: { lastThought() },
+                            makeNew: { .thought(id: UUID(), StreamingText(txt)) })
         case .toolCall(let payload):
             let full = payload.content.flatMap { Self.flatten($0) } ?? ""
             transcript.messages.append(.toolCall(.init(
@@ -250,20 +254,20 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         return nil
     }
-    private func append(text addition: String, into locate: () -> Int?, fallback: ACPMessage) {
+    private func appendStreaming(text addition: String,
+                                locate: () -> Int?,
+                                makeNew: () -> ACPMessage) {
         if let i = locate() {
             switch transcript.messages[i] {
-            case .agent(let id, let t):   transcript.messages[i] = .agent(id: id, text: t + addition)
-            case .thought(let id, let t): transcript.messages[i] = .thought(id: id, text: t + addition)
-            default: transcript.messages.append(fallback)
-            }
-        } else {
-            switch fallback {
-            case .agent:   transcript.messages.append(.agent(id: UUID(), text: addition))
-            case .thought: transcript.messages.append(.thought(id: UUID(), text: addition))
-            default: transcript.messages.append(fallback)
+            case .agent(_, let buf), .thought(_, let buf):
+                buf.append(addition)
+                transcript.streamingTick &+= 1
+                return
+            default:
+                break
             }
         }
+        transcript.messages.append(makeNew())
     }
     private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) {
         for i in transcript.messages.indices {

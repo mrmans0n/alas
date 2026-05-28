@@ -11,7 +11,7 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("hello ")))
         session.apply(.agentMessageChunk(.text("world")))
         #expect(session.transcript.messages.count == 1)
-        if case .agent(_, let text) = session.transcript.messages[0] { #expect(text == "hello world") }
+        if case .agent(_, let buf) = session.transcript.messages[0] { #expect(buf.value == "hello world") }
         else { Issue.record("expected single agent message") }
     }
 

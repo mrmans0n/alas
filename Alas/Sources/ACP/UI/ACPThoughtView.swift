@@ -3,7 +3,7 @@ import SwiftUI
 /// Collapsed-by-default "Thinking…" row. Click to expand and read the raw
 /// reasoning text. Visually anchored by a left vertical accent bar.
 struct ACPThoughtView: View {
-    let text: String
+    @ObservedObject var buffer: StreamingText
     @State private var expanded = false
     @Environment(\.theme) private var theme
 
@@ -28,7 +28,7 @@ struct ACPThoughtView: View {
                 .buttonStyle(.plain)
 
                 if expanded {
-                    Text(text)
+                    Text(buffer.value)
                         .font(.system(size: 12, design: .default).italic())
                         .foregroundStyle(theme.color("fg-dim"))
                         .lineSpacing(2)

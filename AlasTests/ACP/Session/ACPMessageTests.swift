@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+@MainActor
 @Suite("ACPMessage")
 struct ACPMessageTests {
     @Test("user message round-trips through JSON")
@@ -19,14 +20,14 @@ struct ACPMessageTests {
     }
     @Test("agent message round-trips")
     func agentRoundtrip() throws {
-        let m = ACPMessage.agent(id: UUID(), text: "world")
+        let m = ACPMessage.agent(id: UUID(), StreamingText("world"))
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        guard case .agent(_, let text) = back else {
+        guard case .agent(_, let buf) = back else {
             Issue.record("expected agent message")
             return
         }
-        #expect(text == "world")
+        #expect(buf.value == "world")
     }
     @Test("tool call round-trips")
     func toolRoundtrip() throws {
