@@ -6,6 +6,74 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("accepted submit restores structured draft when async completion fails")
+    func acceptedSubmitRestoresDraftWhenCompletionFails() {
+        let draft = ACPComposerDraft(segments: [
+            .text("Read "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" before replying")
+        ])
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: draft))
+        var changedDrafts: [ACPComposerDraft] = []
+        var clearCount = 0
+        var completion: (@MainActor (Bool) -> Void)?
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: { clearCount += 1 },
+            onSubmit: { _, _, submittedDraft, onFinished in
+                #expect(submittedDraft == draft)
+                completion = onFinished
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.submit(textView)
+        #expect(textView.string.isEmpty)
+        #expect(changedDrafts.isEmpty)
+        #expect(clearCount == 0)
+
+        completion?(false)
+
+        #expect(changedDrafts == [draft])
+        #expect(clearCount == 0)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == draft)
+    }
+
+    @Test("accepted submit clears persisted draft when async completion succeeds")
+    func acceptedSubmitClearsDraftWhenCompletionSucceeds() {
+        let draft = ACPComposerDraft(segments: [.text("hello")])
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: draft))
+        var changedDrafts: [ACPComposerDraft] = []
+        var clearCount = 0
+        var completion: (@MainActor (Bool) -> Void)?
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: { clearCount += 1 },
+            onSubmit: { _, _, submittedDraft, onFinished in
+                #expect(submittedDraft == draft)
+                completion = onFinished
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.submit(textView)
+        completion?(true)
+
+        #expect(changedDrafts.isEmpty)
+        #expect(clearCount == 1)
+        #expect(textView.string.isEmpty)
+    }
+
     @Test("serializes plain text and mention chips in order")
     func serializesAttributedDraft() {
         let attributed = NSMutableAttributedString(string: "Read ")

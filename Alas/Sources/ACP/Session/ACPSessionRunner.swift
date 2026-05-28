@@ -243,13 +243,20 @@ final class ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
-    func send(text: String, attachments: [ACPMessage.Attachment]) {
+    func send(
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
+    ) {
         var blocks: [ACPContentBlock] = [.text(text)]
         for a in attachments {
             blocks.append(.resourceLink(uri: a.uri, name: a.name))
         }
-        Task { [weak self] in
-            guard let self else { return }
+        Task { [weak self, onPromptFinished] in
+            guard let self else {
+                await MainActor.run { onPromptFinished?(false) }
+                return
+            }
             await MainActor.run {
                 let before = self.session.messages.count
                 let titleBefore = self.session.title
@@ -278,11 +285,15 @@ extension ACPSessionRunner {
                 // composer accepts the next prompt; leaving it on
                 // `.streaming` froze the UI on Stop after every
                 // successful reply.
-                await MainActor.run { self.session.streamingState = .idle }
+                await MainActor.run {
+                    self.session.streamingState = .idle
+                    onPromptFinished?(true)
+                }
             } catch {
                 await MainActor.run {
                     self.session.lastError = "prompt failed: \(error.localizedDescription)"
                     self.session.streamingState = .idle
+                    onPromptFinished?(false)
                 }
             }
         }

@@ -125,7 +125,7 @@ private struct ACPSessionView: View {
                 manager: manager,
                 worktreeRoot: worktree.path,
                 agentLookup: { state.agent(id: $0) }
-            ) { text, attachments -> Bool in
+            ) { text, attachments, _, onPromptFinished -> Bool in
                 // Gate: if the runner isn't ready (initial attach in
                 // flight, agent crashed, etc.) or a prompt turn is
                 // already in flight (streaming/sending — send button
@@ -138,7 +138,7 @@ private struct ACPSessionView: View {
                       session.streamingState != .streaming,
                       session.streamingState != .sending,
                       let runner = manager.runners[sessionId] else { return false }
-                runner.send(text: text, attachments: attachments)
+                runner.send(text: text, attachments: attachments, onPromptFinished: onPromptFinished)
                 return true
             }
         }

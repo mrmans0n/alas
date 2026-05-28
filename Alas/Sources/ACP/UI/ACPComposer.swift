@@ -1,6 +1,14 @@
 import SwiftUI
 import AppKit
 
+typealias ACPComposerSubmitCompletion = @MainActor (_ succeeded: Bool) -> Void
+typealias ACPComposerSubmitHandler = (
+    _ text: String,
+    _ attachments: [ACPMessage.Attachment],
+    _ draft: ACPComposerDraft,
+    _ completion: @escaping ACPComposerSubmitCompletion
+) -> Bool
+
 struct ACPInputField: NSViewRepresentable {
     @ObservedObject var session: ACPSession
     let worktreeRoot: URL
@@ -12,7 +20,7 @@ struct ACPInputField: NSViewRepresentable {
     /// Returns `true` when the host accepted the submission (and the
     /// textview should be cleared) or `false` to keep the draft in
     /// place (e.g. session not ready, prompt already in flight).
-    let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
+    let onSubmit: ACPComposerSubmitHandler
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -72,7 +80,7 @@ struct ACPInputField: NSViewRepresentable {
         let initialDraft: ACPComposerDraft
         let onDraftChange: (ACPComposerDraft) -> Void
         let onDraftClear: () -> Void
-        let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
+        let onSubmit: ACPComposerSubmitHandler
         var promptSuggestions: [ACPPromptSuggestion] = []
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
@@ -85,7 +93,7 @@ struct ACPInputField: NSViewRepresentable {
             initialDraft: ACPComposerDraft,
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
-            onSubmit: @escaping (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
+            onSubmit: @escaping ACPComposerSubmitHandler
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
@@ -135,21 +143,42 @@ struct ACPInputField: NSViewRepresentable {
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            // Only clear the draft when the host accepts the
-            // submission. Pressing ⏎ while the agent is connecting /
-            // disconnected / streaming used to wipe the textview even
-            // though the callback rejected the prompt.
-            if onSubmit(text, attachments) {
-                textView.string = ""
-                onDraftClear()
+            let draft = Self.draft(from: attributed)
+            // Rejected submits keep the editable draft in place. Accepted
+            // submits clear only the visible text view here; persisted
+            // draft deletion waits for the async prompt completion.
+            if onSubmit(text, attachments, draft, { [weak self, weak textView] succeeded in
+                guard let self else { return }
+                if succeeded {
+                    self.onDraftClear()
+                } else {
+                    self.onDraftChange(draft)
+                    if let textView {
+                        self.restore(draft, into: textView)
+                    }
+                }
+            }) {
+                clearVisibleDraft(in: textView)
             }
         }
 
         func restoreInitialDraft(into textView: NSTextView) {
-            guard !initialDraft.isEmpty, let storage = textView.textStorage else { return }
+            guard !initialDraft.isEmpty else { return }
+            restore(initialDraft, into: textView)
+        }
+
+        private func restore(_ draft: ACPComposerDraft, into textView: NSTextView) {
+            guard let storage = textView.textStorage else { return }
             restoringDraft = true
-            storage.setAttributedString(Self.attributedString(from: initialDraft))
+            storage.setAttributedString(Self.attributedString(from: draft))
             ACPMarkdownLiveStyler.restyle(storage)
+            textView.needsDisplay = true
+            restoringDraft = false
+        }
+
+        private func clearVisibleDraft(in textView: NSTextView) {
+            restoringDraft = true
+            textView.string = ""
             textView.needsDisplay = true
             restoringDraft = false
         }
