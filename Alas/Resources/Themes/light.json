@@ -23,6 +23,7 @@
     "info": "oklch(0.55 0.13 230)",
     "submodule": "oklch(0.55 0.12 295)",
     "warn": "oklch(0.60 0.14 65)",
+    "caution": "oklch(0.60 0.14 95)",
     "syntax-keyword": "oklch(0.50 0.13 295)",
     "syntax-type": "oklch(0.45 0.10 215)",
     "syntax-function": "oklch(0.55 0.13 60)",
