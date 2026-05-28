@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-28
+
+### 🐛 Fixes
+
+- Fix ACP adapter PATH detection (#329).
+
 ## [0.4.2] - 2026-05-28
 
 ### ✨ Features
