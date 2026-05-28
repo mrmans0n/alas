@@ -210,6 +210,17 @@ final class HarnessService {
         pendingCursorIdleEvents.removeValue(forKey: sessionId)
     }
 
+    /// Peer-write entry point alongside socket events. Lets non-hook sources
+    /// (currently the ACP bridge) report activity for sessions they own.
+    /// No notification side effects — those remain socket-driven so we don't
+    /// double-fire when both hooks and ACP cover the same session.
+    func setExternalActivity(sessionId: String, agent: AgentKind, state: ActivityState) {
+        activityBySession[sessionId] = HarnessActivityState(
+            agent: agent, state: state, pid: nil,
+            lastBody: nil, updatedAt: Date()
+        )
+    }
+
     enum AggregatedState: String, Equatable {
         case running, awaiting
     }
