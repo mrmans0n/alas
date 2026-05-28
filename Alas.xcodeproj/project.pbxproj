@@ -409,6 +409,7 @@
 		8B2A37F58F2C7D842204A596 /* ImageDiffOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B87F114EBEEACCC95B9EF8D5 /* ImageDiffOverlayView.swift */; };
 		8B3D1B7B55629E989FCE53D1 /* ACPPermissionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F31D837F83B4F8B9FB348BD /* ACPPermissionPolicyTests.swift */; };
 		8BF52AFF90954B767B9D7E65 /* ACPSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBEFD27FD7013D458435779 /* ACPSession.swift */; };
+		E6383351E33B4FA1B6E83415 /* ACPTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 103D13C1CC4B4940844078F7 /* ACPTranscript.swift */; };
 		8D22459A108B6BF47AEA71F7 /* session-update-available-models.json in Resources */ = {isa = PBXBuildFile; fileRef = 1B0785F1FFC8008C74009584 /* session-update-available-models.json */; };
 		8D86580619CA83FE832ACB25 /* AppConfigHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A216C9D856D2A6C43964E74 /* AppConfigHarnessTests.swift */; };
 		8DBA8F6E781ADBD5D59EDA13 /* CompletionDocumentationRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFB48AF581F74C564ACBCF5 /* CompletionDocumentationRenderer.swift */; };
@@ -1241,6 +1242,7 @@
 		BA6C7434D216D5C43A2FB921 /* ACPFileChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFileChip.swift; sourceTree = "<group>"; };
 		BB6A90FAE1D410744D02A454 /* CommitPromptEditorWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitPromptEditorWindow.swift; sourceTree = "<group>"; };
 		BBBEFD27FD7013D458435779 /* ACPSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSession.swift; sourceTree = "<group>"; };
+		103D13C1CC4B4940844078F7 /* ACPTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscript.swift; sourceTree = "<group>"; };
 		BC3CA543A17D1C3DFA70A80C /* DraftCommitTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabView.swift; sourceTree = "<group>"; };
 		BCA505FF2E6CFA8278C95C6E /* GhosttyConfigBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyConfigBuilder.swift; sourceTree = "<group>"; };
 		BD4A3B9B1103346242438940 /* FilesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabView.swift; sourceTree = "<group>"; };
@@ -2076,6 +2078,7 @@
 				A47981117B0CDB5F71DECD64 /* ACPComposerDraft.swift */,
 				321866B3EB8CCE337B1D3A58 /* ACPMessage.swift */,
 				BBBEFD27FD7013D458435779 /* ACPSession.swift */,
+				103D13C1CC4B4940844078F7 /* ACPTranscript.swift */,
 				7615FEA1F225EBDE52CF5E14 /* ACPSessionManager.swift */,
 				F332906E17C5865856DBB90B /* ACPSessionRunner.swift */,
 				E0E1BF90CB3BE5BFDFA2EC7C /* ACPSessionStore.swift */,
@@ -3050,6 +3053,7 @@
 				D5C1783F56883B8AF68BF010 /* ACPRecentSessionsButton.swift in Sources */,
 				900A70EF9D41AEF3953CABBB /* ACPSelectChip.swift in Sources */,
 				8BF52AFF90954B767B9D7E65 /* ACPSession.swift in Sources */,
+				E6383351E33B4FA1B6E83415 /* ACPTranscript.swift in Sources */,
 				209FB0AAF20BDE5850A139F4 /* ACPSessionManager.swift in Sources */,
 				1F89B774F2DC7DD818AD4E5B /* ACPSessionRunner.swift in Sources */,
 				027A326E7DAB6C6E133E5FD3 /* ACPSessionStore.swift in Sources */,

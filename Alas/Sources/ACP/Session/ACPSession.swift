@@ -9,9 +9,9 @@ final class ACPSession: ObservableObject, Identifiable {
     let agentId: String
     let worktreeId: String
     let createdAt: Date
+    let transcript = ACPTranscript()
 
     @Published var title: String
-    @Published var messages: [ACPMessage] = []
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = []
@@ -21,8 +21,18 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var autoRunEnabled: Bool = false
     @Published var composerDraft: ACPComposerDraft = .empty
     @Published private(set) var composerDraftRevision: Int = 0
-    @Published var pendingPermission: PendingPermission?
-    @Published var streamingState: StreamingState = .idle
+    var messages: [ACPMessage] {
+        get { transcript.messages }
+        set { transcript.messages = newValue }
+    }
+    var pendingPermission: PendingPermission? {
+        get { transcript.pendingPermission }
+        set { transcript.pendingPermission = newValue }
+    }
+    var streamingState: StreamingState {
+        get { transcript.streamingState }
+        set { transcript.streamingState = newValue }
+    }
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
     @Published var disconnected: Bool = false
@@ -43,6 +53,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// as the persistence key in `ACPSessionStore`.
     /// Not persisted — recreated on each `attach()` if missing.
     var remoteSessionId: String?
+
+    /// Forwards transcript publishes to ACPSession.objectWillChange while
+    /// the messages/streamingState/pendingPermission forwarders are in
+    /// place. Without it, views that observe ACPSession but read through
+    /// the forwarders never get notified of transcript-only updates.
+    /// Removed when the forwarders are removed and all consumers observe
+    /// ACPTranscript directly.
+    private var transcriptBridge: AnyCancellable?
 
     func replaceComposerDraft(_ draft: ACPComposerDraft) {
         composerDraft = draft
@@ -66,6 +84,9 @@ final class ACPSession: ObservableObject, Identifiable {
         self.worktreeId = worktreeId
         self.title = title
         self.createdAt = createdAt
+        self.transcriptBridge = transcript.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
