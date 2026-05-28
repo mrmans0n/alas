@@ -69,7 +69,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
-        messages.append(.user(text: text, attachments: attachments))
+        messages.append(.user(id: UUID(), text: text, attachments: attachments))
         if title == "" || title == "New session" {
             title = String(text.prefix(40))
         }
@@ -78,12 +78,12 @@ final class ACPSession: ObservableObject, Identifiable {
     func apply(_ update: ACPSessionUpdate) {
         switch update {
         case .agentMessageChunk(let block):
-            append(text: text(of: block), into: { lastAgent() }, fallback: .agent(text: ""))
+            append(text: text(of: block), into: { lastAgent() }, fallback: .agent(id: UUID(), text: ""))
         case .userMessageChunk(let block):
             // Agents rarely emit these; treat as informational.
-            messages.append(.systemNotice(text: text(of: block)))
+            messages.append(.systemNotice(id: UUID(), text: text(of: block)))
         case .agentThoughtChunk(let block):
-            append(text: text(of: block), into: { lastThought() }, fallback: .thought(text: ""))
+            append(text: text(of: block), into: { lastThought() }, fallback: .thought(id: UUID(), text: ""))
         case .toolCall(let payload):
             let full = payload.content.flatMap { Self.flatten($0) } ?? ""
             messages.append(.toolCall(.init(
@@ -106,9 +106,11 @@ final class ACPSession: ObservableObject, Identifiable {
         case .plan(let entries):
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
             if let i = messages.lastIndex(where: { if case .plan = $0 { return true } else { return false } }) {
-                messages[i] = .plan(items)
+                if case .plan(let existingId, _) = messages[i] {
+                    messages[i] = .plan(id: existingId, items)
+                }
             } else {
-                messages.append(.plan(items))
+                messages.append(.plan(id: UUID(), items))
             }
         case .availableModelsUpdate(let ms):
             availableModels = ms
@@ -126,11 +128,11 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func appendSystemNotice(_ text: String) {
-        messages.append(.systemNotice(text: text))
+        messages.append(.systemNotice(id: UUID(), text: text))
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
-        messages.append(.fileEdit(edit))
+        messages.append(.fileEdit(id: UUID(), edit))
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when
@@ -253,14 +255,14 @@ final class ACPSession: ObservableObject, Identifiable {
     private func append(text addition: String, into locate: () -> Int?, fallback: ACPMessage) {
         if let i = locate() {
             switch messages[i] {
-            case .agent(let t):   messages[i] = .agent(text: t + addition)
-            case .thought(let t): messages[i] = .thought(text: t + addition)
+            case .agent(let id, let t):   messages[i] = .agent(id: id, text: t + addition)
+            case .thought(let id, let t): messages[i] = .thought(id: id, text: t + addition)
             default: messages.append(fallback)
             }
         } else {
             switch fallback {
-            case .agent: messages.append(.agent(text: addition))
-            case .thought: messages.append(.thought(text: addition))
+            case .agent:   messages.append(.agent(id: UUID(), text: addition))
+            case .thought: messages.append(.thought(id: UUID(), text: addition))
             default: messages.append(fallback)
             }
         }

@@ -11,7 +11,7 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("hello ")))
         session.apply(.agentMessageChunk(.text("world")))
         #expect(session.messages.count == 1)
-        if case .agent(let text) = session.messages[0] { #expect(text == "hello world") }
+        if case .agent(_, let text) = session.messages[0] { #expect(text == "hello world") }
         else { Issue.record("expected single agent message") }
     }
 
@@ -20,7 +20,7 @@ struct ACPSessionTests {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.recordUserPrompt(text: "hi", attachments: [])
         #expect(session.messages.count == 1)
-        if case .user(let text, _) = session.messages[0] { #expect(text == "hi") }
+        if case .user(_, let text, _) = session.messages[0] { #expect(text == "hi") }
         else { Issue.record("expected user message") }
     }
 
@@ -42,7 +42,7 @@ struct ACPSessionTests {
         session.apply(.plan([.init(content: "a", priority: nil, status: "completed"),
                              .init(content: "b", priority: nil, status: "in_progress")]))
         #expect(session.messages.count == 1)
-        if case .plan(let items) = session.messages[0] {
+        if case .plan(_, let items) = session.messages[0] {
             #expect(items.count == 2)
             #expect(items[0].status == "completed")
         } else { Issue.record("expected plan") }

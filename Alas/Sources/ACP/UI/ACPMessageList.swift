@@ -31,18 +31,18 @@ struct ACPMessageList: View {
         if let last = session.messages.last {
             hasher.combine(last.kind)
             switch last {
-            case .agent(let t), .thought(let t), .systemNotice(let t):
+            case .agent(_, let t), .thought(_, let t), .systemNotice(_, let t):
                 hasher.combine(t.count)
             case .toolCall(let tc):
                 hasher.combine(tc.status)
                 hasher.combine(tc.content.count)
-            case .fileEdit(let e):
+            case .fileEdit(_, let e):
                 hasher.combine(e.added)
                 hasher.combine(e.removed)
-            case .plan(let items):
+            case .plan(_, let items):
                 hasher.combine(items.count)
                 for it in items { hasher.combine(it.status) }
-            case .user(let t, _):
+            case .user(_, let t, _):
                 hasher.combine(t.count)
             }
         }
@@ -54,8 +54,8 @@ struct ACPMessageList: View {
             GeometryReader { viewport in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(Array(session.messages.enumerated()), id: \.offset) { idx, message in
-                            row(for: message).id(idx)
+                        ForEach(session.messages, id: \.stableId) { message in
+                            row(for: message)
                         }
                         if session.pendingPermission != nil, let policy = policy {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
@@ -176,19 +176,19 @@ struct ACPMessageList: View {
     @ViewBuilder
     private func row(for m: ACPMessage) -> some View {
         switch m {
-        case .user(let text, let attachments):
+        case .user(_, let text, let attachments):
             UserMessageRow(text: text, attachments: attachments)
-        case .agent(let text):
+        case .agent(_, let text):
             AgentMessageRow(text: text)
-        case .thought(let text):
+        case .thought(_, let text):
             ACPThoughtView(text: text)
         case .toolCall(let tc):
             ACPToolCallCard(toolCall: tc)
-        case .fileEdit(let edit):
+        case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: { onOpenDiff(edit.path) })
-        case .plan(let items):
+        case .plan(_, let items):
             ACPPlanCard(items: items)
-        case .systemNotice(let text):
+        case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }
     }

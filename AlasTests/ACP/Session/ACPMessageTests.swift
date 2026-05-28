@@ -6,17 +6,27 @@ import Testing
 struct ACPMessageTests {
     @Test("user message round-trips through JSON")
     func userRoundtrip() throws {
-        let m = ACPMessage.user(text: "hello", attachments: [.init(uri: "file:///a.swift", name: "a.swift")])
+        let m = ACPMessage.user(id: UUID(), text: "hello", attachments: [.init(uri: "file:///a.swift", name: "a.swift")])
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        #expect(back == m)
+        guard case .user(_, let text, let atts) = back else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(text == "hello")
+        #expect(atts.count == 1)
+        #expect(atts[0].uri == "file:///a.swift")
     }
     @Test("agent message round-trips")
     func agentRoundtrip() throws {
-        let m = ACPMessage.agent(text: "world")
+        let m = ACPMessage.agent(id: UUID(), text: "world")
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        #expect(back == m)
+        guard case .agent(_, let text) = back else {
+            Issue.record("expected agent message")
+            return
+        }
+        #expect(text == "world")
     }
     @Test("tool call round-trips")
     func toolRoundtrip() throws {
@@ -30,9 +40,15 @@ struct ACPMessageTests {
     }
     @Test("file edit round-trips")
     func editRoundtrip() throws {
-        let m = ACPMessage.fileEdit(.init(path: "x.swift", added: 4, removed: 1))
+        let m = ACPMessage.fileEdit(id: UUID(), .init(path: "x.swift", added: 4, removed: 1))
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        #expect(back == m)
+        guard case .fileEdit(_, let edit) = back else {
+            Issue.record("expected file edit")
+            return
+        }
+        #expect(edit.path == "x.swift")
+        #expect(edit.added == 4)
+        #expect(edit.removed == 1)
     }
 }
