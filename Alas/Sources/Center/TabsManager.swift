@@ -21,6 +21,10 @@ final class TabsManager {
     }
 
     private var byWorktree: [String: TabsFile] = [:]
+    /// `true` once `loadAll` has been called at least once, meaning any
+    /// persisted tabs have been read from disk. Views use this to
+    /// distinguish "no tabs yet (still loading)" from "genuinely empty".
+    private(set) var hasLoaded = false
     private let store = PersistenceStore()
     private let bufferStore: EditorBufferStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
@@ -108,6 +112,7 @@ final class TabsManager {
                 byWorktree[id] = file
             }
         }
+        hasLoaded = true
     }
 
     @discardableResult

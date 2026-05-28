@@ -765,4 +765,15 @@ struct TabsManagerRuntimeTitleTests {
         let tab = mgr.appendEditor(worktreeId: "wt", title: "README.md", relativePath: "README.md")
         #expect(mgr.displayTerminalTitle(for: tab) == nil)
     }
+
+    @Test func hasLoadedIsFalseBeforeLoadAll() {
+        let mgr = TabsManager()
+        #expect(mgr.hasLoaded == false)
+    }
+
+    @Test func hasLoadedIsTrueAfterLoadAll() {
+        let mgr = TabsManager()
+        mgr.loadAll(worktreeIds: [])
+        #expect(mgr.hasLoaded == true)
+    }
 }

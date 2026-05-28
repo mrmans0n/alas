@@ -88,7 +88,9 @@ struct CenterPaneView: View {
                 }
             )
             Group {
-                if tabs.isEmpty {
+                if tabs.isEmpty, !state.tabs.hasLoaded {
+                    Spinner()
+                } else if tabs.isEmpty {
                     EmptyTabView(
                         onNewTerminal: openTerminal,
                         onNewAgentTerminal: { state.openAgentLauncherOverlay(mode: .terminal) },
