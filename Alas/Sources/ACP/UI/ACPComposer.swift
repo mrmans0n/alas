@@ -87,6 +87,8 @@ struct ACPInputField: NSViewRepresentable {
         var theme: Theme?
         weak var textView: NSTextView?
         private var restoringDraft = false
+        private var nextSubmitID = 0
+        private var pendingSubmitID: Int?
 
         init(
             worktreeRoot: URL,
@@ -136,6 +138,7 @@ struct ACPInputField: NSViewRepresentable {
             else { return }
             ACPMarkdownLiveStyler.restyle(storage)
             guard !restoringDraft else { return }
+            pendingSubmitID = nil
             onDraftChange(Self.draft(from: storage))
         }
 
@@ -147,17 +150,13 @@ struct ACPInputField: NSViewRepresentable {
             // Rejected submits keep the editable draft in place. Accepted
             // submits clear only the visible text view here; persisted
             // draft deletion waits for the async prompt completion.
+            let submitID = nextSubmitID
+            nextSubmitID += 1
             if onSubmit(text, attachments, draft, { [weak self, weak textView] succeeded in
                 guard let self else { return }
-                if succeeded {
-                    self.onDraftClear()
-                } else {
-                    self.onDraftChange(draft)
-                    if let textView {
-                        self.restore(draft, into: textView)
-                    }
-                }
+                self.finishSubmit(id: submitID, draft: draft, succeeded: succeeded, textView: textView)
             }) {
+                pendingSubmitID = submitID
                 clearVisibleDraft(in: textView)
             }
         }
@@ -181,6 +180,24 @@ struct ACPInputField: NSViewRepresentable {
             textView.string = ""
             textView.needsDisplay = true
             restoringDraft = false
+        }
+
+        private func finishSubmit(
+            id: Int,
+            draft: ACPComposerDraft,
+            succeeded: Bool,
+            textView: NSTextView?
+        ) {
+            guard pendingSubmitID == id else { return }
+            pendingSubmitID = nil
+            if succeeded {
+                onDraftClear()
+            } else {
+                onDraftChange(draft)
+                if let textView {
+                    restore(draft, into: textView)
+                }
+            }
         }
 
         static func draft(from attributed: NSAttributedString) -> ACPComposerDraft {

@@ -74,6 +74,78 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string.isEmpty)
     }
 
+    @Test("successful completion does not clear newer draft after intervening edit")
+    func successfulCompletionDoesNotClearNewerDraftAfterInterveningEdit() {
+        let submittedDraft = ACPComposerDraft(segments: [.text("hello")])
+        let newerDraft = ACPComposerDraft(segments: [
+            .text("new "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift")
+        ])
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: submittedDraft))
+        var changedDrafts: [ACPComposerDraft] = []
+        var clearCount = 0
+        var completion: (@MainActor (Bool) -> Void)?
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: { clearCount += 1 },
+            onSubmit: { _, _, draft, onFinished in
+                #expect(draft == submittedDraft)
+                completion = onFinished
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.submit(textView)
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        completion?(true)
+
+        #expect(changedDrafts == [newerDraft])
+        #expect(clearCount == 0)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
+    }
+
+    @Test("failed completion does not restore submitted draft after intervening edit")
+    func failedCompletionDoesNotRestoreSubmittedDraftAfterInterveningEdit() {
+        let submittedDraft = ACPComposerDraft(segments: [.text("hello")])
+        let newerDraft = ACPComposerDraft(segments: [
+            .text("new "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift")
+        ])
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: submittedDraft))
+        var changedDrafts: [ACPComposerDraft] = []
+        var clearCount = 0
+        var completion: (@MainActor (Bool) -> Void)?
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: { clearCount += 1 },
+            onSubmit: { _, _, draft, onFinished in
+                #expect(draft == submittedDraft)
+                completion = onFinished
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.submit(textView)
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        completion?(false)
+
+        #expect(changedDrafts == [newerDraft])
+        #expect(clearCount == 0)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
+    }
+
     @Test("serializes plain text and mention chips in order")
     func serializesAttributedDraft() {
         let attributed = NSMutableAttributedString(string: "Read ")
