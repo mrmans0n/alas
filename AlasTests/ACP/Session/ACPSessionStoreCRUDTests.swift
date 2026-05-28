@@ -4,9 +4,12 @@ import Testing
 
 @Suite("ACPSessionStore CRUD")
 struct ACPSessionStoreCRUDTests {
+    private func tmpURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("acp-crud-\(UUID()).sqlite")
+    }
+
     private func tmp() throws -> ACPSessionStore {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-crud-\(UUID()).sqlite")
-        return try ACPSessionStore(path: url.path)
+        try ACPSessionStore(path: tmpURL().path)
     }
 
     @Test("insert + load session round-trips fields")
@@ -55,7 +58,8 @@ struct ACPSessionStoreCRUDTests {
 
     @Test("composer draft upsert load and delete round-trips")
     func composerDraftCRUD() throws {
-        let store = try tmp()
+        let url = tmpURL()
+        let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
@@ -68,6 +72,7 @@ struct ACPSessionStoreCRUDTests {
         try store.upsertComposerDraft(sessionId: "s", draft: draft, updatedAt: 123)
 
         #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+        #expect(try ACPSessionStore(path: url.path).loadComposerDraft(sessionId: "s") == draft)
 
         try store.deleteComposerDraft(sessionId: "s")
         #expect(try store.loadComposerDraft(sessionId: "s") == nil)
