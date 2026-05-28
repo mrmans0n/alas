@@ -17,7 +17,7 @@ struct ACPSessionRunnerTests {
 
         #expect(succeeded == false)
         #expect(runner.session.lastError?.contains("prompt failed") == true)
-        #expect(runner.session.streamingState == .idle)
+        #expect(runner.session.transcript.streamingState == .idle)
     }
 
     @Test("send reports successful completion when session prompt succeeds")
@@ -33,7 +33,7 @@ struct ACPSessionRunnerTests {
 
         #expect(succeeded == true)
         #expect(runner.session.lastError == nil)
-        #expect(runner.session.streamingState == .idle)
+        #expect(runner.session.transcript.streamingState == .idle)
     }
 
     @Test("send treats user-cancelled prompt errors as accepted completion")
@@ -61,7 +61,7 @@ struct ACPSessionRunnerTests {
         }
         #expect(completion == true)
         #expect(runner.session.lastError == nil)
-        #expect(runner.session.streamingState == .idle)
+        #expect(runner.session.transcript.streamingState == .idle)
         #expect(mock.sent.contains { $0.method == "session/cancel" })
     }
 
@@ -104,14 +104,14 @@ struct ACPSessionRunnerTests {
         }
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
-        #expect(runner.session.streamingState == .sending)
+        #expect(runner.session.transcript.streamingState == .sending)
 
         await finishSecond.open()
         for _ in 0..<20 where secondCompletion == nil {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(secondCompletion == true)
-        #expect(runner.session.streamingState == .idle)
+        #expect(runner.session.transcript.streamingState == .idle)
     }
 
     @Test("cancelled prompt success does not complete over a newer prompt")
@@ -148,19 +148,19 @@ struct ACPSessionRunnerTests {
         await secondStarted.wait()
         await finishFirst.open()
 
-        for _ in 0..<20 where runner.session.streamingState != .sending {
+        for _ in 0..<20 where runner.session.transcript.streamingState != .sending {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
-        #expect(runner.session.streamingState == .sending)
+        #expect(runner.session.transcript.streamingState == .sending)
 
         await finishSecond.open()
         for _ in 0..<20 where secondCompletion == nil {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         #expect(secondCompletion == true)
-        #expect(runner.session.streamingState == .idle)
+        #expect(runner.session.transcript.streamingState == .idle)
     }
 
     @Test("emitted session/update lands on the session and persists a message row")
@@ -186,7 +186,7 @@ struct ACPSessionRunnerTests {
         // Allow the actor hop
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        #expect(session.messages.count == 1)
+        #expect(session.transcript.messages.count == 1)
         let rows = try store.loadMessages(sessionId: "s")
         #expect(rows.count == 1)
         #expect(rows[0].kind == "agent")
@@ -216,7 +216,7 @@ struct ACPSessionRunnerTests {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         #expect(session.followsTranscriptTail)
-        #expect(session.messages.count == 1)
+        #expect(session.transcript.messages.count == 1)
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }
 

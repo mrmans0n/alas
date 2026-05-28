@@ -64,7 +64,7 @@ final class ACPSessionRunner {
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
                 await MainActor.run {
-                    let before = self.session.messages.count
+                    let before = self.session.transcript.messages.count
                     self.session.apply(u.update)
                     self.persistFromIndex(before)
                 }
@@ -78,7 +78,7 @@ final class ACPSessionRunner {
             await MainActor.run {
                 self.session.disconnected = true
                 self.session.attached = false
-                self.session.streamingState = .idle
+                self.session.transcript.streamingState = .idle
                 self.appendAndPersistSystemNotice("Agent disconnected.")
             }
         }
@@ -237,14 +237,14 @@ final class ACPSessionRunner {
             policy.userCancelled()
             let changedIndices = session.cancelInFlightToolCalls()
             for i in changedIndices {
-                let m = session.messages[i]
+                let m = session.transcript.messages[i]
                 if let payload = try? ACPMessageCodec.encode(m) {
                     let id = "msg-\(sessionId)-\(i)"
                     try? store.updateMessagePayload(id: id, payload: payload)
                 }
             }
             appendAndPersistSystemNotice("Interrupted by user.")
-            session.streamingState = .idle
+            session.transcript.streamingState = .idle
         }
     }
 }
@@ -268,7 +268,7 @@ extension ACPSessionRunner {
             }
             await MainActor.run {
                 self.activePromptID = promptID
-                let before = self.session.messages.count
+                let before = self.session.transcript.messages.count
                 let titleBefore = self.session.title
                 if !self.session.followsTranscriptTail {
                     self.session.followsTranscriptTail = true
@@ -283,7 +283,7 @@ extension ACPSessionRunner {
                 if self.session.title != titleBefore {
                     self.persistSessionRow()
                 }
-                self.session.streamingState = .sending
+                self.session.transcript.streamingState = .sending
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
@@ -300,7 +300,7 @@ extension ACPSessionRunner {
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
-                        self.session.streamingState = .idle
+                        self.session.transcript.streamingState = .idle
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     if !hasNewerActivePrompt {
@@ -314,7 +314,7 @@ extension ACPSessionRunner {
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
-                        self.session.streamingState = .idle
+                        self.session.transcript.streamingState = .idle
                     }
                     if !wasCancelled, isActivePrompt {
                         self.session.lastError = "prompt failed: \(error.localizedDescription)"
@@ -331,14 +331,14 @@ extension ACPSessionRunner {
     /// instead of `session.appendSystemNotice` directly so the message
     /// survives a session reload.
     func appendAndPersistSystemNotice(_ text: String) {
-        let before = session.messages.count
+        let before = session.transcript.messages.count
         session.appendSystemNotice(text)
         persistFromIndex(before)
     }
 
     /// Append a file-edit card to the session AND persist it.
     func appendAndPersistFileEdit(_ edit: ACPMessage.FileEdit) {
-        let before = session.messages.count
+        let before = session.transcript.messages.count
         session.appendFileEdit(edit)
         persistFromIndex(before)
     }
@@ -357,7 +357,7 @@ extension ACPSessionRunner {
     /// text was visible in memory but never written, so reopening a
     /// session lost most of the conversation.
     func persistFromIndex(_ from: Int) {
-        let messages = session.messages
+        let messages = session.transcript.messages
         guard messages.count > 0 else { return }
 
         let lowerBound: Int

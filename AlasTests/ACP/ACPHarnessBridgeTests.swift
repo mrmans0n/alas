@@ -18,7 +18,7 @@ struct ACPHarnessBridgeTests {
         let bridge = ACPHarnessBridge(harness: harness)
         let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
-        session.streamingState = .sending
+        session.transcript.streamingState = .sending
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.state == .busy)
         #expect(harness.activityBySession["s1"]?.agent == .claude)
@@ -30,7 +30,7 @@ struct ACPHarnessBridgeTests {
         let bridge = ACPHarnessBridge(harness: harness)
         let session = ACPSession(id: "s1", agentId: "codex", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.state == .busy)
         #expect(harness.activityBySession["s1"]?.agent == .codex)
@@ -42,7 +42,7 @@ struct ACPHarnessBridgeTests {
         let bridge = ACPHarnessBridge(harness: harness)
         let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
-        session.streamingState = .awaitingPermission
+        session.transcript.streamingState = .awaitingPermission
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.state == .permissionRequest)
     }
@@ -53,9 +53,9 @@ struct ACPHarnessBridgeTests {
         let bridge = ACPHarnessBridge(harness: harness)
         let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
-        session.streamingState = .idle
+        session.transcript.streamingState = .idle
         await Task.yield()
         #expect(harness.activityBySession["s1"] == nil)
     }
@@ -66,7 +66,7 @@ struct ACPHarnessBridgeTests {
         let bridge = ACPHarnessBridge(harness: harness)
         let session = ACPSession(id: "s1", agentId: "cursor-agent", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.agent == .cursor)
     }
@@ -77,7 +77,7 @@ struct ACPHarnessBridgeTests {
         let bridge = ACPHarnessBridge(harness: harness)
         let session = ACPSession(id: "s1", agentId: "made-up-agent", worktreeId: "wt", title: "t")
         bridge.observe(session: session)
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
         #expect(harness.activityBySession["s1"]?.agent == .claude)
     }
@@ -93,7 +93,7 @@ struct ACPHarnessBridgeTests {
         let session = manager.createSession(agentId: "claude")
 
         bridge.attach(manager: manager)
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
 
         #expect(harness.activityBySession[session.id]?.state == .busy)
@@ -111,7 +111,7 @@ struct ACPHarnessBridgeTests {
 
         let session = manager.createSession(agentId: "claude")
         await Task.yield()
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
 
         #expect(harness.activityBySession[session.id]?.state == .busy)
@@ -127,7 +127,7 @@ struct ACPHarnessBridgeTests {
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = manager.createSession(agentId: "claude")
         bridge.attach(manager: manager)
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
         #expect(harness.activityBySession[session.id]?.state == .busy)
 
@@ -147,14 +147,14 @@ struct ACPHarnessBridgeTests {
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = manager.createSession(agentId: "claude")
         bridge.attach(manager: manager)
-        session.streamingState = .awaitingPermission
+        session.transcript.streamingState = .awaitingPermission
         await Task.yield()
         #expect(harness.activityBySession[session.id]?.state == .permissionRequest)
 
         await manager.detach(sessionId: session.id)
         await Task.yield()
 
-        #expect(session.streamingState == .idle)
+        #expect(session.transcript.streamingState == .idle)
         #expect(harness.activityBySession[session.id] == nil)
     }
 
@@ -168,7 +168,7 @@ struct ACPHarnessBridgeTests {
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = manager.createSession(agentId: "claude")
         bridge.attach(manager: manager)
-        session.streamingState = .streaming
+        session.transcript.streamingState = .streaming
         await Task.yield()
 
         bridge.detach(worktreeId: "wt")
@@ -177,7 +177,7 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession[session.id] == nil)
 
         // Further streamingState changes are not mirrored.
-        session.streamingState = .awaitingPermission
+        session.transcript.streamingState = .awaitingPermission
         await Task.yield()
         #expect(harness.activityBySession[session.id] == nil)
     }

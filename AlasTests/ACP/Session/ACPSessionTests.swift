@@ -10,8 +10,8 @@ struct ACPSessionTests {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.apply(.agentMessageChunk(.text("hello ")))
         session.apply(.agentMessageChunk(.text("world")))
-        #expect(session.messages.count == 1)
-        if case .agent(_, let text) = session.messages[0] { #expect(text == "hello world") }
+        #expect(session.transcript.messages.count == 1)
+        if case .agent(_, let text) = session.transcript.messages[0] { #expect(text == "hello world") }
         else { Issue.record("expected single agent message") }
     }
 
@@ -19,8 +19,8 @@ struct ACPSessionTests {
     func userPrompt() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.recordUserPrompt(text: "hi", attachments: [])
-        #expect(session.messages.count == 1)
-        if case .user(_, let text, _) = session.messages[0] { #expect(text == "hi") }
+        #expect(session.transcript.messages.count == 1)
+        if case .user(_, let text, _) = session.transcript.messages[0] { #expect(text == "hi") }
         else { Issue.record("expected user message") }
     }
 
@@ -41,8 +41,8 @@ struct ACPSessionTests {
         session.apply(.plan([.init(content: "a", priority: nil, status: "pending")]))
         session.apply(.plan([.init(content: "a", priority: nil, status: "completed"),
                              .init(content: "b", priority: nil, status: "in_progress")]))
-        #expect(session.messages.count == 1)
-        if case .plan(_, let items) = session.messages[0] {
+        #expect(session.transcript.messages.count == 1)
+        if case .plan(_, let items) = session.transcript.messages[0] {
             #expect(items.count == 2)
             #expect(items[0].status == "completed")
         } else { Issue.record("expected plan") }
@@ -118,8 +118,8 @@ struct ACPSessionTests {
             toolCallId: "tc-1", status: "completed",
             content: [.content(.text("file contents\nline two"))],
             rawOutput: nil)))
-        #expect(session.messages.count == 1)
-        if case .toolCall(let tc) = session.messages[0] {
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.content == "file contents\nline two")
             #expect(tc.preview == "file contents")
             #expect(tc.status == "completed")
@@ -136,8 +136,8 @@ struct ACPSessionTests {
             toolCallId: "tc-2", status: "completed",
             content: [.diff(path: "a.swift", oldText: "let x = 1\n", newText: "let x = 2\n")],
             rawOutput: nil)))
-        #expect(session.messages.count == 1)
-        if case .toolCall(let tc) = session.messages[0] {
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.content == "--- a.swift\n-let x = 1\n+let x = 2")
         } else { Issue.record("expected toolCall message") }
     }

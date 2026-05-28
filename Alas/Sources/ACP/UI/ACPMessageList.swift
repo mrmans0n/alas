@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ACPMessageList: View {
     @ObservedObject var session: ACPSession
+    @ObservedObject var transcript: ACPTranscript
     let onOpenDiff: (String) -> Void
     let policy: ACPPermissionPolicy?
     let scopeKey: String
@@ -27,8 +28,8 @@ struct ACPMessageList: View {
     /// edits in addition to brand-new rows.
     private var scrollSignature: Int {
         var hasher = Hasher()
-        hasher.combine(session.messages.count)
-        if let last = session.messages.last {
+        hasher.combine(transcript.messages.count)
+        if let last = transcript.messages.last {
             hasher.combine(last.kind)
             switch last {
             case .agent(_, let t), .thought(_, let t), .systemNotice(_, let t):
@@ -54,14 +55,14 @@ struct ACPMessageList: View {
             GeometryReader { viewport in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(session.messages, id: \.stableId) { message in
+                        ForEach(transcript.messages, id: \.stableId) { message in
                             row(for: message)
                         }
-                        if session.pendingPermission != nil, let policy = policy {
+                        if transcript.pendingPermission != nil, let policy = policy {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
                                 .id("__pending_perm__")
                         }
-                        if session.streamingState == .streaming {
+                        if transcript.streamingState == .streaming {
                             StreamingCaret().frame(width: 8, height: 14)
                                 .id("__streaming_caret__")
                         }
@@ -107,7 +108,7 @@ struct ACPMessageList: View {
                         scrollToTail(proxy: proxy, animated: true)
                     }
                 }
-                .onChange(of: session.streamingState) { _, new in
+                .onChange(of: transcript.streamingState) { _, new in
                     if session.followsTranscriptTail && (new == .streaming || new == .sending) {
                         scrollToTail(proxy: proxy, animated: true)
                     }

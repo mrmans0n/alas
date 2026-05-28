@@ -10,7 +10,7 @@ struct ACPPermissionPrompt: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        if let pending = session.pendingPermission {
+        if let pending = session.transcript.pendingPermission {
             content(for: pending.params)
         }
     }

@@ -51,7 +51,7 @@ final class ACPSessionManager: ObservableObject {
         if let stored = try? store.loadMessages(sessionId: id) {
             for m in stored {
                 if let decoded = try? ACPMessageCodec.decode(kind: m.kind, payload: m.payload) {
-                    session.messages.append(decoded)
+                    session.transcript.messages.append(decoded)
                 }
             }
         }
@@ -82,13 +82,13 @@ final class ACPSessionManager: ObservableObject {
         refreshRecent()
     }
 
-    /// Persist a fresh trailing chunk of messages (`from..<session.messages.count`)
+    /// Persist a fresh trailing chunk of messages (`from..<session.transcript.messages.count`)
     /// to the store. Used by code paths that mutate the session outside the
     /// runner's update loop (composer fallback when no runner is attached
     /// yet, or any direct manager call) so the messages survive a reload.
     func persistTrailingMessages(_ session: ACPSession, fromIndex from: Int) {
         let now = Int64(Date().timeIntervalSince1970)
-        let messages = session.messages
+        let messages = session.transcript.messages
         guard from < messages.count else { return }
         for i in from..<messages.count {
             let m = messages[i]
@@ -260,7 +260,7 @@ extension ACPSessionManager {
         // badge stuck on `[wait]` via the harness bridge).
         if let session = sessions[sessionId] {
             session.attached = false
-            session.streamingState = .idle
+            session.transcript.streamingState = .idle
         }
     }
 

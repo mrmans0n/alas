@@ -38,8 +38,8 @@ final class ACPPermissionPolicy {
     private var pendingContinuation: CheckedContinuation<ACPPermissionResponse, Never>?
 
     private func awaitUserDecision(scopeKey: String, params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
-        session.streamingState = .awaitingPermission
-        session.pendingPermission = .init(id: .number(0), params: params)
+        session.transcript.streamingState = .awaitingPermission
+        session.transcript.pendingPermission = .init(id: .number(0), params: params)
         return await withCheckedContinuation { (c: CheckedContinuation<ACPPermissionResponse, Never>) in
             pendingContinuation = c
         }
@@ -52,16 +52,16 @@ final class ACPPermissionPolicy {
         if let scope = persistScope {
             try? log.record(sessionId: session.id, scopeKey: scopeKey, decision: decision, scope: scope)
         }
-        session.pendingPermission = nil
-        session.streamingState = .streaming
+        session.transcript.pendingPermission = nil
+        session.transcript.streamingState = .streaming
         let cont = pendingContinuation
         pendingContinuation = nil
         cont?.resume(returning: .init(outcome: .selected(optionId: optionId)))
     }
 
     func userCancelled() {
-        session.pendingPermission = nil
-        session.streamingState = .idle
+        session.transcript.pendingPermission = nil
+        session.transcript.streamingState = .idle
         let cont = pendingContinuation
         pendingContinuation = nil
         cont?.resume(returning: .init(outcome: .cancelled))
