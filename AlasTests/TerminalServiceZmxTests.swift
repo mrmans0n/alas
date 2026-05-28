@@ -229,4 +229,70 @@ struct TerminalServiceZmxTests {
         #expect(recorder.calls.count == 1)
         #expect(recorder.calls[0].args == ["kill", "alas-leaf-A"])
     }
+
+    // MARK: resolveLaunchPlan — keepSessionsAlive gating
+
+    @Test func resolveLaunchPlanWrapsWhenKeepAliveTrueAndZmxAvailable() {
+        let recorder = RecordingRunner()
+        let client = ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        let inner = StartupScriptInstaller.Plan(
+            executable: "/bin/zsh", args: ["-l"], envOverrides: ["FOO": "1"]
+        )
+
+        let plan = TerminalService.resolveLaunchPlan(
+            keepAlive: true,
+            zmxClient: client,
+            sessionId: "leaf-1",
+            innerPlan: inner
+        )
+
+        #expect(plan.executable == "/fake/Contents/Resources/zmx/zmx")
+        #expect(plan.args == ["attach", "alas-leaf-1", "/bin/zsh", "-l"])
+        #expect(plan.envOverrides == ["FOO": "1"])
+    }
+
+    @Test func resolveLaunchPlanReturnsInnerWhenKeepAliveFalse() {
+        let recorder = RecordingRunner()
+        let client = ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        let inner = StartupScriptInstaller.Plan(
+            executable: "/bin/zsh", args: ["-l"], envOverrides: ["FOO": "1"]
+        )
+
+        let plan = TerminalService.resolveLaunchPlan(
+            keepAlive: false,
+            zmxClient: client,
+            sessionId: "leaf-2",
+            innerPlan: inner
+        )
+
+        // With the setting off, the inner plan is returned untouched —
+        // no zmx in the executable, no extra args, env preserved.
+        #expect(plan.executable == "/bin/zsh")
+        #expect(plan.args == ["-l"])
+        #expect(plan.envOverrides == ["FOO": "1"])
+        // No subprocess must be spawned — the guard short-circuits before
+        // any zmx command runs.
+        #expect(recorder.calls.isEmpty)
+    }
+
+    @Test func resolveLaunchPlanReturnsInnerWhenZmxUnavailable() {
+        // keepAlive=true, but zmx binary missing: ZmxClient.wrap returns the
+        // input plan unchanged. The helper must propagate that behavior.
+        let recorder = RecordingRunner()
+        let client = ZmxClient(env: makeZmxEnv(available: false), runner: recorder.runner())
+        let inner = StartupScriptInstaller.Plan(
+            executable: "/bin/zsh", args: [], envOverrides: [:]
+        )
+
+        let plan = TerminalService.resolveLaunchPlan(
+            keepAlive: true,
+            zmxClient: client,
+            sessionId: "leaf-3",
+            innerPlan: inner
+        )
+
+        #expect(plan.executable == "/bin/zsh")
+        #expect(plan.args == [])
+        #expect(recorder.calls.isEmpty)
+    }
 }

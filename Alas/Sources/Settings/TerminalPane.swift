@@ -33,6 +33,13 @@ struct TerminalPane: View {
                     }
                 }
 
+                SettingsGroup(title: "Sessions") {
+                    SettingsRow(name: "Keep sessions alive across app quit",
+                                desc: "Terminal panes (and any running agents inside them) survive quit and relaunch with their shell, scrollback, and state.") {
+                        AlasToggle(on: state.bind(\.terminal.keepSessionsAlive))
+                    }
+                }
+
                 SettingsGroup(title: "Startup scripts") {
                     SettingsRow(name: "Run on session open",
                                 desc: "Executed in every new terminal pane after the shell starts.") {

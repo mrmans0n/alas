@@ -344,6 +344,21 @@ final class AppState {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
         tabs.loadAll(worktreeIds: allWorktreeIds)
+        // When cross-quit persistence is disabled, drop every persisted
+        // terminal tab right after load — across all worktrees, before
+        // any lazy-display path could observe them — so orphan zmx
+        // daemon sessions get killed via `closeTab` and inactive /
+        // other-worktree tabs don't linger waiting for someone to open
+        // them (which is the only thing that drives the per-tab guard
+        // in `restoreTerminalTabIfNeeded`).
+        if !config.terminal.keepSessionsAlive {
+            for worktreeId in allWorktreeIds {
+                for tab in tabs.tabs(forWorktree: worktreeId) {
+                    guard case .terminal = tab else { continue }
+                    closeTab(worktreeId: worktreeId, tabId: tab.id)
+                }
+            }
+        }
         // Persisted terminal-tab leaves are now in memory — refresh their
         // hook symlinks so zmx-persisted shells in undisplayed tabs deliver
         // hooks/CLI requests to the live harness immediately, rather than
@@ -1316,6 +1331,28 @@ final class AppState {
               case .terminal(let state) = tab,
               let worktree = worktree(withId: worktreeId),
               let project = projects.first(where: { $0.id == worktree.projectId }) else { return nil }
+
+        // When the user has opted out of cross-quit persistence and none of
+        // the tab's leaves have a live session (the only way to reach this
+        // branch is a relaunch where the registry is empty for these
+        // leaves), drop the persisted tab instead of opening fresh shells.
+        // Otherwise the toggle would only strip the `zmx attach` wrapper and
+        // still resurrect a plain shell in the same tab slot on every
+        // relaunch.
+        //
+        // Use `closeTab` (not `tabs.close`) so harness detector state is
+        // unregistered and `terminal.closeSession` issues the best-effort
+        // `zmx kill` for each leaf — otherwise daemon-side sessions left
+        // over from a previous keep-alive=true run stay orphaned with no
+        // tab left to control them.
+        if !config.terminal.keepSessionsAlive {
+            let hasLiveLeaf = state.root.leaves()
+                .contains { terminal.registry.session(for: $0.id) != nil }
+            if !hasLiveLeaf {
+                closeTab(worktreeId: worktreeId, tabId: tabId)
+                return nil
+            }
+        }
 
         for leaf in state.root.leaves() {
             // Idempotent: skip leaves whose session is already alive in the

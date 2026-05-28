@@ -117,11 +117,63 @@ struct AppConfig: Codable, Equatable {
         var scrollbackLines: Int
         var bell: String                 // off | visual | sound
         var syncTabTitleWithTerminalTitle: Bool
+        /// When true, every interactive pane is wrapped in `zmx attach <name>`
+        /// so the shell (and any running agents) survives app quit/relaunch.
+        /// When false, panes launch as plain shells and die with the app.
+        var keepSessionsAlive: Bool
 
         enum CodingKeys: String, CodingKey {
             case shell, workingDirectory, startupScript, worktreeCreateScript,
                  inheritParentEnv, fontFamily, fontSize, cursorStyle, cursorBlink,
-                 scrollbackLines, bell, syncTabTitleWithTerminalTitle
+                 scrollbackLines, bell, syncTabTitleWithTerminalTitle,
+                 keepSessionsAlive
+        }
+
+        init(
+            shell: String,
+            workingDirectory: String,
+            startupScript: String,
+            worktreeCreateScript: String,
+            inheritParentEnv: Bool,
+            fontFamily: String,
+            fontSize: Int,
+            cursorStyle: String,
+            cursorBlink: Bool,
+            scrollbackLines: Int,
+            bell: String,
+            syncTabTitleWithTerminalTitle: Bool,
+            keepSessionsAlive: Bool = true
+        ) {
+            self.shell = shell
+            self.workingDirectory = workingDirectory
+            self.startupScript = startupScript
+            self.worktreeCreateScript = worktreeCreateScript
+            self.inheritParentEnv = inheritParentEnv
+            self.fontFamily = fontFamily
+            self.fontSize = fontSize
+            self.cursorStyle = cursorStyle
+            self.cursorBlink = cursorBlink
+            self.scrollbackLines = scrollbackLines
+            self.bell = bell
+            self.syncTabTitleWithTerminalTitle = syncTabTitleWithTerminalTitle
+            self.keepSessionsAlive = keepSessionsAlive
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            shell = try c.decode(String.self, forKey: .shell)
+            workingDirectory = try c.decode(String.self, forKey: .workingDirectory)
+            startupScript = try c.decode(String.self, forKey: .startupScript)
+            worktreeCreateScript = try c.decode(String.self, forKey: .worktreeCreateScript)
+            inheritParentEnv = try c.decode(Bool.self, forKey: .inheritParentEnv)
+            fontFamily = try c.decode(String.self, forKey: .fontFamily)
+            fontSize = try c.decode(Int.self, forKey: .fontSize)
+            cursorStyle = try c.decode(String.self, forKey: .cursorStyle)
+            cursorBlink = try c.decode(Bool.self, forKey: .cursorBlink)
+            scrollbackLines = try c.decode(Int.self, forKey: .scrollbackLines)
+            bell = try c.decode(String.self, forKey: .bell)
+            syncTabTitleWithTerminalTitle = (try? c.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? false
+            keepSessionsAlive = (try? c.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
         }
     }
 
@@ -267,7 +319,8 @@ struct AppConfig: Codable, Equatable {
             cursorBlink: true,
             scrollbackLines: 10000,
             bell: "visual",
-            syncTabTitleWithTerminalTitle: false
+            syncTabTitleWithTerminalTitle: false,
+            keepSessionsAlive: true
         ),
         harness: Harness(notifyOnFinish: true, notifyOnAwaiting: true),
         code: Code(
@@ -405,6 +458,7 @@ extension AppConfig {
             let scrollbackLines = (try? termContainer.decode(Int.self, forKey: .scrollbackLines)) ?? 10000
             let bell = (try? termContainer.decode(String.self, forKey: .bell)) ?? "visual"
             let syncTabTitleWithTerminalTitle = (try? termContainer.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? false
+            let keepSessionsAlive = (try? termContainer.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
             terminal = Terminal(
                 shell: shell,
                 workingDirectory: workingDirectory,
@@ -417,7 +471,8 @@ extension AppConfig {
                 cursorBlink: cursorBlink,
                 scrollbackLines: scrollbackLines,
                 bell: bell,
-                syncTabTitleWithTerminalTitle: syncTabTitleWithTerminalTitle
+                syncTabTitleWithTerminalTitle: syncTabTitleWithTerminalTitle,
+                keepSessionsAlive: keepSessionsAlive
             )
         } else {
             terminal = Terminal(
@@ -432,7 +487,8 @@ extension AppConfig {
                 cursorBlink: true,
                 scrollbackLines: 10000,
                 bell: "visual",
-                syncTabTitleWithTerminalTitle: false
+                syncTabTitleWithTerminalTitle: false,
+                keepSessionsAlive: true
             )
         }
         harness = try c.decode(Harness.self, forKey: .harness)
