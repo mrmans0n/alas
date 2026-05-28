@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-05-29
+
+### ✨ Features
+
+- Persist worktree launch defaults per project (#333).
+- Persist ACP composer drafts (#338).
+- Add syntax highlighting for ACP chat code blocks (#340).
+- Improve ACP transcript rendering with stable row identity, streaming append buffers, and incremental markdown memoization (#342, #345, #346).
+
+### 🐛 Fixes
+
+- Show loading spinner while restoring worktree tabs (#330).
+- Make the ACP auto-run toggle yellow to distinguish it from thinking mode (#331).
+- Remove blue focus ring and disable auto-run while loading (#332).
+- Restore the ACP transcript tail correctly (#334).
+- Hide ACP composer shortcut hints when they overflow (#335).
+- Always show the tab close icon, even with a single tab (#336).
+- Surface work badges for ACP sessions (#337).
+- Render tool-call output in expanded ACP chat cards (#339).
+
+### 🏗️ Internal
+
+- Introduce the ACPTranscript wrapper and migrate call sites to it (#343, #344).
+
 ## [0.4.3] - 2026-05-28
 
 ### 🐛 Fixes
