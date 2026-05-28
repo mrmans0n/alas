@@ -270,6 +270,9 @@ struct TerminalServiceZmxTests {
         #expect(plan.executable == "/bin/zsh")
         #expect(plan.args == ["-l"])
         #expect(plan.envOverrides == ["FOO": "1"])
+        // No subprocess must be spawned — the guard short-circuits before
+        // any zmx command runs.
+        #expect(recorder.calls.isEmpty)
     }
 
     @Test func resolveLaunchPlanReturnsInnerWhenZmxUnavailable() {
@@ -290,5 +293,6 @@ struct TerminalServiceZmxTests {
 
         #expect(plan.executable == "/bin/zsh")
         #expect(plan.args == [])
+        #expect(recorder.calls.isEmpty)
     }
 }
