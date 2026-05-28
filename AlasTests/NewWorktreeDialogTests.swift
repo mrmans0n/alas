@@ -119,4 +119,118 @@ struct NewWorktreeDialogTests {
             addedAt: Date(timeIntervalSince1970: 0)
         )
     }
+
+    // MARK: - Launch surface helpers
+
+    private static func agent(id: String, displayName: String, isEnabled: Bool = true) -> AgentDefinition {
+        AgentDefinition(
+            id: id,
+            displayName: displayName,
+            binary: id,
+            binaryOverride: nil,
+            promptModeArgs: [],
+            bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: isEnabled,
+            builtinLogoAssetName: nil
+        )
+    }
+
+    @Test func acpCapableAgentsFiltersToCatalogIds() {
+        let agents = [
+            Self.agent(id: "claude",  displayName: "Claude"),   // ACP-capable
+            Self.agent(id: "amp",     displayName: "Amp"),      // terminal-only
+            Self.agent(id: "codex",   displayName: "Codex"),    // ACP-capable
+        ]
+        let filtered = NewWorktreeDialog.acpCapableAgents(from: agents)
+        #expect(filtered.map(\.id) == ["claude", "codex"])
+    }
+
+    @Test func acpCapableAgentsReturnsEmptyWhenNoneMatch() {
+        let agents = [Self.agent(id: "amp", displayName: "Amp")]
+        #expect(NewWorktreeDialog.acpCapableAgents(from: agents).isEmpty)
+    }
+
+    @Test func acpSegmentEnabledWhenAtLeastOneACPCapableAgent() {
+        let agents = [Self.agent(id: "claude", displayName: "Claude")]
+        #expect(NewWorktreeDialog.acpSegmentEnabled(enabledAgents: agents))
+    }
+
+    @Test func acpSegmentDisabledWhenNoACPCapableAgents() {
+        let agents = [Self.agent(id: "amp", displayName: "Amp")]
+        #expect(!NewWorktreeDialog.acpSegmentEnabled(enabledAgents: agents))
+    }
+
+    @Test func resolvedLaunchAgentKeepsInitialWhenValidForTerminalMode() {
+        let agents = [
+            Self.agent(id: "claude", displayName: "Claude"),
+            Self.agent(id: "amp",    displayName: "Amp"),
+        ]
+        let resolved = NewWorktreeDialog.resolvedLaunchAgent(
+            initialAgentId: "amp",
+            mode: .terminal,
+            enabledAgents: agents
+        )
+        #expect(resolved == "amp")
+    }
+
+    @Test func resolvedLaunchAgentAllowsNoneInTerminalMode() {
+        let agents = [Self.agent(id: "claude", displayName: "Claude")]
+        let resolved = NewWorktreeDialog.resolvedLaunchAgent(
+            initialAgentId: "none",
+            mode: .terminal,
+            enabledAgents: agents
+        )
+        #expect(resolved == "none")
+    }
+
+    @Test func resolvedLaunchAgentReplacesNonACPInACPMode() {
+        let agents = [
+            Self.agent(id: "amp",    displayName: "Amp"),     // not ACP-capable
+            Self.agent(id: "claude", displayName: "Claude"),  // ACP-capable
+            Self.agent(id: "codex",  displayName: "Codex"),   // ACP-capable
+        ]
+        let resolved = NewWorktreeDialog.resolvedLaunchAgent(
+            initialAgentId: "amp",
+            mode: .acp,
+            enabledAgents: agents
+        )
+        #expect(resolved == "claude")
+    }
+
+    @Test func resolvedLaunchAgentReplacesNoneInACPMode() {
+        let agents = [Self.agent(id: "claude", displayName: "Claude")]
+        let resolved = NewWorktreeDialog.resolvedLaunchAgent(
+            initialAgentId: "none",
+            mode: .acp,
+            enabledAgents: agents
+        )
+        #expect(resolved == "claude")
+    }
+
+    @Test func resolvedLaunchAgentKeepsValidACPInACPMode() {
+        let agents = [
+            Self.agent(id: "claude", displayName: "Claude"),
+            Self.agent(id: "codex",  displayName: "Codex"),
+        ]
+        let resolved = NewWorktreeDialog.resolvedLaunchAgent(
+            initialAgentId: "codex",
+            mode: .acp,
+            enabledAgents: agents
+        )
+        #expect(resolved == "codex")
+    }
+
+    @Test func resolvedLaunchAgentReturnsNoneWhenACPModeButNoCapableAgents() {
+        // Defensive: caller should disable the ACP segment first, but if
+        // they don't, we still return "none" rather than crashing.
+        let agents = [Self.agent(id: "amp", displayName: "Amp")]
+        let resolved = NewWorktreeDialog.resolvedLaunchAgent(
+            initialAgentId: "amp",
+            mode: .acp,
+            enabledAgents: agents
+        )
+        #expect(resolved == "none")
+    }
 }

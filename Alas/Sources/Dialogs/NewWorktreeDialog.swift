@@ -268,4 +268,37 @@ struct NewWorktreeDialog: View {
         }
         return availableBranches.first ?? configuredDefault
     }
+
+    // MARK: - Launch surface helpers
+
+    nonisolated static func acpCapableAgents(from agents: [AgentDefinition]) -> [AgentDefinition] {
+        let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
+        return agents.filter { acpIds.contains($0.id) }
+    }
+
+    nonisolated static func acpSegmentEnabled(enabledAgents: [AgentDefinition]) -> Bool {
+        !acpCapableAgents(from: enabledAgents).isEmpty
+    }
+
+    /// Decide which agent id the picker should hold given the desired
+    /// `mode`. In terminal mode any enabled agent (or "none") is valid.
+    /// In ACP mode "none" is not allowed and the agent must be
+    /// ACP-capable; if the incoming id isn't, fall back to the first
+    /// ACP-capable enabled agent, or "none" if none exist.
+    nonisolated static func resolvedLaunchAgent(
+        initialAgentId: String,
+        mode: AppConfig.LauncherMode,
+        enabledAgents: [AgentDefinition]
+    ) -> String {
+        switch mode {
+        case .terminal:
+            return initialAgentId
+        case .acp:
+            let capable = acpCapableAgents(from: enabledAgents)
+            if initialAgentId != "none", capable.contains(where: { $0.id == initialAgentId }) {
+                return initialAgentId
+            }
+            return capable.first?.id ?? "none"
+        }
+    }
 }
