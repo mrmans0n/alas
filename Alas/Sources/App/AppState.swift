@@ -546,9 +546,8 @@ final class AppState {
                             for: newWorktree,
                             startupScriptSuffix: suffix
                         )
-                    case .acp:
-                        // Wired in the next task — fall through to no-op for now.
-                        break
+                    case .acp(let agentId):
+                        openNewACPSession(agentID: agentId)
                     }
                 } catch {
                     projectsManager.setOperationState(
