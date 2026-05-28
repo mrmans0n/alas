@@ -58,6 +58,9 @@ final class ACPSessionManager: ObservableObject {
         session.currentModel = row.currentModel
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
+        if let loadedDraft = try? store.loadComposerDraft(sessionId: id) {
+            session.composerDraft = loadedDraft
+        }
         sessions[id] = session
         try? store.upsertSession(touch(row))
         refreshRecent()
@@ -108,6 +111,21 @@ final class ACPSessionManager: ObservableObject {
             createdAt: row.createdAt, updatedAt: now,
             lastOpenedAt: row.lastOpenedAt, archived: row.archived))
         refreshRecent()
+    }
+
+    func persistComposerDraft(_ draft: ACPComposerDraft, for session: ACPSession) {
+        session.composerDraft = draft
+        if draft.isEmpty {
+            try? store.deleteComposerDraft(sessionId: session.id)
+        } else {
+            let now = Int64(Date().timeIntervalSince1970)
+            try? store.upsertComposerDraft(sessionId: session.id, draft: draft, updatedAt: now)
+        }
+    }
+
+    func clearComposerDraft(for session: ACPSession) {
+        session.composerDraft = .empty
+        try? store.deleteComposerDraft(sessionId: session.id)
     }
 
     func refreshRecent() {

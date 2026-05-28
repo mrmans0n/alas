@@ -19,6 +19,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var currentMode: String?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false
+    @Published var composerDraft: ACPComposerDraft = .empty
     @Published var pendingPermission: PendingPermission?
     @Published var streamingState: StreamingState = .idle
     @Published var setupState: SetupState = .checking
