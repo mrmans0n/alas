@@ -24,7 +24,7 @@ final class ACPHarnessBridge {
     /// harness service. Idempotent — re-observing a session replaces the
     /// existing subscription.
     func observe(session: ACPSession) {
-        sessionCancellables[session.id] = session.$streamingState
+        sessionCancellables[session.id] = session.transcript.$streamingState
             .sink { [weak self, weak session] state in
                 guard let self, let session else { return }
                 self.apply(state: state, session: session)
