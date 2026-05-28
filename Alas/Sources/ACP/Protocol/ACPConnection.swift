@@ -52,6 +52,11 @@ final class ACPConnection: @unchecked Sendable {
                                              params: ACPSessionSetModelParams(sessionId: sessionId, modelId: modelId)))
     }
 
+    func setConfigOption(sessionId: String, configId: String, value: String) async throws {
+        _ = try await client.send(ACPRequest(method: "session/set_config_option",
+                                             params: ACPSessionSetConfigOptionParams(sessionId: sessionId, configId: configId, value: value)))
+    }
+
     func prompt(sessionId: String, blocks: [ACPContentBlock]) async throws {
         _ = try await client.send(ACPRequest(method: "session/prompt",
                                              params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks)))
