@@ -13,7 +13,8 @@ struct ACPTabView: View {
                 state: state,
                 worktree: worktree,
                 manager: manager,
-                session: session
+                session: session,
+                transcript: session.transcript
             )
         } else {
             VStack {
@@ -35,6 +36,12 @@ private struct ACPSessionView: View {
     let worktree: Worktree
     let manager: ACPSessionManager
     @ObservedObject var session: ACPSession
+    /// Observed so the body re-evaluates when `pendingPermission`
+    /// arrives — `scopeKey(for:)` reads through this and the value
+    /// is passed down to `ACPMessageList`; otherwise the message
+    /// list gets a stale `""` scope and persisted allow/reject_always
+    /// decisions land under the wrong key.
+    @ObservedObject var transcript: ACPTranscript
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -66,7 +73,7 @@ private struct ACPSessionView: View {
             transcriptAndComposer
         }
         .task(id: sessionId) {
-            let freshlyCreated = manager.runners[sessionId] == nil && session.messages.isEmpty
+            let freshlyCreated = manager.runners[sessionId] == nil && session.transcript.messages.isEmpty
             await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
         }
         .focusable()
@@ -79,8 +86,8 @@ private struct ACPSessionView: View {
     /// Esc cancels the in-flight request. Idempotent — safe to press
     /// when nothing's streaming.
     private func handleEscape() {
-        guard session.streamingState == .streaming || session.streamingState == .sending
-              || session.streamingState == .awaitingPermission
+        guard session.transcript.streamingState == .streaming || session.transcript.streamingState == .sending
+              || session.transcript.streamingState == .awaitingPermission
         else { return }
         Task {
             if let runner = manager.runners[sessionId] {
@@ -97,7 +104,7 @@ private struct ACPSessionView: View {
         if case .needsSetup = session.setupState { return false }
         if session.lastError != nil { return false }
         if session.disconnected { return false }
-        return session.messages.isEmpty
+        return session.transcript.messages.isEmpty
     }
 
     private var transcriptAndComposer: some View {
@@ -109,6 +116,7 @@ private struct ACPSessionView: View {
             } else {
                 ACPMessageList(
                     session: session,
+                    transcript: session.transcript,
                     onOpenDiff: { relativePath in
                         state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
                     },
@@ -116,7 +124,7 @@ private struct ACPSessionView: View {
                     // lives) — otherwise the user's click can't resolve the
                     // pending permission request.
                     policy: manager.runners[sessionId]?.policy,
-                    scopeKey: scopeKey(for: session.pendingPermission)
+                    scopeKey: scopeKey(for: session.transcript.pendingPermission)
                 )
             }
 
@@ -135,8 +143,8 @@ private struct ACPSessionView: View {
                 // we don't want ⏎ to silently erase the user's
                 // unsent prompt.
                 guard session.attached, !session.disconnected,
-                      session.streamingState != .streaming,
-                      session.streamingState != .sending,
+                      session.transcript.streamingState != .streaming,
+                      session.transcript.streamingState != .sending,
                       let runner = manager.runners[sessionId] else { return false }
                 let draftRevision = session.composerDraftRevision
                 runner.send(text: text, attachments: attachments) { succeeded in
@@ -173,7 +181,7 @@ private struct ACPSessionView: View {
         await manager.detach(sessionId: sessionId)
         session.lastError = nil
         session.setupState = .checking
-        let freshlyCreated = session.messages.isEmpty
+        let freshlyCreated = session.transcript.messages.isEmpty
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
     }
 

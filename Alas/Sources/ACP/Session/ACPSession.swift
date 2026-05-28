@@ -21,18 +21,6 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var autoRunEnabled: Bool = false
     @Published var composerDraft: ACPComposerDraft = .empty
     @Published private(set) var composerDraftRevision: Int = 0
-    var messages: [ACPMessage] {
-        get { transcript.messages }
-        set { transcript.messages = newValue }
-    }
-    var pendingPermission: PendingPermission? {
-        get { transcript.pendingPermission }
-        set { transcript.pendingPermission = newValue }
-    }
-    var streamingState: StreamingState {
-        get { transcript.streamingState }
-        set { transcript.streamingState = newValue }
-    }
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
     @Published var disconnected: Bool = false
@@ -53,14 +41,6 @@ final class ACPSession: ObservableObject, Identifiable {
     /// as the persistence key in `ACPSessionStore`.
     /// Not persisted — recreated on each `attach()` if missing.
     var remoteSessionId: String?
-
-    /// Forwards transcript publishes to ACPSession.objectWillChange while
-    /// the messages/streamingState/pendingPermission forwarders are in
-    /// place. Without it, views that observe ACPSession but read through
-    /// the forwarders never get notified of transcript-only updates.
-    /// Removed when the forwarders are removed and all consumers observe
-    /// ACPTranscript directly.
-    private var transcriptBridge: AnyCancellable?
 
     func replaceComposerDraft(_ draft: ACPComposerDraft) {
         composerDraft = draft
@@ -84,13 +64,10 @@ final class ACPSession: ObservableObject, Identifiable {
         self.worktreeId = worktreeId
         self.title = title
         self.createdAt = createdAt
-        self.transcriptBridge = transcript.objectWillChange.sink { [weak self] in
-            self?.objectWillChange.send()
-        }
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
-        messages.append(.user(id: UUID(), text: text, attachments: attachments))
+        transcript.messages.append(.user(id: UUID(), text: text, attachments: attachments))
         if title == "" || title == "New session" {
             title = String(text.prefix(40))
         }
@@ -102,12 +79,12 @@ final class ACPSession: ObservableObject, Identifiable {
             append(text: text(of: block), into: { lastAgent() }, fallback: .agent(id: UUID(), text: ""))
         case .userMessageChunk(let block):
             // Agents rarely emit these; treat as informational.
-            messages.append(.systemNotice(id: UUID(), text: text(of: block)))
+            transcript.messages.append(.systemNotice(id: UUID(), text: text(of: block)))
         case .agentThoughtChunk(let block):
             append(text: text(of: block), into: { lastThought() }, fallback: .thought(id: UUID(), text: ""))
         case .toolCall(let payload):
             let full = payload.content.flatMap { Self.flatten($0) } ?? ""
-            messages.append(.toolCall(.init(
+            transcript.messages.append(.toolCall(.init(
                 toolCallId: payload.toolCallId,
                 title: payload.title,
                 kind: payload.kind,
@@ -126,12 +103,12 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         case .plan(let entries):
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
-            if let i = messages.lastIndex(where: { if case .plan = $0 { return true } else { return false } }) {
-                if case .plan(let existingId, _) = messages[i] {
-                    messages[i] = .plan(id: existingId, items)
+            if let i = transcript.messages.lastIndex(where: { if case .plan = $0 { return true } else { return false } }) {
+                if case .plan(let existingId, _) = transcript.messages[i] {
+                    transcript.messages[i] = .plan(id: existingId, items)
                 }
             } else {
-                messages.append(.plan(id: UUID(), items))
+                transcript.messages.append(.plan(id: UUID(), items))
             }
         case .availableModelsUpdate(let ms):
             availableModels = ms
@@ -149,11 +126,11 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func appendSystemNotice(_ text: String) {
-        messages.append(.systemNotice(id: UUID(), text: text))
+        transcript.messages.append(.systemNotice(id: UUID(), text: text))
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
-        messages.append(.fileEdit(id: UUID(), edit))
+        transcript.messages.append(.fileEdit(id: UUID(), edit))
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when
@@ -163,11 +140,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// persist them.
     func cancelInFlightToolCalls() -> [Int] {
         var changed: [Int] = []
-        for i in messages.indices {
-            if case .toolCall(var tc) = messages[i],
+        for i in transcript.messages.indices {
+            if case .toolCall(var tc) = transcript.messages[i],
                tc.status == "in_progress" || tc.status == "pending" {
                 tc.status = "canceled"
-                messages[i] = .toolCall(tc)
+                transcript.messages[i] = .toolCall(tc)
                 changed.append(i)
             }
         }
@@ -252,47 +229,47 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     private func lastAgent() -> Int? {
-        for i in stride(from: messages.count - 1, through: 0, by: -1) {
+        for i in stride(from: transcript.messages.count - 1, through: 0, by: -1) {
             // STOP on .user — every new user turn starts a fresh
             // agent reply. Without this the agent's response to a NEW
             // prompt gets appended to the previous turn's trailing
             // agent message, breaking the conversation order.
-            if case .user = messages[i] { return nil }
-            if case .agent = messages[i] { return i }
-            if case .toolCall = messages[i] { return nil }
-            if case .fileEdit = messages[i] { return nil }
+            if case .user = transcript.messages[i] { return nil }
+            if case .agent = transcript.messages[i] { return i }
+            if case .toolCall = transcript.messages[i] { return nil }
+            if case .fileEdit = transcript.messages[i] { return nil }
         }
         return nil
     }
     private func lastThought() -> Int? {
-        for i in stride(from: messages.count - 1, through: 0, by: -1) {
-            if case .user = messages[i] { return nil }
-            if case .thought = messages[i] { return i }
-            if case .agent = messages[i] { return nil }
-            if case .toolCall = messages[i] { return nil }
+        for i in stride(from: transcript.messages.count - 1, through: 0, by: -1) {
+            if case .user = transcript.messages[i] { return nil }
+            if case .thought = transcript.messages[i] { return i }
+            if case .agent = transcript.messages[i] { return nil }
+            if case .toolCall = transcript.messages[i] { return nil }
         }
         return nil
     }
     private func append(text addition: String, into locate: () -> Int?, fallback: ACPMessage) {
         if let i = locate() {
-            switch messages[i] {
-            case .agent(let id, let t):   messages[i] = .agent(id: id, text: t + addition)
-            case .thought(let id, let t): messages[i] = .thought(id: id, text: t + addition)
-            default: messages.append(fallback)
+            switch transcript.messages[i] {
+            case .agent(let id, let t):   transcript.messages[i] = .agent(id: id, text: t + addition)
+            case .thought(let id, let t): transcript.messages[i] = .thought(id: id, text: t + addition)
+            default: transcript.messages.append(fallback)
             }
         } else {
             switch fallback {
-            case .agent:   messages.append(.agent(id: UUID(), text: addition))
-            case .thought: messages.append(.thought(id: UUID(), text: addition))
-            default: messages.append(fallback)
+            case .agent:   transcript.messages.append(.agent(id: UUID(), text: addition))
+            case .thought: transcript.messages.append(.thought(id: UUID(), text: addition))
+            default: transcript.messages.append(fallback)
             }
         }
     }
     private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) {
-        for i in messages.indices {
-            if case .toolCall(var tc) = messages[i], tc.toolCallId == id {
+        for i in transcript.messages.indices {
+            if case .toolCall(var tc) = transcript.messages[i], tc.toolCallId == id {
                 mutate(&tc)
-                messages[i] = .toolCall(tc)
+                transcript.messages[i] = .toolCall(tc)
                 return
             }
         }

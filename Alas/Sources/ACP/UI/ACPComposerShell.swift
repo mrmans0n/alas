@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Floating glass pill composer. Wraps the AppKit-backed `ACPInputField`
 /// in the design's chrome: heavy blur, model + mode pickers on the right,
-/// animated send button that mirrors `session.streamingState`.
+/// animated send button that mirrors `session.transcript.streamingState`.
 struct ACPComposer: View {
     @ObservedObject var session: ACPSession
     let manager: ACPSessionManager
@@ -169,7 +169,7 @@ struct ACPComposer: View {
 
     private var autoRunDisabled: Bool {
         if session.chipState.autoRun == .ignored { return true }
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending: return true
         default: return !session.attached || session.disconnected
         }
@@ -179,8 +179,8 @@ struct ACPComposer: View {
         if session.chipState.autoRun == .ignored {
             return "Auto-run has no effect — this agent doesn't request permissions"
         }
-        if case .streaming = session.streamingState { return "Auto-run cannot be changed while streaming" }
-        if case .sending = session.streamingState { return "Auto-run cannot be changed while sending" }
+        if case .streaming = session.transcript.streamingState { return "Auto-run cannot be changed while streaming" }
+        if case .sending = session.transcript.streamingState { return "Auto-run cannot be changed while sending" }
         if !session.attached { return "Agent connecting…" }
         if session.disconnected { return "Agent disconnected" }
         return session.autoRunEnabled
@@ -329,14 +329,14 @@ struct ACPComposer: View {
     /// here — those states swap the button to the cancel mode, which IS
     /// clickable.
     private var sendDisabled: Bool {
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending: return false
         default: return !session.attached || session.disconnected
         }
     }
 
     private var sendHelpText: String {
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending: return "Stop streaming"
         default:
             if session.disconnected { return "Agent disconnected" }
@@ -347,14 +347,14 @@ struct ACPComposer: View {
 
     /// Click handler: send while idle, stop while streaming.
     private func sendButtonTapped() {
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending:
             let sid = session.id
             Task { @MainActor in
                 if let runner = manager.runners[sid] {
                     await runner.userCancel()
                 } else {
-                    session.streamingState = .idle
+                    session.transcript.streamingState = .idle
                 }
             }
         default:
@@ -367,7 +367,7 @@ struct ACPComposer: View {
     /// border (the "no input" look), ready = solid accent + accent
     /// border + dark icon, stop = solid del + dark icon.
     private var buttonBg: Color {
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending: return theme.color("del")
         default:
             return sendDisabled
@@ -376,14 +376,14 @@ struct ACPComposer: View {
         }
     }
     private var buttonFg: Color {
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending: return theme.color("bg-0")
         default:
             return sendDisabled ? theme.color("fg-dim") : theme.color("bg-0")
         }
     }
     private var buttonBorder: Color {
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending: return theme.color("del").opacity(0.7)
         default:
             return sendDisabled
@@ -392,7 +392,7 @@ struct ACPComposer: View {
         }
     }
     private var buttonGlyph: String {
-        switch session.streamingState {
+        switch session.transcript.streamingState {
         case .streaming, .sending: return "stop.fill"
         default:                   return "arrow.up"
         }
