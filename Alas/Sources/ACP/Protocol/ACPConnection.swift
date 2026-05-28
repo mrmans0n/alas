@@ -52,6 +52,18 @@ final class ACPConnection: @unchecked Sendable {
                                              params: ACPSessionSetModelParams(sessionId: sessionId, modelId: modelId)))
     }
 
+    /// Sends a config-option change and returns the agent's refreshed
+    /// `configOptions` list. The agent may return empty (older/non-compliant
+    /// implementations) in which case the caller's optimistic local update
+    /// stands; on a full echo the caller should overwrite local state so
+    /// dependent options stay in sync.
+    func setConfigOption(sessionId: String, configId: String, value: String) async throws -> [ACPConfigOption] {
+        let resp = try await client.send(ACPRequest(method: "session/set_config_option",
+                                                    params: ACPSessionSetConfigOptionParams(sessionId: sessionId, configId: configId, value: value)))
+        let result = try? JSONDecoder().decode(ACPSessionSetConfigOptionResult.self, from: resp.body)
+        return result?.configOptions ?? []
+    }
+
     func prompt(sessionId: String, blocks: [ACPContentBlock]) async throws {
         _ = try await client.send(ACPRequest(method: "session/prompt",
                                              params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks)))

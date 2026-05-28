@@ -205,9 +205,10 @@ struct ACPSessionNewResult: Codable, Equatable {
     let currentModel: String?
     let currentMode: String?
     let promptSuggestions: [ACPPromptSuggestion]
+    let configOptions: [ACPConfigOption]
 
     enum CodingKeys: String, CodingKey {
-        case sessionId, availableModels, availableModes, currentModel, currentMode, promptSuggestions
+        case sessionId, availableModels, availableModes, currentModel, currentMode, promptSuggestions, configOptions
         case models, modes
     }
 
@@ -222,6 +223,7 @@ struct ACPSessionNewResult: Codable, Equatable {
         try c.encodeIfPresent(currentModel, forKey: .currentModel)
         try c.encodeIfPresent(currentMode, forKey: .currentMode)
         try c.encode(promptSuggestions, forKey: .promptSuggestions)
+        try c.encode(configOptions, forKey: .configOptions)
     }
 
     init(
@@ -230,7 +232,8 @@ struct ACPSessionNewResult: Codable, Equatable {
         availableModes: [ACPModeInfo],
         currentModel: String?,
         currentMode: String?,
-        promptSuggestions: [ACPPromptSuggestion]
+        promptSuggestions: [ACPPromptSuggestion],
+        configOptions: [ACPConfigOption] = []
     ) {
         self.sessionId = sessionId
         self.availableModels = availableModels
@@ -238,6 +241,7 @@ struct ACPSessionNewResult: Codable, Equatable {
         self.currentModel = currentModel
         self.currentMode = currentMode
         self.promptSuggestions = promptSuggestions
+        self.configOptions = configOptions
     }
 
     init(from decoder: Decoder) throws {
@@ -264,6 +268,7 @@ struct ACPSessionNewResult: Codable, Equatable {
         }
 
         promptSuggestions = (try? c.decode([ACPPromptSuggestion].self, forKey: .promptSuggestions)) ?? []
+        configOptions = (try? c.decode([ACPConfigOption].self, forKey: .configOptions)) ?? []
     }
 }
 

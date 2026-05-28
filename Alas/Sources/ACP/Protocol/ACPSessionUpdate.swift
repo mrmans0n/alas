@@ -14,11 +14,14 @@ enum ACPSessionUpdate: Codable, Equatable {
     case plan([ACPPlanEntry])
     case availableModelsUpdate([ACPModelInfo])
     case currentModeUpdate(modeId: String)
+    case currentModelUpdate(modelId: String)
+    case sessionConfigOptionsUpdate([ACPConfigOption])
     case availableCommandsUpdate([ACPPromptSuggestion])
     case unknown(String)
 
     private enum Keys: String, CodingKey {
-        case sessionUpdate, content, availableModels, modeId, entries, availableCommands
+        case sessionUpdate, content, availableModels, modeId, modelId,
+             entries, availableCommands, configOptions
     }
 
     init(from decoder: Decoder) throws {
@@ -38,6 +41,13 @@ enum ACPSessionUpdate: Codable, Equatable {
             self = .availableModelsUpdate(try c.decode([ACPModelInfo].self, forKey: .availableModels))
         case "current_mode_update":
             self = .currentModeUpdate(modeId: try c.decode(String.self, forKey: .modeId))
+        case "current_model_update":
+            self = .currentModelUpdate(modelId: try c.decode(String.self, forKey: .modelId))
+        // Spec uses `config_option_update`; some drafts/implementations
+        // emit `session_config_options_update`. Accept both.
+        case "config_option_update", "session_config_options_update":
+            self = .sessionConfigOptionsUpdate(
+                try c.decode([ACPConfigOption].self, forKey: .configOptions))
         case "available_commands_update":
             // Wire format: `{ availableCommands: [{ name, description, input }] }`.
             // We don't surface `input` (argument hints) in v1.
@@ -75,6 +85,12 @@ enum ACPSessionUpdate: Codable, Equatable {
         try c.encode(m, forKey: .availableModels)
         case .currentModeUpdate(let m):     try c.encode("current_mode_update", forKey: .sessionUpdate)
         try c.encode(m, forKey: .modeId)
+        case .currentModelUpdate(let m):
+            try c.encode("current_model_update", forKey: .sessionUpdate)
+            try c.encode(m, forKey: .modelId)
+        case .sessionConfigOptionsUpdate(let opts):
+            try c.encode("session_config_options_update", forKey: .sessionUpdate)
+            try c.encode(opts, forKey: .configOptions)
         case .availableCommandsUpdate: break // not produced by us
         case .toolCall, .toolCallUpdate, .unknown: break
         }

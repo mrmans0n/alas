@@ -1,0 +1,22 @@
+{
+  "jsonrpc":"2.0","id":2,
+  "result":{
+    "sessionId":"sess-abc",
+    "availableModels":[{"id":"opus","name":"Claude Opus"}],
+    "availableModes":[{"id":"plan","name":"Plan"},{"id":"default","name":"Default"}],
+    "currentModel":"opus",
+    "currentMode":"default",
+    "promptSuggestions":[],
+    "configOptions":[
+      {
+        "id":"effort","name":"Effort","type":"select",
+        "category":"ThoughtLevel","currentValue":"medium",
+        "options":[
+          {"id":"low","name":"Low"},
+          {"id":"medium","name":"Medium"},
+          {"id":"high","name":"High"}
+        ]
+      }
+    ]
+  }
+}

@@ -40,6 +40,34 @@ struct ACPSessionUpdateTests {
         } else { Issue.record("expected availableModelsUpdate") }
     }
 
+    @Test("decodes current_model_update")
+    func currentModel() throws {
+        let env = try decode("session-update-current-model")
+        if case .currentModelUpdate(let modelId) = env.params!.update {
+            #expect(modelId == "opus")
+        } else { Issue.record("expected currentModelUpdate") }
+    }
+
+    @Test("decodes session_config_options_update")
+    func configOptions() throws {
+        let env = try decode("session-update-config-options")
+        if case .sessionConfigOptionsUpdate(let opts) = env.params!.update {
+            #expect(opts.count == 1)
+            #expect(opts[0].id == "effort")
+            #expect(opts[0].currentValue == "high")
+        } else { Issue.record("expected sessionConfigOptionsUpdate") }
+    }
+
+    @Test("decodes config_option_update (canonical spec discriminator)")
+    func configOptionCanonical() throws {
+        let env = try decode("session-update-config-option")
+        if case .sessionConfigOptionsUpdate(let opts) = env.params!.update {
+            #expect(opts.count == 1)
+            #expect(opts[0].id == "effort")
+            #expect(opts[0].options.first?.id == "low")
+        } else { Issue.record("expected sessionConfigOptionsUpdate") }
+    }
+
     private func decode(_ name: String) throws -> JSONRPCEnvelope<ACPSessionUpdateParams> {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

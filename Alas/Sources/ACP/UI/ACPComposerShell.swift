@@ -57,10 +57,15 @@ struct ACPComposer: View {
                 hint
                 Spacer()
                 autoRunToggle
-                if !session.availableModes.isEmpty {
-                    modeChip
+                if let thinking = session.chipState.thinking {
+                    thinkingChip(thinking)
                 }
-                modelChip
+                if let mode = session.chipState.mode {
+                    modeChip(mode)
+                }
+                if let models = session.chipState.models {
+                    modelChip(models)
+                }
                 sendButton
             }
             .padding(.horizontal, 2)
@@ -154,7 +159,16 @@ struct ACPComposer: View {
             )
         }
         .buttonStyle(.plain)
-        .help(session.autoRunEnabled ? "Auto-run is ON — agent runs tools without asking" : "Click to skip permission prompts")
+        .help(autoRunHelpText)
+    }
+
+    private var autoRunHelpText: String {
+        if session.chipState.autoRun == .ignored {
+            return "Auto-run has no effect — this agent doesn't request permissions"
+        }
+        return session.autoRunEnabled
+            ? "Auto-run is ON — agent runs tools without asking"
+            : "Click to skip permission prompts"
     }
 
     /// Mirrors the design's outlined-pill treatment: dark accent-tinted
@@ -176,70 +190,99 @@ struct ACPComposer: View {
             : theme.color("fg-muted")
     }
 
-    // MARK: - Mode (plan / agent / etc.)
+    // MARK: - Chip builders driven by ACPChipState
 
-    private var modeItems: [ACPSelectChip.Item] {
-        session.availableModes.map { ACPSelectChip.Item(id: $0.id, name: $0.name, description: $0.description) }
-    }
-    private var modeLabel: String {
-        session.availableModes.first(where: { $0.id == session.currentMode })?.name ?? "Mode"
-    }
-    private func selectMode(_ item: ACPSelectChip.Item) {
-        session.currentMode = item.id
-        manager.persist(session)
-        let sid = session.id
-        let remoteId = session.remoteSessionId ?? sid
-        let mid = item.id
-        Task { @MainActor in
-            if let runner = manager.runners[sid] {
-                try? await runner.connection.setMode(sessionId: remoteId, modeId: mid)
-            }
-        }
+    private func modeChip(_ spec: ChipSpec) -> some View {
+        chip(spec: spec,
+             label: chipLabel(prefix: "Mode", spec: spec),
+             placeholder: "Mode",
+             accent: theme.color("accent"))
     }
 
-    private var modeChip: some View {
+    private func thinkingChip(_ spec: ChipSpec) -> some View {
+        chip(spec: spec,
+             label: chipLabel(prefix: "Thinking", spec: spec),
+             placeholder: "Thinking",
+             accent: theme.color("warn"))
+    }
+
+    private func modelChip(_ spec: ChipSpec) -> some View {
+        chip(spec: spec,
+             label: spec.options.first(where: { $0.id == spec.currentId })?.name
+                    ?? spec.currentId
+                    ?? "Model",
+             placeholder: "Model",
+             accent: theme.color("syntax-keyword"))
+    }
+
+    private func chip(spec: ChipSpec,
+                      label: String,
+                      placeholder: String,
+                      accent: Color) -> some View {
         ACPSelectChip(
-            label: modeLabel,
-            placeholder: "Mode",
-            accent: theme.color("accent"),
-            items: modeItems,
-            selectedId: session.currentMode,
-            onSelect: selectMode
+            label: label,
+            placeholder: placeholder,
+            accent: accent,
+            items: spec.options.map {
+                ACPSelectChip.Item(id: $0.id, name: $0.name, description: $0.description)
+            },
+            selectedId: spec.currentId,
+            onSelect: { item in apply(spec: spec, selectedId: item.id) }
         )
     }
 
-    // MARK: - Model
+    /// "Mode: Plan" when a value is selected, "Mode" while pending.
+    private func chipLabel(prefix: String, spec: ChipSpec) -> String {
+        if let id = spec.currentId,
+           let item = spec.options.first(where: { $0.id == id }) {
+            return "\(prefix): \(item.name)"
+        }
+        return prefix
+    }
 
-    private var modelItems: [ACPSelectChip.Item] {
-        session.availableModels.map { ACPSelectChip.Item(id: $0.id, name: $0.name, description: $0.description) }
-    }
-    private var modelLabel: String {
-        session.availableModels.first(where: { $0.id == session.currentModel })?.name
-            ?? session.currentModel
-            ?? "Model"
-    }
-    private func selectModel(_ item: ACPSelectChip.Item) {
-        session.currentModel = item.id
-        manager.persist(session)
+    /// Dispatch a chip selection to the right RPC based on where the spec
+    /// was sourced from. The composer doesn't need to know about agent
+    /// differences — `ChipSpec.source` carries the dispatch info.
+    private func apply(spec: ChipSpec, selectedId: String) {
         let sid = session.id
         let remoteId = session.remoteSessionId ?? sid
-        let mid = item.id
-        Task { @MainActor in
-            if let runner = manager.runners[sid] {
-                try? await runner.connection.setModel(sessionId: remoteId, modelId: mid)
+        switch spec.source {
+        case .mode:
+            session.currentMode = selectedId
+        case .model:
+            session.currentModel = selectedId
+        case .configOption(let id):
+            if let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }) {
+                let old = session.availableConfigOptions[idx]
+                session.availableConfigOptions[idx] = ACPConfigOption(
+                    id: old.id, name: old.name, type: old.type,
+                    category: old.category, currentValue: selectedId,
+                    options: old.options)
             }
         }
-    }
+        manager.persist(session)
 
-    private var modelChip: some View {
-        ACPSelectChip(
-            label: modelLabel,
-            placeholder: "Model",
-            accent: theme.color("syntax-keyword"),
-            items: modelItems,
-            selectedId: session.currentModel,
-            onSelect: selectModel
-        )
+        Task { @MainActor in
+            guard let runner = manager.runners[sid] else { return }
+            switch spec.source {
+            case .mode:
+                try? await runner.connection.setMode(sessionId: remoteId, modeId: selectedId)
+            case .model:
+                try? await runner.connection.setModel(sessionId: remoteId, modelId: selectedId)
+            case .configOption(let id):
+                // The agent's response carries the refreshed configOptions
+                // (including dependent updates — e.g. switching reasoning
+                // effort can reshape available model variants). Overwrite
+                // the optimistic local update so dependent chips stay in
+                // sync. Empty response → keep the optimistic state.
+                if let updated = try? await runner.connection.setConfigOption(
+                    sessionId: remoteId, configId: id, value: selectedId),
+                   !updated.isEmpty {
+                    session.availableConfigOptions = updated
+                    manager.persist(session)
+                }
+            }
+        }
     }
 
     // MARK: - Send button
