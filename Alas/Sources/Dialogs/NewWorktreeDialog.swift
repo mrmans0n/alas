@@ -12,7 +12,8 @@ struct NewWorktreeDialog: View {
     @State private var base: String = ""
     @State private var branch: String = ""
     @State private var runStartup: Bool = true
-    @State private var openTerminal: Bool = true
+    @State private var openAfterCreate: Bool = true
+    @State private var launchMode: AppConfig.LauncherMode = .terminal
     @State private var launchAgentId: String = "none"
     @State private var branches: [String] = []
     @State private var isLoadingBranches = false
@@ -61,19 +62,19 @@ struct NewWorktreeDialog: View {
                     Text("Run startup script after create").font(.system(size: 12))
                         .foregroundColor(theme.color("fg"))
                 }
-                HStack(spacing: 10) {
-                    AlasToggle(on: $openTerminal)
-                    Text("Open in new terminal pane").font(.system(size: 12))
-                        .foregroundColor(theme.color("fg"))
-                }
                 if let validationMessage = branchValidationMessage, branch != state.config.worktrees.branchPrefix {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
-                if !state.agentRegistry.enabled().isEmpty {
+                DialogField(label: "Open after create") {
+                    launchSurfaceSegmented
+                }
+                if openAfterCreate, !pickerAgents.isEmpty {
                     DialogField(label: "Launch agent") {
                         Picker("", selection: $launchAgentId) {
-                            Text("None").tag("none")
-                            ForEach(state.agentRegistry.enabled()) { agent in
+                            if launchMode == .terminal {
+                                Text("None").tag("none")
+                            }
+                            ForEach(pickerAgents) { agent in
                                 Text(agent.displayName).tag(agent.id)
                             }
                         }
@@ -93,7 +94,9 @@ struct NewWorktreeDialog: View {
             confirmEnabled: Self.canCreate(
                 projectsEmpty: state.projects.isEmpty,
                 branchEmpty: branch.isEmpty,
-                branchValidation: branchValidationMessage
+                branchValidation: branchValidationMessage,
+                requiresAcpAgent: openAfterCreate && launchMode == .acp,
+                hasAcpAgent: launchAgentId != "none"
             )
         )
         .onAppear {
@@ -110,11 +113,28 @@ struct NewWorktreeDialog: View {
             if branch.isEmpty {
                 branch = state.config.worktrees.branchPrefix
             }
-            launchAgentId = effectiveAutoLaunchAgent?.id ?? "none"
+            launchMode = state.config.agents.defaultLauncherMode
+            if launchMode == .acp, !acpSegmentEnabled {
+                // Fall back to terminal if the default surface is ACP
+                // but no ACP-capable agent is enabled.
+                launchMode = .terminal
+            }
+            openAfterCreate = true
+            let initialAgent = effectiveAutoLaunchAgent?.id ?? "none"
+            launchAgentId = Self.resolvedLaunchAgent(
+                initialAgentId: initialAgent,
+                mode: launchMode,
+                enabledAgents: state.agentRegistry.enabled()
+            )
             loadBranchesForSelectedProject()
         }
         .onChange(of: projectId) { _, _ in
-            launchAgentId = effectiveAutoLaunchAgent?.id ?? "none"
+            let initialAgent = effectiveAutoLaunchAgent?.id ?? "none"
+            launchAgentId = Self.resolvedLaunchAgent(
+                initialAgentId: initialAgent,
+                mode: launchMode,
+                enabledAgents: state.agentRegistry.enabled()
+            )
             loadBranchesForSelectedProject()
         }
         .onChange(of: branch) { _, _ in
@@ -212,10 +232,22 @@ struct NewWorktreeDialog: View {
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         let dest = URL(fileURLWithPath: renderedPath)
-        let surface: WorktreeLaunchSurface = {
-            if !openTerminal { return .none }
-            return .terminal(agentId: launchAgentId == "none" ? nil : launchAgentId)
-        }()
+        let surface: WorktreeLaunchSurface
+        if !openAfterCreate {
+            surface = .none
+        } else {
+            switch launchMode {
+            case .terminal:
+                surface = .terminal(agentId: launchAgentId == "none" ? nil : launchAgentId)
+            case .acp:
+                guard launchAgentId != "none" else {
+                    // Defensive: confirm button should already be disabled.
+                    createErrorMessage = "Pick an ACP-capable agent for the chat session."
+                    return
+                }
+                surface = .acp(agentId: launchAgentId)
+            }
+        }
         let id = state.createWorktree(
             projectId: project.id,
             base: base,
@@ -233,12 +265,26 @@ struct NewWorktreeDialog: View {
     }
 
     private func submitCreate() {
-        guard Self.canCreate(projectsEmpty: state.projects.isEmpty, branchEmpty: branch.isEmpty, branchValidation: branchValidationMessage) else { return }
+        guard Self.canCreate(
+            projectsEmpty: state.projects.isEmpty,
+            branchEmpty: branch.isEmpty,
+            branchValidation: branchValidationMessage,
+            requiresAcpAgent: openAfterCreate && launchMode == .acp,
+            hasAcpAgent: launchAgentId != "none"
+        ) else { return }
         create()
     }
 
-    nonisolated static func canCreate(projectsEmpty: Bool, branchEmpty: Bool, branchValidation: String? = nil) -> Bool {
-        !projectsEmpty && !branchEmpty && branchValidation == nil
+    nonisolated static func canCreate(
+        projectsEmpty: Bool,
+        branchEmpty: Bool,
+        branchValidation: String? = nil,
+        requiresAcpAgent: Bool = false,
+        hasAcpAgent: Bool = true
+    ) -> Bool {
+        guard !projectsEmpty, !branchEmpty, branchValidation == nil else { return false }
+        if requiresAcpAgent, !hasAcpAgent { return false }
+        return true
     }
 
     nonisolated static func resolvedPresetProject(
@@ -267,6 +313,107 @@ struct NewWorktreeDialog: View {
             return preferred
         }
         return availableBranches.first ?? configuredDefault
+    }
+
+    // MARK: - Launch surface UI
+
+    private var pickerAgents: [AgentDefinition] {
+        let enabled = state.agentRegistry.enabled()
+        switch launchMode {
+        case .terminal: return enabled
+        case .acp:      return Self.acpCapableAgents(from: enabled)
+        }
+    }
+
+    private var acpSegmentEnabled: Bool {
+        Self.acpSegmentEnabled(enabledAgents: state.agentRegistry.enabled())
+    }
+
+    private var launchSurfaceSegmented: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 2) {
+                segment(
+                    isSelected: !openAfterCreate,
+                    icon: "circle.slash",
+                    label: "No tab",
+                    isEnabled: true
+                ) {
+                    openAfterCreate = false
+                }
+                segment(
+                    isSelected: openAfterCreate && launchMode == .terminal,
+                    icon: "terminal",
+                    label: "Terminal",
+                    isEnabled: true
+                ) {
+                    openAfterCreate = true
+                    launchMode = .terminal
+                    launchAgentId = Self.resolvedLaunchAgent(
+                        initialAgentId: launchAgentId,
+                        mode: .terminal,
+                        enabledAgents: state.agentRegistry.enabled()
+                    )
+                }
+                segment(
+                    isSelected: openAfterCreate && launchMode == .acp,
+                    icon: "sparkle",
+                    label: "ACP chat",
+                    isEnabled: acpSegmentEnabled
+                ) {
+                    openAfterCreate = true
+                    launchMode = .acp
+                    launchAgentId = Self.resolvedLaunchAgent(
+                        initialAgentId: launchAgentId,
+                        mode: .acp,
+                        enabledAgents: state.agentRegistry.enabled()
+                    )
+                }
+            }
+            .padding(2)
+            .background(theme.color("seg-container-bg"))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func segment(
+        isSelected: Bool,
+        icon: String,
+        label: String,
+        isEnabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Icon(name: icon, size: 11,
+                     color: isSelected ? theme.color("fg") : theme.color("fg-muted"))
+                Text(label)
+                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+                    .foregroundColor(isSelected ? theme.color("fg") : theme.color("fg-muted"))
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(
+                ZStack {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 4).fill(theme.color("bg-3"))
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.white.opacity(0.04), lineWidth: 1)
+                            .blendMode(.plusLighter)
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .help(isEnabled ? "" : "Enable an ACP-capable agent in Settings → Agents.")
     }
 
     // MARK: - Launch surface helpers

@@ -110,6 +110,24 @@ struct NewWorktreeDialogTests {
         #expect(NewWorktreeDialog.canCreate(projectsEmpty: false, branchEmpty: false))
     }
 
+    @Test func canCreateBlockedByAcpModeWithoutAgent() {
+        #expect(!NewWorktreeDialog.canCreate(
+            projectsEmpty: false,
+            branchEmpty: false,
+            requiresAcpAgent: true,
+            hasAcpAgent: false
+        ))
+    }
+
+    @Test func canCreateAllowsAcpModeWithAgent() {
+        #expect(NewWorktreeDialog.canCreate(
+            projectsEmpty: false,
+            branchEmpty: false,
+            requiresAcpAgent: true,
+            hasAcpAgent: true
+        ))
+    }
+
     private static func project(id: String) -> ProjectConfig {
         ProjectConfig(
             id: id,
