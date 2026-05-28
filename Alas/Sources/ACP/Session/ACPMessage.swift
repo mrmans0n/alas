@@ -1,13 +1,27 @@
 import Foundation
 
 enum ACPMessage: Equatable {
-    case user(text: String, attachments: [Attachment])
-    case agent(text: String)
-    case thought(text: String)
+    case user(id: UUID, text: String, attachments: [Attachment])
+    case agent(id: UUID, text: String)
+    case thought(id: UUID, text: String)
     case toolCall(ToolCall)
-    case fileEdit(FileEdit)
-    case plan([PlanItem])
-    case systemNotice(text: String)
+    case fileEdit(id: UUID, FileEdit)
+    case plan(id: UUID, [PlanItem])
+    case systemNotice(id: UUID, text: String)
+
+    var stableId: String {
+        switch self {
+        case .user(let id, _, _),
+             .agent(let id, _),
+             .thought(let id, _),
+             .fileEdit(let id, _),
+             .plan(let id, _),
+             .systemNotice(let id, _):
+            return id.uuidString
+        case .toolCall(let tc):
+            return "tc-\(tc.toolCallId)"
+        }
+    }
 
     var kind: String {
         switch self {
@@ -102,13 +116,13 @@ enum ACPMessageCodec {
 
     static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
-        case .user(let text, let atts): return try encoder.encode(UserPayload(text: text, attachments: atts))
-        case .agent(let text):           return try encoder.encode(TextPayload(text: text))
-        case .thought(let text):         return try encoder.encode(TextPayload(text: text))
-        case .toolCall(let tc):          return try encoder.encode(tc)
-        case .fileEdit(let fe):          return try encoder.encode(fe)
-        case .plan(let items):           return try encoder.encode(PlanPayload(items: items))
-        case .systemNotice(let text):    return try encoder.encode(TextPayload(text: text))
+        case .user(_, let text, let atts): return try encoder.encode(UserPayload(text: text, attachments: atts))
+        case .agent(_, let text):           return try encoder.encode(TextPayload(text: text))
+        case .thought(_, let text):         return try encoder.encode(TextPayload(text: text))
+        case .toolCall(let tc):             return try encoder.encode(tc)
+        case .fileEdit(_, let fe):          return try encoder.encode(fe)
+        case .plan(_, let items):           return try encoder.encode(PlanPayload(items: items))
+        case .systemNotice(_, let text):    return try encoder.encode(TextPayload(text: text))
         }
     }
 
@@ -116,21 +130,21 @@ enum ACPMessageCodec {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
-            return .user(text: p.text, attachments: p.attachments)
+            return .user(id: UUID(), text: p.text, attachments: p.attachments)
         case "agent":
-            return .agent(text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
+            return .agent(id: UUID(), text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
         case "thought":
-            return .thought(text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
+            return .thought(id: UUID(), text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
         case "tool_call":
             return .toolCall(try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload))
         case "file_edit":
-            return .fileEdit(try JSONDecoder().decode(ACPMessage.FileEdit.self, from: payload))
+            return .fileEdit(id: UUID(), try JSONDecoder().decode(ACPMessage.FileEdit.self, from: payload))
         case "plan":
-            return .plan(try JSONDecoder().decode(PlanPayload.self, from: payload).items)
+            return .plan(id: UUID(), try JSONDecoder().decode(PlanPayload.self, from: payload).items)
         case "system":
-            return .systemNotice(text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
+            return .systemNotice(id: UUID(), text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
         default:
-            return .systemNotice(text: "(unknown message kind: \(kind))")
+            return .systemNotice(id: UUID(), text: "(unknown message kind: \(kind))")
         }
     }
 
