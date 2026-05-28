@@ -34,7 +34,9 @@ struct CommitTabView: View {
                 CommitHeaderView(details: details, expanded: $headerExpanded)
                 splitBody(details: details)
             } else if loadingDetails {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                Spinner()
+                    .frame(width: 20, height: 20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let detailsError {
                 VStack(spacing: 8) {
                     Text("Could not load commit \(String(sha.prefix(7)))")

@@ -88,7 +88,7 @@ private struct PlanRow: View {
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(theme.color("add"))
             case "in_progress":
-                Spinner()
+                Spinner(lineWidth: 1.5, duration: 0.7)
                     .frame(width: 9, height: 9)
             default:
                 Circle()
@@ -105,18 +105,5 @@ private struct PlanRow: View {
         case "in_progress": return theme.color("accent")
         default:            return theme.color("line")
         }
-    }
-}
-
-private struct Spinner: View {
-    @State private var angle: Double = 0
-    @Environment(\.theme) private var theme
-    var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.75)
-            .stroke(theme.color("accent"), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-            .rotationEffect(.degrees(angle))
-            .animation(.linear(duration: 0.7).repeatForever(autoreverses: false), value: angle)
-            .onAppear { angle = 360 }
     }
 }

@@ -76,7 +76,7 @@ struct EditorLSPStatusBadge: View {
         case .ready:
             Circle().fill(theme.color("add")).frame(width: 7, height: 7).accessibilityHidden(true)
         case .loading:
-            ProgressView().controlSize(.mini).frame(width: 9, height: 9).accessibilityHidden(true)
+            Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 9, height: 9).accessibilityHidden(true)
         case .problem:
             Circle().fill(theme.color("warn")).frame(width: 7, height: 7).accessibilityHidden(true)
         case .noLanguage:

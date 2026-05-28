@@ -36,7 +36,8 @@ struct DiffTabView: View {
     private var imageBody: some View {
         Group {
             if !imagePairLoaded {
-                ProgressView()
+                Spinner()
+                    .frame(width: 20, height: 20)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let pair = imagePair {
                 ImageDiffView(
@@ -91,7 +92,9 @@ struct DiffTabView: View {
             }
             ScrollView(.vertical) {
                 if !loaded {
-                    ProgressView().padding()
+                    Spinner()
+                        .frame(width: 16, height: 16)
+                        .padding()
                 } else if diff.hunks.isEmpty {
                     Text("No changes for \(relativePath)").foregroundColor(theme.color("fg-dim")).padding()
                 } else {

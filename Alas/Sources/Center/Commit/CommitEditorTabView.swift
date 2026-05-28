@@ -59,7 +59,9 @@ struct CommitEditorTabView: View {
                 )
                 splitBody(details: details)
             } else if loadingDetails {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                Spinner()
+                    .frame(width: 20, height: 20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error {
                 VStack(spacing: 8) {
                     Text("Could not load commit \(String(tabState.currentSha.prefix(7)))")

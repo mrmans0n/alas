@@ -51,7 +51,8 @@ struct MergeConflictToolbar: View {
             Button(action: onAskAgentResolve) {
                 HStack(spacing: 4) {
                     if agentBusy {
-                        ProgressView().controlSize(.small)
+                        Spinner(lineWidth: 1.5, duration: 0.7)
+                            .frame(width: 12, height: 12)
                     } else {
                         Image(systemName: "sparkles")
                     }

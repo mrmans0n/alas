@@ -21,7 +21,8 @@ struct ImageDiffDifferenceView: View {
                     .interpolation(.none)
                     .aspectRatio(contentMode: .fit)
             } else if computing {
-                ProgressView()
+                Spinner()
+                    .frame(width: 20, height: 20)
             }
         }
         .clipped()

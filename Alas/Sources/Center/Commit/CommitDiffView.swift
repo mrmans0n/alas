@@ -66,7 +66,8 @@ struct CommitDiffView: View {
     private var imageBody: some View {
         Group {
             if !imagePairLoaded {
-                ProgressView()
+                Spinner()
+                    .frame(width: 20, height: 20)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let pair = imagePair {
                 ImageDiffView(
@@ -137,7 +138,9 @@ struct CommitDiffView: View {
     @ViewBuilder
     private var content: some View {
         if loading {
-            ProgressView().padding()
+            Spinner()
+                .frame(width: 16, height: 16)
+                .padding()
         } else if let error {
             Text("Could not load diff for \(path): \(error)")
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))

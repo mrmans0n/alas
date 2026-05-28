@@ -75,9 +75,7 @@ struct FilesTabView: View {
                                 visibilityPill(node)
                             }
                             if Self.showsInlineLoadingIndicator(for: node, open: open, canExpand: canExpand) {
-                                ProgressView()
-                                    .controlSize(.mini)
-                                    .scaleEffect(0.55)
+                                Spinner(lineWidth: 1.5, duration: 0.7)
                                     .frame(width: 12, height: 12)
                                     .accessibilityLabel("Loading \(node.name)")
                             }

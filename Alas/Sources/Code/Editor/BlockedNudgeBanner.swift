@@ -47,8 +47,8 @@ struct BlockedNudgeBanner: View {
             }
             Spacer()
             if remediationState == .running {
-                ProgressView()
-                    .controlSize(.small)
+                Spinner(lineWidth: 1.5, duration: 0.7)
+                    .frame(width: 12, height: 12)
             } else {
                 Button("Allow") {
                     Task { await remediate(nudge: nudge) }

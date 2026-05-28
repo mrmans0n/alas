@@ -24,7 +24,8 @@ struct ACPSetupNudgeBanner: View {
                 .textSelection(.enabled)
             Spacer()
             if status == .installing {
-                ProgressView().controlSize(.small).scaleEffect(0.7)
+                Spinner(lineWidth: 1.5, duration: 0.7)
+                    .frame(width: 12, height: 12)
             }
             if showsInstallButton {
                 Button(installButtonTitle) { runInstall() }
