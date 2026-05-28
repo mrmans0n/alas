@@ -9,10 +9,11 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
-    @Test("opens a fresh DB at schema version 1")
+    @Test("opens a fresh DB at schema version 2")
     func freshSchema() throws {
         let store = try tmpStore()
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
+        #expect(ACPSessionStore.targetSchemaVersion == 2)
     }
 
     @Test("re-opening doesn't double-apply migrations")

@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 1
+    static let targetSchemaVersion = 2
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -26,6 +26,7 @@ final class ACPSessionStore {
         let rows = try db.query("SELECT version FROM schema_version LIMIT 1")
         let current = Int((rows.first?["version"] as? Int64) ?? 0)
         if current < 1 { try migrate_to_v1() }
+        if current < 2 { try migrate_to_v2() }
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -70,6 +71,16 @@ final class ACPSessionStore {
           scope       TEXT NOT NULL,
           decided_at  INTEGER NOT NULL,
           PRIMARY KEY (session_id, scope_key)
+        )
+        """)
+    }
+
+    private func migrate_to_v2() throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS composer_drafts (
+          session_id  TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          payload     BLOB NOT NULL,
+          updated_at  INTEGER NOT NULL
         )
         """)
     }
@@ -132,6 +143,29 @@ extension ACPSessionStore {
 
     func deleteSession(id: String) throws {
         try db.exec("DELETE FROM sessions WHERE id = ?", bindings: [id])
+    }
+
+    func loadComposerDraft(sessionId: String) throws -> ACPComposerDraft? {
+        let rows = try db.query("""
+        SELECT payload FROM composer_drafts WHERE session_id = ?
+        """, bindings: [sessionId])
+        guard let payload = rows.first?["payload"] as? Data else { return nil }
+        return try JSONDecoder().decode(ACPComposerDraft.self, from: payload)
+    }
+
+    func upsertComposerDraft(sessionId: String, draft: ACPComposerDraft, updatedAt: Int64) throws {
+        let payload = try JSONEncoder().encode(draft)
+        try db.exec("""
+        INSERT INTO composer_drafts (session_id, payload, updated_at)
+        VALUES (?,?,?)
+        ON CONFLICT(session_id) DO UPDATE SET
+            payload = excluded.payload,
+            updated_at = excluded.updated_at
+        """, bindings: [sessionId, payload, updatedAt])
+    }
+
+    func deleteComposerDraft(sessionId: String) throws {
+        try db.exec("DELETE FROM composer_drafts WHERE session_id = ?", bindings: [sessionId])
     }
 
     func setArchived(id: String, archived: Bool) throws {
