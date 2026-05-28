@@ -275,6 +275,42 @@ struct TreeSitterHighlighterTests {
         #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
     }
 
+    @Test("diff fallback recognizes adjacent non-Git file headers after hunks")
+    func diffFallbackRecognizesAdjacentNonGitFileHeadersAfterHunks() throws {
+        let src = """
+        --- first.txt
+        +++ first.txt
+        @@ -1 +1 @@
+        -old
+        +new
+        --- second.txt
+        +++ second.txt
+        @@ -1 +1 @@
+        +++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "patch")
+
+        #expect(capture(for: "--- second.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ second.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
+    }
+
+    @Test("diff fallback colors common metadata lines")
+    func diffFallbackCommonMetadataLines() throws {
+        let src = """
+        diff -u a b
+        new file mode 100644
+        rename from old.txt
+        rename to new.txt
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "patch")
+
+        #expect(capture(for: "diff -u a b", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "new file mode 100644", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "rename from old.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "rename to new.txt", in: src, spans: spans) == .keyword)
+    }
+
     @Test("markup, CSS, and SQL fallback emit useful spans")
     func chatFallbackBasics() throws {
         let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "html")

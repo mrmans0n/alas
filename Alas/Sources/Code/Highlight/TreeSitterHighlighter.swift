@@ -166,9 +166,8 @@ private enum RegexFallbackHighlighter {
 
     private static func diffSpans(source: String) -> [HighlightSpan] {
         let nsSource = source as NSString
-        var spans: [HighlightSpan] = []
+        var lines: [(range: NSRange, text: String)] = []
         var offset = 0
-        var inHunk = false
         while offset < nsSource.length {
             let lineRange = nsSource.lineRange(for: NSRange(location: offset, length: 0))
             var contentRange = lineRange
@@ -177,28 +176,55 @@ private enum RegexFallbackHighlighter {
                 guard char == 10 || char == 13 else { break }
                 contentRange.length -= 1
             }
-            let text = nsSource.substring(with: contentRange)
-            if text.hasPrefix("diff --git ") {
+            lines.append((contentRange, nsSource.substring(with: contentRange)))
+            offset = lineRange.location + lineRange.length
+        }
+
+        var spans: [HighlightSpan] = []
+        var inHunk = false
+        for index in lines.indices {
+            let line = lines[index]
+            if line.text.hasPrefix("diff ") {
                 inHunk = false
             }
-            if let capture = diffCapture(for: text, inHunk: inHunk) {
-                spans.append(HighlightSpan(range: contentRange, capture: capture))
+            let previous = index > lines.startIndex ? lines[lines.index(before: index)].text : nil
+            let next = index < lines.index(before: lines.endIndex) ? lines[lines.index(after: index)].text : nil
+            let nextNextIndex = lines.index(index, offsetBy: 2, limitedBy: lines.index(before: lines.endIndex))
+            let nextNext = nextNextIndex.map { lines[$0].text }
+            if let capture = diffCapture(for: line.text, previous: previous, next: next, nextNext: nextNext, inHunk: inHunk) {
+                spans.append(HighlightSpan(range: line.range, capture: capture))
             }
-            if text.hasPrefix("@@"), text.contains("@@") {
+            if line.text.hasPrefix("@@"), line.text.contains("@@") {
                 inHunk = true
             }
-            offset = lineRange.location + lineRange.length
         }
         return spans
     }
 
-    private static func diffCapture(for line: String, inHunk: Bool) -> HighlightCapture? {
+    private static func diffCapture(for line: String, previous: String?, next: String?, nextNext: String?, inHunk: Bool) -> HighlightCapture? {
         if line.hasPrefix("@@"), line.contains("@@") { return .keyword }
-        if line.hasPrefix("diff --git ") || line.hasPrefix("index ") { return .keyword }
+        if isDiffMetadata(line) { return .keyword }
+        if line.hasPrefix("--- "), next?.hasPrefix("+++ ") == true, !inHunk || nextNext?.hasPrefix("@@") == true { return .keyword }
+        if line.hasPrefix("+++ "), previous?.hasPrefix("--- ") == true, !inHunk || next?.hasPrefix("@@") == true { return .keyword }
         if !inHunk, line.hasPrefix("--- ") || line.hasPrefix("+++ ") { return .keyword }
         if line.hasPrefix("+") { return .string }
         if line.hasPrefix("-") { return .comment }
         return nil
+    }
+
+    private static func isDiffMetadata(_ line: String) -> Bool {
+        [
+            "diff ",
+            "index ",
+            "new file mode ",
+            "deleted file mode ",
+            "similarity index ",
+            "dissimilarity index ",
+            "rename from ",
+            "rename to ",
+            "copy from ",
+            "copy to "
+        ].contains(where: { line.hasPrefix($0) })
     }
 
     private static func cssSpans(source: String) -> [HighlightSpan] {
