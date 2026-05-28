@@ -43,4 +43,46 @@ struct ACPAgentProfilesTests {
         #expect(p.thinkingSource == .heuristic)
         #expect(p.autoRun == .supported)
     }
+
+    @Test("heuristic picks known id (effort) when present")
+    func heuristicKnownId() {
+        let opts = [
+            ACPConfigOption(id: "effort", name: "Effort", currentValue: "medium",
+                            options: [ACPConfigOptionItem(id: "medium", name: "Medium")])
+        ]
+        #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == "effort")
+    }
+
+    @Test("heuristic picks ThoughtLevel-category option when no known id")
+    func heuristicByCategory() {
+        let opts = [
+            ACPConfigOption(id: "speed", name: "Speed", currentValue: "fast",
+                            options: [ACPConfigOptionItem(id: "fast", name: "Fast")]),
+            ACPConfigOption(id: "brainpower", name: "Brainpower", category: "ThoughtLevel",
+                            currentValue: "high",
+                            options: [ACPConfigOptionItem(id: "high", name: "High")])
+        ]
+        #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == "brainpower")
+    }
+
+    @Test("heuristic prefers known id over ThoughtLevel category")
+    func heuristicKnownIdWins() {
+        let opts = [
+            ACPConfigOption(id: "brainpower", name: "Brainpower", category: "ThoughtLevel",
+                            currentValue: "high",
+                            options: [ACPConfigOptionItem(id: "high", name: "High")]),
+            ACPConfigOption(id: "thinking", name: "Thinking", currentValue: "deep",
+                            options: [ACPConfigOptionItem(id: "deep", name: "Deep")])
+        ]
+        #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == "thinking")
+    }
+
+    @Test("heuristic returns nil when nothing matches")
+    func heuristicNoMatch() {
+        let opts = [
+            ACPConfigOption(id: "speed", name: "Speed", currentValue: "fast",
+                            options: [ACPConfigOptionItem(id: "fast", name: "Fast")])
+        ]
+        #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == nil)
+    }
 }

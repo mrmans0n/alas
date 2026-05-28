@@ -19,6 +19,13 @@ enum ACPAgentProfiles {
         case none                            // chip is hidden for this agent
     }
 
+    /// Whether the local Auto-run toggle has any effect on this agent. Used to
+    /// decide whether the tooltip should warn the user.
+    enum AutoRunSupport: Equatable {
+        case supported    // agent uses ACP requestPermission; toggle skips prompts
+        case ignored      // agent doesn't request permissions; toggle is a no-op
+    }
+
     static func routing(for agentId: String) -> Routing {
         switch agentId {
         case "claude":
@@ -55,11 +62,4 @@ enum ACPAgentProfiles {
         }
         return nil
     }
-}
-
-/// Whether the local Auto-run toggle has any effect on this agent. Used to
-/// decide whether the tooltip should warn the user.
-enum AutoRunSupport: Equatable {
-    case supported    // agent uses ACP requestPermission; toggle skips prompts
-    case ignored      // agent doesn't request permissions; toggle is a no-op
 }
