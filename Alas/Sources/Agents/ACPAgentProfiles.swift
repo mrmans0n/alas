@@ -13,7 +13,7 @@ enum ACPAgentProfiles {
 
     /// Where a chip's options come from.
     enum ChipSource: Equatable {
-        case modes                           // ACPSession.availableModes
+        case mode                            // ACPSession.availableModes
         case configOption(id: String)        // a specific configOption by id
         case heuristic                       // unknown-agent fallback (see below)
         case none                            // chip is hidden for this agent
@@ -29,23 +29,23 @@ enum ACPAgentProfiles {
     static func routing(for agentId: String) -> Routing {
         switch agentId {
         case "claude":
-            return .init(modeSource: .modes,
+            return .init(modeSource: .mode,
                          thinkingSource: .configOption(id: "effort"),
                          autoRun: .supported)
         case "codex":
-            return .init(modeSource: .modes,
+            return .init(modeSource: .mode,
                          thinkingSource: .configOption(id: "reasoning_effort"),
                          autoRun: .supported)
         case "opencode":
-            return .init(modeSource: .modes,
+            return .init(modeSource: .mode,
                          thinkingSource: .configOption(id: "effort"),
                          autoRun: .supported)
         case "pi":
             return .init(modeSource: .none,
-                         thinkingSource: .modes,
+                         thinkingSource: .mode,
                          autoRun: .ignored)
         default:
-            return .init(modeSource: .modes,
+            return .init(modeSource: .mode,
                          thinkingSource: .heuristic,
                          autoRun: .supported)
         }

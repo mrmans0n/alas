@@ -92,6 +92,6 @@ struct ACPSessionTests {
         let state = session.chipState
         #expect(state.mode == nil)
         #expect(state.thinking?.currentId == "high")
-        #expect(state.autoRun == ACPAgentProfiles.AutoRunSupport.ignored)
+        #expect(state.autoRun == .ignored)
     }
 }

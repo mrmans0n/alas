@@ -69,7 +69,7 @@ extension ACPChipState {
         switch source {
         case .none:
             return nil
-        case .modes:
+        case .mode:
             guard !modes.isEmpty else { return nil }
             return ChipSpec(
                 source: .mode,
