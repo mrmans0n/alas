@@ -515,6 +515,7 @@
 		ADF6D3B634D9CCA17D7884EC /* PiACPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6641006D2208E28C46AAB2 /* PiACPInstallerTests.swift */; };
 		AE179E24A9E308150D1FD1D5 /* CommitPromptStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E40B5F193E3CB5EB5BA945A /* CommitPromptStatusTests.swift */; };
 		AF2263B61D95A8BFF0972E93 /* AgentHookEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136BDA12046FB352E183D6A4 /* AgentHookEvent.swift */; };
+		B055F47062645975A500E2EF /* ACPPlanPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7AAAEB5A9C69FC459AAD70B /* ACPPlanPill.swift */; };
 		B05BA1C6DD0BDA21E0932EE3 /* HookInstallNudgeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5319C6707FCBA825E5CB1003 /* HookInstallNudgeResolver.swift */; };
 		B05D6011E0FDB7AA1B016844 /* SQLiteDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8272ACF30256E328519815C /* SQLiteDatabaseTests.swift */; };
 		B064B59D40A47026CDDEB189 /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96E7159EED1183F784104B4F /* FuzzyMatch.swift */; };
@@ -1264,6 +1265,7 @@
 		B77927262BEAF31E39CE6698 /* RecommendedLanguageCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendedLanguageCatalogTests.swift; sourceTree = "<group>"; };
 		B78414C2E79104BC6218B1F4 /* ACPPermissionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionPolicy.swift; sourceTree = "<group>"; };
 		B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigTests.swift; sourceTree = "<group>"; };
+		B7AAAEB5A9C69FC459AAD70B /* ACPPlanPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPlanPill.swift; sourceTree = "<group>"; };
 		B7CE7B4DAFDB65A79308FB63 /* GitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitService.swift; sourceTree = "<group>"; };
 		B7E50B0600EF60A0D9B09877 /* HighlightCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightCapture.swift; sourceTree = "<group>"; };
 		B8052B601A9C834365A9D880 /* SidebarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarHeaderView.swift; sourceTree = "<group>"; };
@@ -2281,6 +2283,7 @@
 				3F79A184C86BE6C6BF72EB57 /* ACPMessageList.swift */,
 				0BCD93747BF71CB256038314 /* ACPPermissionPrompt.swift */,
 				5E3365E06CDDF9C235A03BA6 /* ACPPlanCard.swift */,
+				B7AAAEB5A9C69FC459AAD70B /* ACPPlanPill.swift */,
 				2CDDDC4C6146165CA4C7474E /* ACPPlanPillState.swift */,
 				987ABA2B4C9EA522DC9860B9 /* ACPQueuedBubble.swift */,
 				10602801D3FA990E60CB072D /* ACPQueueHeader.swift */,
@@ -3104,6 +3107,7 @@
 				52A5CDD852333A0C4BDC6995 /* ACPPermissionRequest.swift in Sources */,
 				823AA3E801A11C535C9438BD /* ACPPermissionScope.swift in Sources */,
 				1DB47076C613039ECE164F28 /* ACPPlanCard.swift in Sources */,
+				B055F47062645975A500E2EF /* ACPPlanPill.swift in Sources */,
 				CF6CC4CD0C7841CA79DB0E4E /* ACPPlanPillState.swift in Sources */,
 				7556121D51C54458FCAFED2A /* ACPProtocolVersion.swift in Sources */,
 				F269D59E1E21AD57EF3EE909 /* ACPQueueHeader.swift in Sources */,
