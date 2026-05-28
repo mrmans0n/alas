@@ -14,6 +14,9 @@ struct NewWorktreeDialog: View {
     @State private var runStartup: Bool = true
     @State private var openAfterCreate: Bool = true
     @State private var launchMode: AppConfig.LauncherMode = .terminal
+    /// The launcher mode to persist — preserves the user's intent even when
+    /// ACP is temporarily unavailable and `launchMode` has been coerced.
+    @State private var persistableLaunchMode: AppConfig.LauncherMode = .terminal
     @State private var launchAgentId: String = "none"
     @State private var branches: [String] = []
     @State private var isLoadingBranches = false
@@ -212,6 +215,7 @@ struct NewWorktreeDialog: View {
             acpSegmentEnabled: acpSegmentEnabled
         )
         launchMode = defaults.launchMode
+        persistableLaunchMode = defaults.persistableLaunchMode
         openAfterCreate = defaults.openAfterCreate
         let initialAgent = effectiveAutoLaunchAgent?.id ?? "none"
         launchAgentId = Self.resolvedLaunchAgent(
@@ -255,7 +259,7 @@ struct NewWorktreeDialog: View {
         state.setWorktreeLaunchDefaults(
             projectId: project.id,
             openAfterCreate: openAfterCreate,
-            launcherMode: launchMode
+            launcherMode: persistableLaunchMode
         )
         createErrorMessage = nil
         presented = false
@@ -364,6 +368,7 @@ struct NewWorktreeDialog: View {
                 ) {
                     openAfterCreate = true
                     launchMode = .terminal
+                    persistableLaunchMode = .terminal
                     launchAgentId = Self.resolvedLaunchAgent(
                         initialAgentId: launchAgentId,
                         mode: .terminal,
@@ -379,6 +384,7 @@ struct NewWorktreeDialog: View {
                 ) {
                     openAfterCreate = true
                     launchMode = .acp
+                    persistableLaunchMode = .acp
                     launchAgentId = Self.resolvedLaunchAgent(
                         initialAgentId: launchAgentId,
                         mode: .acp,
@@ -475,18 +481,20 @@ struct NewWorktreeDialog: View {
     }
 
     /// Resolve launch mode and openAfterCreate from per-project config,
-    /// falling back to global defaults. Returns the effective values.
+    /// falling back to global defaults. Returns the effective UI values plus the
+    /// persistable mode (which preserves the user's intent when ACP is temporarily unavailable).
     nonisolated static func resolvedLaunchDefaults(
         projectOpenAfterCreate: Bool?,
         projectLauncherMode: AppConfig.LauncherMode?,
         globalLauncherMode: AppConfig.LauncherMode,
         acpSegmentEnabled: Bool
-    ) -> (openAfterCreate: Bool, launchMode: AppConfig.LauncherMode) {
-        var mode = projectLauncherMode ?? globalLauncherMode
+    ) -> (openAfterCreate: Bool, launchMode: AppConfig.LauncherMode, persistableLaunchMode: AppConfig.LauncherMode) {
+        let intended = projectLauncherMode ?? globalLauncherMode
+        var mode = intended
         if mode == .acp, !acpSegmentEnabled {
             mode = .terminal
         }
         let open = projectOpenAfterCreate ?? true
-        return (open, mode)
+        return (open, mode, intended)
     }
 }

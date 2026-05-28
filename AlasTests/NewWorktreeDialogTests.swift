@@ -263,6 +263,7 @@ struct NewWorktreeDialogTests {
         )
         #expect(result.openAfterCreate == false)
         #expect(result.launchMode == .acp)
+        #expect(result.persistableLaunchMode == .acp)
     }
 
     @Test func resolvedLaunchDefaultsFallsBackToGlobalWhenProjectIsNil() {
@@ -274,6 +275,7 @@ struct NewWorktreeDialogTests {
         )
         #expect(result.openAfterCreate == true)
         #expect(result.launchMode == .acp)
+        #expect(result.persistableLaunchMode == .acp)
     }
 
     @Test func resolvedLaunchDefaultsFallsBackToTerminalWhenACPDisabled() {
@@ -285,6 +287,8 @@ struct NewWorktreeDialogTests {
         )
         #expect(result.openAfterCreate == true)
         #expect(result.launchMode == .terminal)
+        // persistableLaunchMode preserves the intended .acp preference
+        #expect(result.persistableLaunchMode == .acp)
     }
 
     @Test func resolvedLaunchDefaultsProjectOpenAfterCreateOverridesGlobal() {
@@ -296,5 +300,6 @@ struct NewWorktreeDialogTests {
         )
         #expect(result.openAfterCreate == false)
         #expect(result.launchMode == .terminal)
+        #expect(result.persistableLaunchMode == .terminal)
     }
 }
