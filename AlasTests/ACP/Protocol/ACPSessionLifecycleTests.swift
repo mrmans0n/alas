@@ -25,6 +25,25 @@ struct ACPSessionLifecycleTests {
         #expect(r.promptSuggestions.first?.command == "/clear")
     }
 
+    @Test("decodes session/new response with config options")
+    func decodeConfigOptions() throws {
+        let data = try fixture("session-new-response-with-config-options")
+        let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPSessionNewResult>.self, from: data)
+        let r = try #require(env.result)
+        #expect(r.configOptions.count == 1)
+        #expect(r.configOptions[0].id == "effort")
+        #expect(r.configOptions[0].currentValue == "medium")
+        #expect(r.configOptions[0].options.count == 3)
+    }
+
+    @Test("session/new response without configOptions decodes with empty array")
+    func decodeNoConfigOptions() throws {
+        let data = try fixture("session-new-response")
+        let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPSessionNewResult>.self, from: data)
+        let r = try #require(env.result)
+        #expect(r.configOptions.isEmpty)
+    }
+
     @Test("encodes session/cancel request")
     func encodeCancel() throws {
         let env = JSONRPCEnvelope(
