@@ -14,6 +14,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var messages: [ACPMessage] = []
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
+    @Published var availableConfigOptions: [ACPConfigOption] = []
     @Published var currentModel: String?
     @Published var currentMode: String?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
@@ -102,12 +103,10 @@ final class ACPSession: ObservableObject, Identifiable {
             availableModels = ms
         case .currentModeUpdate(let modeId):
             currentMode = modeId
-        case .currentModelUpdate:
-            // Handled in Task 7 (wire chipState into ACPSession)
-            break
-        case .sessionConfigOptionsUpdate:
-            // Handled in Task 7 (wire chipState into ACPSession)
-            break
+        case .currentModelUpdate(let modelId):
+            currentModel = modelId
+        case .sessionConfigOptionsUpdate(let opts):
+            availableConfigOptions = opts
         case .availableCommandsUpdate(let cmds):
             promptSuggestions = cmds
         case .unknown:
@@ -139,6 +138,20 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         return changed
+    }
+
+    /// Composer-facing normalized chip state. Recomputed on each access
+    /// from the current `availableModels` / `availableModes` /
+    /// `availableConfigOptions` / `currentModel` / `currentMode`. Cheap —
+    /// the inputs are small lists.
+    var chipState: ACPChipState {
+        ACPChipState.normalize(
+            agentId: agentId,
+            availableModels: availableModels,
+            currentModel: currentModel,
+            availableModes: availableModes,
+            currentMode: currentMode,
+            configOptions: availableConfigOptions)
     }
 
     // MARK: helpers
