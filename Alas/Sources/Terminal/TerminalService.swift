@@ -62,7 +62,8 @@ final class TerminalService {
         theme: Theme,
         forcedCwd: URL? = nil,
         startupScriptSuffix: String? = nil,
-        leafId: String = UUID().uuidString
+        leafId: String = UUID().uuidString,
+        allowLegacyAttach: Bool = false
     ) throws -> TerminalSession {
         try ensureApp(cfg: cfg, theme: theme)
         guard let app else { throw NSError(domain: "TerminalService", code: 1) }
@@ -99,7 +100,12 @@ final class TerminalService {
             startupScript: effectiveScript,
             sessionId: sessionId
         )
-        let zmxSessionName = ZmxSessionName.derive(worktreeId: worktree.id, leafId: sessionId)
+        let zmxSessionName = sessionNameForAttach(
+            worktree: worktree,
+            project: project,
+            leafId: sessionId,
+            allowLegacy: allowLegacyAttach
+        )
         let plan = TerminalService.resolveLaunchPlan(
             keepAlive: cfg.keepSessionsAlive,
             zmxClient: zmxClient,
@@ -130,13 +136,18 @@ final class TerminalService {
             projectId: project.id,
             surface: surface,
             executable: plan.executable,
-            args: plan.args
+            args: plan.args,
+            zmxSessionName: (cfg.keepSessionsAlive && zmxClient.isAvailable) ? zmxSessionName : nil
         )
         registry.register(session)
         return session
     }
 
-    func closeSession(id: String, worktreeId explicitWorktreeId: String? = nil) {
+    func closeSession(
+        id: String,
+        worktreeId explicitWorktreeId: String? = nil,
+        projectPath: String? = nil
+    ) {
         let existing = registry.session(for: id)
         if let s = existing {
             s.surface.removeFromSuperview()
@@ -145,10 +156,22 @@ final class TerminalService {
         // `zmxClient.killSession` blocks up to ~5s on a hung daemon. We're
         // on @MainActor here, so dispatch it off-main as fire-and-forget
         // (the call is documented best-effort; we don't read the result).
-        if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
+        if let existingName = existing?.zmxSessionName {
             let client = zmxClient
-            let sessionName = ZmxSessionName.derive(worktreeId: worktreeId, leafId: id)
-            Task.detached { client.killSession(name: sessionName) }
+            Task.detached { client.killSession(name: existingName) }
+        } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
+            let client = zmxClient
+            Task.detached {
+                let sessionNames = Self.sessionNamesForCleanup(
+                    worktreeId: worktreeId,
+                    projectPath: projectPath,
+                    leafId: id,
+                    zmxClient: client
+                )
+                for sessionName in sessionNames {
+                    client.killSession(name: sessionName)
+                }
+            }
         }
         socketReleaseHandler?(id)
         cleanupRcfile(sessionId: id)
@@ -177,17 +200,22 @@ final class TerminalService {
     /// `ZmxClient.killSession` blocks up to ~5s, so we run the sweep on
     /// `Task.detached` to keep the MainActor (UI) responsive.
     func terminateAll(additionalSessions: [TerminalSessionIdentity] = []) {
-        let live = registry.all.map {
-            TerminalSessionIdentity(worktreeId: $0.worktreeId, leafId: $0.id)
+        let liveNames = registry.all.map {
+            $0.zmxSessionName ?? ZmxSessionName.derive(worktreeId: $0.worktreeId, leafId: $0.id)
         }
-        let allSessions = Set(live).union(additionalSessions)
         let client = zmxClient
         Task.detached {
-            for session in allSessions {
-                client.killSession(name: ZmxSessionName.derive(
+            var allNames = Set(liveNames)
+            for session in additionalSessions {
+                allNames.formUnion(Self.sessionNamesForCleanup(
                     worktreeId: session.worktreeId,
-                    leafId: session.leafId
+                    projectPath: session.projectPath,
+                    leafId: session.leafId,
+                    zmxClient: client
                 ))
+            }
+            for name in allNames {
+                client.killSession(name: name)
             }
         }
     }
@@ -254,5 +282,58 @@ final class TerminalService {
                 return trimmed.isEmpty ? nil : trimmed
             }
             .joined(separator: "\n")
+    }
+
+    private func sessionNameForAttach(
+        worktree: Worktree,
+        project: ProjectConfig,
+        leafId: String,
+        allowLegacy: Bool
+    ) -> String {
+        let scoped = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
+        guard allowLegacy else { return scoped }
+        let legacy = ZmxSessionName.legacy(leafId: leafId)
+        guard Self.legacySessionBelongsToKnownRoot(
+            legacy,
+            roots: [worktree.id, project.path],
+            zmxClient: zmxClient
+        ) else {
+            return scoped
+        }
+        return legacy
+    }
+
+    nonisolated private static func sessionNamesForCleanup(
+        worktreeId: String,
+        projectPath: String?,
+        leafId: String,
+        zmxClient: ZmxClient
+    ) -> [String] {
+        let scoped = ZmxSessionName.derive(worktreeId: worktreeId, leafId: leafId)
+        let legacy = ZmxSessionName.legacy(leafId: leafId)
+        let roots = [worktreeId] + (projectPath.map { [$0] } ?? [])
+        guard legacySessionBelongsToKnownRoot(legacy, roots: roots, zmxClient: zmxClient) else {
+            return [scoped]
+        }
+        return [scoped, legacy]
+    }
+
+    nonisolated static func legacySessionBelongsToKnownRoot(
+        _ name: String,
+        roots: [String],
+        zmxClient: ZmxClient
+    ) -> Bool {
+        let roots = Set(roots.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        return zmxClient.listSessionInfos().contains { info in
+            info.name == name && startDir(info.startDir, belongsToAnyOf: roots)
+        }
+    }
+
+    nonisolated private static func startDir(_ startDir: String?, belongsToAnyOf roots: Set<String>) -> Bool {
+        guard let startDir else { return false }
+        let start = URL(fileURLWithPath: startDir).standardizedFileURL.path
+        return roots.contains { root in
+            start == root || start.hasPrefix(root + "/")
+        }
     }
 }

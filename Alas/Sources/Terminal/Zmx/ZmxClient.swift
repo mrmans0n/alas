@@ -1,6 +1,11 @@
 import Foundation
 import os
 
+struct ZmxSessionInfo: Equatable, Sendable {
+    let name: String
+    let startDir: String?
+}
+
 /// Thin Swift wrapper around the bundled `zmx` CLI. Exposes the three
 /// operations Alas needs (`wrap` for launch, `killSession` for explicit
 /// close, `listSessions` for cleanup walks) and falls back to a no-op
@@ -98,11 +103,49 @@ final class ZmxClient: Sendable {
             .filter { !$0.isEmpty }
     }
 
+    /// Parse full `zmx ls` key-value rows. Used for legacy session migration,
+    /// where `start_dir` lets us avoid attaching an old unscoped session from
+    /// a different worktree.
+    func listSessionInfos() -> [ZmxSessionInfo] {
+        guard env.isAvailable, let binary = env.binaryURL else { return [] }
+        let result = runner.run(binary, ["ls"], zmxEnv(), 5.0)
+        guard result.exitCode == 0 else {
+            if let code = result.exitCode {
+                logger.warning("zmx ls exited \(code, privacy: .public): \(result.stderr, privacy: .public)")
+            } else {
+                logger.warning("zmx ls timed out")
+            }
+            return []
+        }
+        return result.stdout
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { parseSessionInfoLine(String($0)) }
+    }
+
     /// Environment passed to every zmx invocation. Pins `ZMX_DIR` so the
     /// CLI talks to the same daemon/socket dir Alas-spawned shells will use.
     private func zmxEnv() -> [String: String] {
         var inherited = ProcessInfo.processInfo.environment
         if let dir = env.zmxDir { inherited["ZMX_DIR"] = dir.path }
         return inherited
+    }
+
+    private func parseSessionInfoLine(_ line: String) -> ZmxSessionInfo? {
+        let fields = line
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\t", omittingEmptySubsequences: true)
+        var name: String?
+        var startDir: String?
+        for field in fields {
+            let parts = field.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            switch parts[0] {
+            case "name": name = String(parts[1])
+            case "start_dir": startDir = String(parts[1])
+            default: break
+            }
+        }
+        guard let name else { return nil }
+        return ZmxSessionInfo(name: name, startDir: startDir)
     }
 }

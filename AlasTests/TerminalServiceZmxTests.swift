@@ -11,10 +11,14 @@ private final class RecordingRunner: @unchecked Sendable {
         let args: [String]
     }
     var calls: [Call] = []
+    var resultsByFirstArg: [String: SubprocessRunner.Result] = [:]
 
     func runner() -> SubprocessRunner {
         SubprocessRunner { exe, args, _, _ in
             self.calls.append(Call(executable: exe, args: args))
+            if let first = args.first, let result = self.resultsByFirstArg[first] {
+                return result
+            }
             return SubprocessRunner.Result(exitCode: 0, stdout: "", stderr: "")
         }
     }
@@ -73,7 +77,8 @@ struct TerminalServiceZmxTests {
             projectId: "proj-1",
             surface: surface,
             executable: "/bin/zsh",
-            args: []
+            args: [],
+            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-abc")
         )
         svc.registry.register(session)
         #expect(svc.registry.session(for: "leaf-abc") != nil)
@@ -98,7 +103,8 @@ struct TerminalServiceZmxTests {
             projectId: "proj-1",
             surface: surface,
             executable: "/bin/zsh",
-            args: []
+            args: [],
+            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-xyz")
         )
         svc.registry.register(session)
 
@@ -143,13 +149,97 @@ struct TerminalServiceZmxTests {
             zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
         )
         // Should not throw or crash — zmx kill is still attempted for cleanup.
+        recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")
+
         svc.closeSession(id: "nonexistent-id", worktreeId: "wt-1")
-        await waitForCalls(recorder, count: 1) { $0.calls.count }
-        #expect(recorder.calls.count == 1)
-        #expect(recorder.calls[0].args == [
+        await waitForCalls(recorder, count: 2) { $0.calls.count }
+        #expect(recorder.calls.map(\.args) == [
+            ["ls"],
+            [
             "kill",
             ZmxSessionName.derive(worktreeId: "wt-1", leafId: "nonexistent-id"),
+            ],
         ])
+    }
+
+    @Test func closeSessionOnUnrestoredLegacySessionKillsScopedAndMatchingLegacyNames() async {
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(
+            exitCode: 0,
+            stdout: "  name=alas-legacy-leaf\tpid=1\tclients=0\tcreated=1\tstart_dir=/tmp/wt\tcmd=/bin/zsh -l\n",
+            stderr: ""
+        )
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        svc.closeSession(id: "legacy-leaf", worktreeId: "/tmp/wt")
+        await waitForCalls(recorder, count: 3) { $0.calls.count }
+
+        #expect(recorder.calls.map(\.args) == [
+            ["ls"],
+            ["kill", ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "legacy-leaf")],
+            ["kill", "alas-legacy-leaf"],
+        ])
+    }
+
+    @Test func closeSessionOnUnrestoredRepoRootLegacySessionKillsLegacyName() async {
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(
+            exitCode: 0,
+            stdout: "  name=alas-legacy-leaf\tpid=1\tclients=0\tcreated=1\tstart_dir=/tmp/repo/subdir\tcmd=/bin/zsh -l\n",
+            stderr: ""
+        )
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        svc.closeSession(id: "legacy-leaf", worktreeId: "/tmp/wt", projectPath: "/tmp/repo")
+        await waitForCalls(recorder, count: 3) { $0.calls.count }
+
+        #expect(recorder.calls.map(\.args) == [
+            ["ls"],
+            ["kill", ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "legacy-leaf")],
+            ["kill", "alas-legacy-leaf"],
+        ])
+    }
+
+    @Test func legacySessionOwnershipAcceptsRepoRootStartDir() {
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(
+            exitCode: 0,
+            stdout: "  name=alas-legacy-leaf\tpid=1\tclients=0\tcreated=1\tstart_dir=/tmp/repo/subdir\tcmd=/bin/zsh -l\n",
+            stderr: ""
+        )
+        let client = ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+
+        let belongs = TerminalService.legacySessionBelongsToKnownRoot(
+            ZmxSessionName.legacy(leafId: "legacy-leaf"),
+            roots: ["/tmp/repo-linked-worktree", "/tmp/repo"],
+            zmxClient: client
+        )
+
+        #expect(belongs)
+        #expect(recorder.calls.map(\.args) == [["ls"]])
+    }
+
+    @Test func legacySessionOwnershipRejectsSiblingRepoRootStartDir() {
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(
+            exitCode: 0,
+            stdout: "  name=alas-legacy-leaf\tpid=1\tclients=0\tcreated=1\tstart_dir=/tmp/repo-other\tcmd=/bin/zsh -l\n",
+            stderr: ""
+        )
+        let client = ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+
+        let belongs = TerminalService.legacySessionBelongsToKnownRoot(
+            ZmxSessionName.legacy(leafId: "legacy-leaf"),
+            roots: ["/tmp/repo-linked-worktree", "/tmp/repo"],
+            zmxClient: client
+        )
+
+        #expect(!belongs)
+        #expect(recorder.calls.map(\.args) == [["ls"]])
     }
 
     // MARK: detachAll
@@ -182,10 +272,8 @@ struct TerminalServiceZmxTests {
 
     @Test
     func terminateAllKillsRegistryAndAdditionalLeaves() async {
-        // Use the standard recorder (no scripted ls output): the new
-        // terminateAll does not enumerate `zmx ls` at all, so we should
-        // see ONLY kill calls — none for `ls`.
         let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")
         let client = ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
         let service = TerminalService(zmxClient: client)
 
@@ -205,21 +293,47 @@ struct TerminalServiceZmxTests {
         service.terminateAll(additionalSessions: [
             TerminalSessionIdentity(worktreeId: "wt-2", leafId: "leaf-persisted-B"),
         ])
-        await waitForCalls(recorder, count: 2) { $0.calls.count }
+        await waitForCalls(recorder, count: 3) { $0.calls.count }
 
         let allArgs = Set(recorder.calls.map(\.args))
         #expect(allArgs == Set([
+            ["ls"],
             ["kill", ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-A")],
             ["kill", ZmxSessionName.derive(worktreeId: "wt-2", leafId: "leaf-persisted-B")],
         ]))
-        // No `ls` invocation — we no longer enumerate zmx's session list
-        // to avoid touching another live Alas instance's sessions.
-        #expect(recorder.calls.contains(where: { $0.args.first == "ls" }) == false)
+    }
+
+    @Test
+    func terminateAllKillsRepoRootLegacyAdditionalLeaves() async {
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(
+            exitCode: 0,
+            stdout: "  name=alas-leaf-persisted-B\tpid=1\tclients=0\tcreated=1\tstart_dir=/tmp/repo\tcmd=/bin/zsh -l\n",
+            stderr: ""
+        )
+        let client = ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        let service = TerminalService(zmxClient: client)
+
+        service.terminateAll(additionalSessions: [
+            TerminalSessionIdentity(
+                worktreeId: "/tmp/wt",
+                projectPath: "/tmp/repo",
+                leafId: "leaf-persisted-B"
+            ),
+        ])
+        await waitForCalls(recorder, count: 3) { $0.calls.count }
+
+        #expect(Set(recorder.calls.map(\.args)) == Set([
+            ["ls"],
+            ["kill", ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "leaf-persisted-B")],
+            ["kill", "alas-leaf-persisted-B"],
+        ]))
     }
 
     @Test
     func terminateAllDeduplicatesRegistryAndAdditional() async {
         let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")
         let client = ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
         let service = TerminalService(zmxClient: client)
 
@@ -238,11 +352,13 @@ struct TerminalServiceZmxTests {
         service.terminateAll(additionalSessions: [
             TerminalSessionIdentity(worktreeId: "wt-1", leafId: "leaf-A"),
         ])
-        await waitForCalls(recorder, count: 1) { $0.calls.count }
-        #expect(recorder.calls.count == 1)
-        #expect(recorder.calls[0].args == [
-            "kill",
-            ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-A"),
+        await waitForCalls(recorder, count: 2) { $0.calls.count }
+        #expect(recorder.calls.map(\.args) == [
+            ["ls"],
+            [
+                "kill",
+                ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-A"),
+            ],
         ])
     }
 

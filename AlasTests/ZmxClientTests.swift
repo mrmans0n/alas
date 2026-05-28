@@ -184,4 +184,32 @@ struct ZmxClientTests {
         let client = ZmxClient(env: env(available: true), runner: recorder.runner())
         #expect(client.listSessions() == ["alas-AAA", "alas-BBB"])
     }
+
+    @Test
+    func listSessionInfosParsesFullLsOutput() {
+        let recorder = RecordingRunner()
+        recorder.result = SubprocessRunner.Result(
+            exitCode: 0,
+            stdout: """
+              name=alas-old-leaf\tpid=25367\tclients=1\tcreated=1779957881\tstart_dir=/Users/nacho/.alas/.worktrees/alas/nacho-new-worktree-acp\tcmd=/bin/zsh -l
+              name=alas-other\tpid=25368\tclients=0\tcreated=1779957882\tstart_dir=/Volumes/Workspace/alas\tcmd=/bin/zsh -l -i
+
+            """,
+            stderr: ""
+        )
+        let client = ZmxClient(env: env(available: true), runner: recorder.runner())
+        let infos = client.listSessionInfos()
+
+        #expect(infos == [
+            ZmxSessionInfo(
+                name: "alas-old-leaf",
+                startDir: "/Users/nacho/.alas/.worktrees/alas/nacho-new-worktree-acp"
+            ),
+            ZmxSessionInfo(
+                name: "alas-other",
+                startDir: "/Volumes/Workspace/alas"
+            ),
+        ])
+        #expect(recorder.calls[0].args == ["ls"])
+    }
 }

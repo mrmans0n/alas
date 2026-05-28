@@ -24,6 +24,11 @@ struct ZmxSessionNameTests {
     }
 
     @Test
+    func legacyNameKeepsPreScopedFormatForUpgradeFallback() {
+        #expect(ZmxSessionName.legacy(leafId: "leaf-123") == "alas-leaf-123")
+    }
+
+    @Test
     func deriveDoesNotMutateInput() {
         let worktreeId = "/tmp/worktree"
         let leafId = "abc-123"

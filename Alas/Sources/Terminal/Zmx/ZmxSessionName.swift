@@ -9,6 +9,10 @@ enum ZmxSessionName {
         "alas-\(hash16(worktreeId))-\(hash16(leafId))"
     }
 
+    static func legacy(leafId: String) -> String {
+        "alas-\(leafId)"
+    }
+
     private static func hash16(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8))
             .prefix(8)
