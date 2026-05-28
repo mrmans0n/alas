@@ -203,6 +203,174 @@ struct TreeSitterHighlighterTests {
         #expect(yaml.contains(where: { $0.capture == .property }))
     }
 
+    @Test("diff fallback colors added, removed, and hunk lines")
+    func diffFallbackBasics() throws {
+        let src = """
+        @@ -1,2 +1,2 @@
+        -old line
+        +new line
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+        #expect(spans.contains(where: { $0.capture == .keyword }))
+        #expect(spans.contains(where: { $0.capture == .string }))
+        #expect(spans.contains(where: { $0.capture == .comment }))
+    }
+
+    @Test("diff fallback classifies headers and changed marker runs exactly")
+    func diffFallbackExactMarkerClassification() throws {
+        let src = """
+        diff --git a/file.md b/file.md
+        index 1111111..2222222 100644
+        --- a/file.md
+        +++ b/file.md
+        @@ -1,2 +1,2 @@
+        ---- heading
+        ++++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+
+        #expect(capture(for: "--- a/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ b/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "---- heading", in: src, spans: spans) == .comment)
+        #expect(capture(for: "++++ heading", in: src, spans: spans) == .string)
+    }
+
+    @Test("diff fallback classifies post-hunk file marker lines as changed content")
+    func diffFallbackPostHunkMarkerLines() throws {
+        let src = """
+        --- a/file.md
+        +++ b/file.md
+        @@ -1,2 +1,2 @@
+        --- heading
+        +++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+
+        #expect(capture(for: "--- a/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ b/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "--- heading", in: src, spans: spans) == .comment)
+        #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
+    }
+
+    @Test("diff fallback resets header state for each file block")
+    func diffFallbackResetsHeaderStateForEachFileBlock() throws {
+        let src = """
+        diff --git a/first.md b/first.md
+        index 1111111..2222222 100644
+        --- a/first.md
+        +++ b/first.md
+        @@ -1 +1 @@
+        +first line
+        diff --git a/second.md b/second.md
+        index 3333333..4444444 100644
+        --- a/second.md
+        +++ b/second.md
+        @@ -1 +1 @@
+        +++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+
+        #expect(capture(for: "--- a/second.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ b/second.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
+    }
+
+    @Test("diff fallback recognizes adjacent non-Git file headers after hunks")
+    func diffFallbackRecognizesAdjacentNonGitFileHeadersAfterHunks() throws {
+        let src = """
+        --- first.txt
+        +++ first.txt
+        @@ -1 +1 @@
+        -old
+        +new
+        --- second.txt
+        +++ second.txt
+        @@ -1 +1 @@
+        +++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "patch")
+
+        #expect(capture(for: "--- second.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ second.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
+    }
+
+    @Test("diff fallback colors common metadata lines")
+    func diffFallbackCommonMetadataLines() throws {
+        let src = """
+        diff -u a b
+        new file mode 100644
+        old mode 100644
+        new mode 100755
+        rename from old.txt
+        rename to new.txt
+        \\ No newline at end of file
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "patch")
+
+        #expect(capture(for: "diff -u a b", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "new file mode 100644", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "old mode 100644", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "new mode 100755", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "rename from old.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "rename to new.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: #"\ No newline at end of file"#, in: src, spans: spans) == .keyword)
+    }
+
+    @Test("markup, CSS, and SQL fallback emit useful spans")
+    func chatFallbackBasics() throws {
+        let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "html")
+        let css = TreeSitterHighlighter.highlight(source: #".primary { display: flex; color: #fff; }"#, fileExtension: "css")
+        let sql = TreeSitterHighlighter.highlight(source: #"SELECT id FROM users WHERE active = true;"#, fileExtension: "sql")
+
+        #expect(html.contains(where: { $0.capture == .keyword }))
+        #expect(html.contains(where: { $0.capture == .attribute }))
+        #expect(html.contains(where: { $0.capture == .string }))
+        #expect(css.contains(where: { $0.capture == .keyword }))
+        #expect(sql.contains(where: { $0.capture == .keyword }))
+    }
+
+    @Test("CSS fallback does not treat hashes as line comments")
+    func cssFallbackDoesNotTreatHashesAsLineComments() throws {
+        let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "css")
+        let swallowedRange = NSRange(src.range(of: "#fff; background")!, in: src)
+
+        #expect(capture(for: "background", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "display", in: src, spans: spans) == .keyword)
+        #expect(!spans.contains(where: { $0.capture == .comment && NSIntersectionRange($0.range, swallowedRange).length == swallowedRange.length }))
+    }
+
+    @Test("markup fallback captures spaced and boolean attributes exactly")
+    func markupFallbackExactAttributes() throws {
+        let src = #"<button class = "primary" disabled>Save</button>"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+
+        #expect(capture(for: "class", in: src, spans: spans) == .attribute)
+        #expect(capture(for: "disabled", in: src, spans: spans) == .attribute)
+        #expect(capture(for: #""primary""#, in: src, spans: spans) == .string)
+    }
+
+    @Test("markup fallback does not classify assigned text outside tags as attributes")
+    func markupFallbackDoesNotClassifyAssignedTextOutsideTagsAsAttributes() throws {
+        let src = #"x = 1 <button class="primary">Save</button>"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+
+        #expect(capture(for: "x", in: src, spans: spans) != .attribute)
+        #expect(capture(for: "class", in: src, spans: spans) == .attribute)
+        #expect(capture(for: #""primary""#, in: src, spans: spans) == .string)
+    }
+
+    @Test("markup fallback does not recover boolean attributes inside comments or strings")
+    func markupFallbackSkipsBooleanAttributesInsideCommentsAndStrings() throws {
+        let src = #"<!-- <button disabled> --> <input disabled value="<tag disabled>">"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+
+        #expect(capture(for: "disabled", occurrence: 0, in: src, spans: spans) != .attribute)
+        #expect(capture(for: "disabled", occurrence: 1, in: src, spans: spans) == .attribute)
+        #expect(capture(for: "disabled", occurrence: 2, in: src, spans: spans) != .attribute)
+    }
+
     @Test("string literal captured")
     func stringLiteral() throws {
         let src = #"let x = "hi""#
@@ -232,5 +400,32 @@ struct TreeSitterHighlighterTests {
         let spans = await session.highlight(source: #"let value = "hello""#, fileExtension: "swift", edits: [])
         let captures = Set(spans.map { $0.capture })
         #expect(captures.contains(.string))
+    }
+
+    private func capture(for substring: String, in source: String, spans: [HighlightSpan]) -> HighlightCapture? {
+        guard let range = source.range(of: substring) else { return nil }
+        let nsRange = NSRange(range, in: source)
+        return spans.first(where: { $0.range == nsRange })?.capture
+    }
+
+    private func capture(
+        for substring: String,
+        occurrence: Int,
+        in source: String,
+        spans: [HighlightSpan]
+    ) -> HighlightCapture? {
+        guard let range = range(of: substring, occurrence: occurrence, in: source) else { return nil }
+        let nsRange = NSRange(range, in: source)
+        return spans.first(where: { $0.range == nsRange })?.capture
+    }
+
+    private func range(of substring: String, occurrence: Int, in source: String) -> Range<String.Index>? {
+        var searchRange = source.startIndex..<source.endIndex
+        for index in 0...occurrence {
+            guard let range = source.range(of: substring, range: searchRange) else { return nil }
+            if index == occurrence { return range }
+            searchRange = range.upperBound..<source.endIndex
+        }
+        return nil
     }
 }
