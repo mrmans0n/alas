@@ -34,9 +34,22 @@ final class ACPSessionRunner {
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var seq: Int64 = 0
+    private var steerUndoExpiryTask: Task<Void, Never>?
+    /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
+    /// from main / PR #338). Reused by the queue's sendNow path:
+    /// `activePromptID` identifies the task that currently owns
+    /// `streamingState`; `cancelledPromptIDs` carries explicit
+    /// invalidations (steer, userCancel) so a slow `session/cancel`
+    /// can't let a stale completion clobber the successor task.
     private var nextPromptID = 0
     private var activePromptID: Int?
     private var cancelledPromptIDs: Set<Int> = []
+    /// Set while `steer` is between `userCancel` and the redirect's
+    /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so an
+    /// Undo tapped during the cancel round-trip can't drain the just-
+    /// restored snapshot ahead of the steer's replacement prompt. Once
+    /// the redirect is in flight, normal drain semantics resume.
+    private var steerInProgress: Bool = false
 
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
          sessionId: String, worktreePath: String,
@@ -79,6 +92,9 @@ final class ACPSessionRunner {
                 self.session.disconnected = true
                 self.session.attached = false
                 self.session.transcript.streamingState = .idle
+                // No flushQueueIfIdle() here: the connection is dead, so
+                // the next prompt would just fail. The queue stays put
+                // and drains naturally on the next successful reattach.
                 self.appendAndPersistSystemNotice("Agent disconnected.")
             }
         }
@@ -174,6 +190,22 @@ final class ACPSessionRunner {
         filesTask?.cancel()
     }
 
+    /// Cancel ownership of any in-flight prompt RPC. The unstructured
+    /// `sendNow` task survives `stop()` (it isn't a child task); calling
+    /// this marks its `activePromptID` as cancelled so when the RPC
+    /// eventually fails (because `connection.shutdown()` killed it) the
+    /// catch path treats it as a deliberate cancel — skipping
+    /// `setQueueHeadError`. Without this, detach during a queued flush
+    /// would persist a `lastError` on the queue head, and the next
+    /// attach's `flushQueueIfIdle` would skip it (guard requires
+    /// `lastError == nil`), forcing the user to click Retry.
+    func invalidateActivePrompt() {
+        if let promptID = activePromptID {
+            cancelledPromptIDs.insert(promptID)
+            activePromptID = nil
+        }
+    }
+
     /// Re-upsert the session's persistence row to capture changes to
     /// title / model / mode / autoRun that the runner mutated directly.
     /// `ACPSessionManager.persist` does the same thing plus a recent-
@@ -227,12 +259,44 @@ final class ACPSessionRunner {
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
     func userCancel() async {
+        // Capture the prompt + queue head the user INTENDED to stop
+        // BEFORE awaiting `connection.cancel`. Without this snapshot, a
+        // natural completion of the in-flight prompt during the cancel
+        // round-trip would let the success path drain a queue item, and
+        // `activePromptID` after the await would point at the freshly-
+        // flushed queued send — so Stop would cancel + pop a prompt the
+        // user only queued, not the one they pressed Stop on.
+        // Snapshot the intended target AND insert it into
+        // `cancelledPromptIDs` BEFORE awaiting `connection.cancel`. The
+        // cancel notification can make the in-flight `session/prompt`
+        // RPC throw before we resume; if `cancelledPromptIDs` isn't
+        // populated by then, the prompt task's catch path reads
+        // `wasCancelled == false`, calls `setQueueHeadError`, and
+        // flips the queue head back to `.pending` with a lastError.
+        // The post-await block below then can't pop it (status no
+        // longer `.sending`), leaving the cancelled prompt stuck at
+        // the front of the queue. Pre-registering the cancellation
+        // makes the catch path skip the error path entirely.
+        let intended: (promptID: Int?, queueHeadID: UUID?) = await MainActor.run {
+            let snapshot: (promptID: Int?, queueHeadID: UUID?) = (
+                activePromptID,
+                session.queue.first.flatMap { $0.status == .sending ? $0.id : nil }
+            )
+            if let promptID = snapshot.promptID {
+                cancelledPromptIDs.insert(promptID)
+            }
+            return snapshot
+        }
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
         await MainActor.run {
-            if let promptID = activePromptID {
-                cancelledPromptIDs.insert(promptID)
-                activePromptID = nil
+            if let promptID = intended.promptID {
+                // Only clear activePromptID if it's still ours — a
+                // natural completion + queued promotion during the
+                // cancel await would have moved it on.
+                if activePromptID == promptID {
+                    activePromptID = nil
+                }
             }
             policy.userCancelled()
             let changedIndices = session.cancelInFlightToolCalls()
@@ -243,64 +307,307 @@ final class ACPSessionRunner {
                     try? store.updateMessagePayload(id: id, payload: payload)
                 }
             }
+            // Pop the head ONLY if it's the same `.sending` item we
+            // were aiming at. If a queued item promoted itself during
+            // the await it's a fresh prompt the user hasn't stopped —
+            // leave it alone.
+            if let stoppedID = intended.queueHeadID,
+               let current = session.queue.first,
+               current.id == stoppedID,
+               current.status == .sending {
+                session.queue.removeFirst()
+                persistQueue()
+            }
             appendAndPersistSystemNotice("Interrupted by user.")
-            session.transcript.streamingState = .idle
+            // Only force state to .idle if a successor prompt hasn't
+            // already taken ownership. A natural completion of the
+            // intended prompt during the cancel await can let
+            // flushQueueIfIdle promote a queued head to .sending and
+            // dispatch its sendNow; that successor now owns
+            // streamingState. Forcing .idle here would make the UI
+            // think the agent is free, hide the Stop pill, and let the
+            // composer accept another direct send mid-flight.
+            let successorOwnsState = activePromptID != nil
+                && activePromptID != intended.promptID
+            if !successorOwnsState {
+                session.transcript.streamingState = .idle
+            }
+            flushQueueIfIdle()
         }
     }
 }
 
 extension ACPSessionRunner {
+    /// Legacy callsite shim: defaults to `.auto` intent (immediate send
+    /// when idle, queue when busy).
+    func send(text: String, attachments: [ACPMessage.Attachment]) {
+        send(text: text, attachments: attachments, intent: .auto, onPromptFinished: nil)
+    }
+
+    /// Backwards-compatible shim for callers that supply a completion but
+    /// don't care about intent (e.g. existing tests, pre-queue callers).
     func send(
         text: String,
         attachments: [ACPMessage.Attachment],
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)?
+    ) {
+        send(text: text, attachments: attachments, intent: .auto, onPromptFinished: onPromptFinished)
+    }
+
+    func send(
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        intent: ACPSubmitIntent,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         var blocks: [ACPContentBlock] = [.text(text)]
         for a in attachments {
             blocks.append(.resourceLink(uri: a.uri, name: a.name))
         }
+        send(blocks: blocks, intent: intent, onPromptFinished: onPromptFinished)
+    }
+
+    /// Primary entry. Resolves the routing then dispatches to one of:
+    ///   - sendNow  → records the user prompt, awaits prompt RPC
+    ///   - enqueue  → appends to queue + persists
+    ///   - steer    → cancels in-flight + clears queue + sends (Task 8)
+    ///   - noOp     → empty composer, ignore
+    func send(
+        blocks: [ACPContentBlock],
+        intent: ACPSubmitIntent,
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
+    ) {
+        let route = ACPSubmitRoute.resolve(
+            intent: intent,
+            state: session.transcript.streamingState,
+            queueEmpty: session.queue.isEmpty,
+            blocksEmpty: blocks.isEmpty,
+            inFlightSteer: steerInProgress)
+        switch route {
+        case .noOp:
+            // Composer guards empty submits before invoking onSubmit, but
+            // tell the caller the submit was rejected so its draft state
+            // stays consistent.
+            Task { @MainActor in onPromptFinished?(false) }
+        case .sendNow:
+            sendNow(blocks: blocks, queuedItemId: nil, onPromptFinished: onPromptFinished)
+        case .enqueue:
+            session.enqueue(blocks: blocks)
+            persistQueue()
+            // The user's prompt was accepted into the queue — from the
+            // composer's perspective this is a successful submission so
+            // the persisted draft can be cleared. The actual RPC fires
+            // later when the flusher drains the head.
+            Task { @MainActor in onPromptFinished?(true) }
+        case .steer:
+            steer(blocks: blocks, onPromptFinished: onPromptFinished)
+        }
+    }
+
+    /// Persist the current queue snapshot. Called after every mutation:
+    /// enqueue, edit, remove, reorder, head-status flip. Failures are
+    /// swallowed — the same pattern as transcript persistence; surfacing
+    /// would block the UI for a transient SQLite error and we'd rather
+    /// lose a queue snapshot than the user's draft.
+    func persistQueue() {
+        try? store.upsertQueue(sessionId: sessionId, items: session.queue)
+    }
+
+    /// Drain the queue head if (a) state is `.idle`, (b) the head is
+    /// `.pending`, and (c) the head has no `lastError`. Marks the head
+    /// `.sending`, persists, and dispatches `sendNow` with the head's
+    /// id so success can pop the right item and failure can flag the
+    /// right item without disturbing the rest of the queue.
+    ///
+    /// Chained drain is implicit: sendNow's completion sets state to
+    /// `.idle` and calls back here.
+    func flushQueueIfIdle() {
+        guard !steerInProgress,
+              session.transcript.streamingState == .idle,
+              let head = session.queue.first,
+              head.status == .pending,
+              head.lastError == nil
+        else { return }
+        session.markQueueHeadSending()
+        persistQueue()
+        sendNow(blocks: head.blocks, queuedItemId: head.id)
+    }
+
+    /// Cancel the in-flight turn (if any), discard the ENTIRE queue
+    /// (including any `.sending` head whose `sendNow` task is mid-RPC),
+    /// then send the new prompt as a fresh turn. Only the `.pending`
+    /// items are snapshotted for undo — restoring a previously-`.sending`
+    /// item would just re-fire the prompt the user just redirected away
+    /// from. The stale in-flight task gets neutralised because `sendNow`
+    /// guards every completion-side mutation on `queue.first?.id ==
+    /// queuedItemId`; once we've emptied the queue, the orphan task
+    /// resolves to a no-op.
+    func steer(
+        blocks: [ACPContentBlock],
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
+    ) {
+        let snapshot = session.queue.filter { $0.status == .pending }
+        session.queue.removeAll()
+        if !snapshot.isEmpty {
+            session.steerUndo = .init(id: UUID(), snapshot: snapshot)
+            armSteerUndoExpiry()
+        }
+        persistQueue()
+        // Invalidate the in-flight prompt NOW (before awaiting userCancel)
+        // so its completion can't race the redirect during the cancel
+        // round-trip. Without this, a slow `session/cancel` leaves the
+        // old `activePromptID` valid; the cancelled RPC's completion
+        // would then flip state to .idle, opening a window where the
+        // composer could accept another submit before the redirect's
+        // `sendNow` installs a new one.
+        if let promptID = activePromptID {
+            cancelledPromptIDs.insert(promptID)
+            activePromptID = nil
+        }
+        // Suppress queue flushing until the redirect is installed: while
+        // userCancel awaits the cancel notification, an Undo tap would
+        // re-prepend the snapshot to the queue and userCancel's own
+        // trailing flushQueueIfIdle would then dispatch the "discarded"
+        // item ahead of the steer's replacement prompt.
+        steerInProgress = true
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.userCancel()
+            await MainActor.run {
+                self.steerInProgress = false
+                // If the session was detached while we were awaiting
+                // `userCancel` (tab closed, worktree torn down), the
+                // runner has been removed from `ACPSessionManager` and
+                // the connection shut down. Firing `sendNow` now would
+                // append the redirect to a detached session and persist
+                // a `lastError` against the dead connection. Bail out
+                // and tell the composer the submit didn't land so its
+                // draft stays put.
+                guard self.session.attached, !self.session.disconnected else {
+                    onPromptFinished?(false)
+                    return
+                }
+                self.sendNow(blocks: blocks, queuedItemId: nil, onPromptFinished: onPromptFinished)
+            }
+        }
+    }
+
+    /// Re-prepend the most-recent steer-undo snapshot to the queue and
+    /// clear the buffer. Called when the user taps "Undo" on the toast.
+    func steerUndo() {
+        guard let undo = session.steerUndo, !undo.snapshot.isEmpty else { return }
+        session.restorePendingSnapshot(undo.snapshot)
+        session.steerUndo = nil
+        steerUndoExpiryTask?.cancel()
+        steerUndoExpiryTask = nil
+        persistQueue()
+        flushQueueIfIdle()
+    }
+
+    /// Exposed for tests + the toast view so it can show / hide.
+    func steerUndoSnapshot() -> [QueuedPrompt]? { session.steerUndo?.snapshot }
+
+    private func armSteerUndoExpiry() {
+        steerUndoExpiryTask?.cancel()
+        steerUndoExpiryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            await MainActor.run {
+                self?.session.steerUndo = nil
+                self?.steerUndoExpiryTask = nil
+            }
+        }
+    }
+
+    /// Direct prompt RPC path. `queuedItemId` is set when called by the
+    /// flusher; nil when called from the user-typed-and-submitted path.
+    /// `onPromptFinished` fires when the active turn ends (success or
+    /// cancel/failure) and lets the composer reconcile its persisted
+    /// draft. Stale completions (steer cancelled us; another sendNow
+    /// took ownership) skip the callback so the composer stays in sync
+    /// with the SUCCESSOR turn only.
+    func sendNow(
+        blocks: [ACPContentBlock],
+        queuedItemId: UUID?,
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
+    ) {
         let promptID = nextPromptID
         nextPromptID += 1
+        // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
+        // this, `detach.invalidateActivePrompt()` (or another concurrent
+        // cancel) could land between the increment above and the Task's
+        // first `MainActor.run`, see no active prompt to invalidate, and
+        // the Task would then run normally, fail on `connection.shutdown`,
+        // and persist `lastError` on the queue head — defeating the
+        // detach-clears-cleanly fix from the previous commit.
+        activePromptID = promptID
         Task { [weak self, onPromptFinished] in
             guard let self else {
                 await MainActor.run { onPromptFinished?(false) }
                 return
             }
-            await MainActor.run {
-                self.activePromptID = promptID
-                let before = self.session.transcript.messages.count
-                let titleBefore = self.session.title
-                if !self.session.followsTranscriptTail {
-                    self.session.followsTranscriptTail = true
+            let proceeded = await MainActor.run { () -> Bool in
+                // If we were cancelled while this Task was being scheduled,
+                // exit without touching transcript or state. The connection
+                // may already be torn down by detach, and recording the
+                // user prompt now would leak transcript writes into a
+                // detached session.
+                if self.activePromptID != promptID {
+                    self.cancelledPromptIDs.remove(promptID)
+                    return false
                 }
-                self.session.recordUserPrompt(text: text, attachments: attachments)
-                self.persistFromIndex(before)
-                // First-prompt path auto-renames the session to the
-                // prompt prefix. Persist the row so the new title
-                // survives a reload — without this the toolbar showed
-                // the derived name in-memory but the SQLite row stayed
-                // on "New session" until the user manually renamed.
-                if self.session.title != titleBefore {
-                    self.persistSessionRow()
+                // Record the user prompt BEFORE awaiting `session/prompt`.
+                // The agent streams `session/update` notifications through
+                // `incomingUpdates` while the RPC is in flight, so if we
+                // recorded after the await an agent_message_chunk could
+                // land first and the transcript would render answer-
+                // before-question. Skip for a queued retry whose prompt
+                // is already in the transcript from the previous attempt.
+                let shouldRecord: Bool = {
+                    if let qid = queuedItemId,
+                       let idx = self.session.queue.firstIndex(where: { $0.id == qid }),
+                       self.session.queue[idx].transcriptRecorded {
+                        return false
+                    }
+                    return true
+                }()
+                if shouldRecord {
+                    let before = self.session.transcript.messages.count
+                    let titleBefore = self.session.title
+                    if !self.session.followsTranscriptTail {
+                        self.session.followsTranscriptTail = true
+                    }
+                    self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
+                                                  attachments: Self.attachments(of: blocks))
+                    self.persistFromIndex(before)
+                    if self.session.title != titleBefore { self.persistSessionRow() }
+                    if let qid = queuedItemId,
+                       let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
+                        self.session.queue[idx].transcriptRecorded = true
+                        self.persistQueue()
+                    }
                 }
                 self.session.transcript.streamingState = .sending
+                return true
+            }
+            guard proceeded else {
+                await MainActor.run { onPromptFinished?(false) }
+                return
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
                 try await self.connection.prompt(sessionId: remoteId, blocks: blocks)
-                // The `session/prompt` response is the END of the
-                // turn — by the time `prompt` returns the agent has
-                // emitted every update for this turn and the response
-                // carries the stop reason. Flip back to `.idle` so the
-                // composer accepts the next prompt; leaving it on
-                // `.streaming` froze the UI on Stop after every
-                // successful reply.
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
+                        if queuedItemId != nil {
+                            _ = self.session.popQueueHead()
+                            self.persistQueue()
+                        }
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
+                        self.flushQueueIfIdle()
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     if !hasNewerActivePrompt {
@@ -313,17 +620,47 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
+                        if queuedItemId != nil, !wasCancelled {
+                            // Queued send failed naturally — leave the item
+                            // at the head with lastError so the bubble shows
+                            // Retry. Cancelled queued sends had the item
+                            // discarded elsewhere (steer) and don't surface.
+                            self.session.setQueueHeadError(error.localizedDescription)
+                            self.persistQueue()
+                        } else if queuedItemId == nil, !wasCancelled {
+                            self.session.lastError = "prompt failed: \(error.localizedDescription)"
+                        }
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
-                    }
-                    if !wasCancelled, isActivePrompt {
-                        self.session.lastError = "prompt failed: \(error.localizedDescription)"
+                        self.flushQueueIfIdle()
                     }
                     if !hasNewerActivePrompt {
                         onPromptFinished?(wasCancelled)
                     }
                 }
             }
+        }
+    }
+
+    /// First text block as the user-facing preview. Used when recording
+    /// the queued item's bubble in the transcript on flush. Concatenating
+    /// every text block matches the wire shape we already send.
+    static func textPreview(of blocks: [ACPContentBlock]) -> String {
+        blocks.compactMap { b -> String? in
+            if case .text(let s) = b { return s }
+            return nil
+        }.joined()
+    }
+
+    /// Resource-link attachments derived from the prompt blocks. Mirrors
+    /// the shape `recordUserPrompt` expects (which previously came from
+    /// the composer-level attachments array).
+    static func attachments(of blocks: [ACPContentBlock]) -> [ACPMessage.Attachment] {
+        blocks.compactMap { b -> ACPMessage.Attachment? in
+            if case .resourceLink(let uri, let name) = b {
+                return ACPMessage.Attachment(uri: uri, name: name)
+            }
+            return nil
         }
     }
 

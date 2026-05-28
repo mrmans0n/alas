@@ -105,4 +105,48 @@ struct ACPSessionManagerTests {
         #expect(session.composerDraft == submitted)
         #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
     }
+
+    @Test("detach normalizes a .sending queue head so re-attach can flush")
+    func detachNormalizesSendingHead() async throws {
+        // Regression: closing a tab while the flusher had promoted the
+        // head to .sending used to leave the cached ACPSession with a
+        // .sending head. The next openSession returns the cached object
+        // (no `restoreQueue`), and the post-attach `flushQueueIfIdle`
+        // sees `.sending` and no-ops — the queue is stuck until a full
+        // app restart reloads from SQLite.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-detach-q-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        session.enqueue(blocks: [.text("queued")])
+        session.markQueueHeadSending()
+        #expect(session.queue[0].status == .sending)
+
+        await mgr.detach(sessionId: session.id)
+        #expect(session.queue[0].status == .pending)
+    }
+
+    @Test("persistQueue writes to SQLite without requiring a runner")
+    func persistQueueWithoutRunner() throws {
+        // Regression: ACPTabView's queue actions used to call
+        // `manager.runners[sessionId]?.persistQueue()`, which silently
+        // no-oped when no runner was attached (setup nudge / launch
+        // failure). Edits then lived only in memory; relaunch restored
+        // the supposedly-removed prompts from SQLite.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-persist-q-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        session.enqueue(blocks: [.text("a")])
+        session.enqueue(blocks: [.text("b")])
+
+        mgr.persistQueue(for: session)
+        let persisted = try store.loadQueue(sessionId: session.id)
+        #expect(persisted == session.queue)
+
+        session.clearPendingQueue()
+        mgr.persistQueue(for: session)
+        let afterClear = try store.loadQueue(sessionId: session.id)
+        #expect(afterClear.isEmpty)
+    }
 }

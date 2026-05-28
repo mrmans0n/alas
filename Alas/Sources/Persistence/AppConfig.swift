@@ -182,16 +182,27 @@ struct AppConfig: Codable, Equatable {
         var notifyOnAwaiting: Bool
         var dismissedHookInstallNudges: [String]
         var dismissedACPSetupNudges: [String]
+        /// When true (default): ⏎ submits with .auto intent, ⌥⏎ steers.
+        /// When false: the two are inverted — ⏎ steers, ⌥⏎ queues. The
+        /// label in Settings is "Send on ⏎, queue on ⌥⏎ while busy".
+        var acpSendOnEnter: Bool
 
         enum CodingKeys: String, CodingKey {
-            case notifyOnFinish, notifyOnAwaiting, dismissedHookInstallNudges, dismissedACPSetupNudges
+            case notifyOnFinish, notifyOnAwaiting,
+                 dismissedHookInstallNudges, dismissedACPSetupNudges,
+                 acpSendOnEnter
         }
 
-        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool, dismissedHookInstallNudges: [String] = [], dismissedACPSetupNudges: [String] = []) {
+        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool,
+             dismissedHookInstallNudges: [String] = [],
+             dismissedACPSetupNudges: [String] = [],
+             acpSendOnEnter: Bool = true)
+        {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
             self.dismissedHookInstallNudges = dismissedHookInstallNudges
             self.dismissedACPSetupNudges = dismissedACPSetupNudges
+            self.acpSendOnEnter = acpSendOnEnter
         }
 
         init(from decoder: Decoder) throws {
@@ -200,6 +211,7 @@ struct AppConfig: Codable, Equatable {
             notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
             dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
             dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
+            acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
         }
     }
 

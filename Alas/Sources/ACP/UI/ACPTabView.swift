@@ -124,7 +124,44 @@ private struct ACPSessionView: View {
                     // lives) — otherwise the user's click can't resolve the
                     // pending permission request.
                     policy: manager.runners[sessionId]?.policy,
-                    scopeKey: scopeKey(for: session.transcript.pendingPermission)
+                    scopeKey: scopeKey(for: session.transcript.pendingPermission),
+                    onQueueEdit: { item in
+                        // Inline editor is a future enhancement (see plan §4.4).
+                        // For v1, clicking the pencil removes the item from
+                        // the queue so the user can re-type in the composer.
+                        session.removeFromQueue(id: item.id)
+                        manager.persistQueue(for: session)
+                        // Discarding the head can unblock a successor
+                        // that was waiting behind a `lastError` head.
+                        manager.runners[sessionId]?.flushQueueIfIdle()
+                    },
+                    onQueueRemove: { id in
+                        session.removeFromQueue(id: id)
+                        manager.persistQueue(for: session)
+                        manager.runners[sessionId]?.flushQueueIfIdle()
+                    },
+                    onQueueRetry: { id in
+                        guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
+                        session.queue[idx].lastError = nil
+                        manager.persistQueue(for: session)
+                        manager.runners[sessionId]?.flushQueueIfIdle()
+                    },
+                    onQueueReorder: { src, dst in
+                        session.moveInQueue(from: src, to: dst)
+                        manager.persistQueue(for: session)
+                        // Reordering can move a clean prompt to the head
+                        // where it can finally drain.
+                        manager.runners[sessionId]?.flushQueueIfIdle()
+                    },
+                    onQueueClearAll: {
+                        session.clearPendingQueue()
+                        manager.persistQueue(for: session)
+                        // No-op if the queue is now empty, but if a
+                        // `.sending` head survives the clear and the
+                        // user re-enqueues, the next idle drain still
+                        // needs to fire from this path.
+                        manager.runners[sessionId]?.flushQueueIfIdle()
+                    }
                 )
             }
 
@@ -132,22 +169,17 @@ private struct ACPSessionView: View {
                 session: session,
                 manager: manager,
                 worktreeRoot: worktree.path,
-                agentLookup: { state.agent(id: $0) }
-            ) { text, attachments, draft, onPromptFinished -> Bool in
-                // Gate: if the runner isn't ready (initial attach in
-                // flight, agent crashed, etc.) or a prompt turn is
-                // already in flight (streaming/sending — send button
-                // is showing Stop), reject the submission and KEEP
-                // the draft. Returning `false` tells the textview not
-                // to clear, which is the difference from a no-op:
-                // we don't want ⏎ to silently erase the user's
-                // unsent prompt.
+                agentLookup: { state.agent(id: $0) },
+                sendOnEnter: state.config.harness.acpSendOnEnter
+            ) { text, attachments, intent, draft, onPromptFinished -> Bool in
                 guard session.attached, !session.disconnected,
-                      session.transcript.streamingState != .streaming,
-                      session.transcript.streamingState != .sending,
                       let runner = manager.runners[sessionId] else { return false }
+                // `intent` is already resolved by the composer for keyboard
+                // submits; the toolbar send button bypasses the keyboard
+                // inversion and supplies its own intent directly. No
+                // further resolution here.
                 let draftRevision = session.composerDraftRevision
-                runner.send(text: text, attachments: attachments) { succeeded in
+                runner.send(text: text, attachments: attachments, intent: intent) { succeeded in
                     if succeeded {
                         manager.clearComposerDraft(
                             for: session,
@@ -165,6 +197,21 @@ private struct ACPSessionView: View {
                     onPromptFinished(succeeded)
                 }
                 return true
+            }
+
+            if let undo = session.steerUndo, !undo.snapshot.isEmpty {
+                VStack {
+                    Spacer()
+                    ACPSteerUndoToast(
+                        discardedCount: undo.snapshot.count,
+                        onUndo: { manager.runners[sessionId]?.steerUndo() },
+                        onDismiss: { session.steerUndo = nil }
+                    )
+                    .id(undo.id)
+                    .padding(.bottom, 200)
+                }
+                .frame(maxWidth: .infinity)
+                .transition(.opacity)
             }
         }
     }

@@ -8,6 +8,10 @@ struct ACPComposer: View {
     let manager: ACPSessionManager
     let worktreeRoot: URL
     let agentLookup: (String) -> AgentDefinition?
+    /// Current value of the `acpSendOnEnter` setting. Threaded down to
+    /// `ACPInputField` so its placeholder reflects whichever action ⏎
+    /// triggers under the current mapping.
+    let sendOnEnter: Bool
     let onSubmit: ACPComposerSubmitHandler
 
     @Environment(\.theme) private var theme
@@ -49,6 +53,7 @@ struct ACPComposer: View {
                 session: session,
                 worktreeRoot: worktreeRoot,
                 actions: actions,
+                sendOnEnter: sendOnEnter,
                 onDraftChange: { draft in manager.persistComposerDraft(draft, for: session) },
                 onDraftClear: { manager.clearComposerDraft(for: session) },
                 onSubmit: onSubmit
@@ -58,6 +63,7 @@ struct ACPComposer: View {
             HStack(spacing: 8) {
                 hint
                 Spacer()
+                stopPill
                 autoRunToggle
                 if let thinking = session.chipState.thinking {
                     thinkingChip(thinking)
@@ -302,20 +308,73 @@ struct ACPComposer: View {
         }
     }
 
+    // MARK: - Stop pill (separate from send; visible only while busy)
+
+    @ViewBuilder
+    private var stopPill: some View {
+        if isBusy {
+            Button {
+                stopTapped()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("Stop")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(theme.color("del"))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6).fill(theme.color("del").opacity(0.15))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("del").opacity(0.45), lineWidth: 0.75)
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Stop the running turn (Esc)")
+        }
+    }
+
+    private var isBusy: Bool {
+        switch session.transcript.streamingState {
+        case .streaming, .sending, .awaitingPermission: return true
+        case .idle: return false
+        }
+    }
+
+    private func stopTapped() {
+        let sid = session.id
+        Task { @MainActor in
+            if let runner = manager.runners[sid] {
+                await runner.userCancel()
+            } else {
+                session.transcript.streamingState = .idle
+            }
+        }
+    }
+
     // MARK: - Send button
 
     private var sendButton: some View {
         Button {
             sendButtonTapped()
         } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 7).fill(buttonBg)
-                Image(systemName: buttonGlyph)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(buttonFg)
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7).fill(buttonBg)
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(buttonFg)
+                }
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(buttonBorder, lineWidth: 0.5))
+                .frame(width: 28, height: 28)
+                if session.queue.count > 0 {
+                    queueBadge
+                        .offset(x: 6, y: -6)
+                }
             }
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(buttonBorder, lineWidth: 0.5))
-            .frame(width: 28, height: 28)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -324,77 +383,54 @@ struct ACPComposer: View {
         .help(sendHelpText)
     }
 
-    /// True while we can't deliver a prompt: the agent process isn't
-    /// attached yet, or it disconnected. Streaming/sending isn't covered
-    /// here — those states swap the button to the cancel mode, which IS
-    /// clickable.
+    /// Disabled only when the agent isn't reachable. State.streaming /
+    /// .sending no longer disable — they queue.
     private var sendDisabled: Bool {
-        switch session.transcript.streamingState {
-        case .streaming, .sending: return false
-        default: return !session.attached || session.disconnected
-        }
+        !session.attached || session.disconnected
     }
 
     private var sendHelpText: String {
-        switch session.transcript.streamingState {
-        case .streaming, .sending: return "Stop streaming"
-        default:
-            if session.disconnected { return "Agent disconnected" }
-            if !session.attached    { return "Agent connecting…" }
-            return "Send (⏎)"
+        if session.disconnected { return "Agent disconnected" }
+        if !session.attached    { return "Agent connecting…" }
+        if session.transcript.streamingState == .idle, session.queue.isEmpty {
+            return "Send (⏎). Hold ⌥ to steer."
         }
+        return "Queue (⏎). Hold ⌥ to steer."
     }
 
-    /// Click handler: send while idle, stop while streaming.
+    /// Always submit; the runner's routing decides queue vs send vs steer.
     private func sendButtonTapped() {
-        switch session.transcript.streamingState {
-        case .streaming, .sending:
-            let sid = session.id
-            Task { @MainActor in
-                if let runner = manager.runners[sid] {
-                    await runner.userCancel()
-                } else {
-                    session.transcript.streamingState = .idle
-                }
-            }
-        default:
-            guard !sendDisabled else { return }
-            actions.submit?()
-        }
+        guard !sendDisabled else { return }
+        let option = NSApp.currentEvent?.modifierFlags.contains(.option) == true
+        actions.submitWithIntent?(option ? .steer : .auto)
     }
 
-    /// Matches the design's `.chat-send` states. Idle = dark fill + line
-    /// border (the "no input" look), ready = solid accent + accent
-    /// border + dark icon, stop = solid del + dark icon.
     private var buttonBg: Color {
-        switch session.transcript.streamingState {
-        case .streaming, .sending: return theme.color("del")
-        default:
-            return sendDisabled
-                ? theme.color("bg-3").opacity(0.7)
-                : theme.color("accent")
-        }
+        sendDisabled
+            ? theme.color("bg-3").opacity(0.7)
+            : theme.color("accent")
     }
     private var buttonFg: Color {
-        switch session.transcript.streamingState {
-        case .streaming, .sending: return theme.color("bg-0")
-        default:
-            return sendDisabled ? theme.color("fg-dim") : theme.color("bg-0")
-        }
+        sendDisabled ? theme.color("fg-dim") : theme.color("bg-0")
     }
     private var buttonBorder: Color {
-        switch session.transcript.streamingState {
-        case .streaming, .sending: return theme.color("del").opacity(0.7)
-        default:
-            return sendDisabled
-                ? theme.color("line")
-                : theme.color("accent").opacity(0.7)
-        }
+        sendDisabled
+            ? theme.color("line")
+            : theme.color("accent").opacity(0.7)
     }
-    private var buttonGlyph: String {
-        switch session.transcript.streamingState {
-        case .streaming, .sending: return "stop.fill"
-        default:                   return "arrow.up"
-        }
+
+    /// Small badge with the queue count, sitting at the top-right of
+    /// the send button.
+    private var queueBadge: some View {
+        Text("\(session.queue.count)")
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(theme.color("bg-0"))
+            .padding(.horizontal, 4)
+            .frame(minWidth: 16, minHeight: 14)
+            .background(
+                Capsule().fill(theme.color("warn"))
+            )
+            .overlay(Capsule().strokeBorder(theme.color("bg-0"), lineWidth: 1))
     }
 }

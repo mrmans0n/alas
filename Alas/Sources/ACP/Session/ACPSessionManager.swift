@@ -55,6 +55,10 @@ final class ACPSessionManager: ObservableObject {
                 }
             }
         }
+        // Restore queue
+        if let queue = try? store.loadQueue(sessionId: id) {
+            session.restoreQueue(queue)
+        }
         session.currentModel = row.currentModel
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
@@ -126,6 +130,16 @@ final class ACPSessionManager: ObservableObject {
     func clearComposerDraft(for session: ACPSession) {
         session.replaceComposerDraft(.empty)
         try? store.deleteComposerDraft(sessionId: session.id)
+    }
+
+    /// Persist the in-memory queue to SQLite. The runner has the same
+    /// `persistQueue` method, but UI actions on a session that has no
+    /// runner yet (setup nudge, launch failure) must still reach the
+    /// store directly — otherwise removing or clearing queue items
+    /// only mutates the cached `ACPSession`, and the supposedly-removed
+    /// prompts reappear on relaunch.
+    func persistQueue(for session: ACPSession) {
+        try? store.upsertQueue(sessionId: session.id, items: session.queue)
     }
 
     func clearComposerDraft(
@@ -237,6 +251,7 @@ extension ACPSessionManager {
             runner.start()
             runners[sessionId] = runner
             session.attached = true
+            runner.flushQueueIfIdle()
             stderrTask.cancel()
         } catch {
             // Give stderr a moment to drain so the message is the real cause.
@@ -250,17 +265,35 @@ extension ACPSessionManager {
     }
 
     func detach(sessionId: ACPSession.ID) async {
-        if let runner = runners.removeValue(forKey: sessionId) {
-            runner.stop()
-            await runner.connection.shutdown()
-        }
-        // Reset transient state so a later reopen of the same session
-        // doesn't surface stale `streamingState` (e.g. an `.awaitingPermission`
-        // left over from a closed tab would otherwise leave the sidebar work
-        // badge stuck on `[wait]` via the harness bridge).
+        // Reset transient session state SYNCHRONOUSLY before any await.
+        // The steer task is unstructured and can resume during the
+        // `connection.shutdown()` await below — if `session.attached`
+        // is still true at that point, its post-`userCancel` liveness
+        // check passes and it dispatches `sendNow` against a connection
+        // being torn down. Flipping the flag here closes that window.
         if let session = sessions[sessionId] {
             session.attached = false
             session.transcript.streamingState = .idle
+            // Normalize any in-flight queue head: the sendNow task that
+            // owned it is gone with the runner, so the next attach must
+            // see a `.pending` head to be able to flush it. Without this,
+            // closing a tab mid-flush leaves the cached session's head
+            // as `.sending`; the next openSession returns the cached
+            // object (skipping `restoreQueue`), the post-attach flush
+            // sees `.sending`, and the queue stays stuck until a full
+            // app restart reloads from SQLite.
+            session.restoreQueue(session.queue)
+        }
+        if let runner = runners.removeValue(forKey: sessionId) {
+            // Invalidate the in-flight prompt BEFORE shutting down the
+            // connection. The unstructured `sendNow` task survives stop()
+            // and the connection close will make its RPC throw — we want
+            // its catch path to recognise the failure as "deliberately
+            // cancelled" so it skips `setQueueHeadError` and the queue
+            // head can come back as cleanly `.pending` after restoreQueue.
+            runner.invalidateActivePrompt()
+            runner.stop()
+            await runner.connection.shutdown()
         }
     }
 
