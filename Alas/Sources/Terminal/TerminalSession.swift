@@ -6,6 +6,11 @@
 import Foundation
 import AppKit
 
+struct TerminalSessionIdentity: Hashable, Sendable {
+    let worktreeId: String
+    let leafId: String
+}
+
 @MainActor
 final class TerminalSession {
     let id: String                // matches Tab.id (UUID string)

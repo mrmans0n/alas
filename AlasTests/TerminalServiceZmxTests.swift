@@ -78,7 +78,7 @@ struct TerminalServiceZmxTests {
         svc.registry.register(session)
         #expect(svc.registry.session(for: "leaf-abc") != nil)
 
-        svc.closeSession(id: "leaf-abc")
+        svc.closeSession(id: "leaf-abc", worktreeId: "wt-1")
 
         #expect(svc.registry.session(for: "leaf-abc") == nil)
     }
@@ -102,11 +102,14 @@ struct TerminalServiceZmxTests {
         )
         svc.registry.register(session)
 
-        svc.closeSession(id: "leaf-xyz")
+        svc.closeSession(id: "leaf-xyz", worktreeId: "wt-1")
         await waitForCalls(recorder, count: 1) { $0.calls.count }
 
         #expect(recorder.calls.count == 1)
-        #expect(recorder.calls[0].args == ["kill", "alas-leaf-xyz"])
+        #expect(recorder.calls[0].args == [
+            "kill",
+            ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-xyz"),
+        ])
     }
 
     @Test func closeSessionIsNoOpForZmxKillWhenUnavailable() {
@@ -126,7 +129,7 @@ struct TerminalServiceZmxTests {
         )
         svc.registry.register(session)
 
-        svc.closeSession(id: "leaf-absent")
+        svc.closeSession(id: "leaf-absent", worktreeId: "wt-1")
 
         // Registry must be cleaned up even when zmx is unavailable.
         #expect(svc.registry.session(for: "leaf-absent") == nil)
@@ -140,10 +143,13 @@ struct TerminalServiceZmxTests {
             zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
         )
         // Should not throw or crash — zmx kill is still attempted for cleanup.
-        svc.closeSession(id: "nonexistent-id")
+        svc.closeSession(id: "nonexistent-id", worktreeId: "wt-1")
         await waitForCalls(recorder, count: 1) { $0.calls.count }
         #expect(recorder.calls.count == 1)
-        #expect(recorder.calls[0].args == ["kill", "alas-nonexistent-id"])
+        #expect(recorder.calls[0].args == [
+            "kill",
+            ZmxSessionName.derive(worktreeId: "wt-1", leafId: "nonexistent-id"),
+        ])
     }
 
     // MARK: detachAll
@@ -196,11 +202,16 @@ struct TerminalServiceZmxTests {
 
         // Pass one persisted-but-not-registered leaf id; expect both to
         // be killed and nothing else.
-        service.terminateAll(additionalLeafIds: ["leaf-persisted-B"])
+        service.terminateAll(additionalSessions: [
+            TerminalSessionIdentity(worktreeId: "wt-2", leafId: "leaf-persisted-B"),
+        ])
         await waitForCalls(recorder, count: 2) { $0.calls.count }
 
         let allArgs = Set(recorder.calls.map(\.args))
-        #expect(allArgs == Set([["kill", "alas-leaf-A"], ["kill", "alas-leaf-persisted-B"]]))
+        #expect(allArgs == Set([
+            ["kill", ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-A")],
+            ["kill", ZmxSessionName.derive(worktreeId: "wt-2", leafId: "leaf-persisted-B")],
+        ]))
         // No `ls` invocation — we no longer enumerate zmx's session list
         // to avoid touching another live Alas instance's sessions.
         #expect(recorder.calls.contains(where: { $0.args.first == "ls" }) == false)
@@ -224,10 +235,15 @@ struct TerminalServiceZmxTests {
         service.registry.register(session)
 
         // leaf-A is in both registry and additionals — should still kill once.
-        service.terminateAll(additionalLeafIds: ["leaf-A"])
+        service.terminateAll(additionalSessions: [
+            TerminalSessionIdentity(worktreeId: "wt-1", leafId: "leaf-A"),
+        ])
         await waitForCalls(recorder, count: 1) { $0.calls.count }
         #expect(recorder.calls.count == 1)
-        #expect(recorder.calls[0].args == ["kill", "alas-leaf-A"])
+        #expect(recorder.calls[0].args == [
+            "kill",
+            ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-A"),
+        ])
     }
 
     // MARK: resolveLaunchPlan — keepSessionsAlive gating
@@ -242,12 +258,17 @@ struct TerminalServiceZmxTests {
         let plan = TerminalService.resolveLaunchPlan(
             keepAlive: true,
             zmxClient: client,
-            sessionId: "leaf-1",
+            sessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-1"),
             innerPlan: inner
         )
 
         #expect(plan.executable == "/fake/Contents/Resources/zmx/zmx")
-        #expect(plan.args == ["attach", "alas-leaf-1", "/bin/zsh", "-l"])
+        #expect(plan.args == [
+            "attach",
+            ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-1"),
+            "/bin/zsh",
+            "-l",
+        ])
         #expect(plan.envOverrides == ["FOO": "1"])
     }
 
@@ -261,7 +282,7 @@ struct TerminalServiceZmxTests {
         let plan = TerminalService.resolveLaunchPlan(
             keepAlive: false,
             zmxClient: client,
-            sessionId: "leaf-2",
+            sessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-2"),
             innerPlan: inner
         )
 
@@ -287,7 +308,7 @@ struct TerminalServiceZmxTests {
         let plan = TerminalService.resolveLaunchPlan(
             keepAlive: true,
             zmxClient: client,
-            sessionId: "leaf-3",
+            sessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-3"),
             innerPlan: inner
         )
 

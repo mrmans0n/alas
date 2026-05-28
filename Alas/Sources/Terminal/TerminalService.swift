@@ -99,10 +99,11 @@ final class TerminalService {
             startupScript: effectiveScript,
             sessionId: sessionId
         )
+        let zmxSessionName = ZmxSessionName.derive(worktreeId: worktree.id, leafId: sessionId)
         let plan = TerminalService.resolveLaunchPlan(
             keepAlive: cfg.keepSessionsAlive,
             zmxClient: zmxClient,
-            sessionId: sessionId,
+            sessionName: zmxSessionName,
             innerPlan: innerPlan
         )
         // Plan-supplied env overrides (e.g. ZDOTDIR for zsh startup scripts)
@@ -135,17 +136,20 @@ final class TerminalService {
         return session
     }
 
-    func closeSession(id: String) {
-        if let s = registry.session(for: id) {
+    func closeSession(id: String, worktreeId explicitWorktreeId: String? = nil) {
+        let existing = registry.session(for: id)
+        if let s = existing {
             s.surface.removeFromSuperview()
         }
         registry.unregister(id: id)
         // `zmxClient.killSession` blocks up to ~5s on a hung daemon. We're
         // on @MainActor here, so dispatch it off-main as fire-and-forget
         // (the call is documented best-effort; we don't read the result).
-        let client = zmxClient
-        let sessionName = ZmxSessionName.derive(leafId: id)
-        Task.detached { client.killSession(name: sessionName) }
+        if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
+            let client = zmxClient
+            let sessionName = ZmxSessionName.derive(worktreeId: worktreeId, leafId: id)
+            Task.detached { client.killSession(name: sessionName) }
+        }
         socketReleaseHandler?(id)
         cleanupRcfile(sessionId: id)
     }
@@ -160,7 +164,7 @@ final class TerminalService {
 
     /// User-requested "Terminate All Terminal Sessions". Kills every
     /// session we currently know about, including persisted-but-unrestored
-    /// leaves the caller hands in via `additionalLeafIds`. Best-effort:
+    /// sessions the caller hands in via `additionalSessions`. Best-effort:
     /// each kill swallows its own errors.
     ///
     /// We deliberately do NOT enumerate `zmx ls` and kill arbitrary
@@ -172,12 +176,18 @@ final class TerminalService {
     ///
     /// `ZmxClient.killSession` blocks up to ~5s, so we run the sweep on
     /// `Task.detached` to keep the MainActor (UI) responsive.
-    func terminateAll(additionalLeafIds: [String] = []) {
-        let allIds = Set(registry.all.map(\.id)).union(additionalLeafIds)
+    func terminateAll(additionalSessions: [TerminalSessionIdentity] = []) {
+        let live = registry.all.map {
+            TerminalSessionIdentity(worktreeId: $0.worktreeId, leafId: $0.id)
+        }
+        let allSessions = Set(live).union(additionalSessions)
         let client = zmxClient
         Task.detached {
-            for id in allIds {
-                client.killSession(name: ZmxSessionName.derive(leafId: id))
+            for session in allSessions {
+                client.killSession(name: ZmxSessionName.derive(
+                    worktreeId: session.worktreeId,
+                    leafId: session.leafId
+                ))
             }
         }
     }
@@ -224,12 +234,12 @@ final class TerminalService {
     static func resolveLaunchPlan(
         keepAlive: Bool,
         zmxClient: ZmxClient,
-        sessionId: String,
+        sessionName: String,
         innerPlan: StartupScriptInstaller.Plan
     ) -> StartupScriptInstaller.Plan {
         guard keepAlive else { return innerPlan }
         return zmxClient.wrap(
-            sessionName: ZmxSessionName.derive(leafId: sessionId),
+            sessionName: sessionName,
             plan: innerPlan
         )
     }

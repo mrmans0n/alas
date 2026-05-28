@@ -1070,8 +1070,8 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
-        // Single identity for this pane: used as the zmx session name
-        // suffix, the SessionRegistry key, the leaf id, the persisted
+        // Single identity for this pane: used with the worktree id to derive
+        // the zmx session name, plus the SessionRegistry key, leaf id, persisted
         // sessionId (mirrored to id on encode), and ALAS_SESSION_ID. Generated
         // here so every downstream call site receives the same value.
         let leafId = UUID().uuidString
@@ -1134,8 +1134,9 @@ final class AppState {
             ?? worktree.path
 
         do {
-            // Single identity for the new pane: zmx session name suffix,
-            // SessionRegistry key, leaf id, persisted sessionId, ALAS_SESSION_ID.
+            // Single identity for the new pane: used with the worktree id to
+            // derive the zmx session name, plus the SessionRegistry key, leaf
+            // id, persisted sessionId, and ALAS_SESSION_ID.
             // Generated here so the registry key `terminal.openSession`
             // registers under matches the `newLeafId` the split tree stores.
             let newLeafId = UUID().uuidString
@@ -1169,7 +1170,7 @@ final class AppState {
             closeTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
-            terminal.closeSession(id: closedLeafId)
+            terminal.closeSession(id: closedLeafId, worktreeId: worktreeId)
             harness.detector.unregister(sessionId: closedLeafId)
             harness.forgetSession(closedLeafId)
         }
@@ -1190,11 +1191,15 @@ final class AppState {
                     return (worktree.id, tab.id)
                 }
             }
-        let persistedLeafIds = allPersistedTerminalLeafIds()
+        let persistedSessions = allPersistedTerminalSessions()
         // Count individual leaves, not tabs — a single tab with split panes
         // contains multiple leaves and `terminateAll` kills every one. Union
         // with the live registry catches any session not yet flushed to disk.
-        let sessionCount = Set(persistedLeafIds).union(terminal.registry.all.map(\.id)).count
+        let sessionCount = Set(persistedSessions)
+            .union(terminal.registry.all.map {
+                TerminalSessionIdentity(worktreeId: $0.worktreeId, leafId: $0.id)
+            })
+            .count
 
         let alert = NSAlert()
         alert.messageText = "Terminate All Terminal Sessions"
@@ -1212,16 +1217,18 @@ final class AppState {
         // own those persisted leaves too. Scoped to OUR instance's known
         // leaves so we don't trample sessions owned by a concurrently-
         // running Alas process under the same ZMX_DIR.
-        terminal.terminateAll(additionalLeafIds: persistedLeafIds)
+        terminal.terminateAll(additionalSessions: persistedSessions)
     }
 
-    /// All terminal-leaf ids persisted under this Alas instance's projects.
-    private func allPersistedTerminalLeafIds() -> [String] {
+    /// All terminal sessions persisted under this Alas instance's projects.
+    private func allPersistedTerminalSessions() -> [TerminalSessionIdentity] {
         projects.flatMap { project in
             projectsManager.worktrees(projectId: project.id).flatMap { worktree in
-                tabs.tabs(forWorktree: worktree.id).flatMap { tab -> [String] in
+                tabs.tabs(forWorktree: worktree.id).flatMap { tab -> [TerminalSessionIdentity] in
                     guard case .terminal(let state) = tab else { return [] }
-                    return state.root.leaves().map(\.id)
+                    return state.root.leaves().map {
+                        TerminalSessionIdentity(worktreeId: worktree.id, leafId: $0.id)
+                    }
                 }
             }
         }
@@ -1490,7 +1497,7 @@ final class AppState {
                 for leaf in s.root.leaves() {
                     harness.detector.unregister(sessionId: leaf.id)
                     harness.forgetSession(leaf.id)
-                    terminal.closeSession(id: leaf.id)
+                    terminal.closeSession(id: leaf.id, worktreeId: worktreeId)
                 }
             }
             if case .editor = tab {
@@ -1503,14 +1510,14 @@ final class AppState {
         tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
 
-    private func cleanupTerminals(allTabs: [Tab], tabIds: [TabID]) {
+    private func cleanupTerminals(worktreeId: String, allTabs: [Tab], tabIds: [TabID]) {
         for id in tabIds {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
                     harness.detector.unregister(sessionId: leaf.id)
                     harness.forgetSession(leaf.id)
-                    terminal.closeSession(id: leaf.id)
+                    terminal.closeSession(id: leaf.id, worktreeId: worktreeId)
                 }
             }
         }
@@ -1549,7 +1556,7 @@ final class AppState {
     func closeOtherTabs(worktreeId: String, keeping tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeOthers(worktreeId: worktreeId, keeping: tabId)
-        cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
@@ -1560,7 +1567,7 @@ final class AppState {
     private func cleanupWorktreeState(worktreeId: String) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
-        cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
     }
@@ -1572,7 +1579,7 @@ final class AppState {
     func closeTabsToLeft(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToLeft(worktreeId: worktreeId, of: tabId)
-        cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
@@ -1580,7 +1587,7 @@ final class AppState {
     func closeTabsToRight(worktreeId: String, of tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeToRight(worktreeId: worktreeId, of: tabId)
-        cleanupTerminals(allTabs: allTabs, tabIds: closed)
+        cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
