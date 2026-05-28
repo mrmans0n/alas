@@ -5,7 +5,6 @@ import Testing
 @MainActor
 @Suite("ACPHarnessBridge")
 struct ACPHarnessBridgeTests {
-
     private func makeHarness() -> HarnessService {
         HarnessService(
             socketServer: AgentHookSocketServer(socketPath: "/dev/null"),
