@@ -27,7 +27,8 @@ struct AiSplitButton: View {
             Button(action: onGenerate) {
                 HStack(spacing: 6) {
                     if busy {
-                        ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                        Spinner(lineWidth: 1.5, duration: 0.7)
+                            .frame(width: 12, height: 12)
                     } else {
                         Text("✨").font(.system(size: 11))
                     }

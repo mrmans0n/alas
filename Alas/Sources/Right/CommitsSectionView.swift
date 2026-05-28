@@ -151,7 +151,8 @@ struct CommitsSectionView: View {
     private var footer: some View {
         if isLoadingOlder {
             HStack(spacing: 6) {
-                ProgressView().controlSize(.mini)
+                Spinner(lineWidth: 1.5, duration: 0.7)
+                    .frame(width: 10, height: 10)
                 Text("Loading…")
                     .font(.system(size: 11))
                     .foregroundColor(theme.color("fg-faint"))

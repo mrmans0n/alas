@@ -59,7 +59,7 @@ struct ACPToolCallCard: View {
         if toolCall.content.isEmpty {
             HStack(spacing: 6) {
                 if toolCall.status == "in_progress" || toolCall.status == "pending" {
-                    Spinner().frame(width: 10, height: 10)
+                    Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
                     Text("Working…")
                 } else if toolCall.status == "canceled" || toolCall.status == "cancelled" {
                     Text("Canceled.")
@@ -90,7 +90,7 @@ struct ACPToolCallCard: View {
     private var statusIndicator: some View {
         switch toolCall.status {
         case "in_progress":
-            Spinner().frame(width: 11, height: 11)
+            Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
         case "pending":
             // Static dot while waiting for permission / queue.
             Circle().fill(theme.color("fg-faint")).frame(width: 5, height: 5)
@@ -147,19 +147,5 @@ struct ACPToolCallCard: View {
                 .foregroundStyle(theme.color("accent"))
         }
         .frame(width: 18, height: 18)
-    }
-}
-
-/// Compact circular spinner used by tool cards while a call is in flight.
-private struct Spinner: View {
-    @State private var angle: Double = 0
-    @Environment(\.theme) private var theme
-    var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.75)
-            .stroke(theme.color("accent"), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-            .rotationEffect(.degrees(angle))
-            .animation(.linear(duration: 0.7).repeatForever(autoreverses: false), value: angle)
-            .onAppear { angle = 360 }
     }
 }

@@ -20,9 +20,7 @@ struct BranchPicker: View {
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
                 if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.55)
+                    Spinner(lineWidth: 1.5, duration: 0.7)
                         .frame(width: 12, height: 12)
                 }
                 Image(systemName: "chevron.down")

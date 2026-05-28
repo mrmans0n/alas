@@ -98,8 +98,8 @@ struct ConflictsSection: View {
 
     private var progressRow: some View {
         HStack(spacing: 6) {
-            ProgressView()
-                .controlSize(.mini)
+            Spinner(lineWidth: 1.5, duration: 0.7)
+                .frame(width: 10, height: 10)
             Text("Agent resolving conflicts…")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
