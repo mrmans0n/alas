@@ -410,6 +410,8 @@
 		8B3D1B7B55629E989FCE53D1 /* ACPPermissionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F31D837F83B4F8B9FB348BD /* ACPPermissionPolicyTests.swift */; };
 		8BF52AFF90954B767B9D7E65 /* ACPSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBEFD27FD7013D458435779 /* ACPSession.swift */; };
 		E6383351E33B4FA1B6E83415 /* ACPTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 103D13C1CC4B4940844078F7 /* ACPTranscript.swift */; };
+		AA22334400BB5566778899FF /* ACPStreamingText.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22334400BB5566778899DD /* ACPStreamingText.swift */; };
+		AA22334400BB556677889900 /* ACPStreamingTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22334400BB5566778899EE /* ACPStreamingTextTests.swift */; };
 		8D22459A108B6BF47AEA71F7 /* session-update-available-models.json in Resources */ = {isa = PBXBuildFile; fileRef = 1B0785F1FFC8008C74009584 /* session-update-available-models.json */; };
 		8D86580619CA83FE832ACB25 /* AppConfigHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A216C9D856D2A6C43964E74 /* AppConfigHarnessTests.swift */; };
 		8DBA8F6E781ADBD5D59EDA13 /* CompletionDocumentationRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFB48AF581F74C564ACBCF5 /* CompletionDocumentationRenderer.swift */; };
@@ -1243,6 +1245,8 @@
 		BB6A90FAE1D410744D02A454 /* CommitPromptEditorWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitPromptEditorWindow.swift; sourceTree = "<group>"; };
 		BBBEFD27FD7013D458435779 /* ACPSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSession.swift; sourceTree = "<group>"; };
 		103D13C1CC4B4940844078F7 /* ACPTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscript.swift; sourceTree = "<group>"; };
+		AA22334400BB5566778899DD /* ACPStreamingText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPStreamingText.swift; sourceTree = "<group>"; };
+		AA22334400BB5566778899EE /* ACPStreamingTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPStreamingTextTests.swift; sourceTree = "<group>"; };
 		BC3CA543A17D1C3DFA70A80C /* DraftCommitTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabView.swift; sourceTree = "<group>"; };
 		BCA505FF2E6CFA8278C95C6E /* GhosttyConfigBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyConfigBuilder.swift; sourceTree = "<group>"; };
 		BD4A3B9B1103346242438940 /* FilesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabView.swift; sourceTree = "<group>"; };
@@ -2079,6 +2083,7 @@
 				321866B3EB8CCE337B1D3A58 /* ACPMessage.swift */,
 				BBBEFD27FD7013D458435779 /* ACPSession.swift */,
 				103D13C1CC4B4940844078F7 /* ACPTranscript.swift */,
+				AA22334400BB5566778899DD /* ACPStreamingText.swift */,
 				7615FEA1F225EBDE52CF5E14 /* ACPSessionManager.swift */,
 				F332906E17C5865856DBB90B /* ACPSessionRunner.swift */,
 				E0E1BF90CB3BE5BFDFA2EC7C /* ACPSessionStore.swift */,
@@ -2413,6 +2418,7 @@
 				D1B15CAE2163ED7C1A670F46 /* ACPComposerDraftTests.swift */,
 				C8A0A083659269CDD16A6764 /* ACPMessageTests.swift */,
 				AA11223300AA4455667788CC /* ACPMessageStableIdTests.swift */,
+				AA22334400BB5566778899EE /* ACPStreamingTextTests.swift */,
 				FB5B73ECBD730B5BB24E2240 /* ACPSessionManagerTests.swift */,
 				B91E5E766925FD6499548CFC /* ACPSessionRunnerTests.swift */,
 				45D7C5464CA7B663A9A7BBFF /* ACPSessionStoreCRUDTests.swift */,
@@ -3054,6 +3060,7 @@
 				900A70EF9D41AEF3953CABBB /* ACPSelectChip.swift in Sources */,
 				8BF52AFF90954B767B9D7E65 /* ACPSession.swift in Sources */,
 				E6383351E33B4FA1B6E83415 /* ACPTranscript.swift in Sources */,
+				AA22334400BB5566778899FF /* ACPStreamingText.swift in Sources */,
 				209FB0AAF20BDE5850A139F4 /* ACPSessionManager.swift in Sources */,
 				1F89B774F2DC7DD818AD4E5B /* ACPSessionRunner.swift in Sources */,
 				027A326E7DAB6C6E133E5FD3 /* ACPSessionStore.swift in Sources */,
@@ -3431,6 +3438,7 @@
 				7433DB9396574A02DBF9953D /* ACPLaunchSpecTests.swift in Sources */,
 				D10A8F47A537C1C8969752B1 /* ACPMessageTests.swift in Sources */,
 				AA11223300AA4455667788BB /* ACPMessageStableIdTests.swift in Sources */,
+				AA22334400BB556677889900 /* ACPStreamingTextTests.swift in Sources */,
 				395276FB3018E0B9E68A7D81 /* ACPMockClientTests.swift in Sources */,
 				4937795BA36F920B9930C916 /* ACPPermissionDecisionLogTests.swift in Sources */,
 				57138814D45D03AE10BE9D67 /* ACPPermissionFSTests.swift in Sources */,

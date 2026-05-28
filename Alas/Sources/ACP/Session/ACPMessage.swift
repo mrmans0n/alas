@@ -2,8 +2,8 @@ import Foundation
 
 enum ACPMessage: Equatable {
     case user(id: UUID, text: String, attachments: [Attachment])
-    case agent(id: UUID, text: String)
-    case thought(id: UUID, text: String)
+    case agent(id: UUID, StreamingText)
+    case thought(id: UUID, StreamingText)
     case toolCall(ToolCall)
     case fileEdit(id: UUID, FileEdit)
     case plan(id: UUID, [PlanItem])
@@ -114,11 +114,12 @@ enum ACPMessageCodec {
         return e
     }()
 
+    @MainActor
     static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
         case .user(_, let text, let atts): return try encoder.encode(UserPayload(text: text, attachments: atts))
-        case .agent(_, let text):           return try encoder.encode(TextPayload(text: text))
-        case .thought(_, let text):         return try encoder.encode(TextPayload(text: text))
+        case .agent(_, let buf):            return try encoder.encode(TextPayload(text: buf.value))
+        case .thought(_, let buf):          return try encoder.encode(TextPayload(text: buf.value))
         case .toolCall(let tc):             return try encoder.encode(tc)
         case .fileEdit(_, let fe):          return try encoder.encode(fe)
         case .plan(_, let items):           return try encoder.encode(PlanPayload(items: items))
@@ -126,15 +127,16 @@ enum ACPMessageCodec {
         }
     }
 
+    @MainActor
     static func decode(kind: String, payload: Data) throws -> ACPMessage {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
             return .user(id: UUID(), text: p.text, attachments: p.attachments)
         case "agent":
-            return .agent(id: UUID(), text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
+            return .agent(id: UUID(), StreamingText(try JSONDecoder().decode(TextPayload.self, from: payload).text))
         case "thought":
-            return .thought(id: UUID(), text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
+            return .thought(id: UUID(), StreamingText(try JSONDecoder().decode(TextPayload.self, from: payload).text))
         case "tool_call":
             return .toolCall(try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload))
         case "file_edit":

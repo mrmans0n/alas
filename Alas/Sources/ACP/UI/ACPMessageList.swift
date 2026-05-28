@@ -29,10 +29,16 @@ struct ACPMessageList: View {
     private var scrollSignature: Int {
         var hasher = Hasher()
         hasher.combine(transcript.messages.count)
+        // Streaming chunks mutate the buffer in place without re-publishing
+        // the transcript array; the tick gives the body a reason to re-eval
+        // so this signature changes and the tail-scroll fires per chunk.
+        hasher.combine(transcript.streamingTick)
         if let last = transcript.messages.last {
             hasher.combine(last.kind)
             switch last {
-            case .agent(_, let t), .thought(_, let t), .systemNotice(_, let t):
+            case .agent(_, let buf), .thought(_, let buf):
+                hasher.combine(buf.value.count)
+            case .systemNotice(_, let t):
                 hasher.combine(t.count)
             case .toolCall(let tc):
                 hasher.combine(tc.status)
@@ -179,10 +185,10 @@ struct ACPMessageList: View {
         switch m {
         case .user(_, let text, let attachments):
             UserMessageRow(text: text, attachments: attachments)
-        case .agent(_, let text):
-            AgentMessageRow(text: text)
-        case .thought(_, let text):
-            ACPThoughtView(text: text)
+        case .agent(_, let buf):
+            AgentMessageRow(buffer: buf)
+        case .thought(_, let buf):
+            ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
             ACPToolCallCard(toolCall: tc)
         case .fileEdit(_, let edit):
@@ -345,9 +351,9 @@ private struct UserMessageRow: View {
 // MARK: - Agent prose (markdown-rendered, full-width)
 
 private struct AgentMessageRow: View {
-    let text: String
+    @ObservedObject var buffer: StreamingText
     var body: some View {
-        ACPMarkdownText(raw: text)
+        ACPMarkdownText(raw: buffer.value)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
