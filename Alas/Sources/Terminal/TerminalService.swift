@@ -99,9 +99,11 @@ final class TerminalService {
             startupScript: effectiveScript,
             sessionId: sessionId
         )
-        let plan = zmxClient.wrap(
-            sessionName: ZmxSessionName.derive(leafId: sessionId),
-            plan: innerPlan
+        let plan = TerminalService.resolveLaunchPlan(
+            keepAlive: cfg.keepSessionsAlive,
+            zmxClient: zmxClient,
+            sessionId: sessionId,
+            innerPlan: innerPlan
         )
         // Plan-supplied env overrides (e.g. ZDOTDIR for zsh startup scripts)
         // win over inherited env.
@@ -209,6 +211,27 @@ final class TerminalService {
         default:
             return worktree.path
         }
+    }
+
+    /// Decide which launch plan to use for a new pane. When
+    /// `keepAlive` is true and zmx is available, the inner plan is wrapped
+    /// in `zmx attach <name>` so the shell survives app quit. When
+    /// `keepAlive` is false, the inner plan is returned unchanged — pre-#317
+    /// behavior. When zmx is unavailable, `ZmxClient.wrap` returns the inner
+    /// plan unchanged regardless of `keepAlive`.
+    ///
+    /// Static so tests can drive it without spinning up `Ghostty.App`.
+    static func resolveLaunchPlan(
+        keepAlive: Bool,
+        zmxClient: ZmxClient,
+        sessionId: String,
+        innerPlan: StartupScriptInstaller.Plan
+    ) -> StartupScriptInstaller.Plan {
+        guard keepAlive else { return innerPlan }
+        return zmxClient.wrap(
+            sessionName: ZmxSessionName.derive(leafId: sessionId),
+            plan: innerPlan
+        )
     }
 
     private static func composeStartupScript(
