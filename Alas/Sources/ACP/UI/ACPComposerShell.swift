@@ -99,6 +99,13 @@ struct ACPComposer: View {
     }
 
     private var hint: some View {
+        ViewThatFits(in: .horizontal) {
+            hintContent(showShortcuts: true)
+            hintContent(showShortcuts: false)
+        }
+    }
+
+    private func hintContent(showShortcuts: Bool) -> some View {
         HStack(spacing: 6) {
             // Pulse + agent identity (icon + ACP label). Pulse moved here
             // from the toolbar so the "live agent" cue sits next to the
@@ -107,11 +114,13 @@ struct ACPComposer: View {
             if let agent = agentLookup(session.agentId) {
                 AgentLogoView(agent: agent).frame(width: 14, height: 14)
             }
-            Rectangle().fill(theme.color("line")).frame(width: 0.5, height: 12).padding(.horizontal, 2)
-            kbdLabel("⏎")
-            Text("send").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
-            kbdLabel("⇧⏎")
-            Text("newline").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
+            if showShortcuts {
+                Rectangle().fill(theme.color("line")).frame(width: 0.5, height: 12).padding(.horizontal, 2)
+                kbdLabel("⏎")
+                Text("send").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
+                kbdLabel("⇧⏎")
+                Text("newline").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
+            }
         }
     }
 
