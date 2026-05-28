@@ -20,6 +20,7 @@ struct ACPInputField: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.drawsBackground = false
         textView.backgroundColor = .clear
+        textView.focusRingType = .none
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
         textView.insertionPointColor = NSColor.controlAccentColor
         context.coordinator.textView = textView
@@ -34,6 +35,7 @@ struct ACPInputField: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.backgroundColor = .clear
+        scroll.focusRingType = .none
         scroll.documentView = textView
         // Auto-focus on mount. Tabs are created lazily (the switch in
         // `CenterPaneView` only renders the active tab), so this fires
