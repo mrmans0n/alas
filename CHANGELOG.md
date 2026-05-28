@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-28
+
+### ✨ Features
+
+- Add a uniform chip row across agents (#328).
+- Add a terminal/chat selector to the new worktree dialog (#324).
+- Add a toggle to disable cross-quit session persistence (#323).
+
+### 🐛 Fixes
+
+- Isolate terminal session restore state (#326).
+- Use a consistent loading spinner UI (#327).
+- Route the language selector settings link to the Code section (#325).
+
 ## [0.4.1] - 2026-05-28
 
 ### 🐛 Fixes
