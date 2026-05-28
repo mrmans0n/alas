@@ -1046,11 +1046,12 @@ final class AppState {
     }
 
     /// Activate a specific harness session: bring the app to front, select
-    /// the worktree, activate the terminal tab hosting `sessionId`, and
-    /// focus the pane within that tab that owns the session (so keyboard
-    /// input and the tab-bar harness badge follow the user's intent).
-    /// If the tab is no longer present (session was closed mid-flight) the
-    /// worktree is still selected so the user lands somewhere sensible.
+    /// the worktree, activate the terminal or ACP tab hosting `sessionId`.
+    /// For terminal tabs the owning leaf is also focused (so keyboard input
+    /// follows the user's intent); ACP tabs are single-pane so no leaf
+    /// focusing is needed. If the tab is no longer present (session was
+    /// closed mid-flight) the worktree is still selected so the user lands
+    /// somewhere sensible.
     func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
         selectedWorktreeId = worktreeId
         var matchedTabId: TabID?
@@ -1061,6 +1062,15 @@ final class AppState {
             matchedTabId = tab.id
             matchedLeafId = leaf.id
             break
+        }
+        // Fall through to ACP tabs: no leaf focusing needed — an ACP tab
+        // is a single pane.
+        if matchedTabId == nil {
+            for tab in tabs.tabs(forWorktree: worktreeId) {
+                guard case .acpSession(let s) = tab, s.sessionId == sessionId else { continue }
+                matchedTabId = tab.id
+                break
+            }
         }
         if let tabId = matchedTabId {
             if let leafId = matchedLeafId {
@@ -2272,6 +2282,12 @@ final class AppState {
     @ObservationIgnored
     private var acpManagers: [String: ACPSessionManager] = [:]
 
+    /// Mirrors `ACPSession.streamingState` into `HarnessService.activityBySession`
+    /// so the sidebar work badge surfaces ACP activity. Attached for every
+    /// manager created via `acpManager(for:)`; detached from `disposeACPManager(for:)`.
+    @ObservationIgnored
+    private lazy var acpHarnessBridge = ACPHarnessBridge(harness: harness)
+
     /// Returns `true` when the editor has a live, dirty (unsaved) buffer for
     /// the given absolute path within the given worktree.
     func editorHasDirtyBuffer(for absolutePath: String, worktreeId: String) -> Bool {
@@ -2315,6 +2331,7 @@ final class AppState {
                 }
             )
             acpManagers[worktree.id] = mgr
+            acpHarnessBridge.attach(manager: mgr)
             return mgr
         } catch {
             return nil
@@ -2330,6 +2347,7 @@ final class AppState {
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
         guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
+        acpHarnessBridge.detach(worktreeId: worktreeId)
         let sessionIds = Array(manager.runners.keys)
         // Synchronously cancel the runner's async loops so they stop
         // pumping the agent's stdout into our handlers immediately —

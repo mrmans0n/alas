@@ -47,8 +47,11 @@ struct SidebarView: View {
                                 },
                                 harnessSummary: { worktreeId in
                                     let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
-                                        if case .terminal(let s) = tab { return s.root.leaves().map(\.sessionId) }
-                                        return []
+                                        switch tab {
+                                        case .terminal(let s):   return s.root.leaves().map(\.sessionId)
+                                        case .acpSession(let s): return [s.sessionId]
+                                        default:                 return []
+                                        }
                                     }
                                     return state.harness.summary(forSessionIds: ids)
                                 },
@@ -79,8 +82,11 @@ struct SidebarView: View {
                                 showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
                                 onActivateHarness: { wt in
                                     let ids = state.tabs.tabs(forWorktree: wt.id).flatMap { tab -> [String] in
-                                        if case .terminal(let s) = tab { return s.root.leaves().map(\.sessionId) }
-                                        return []
+                                        switch tab {
+                                        case .terminal(let s):   return s.root.leaves().map(\.sessionId)
+                                        case .acpSession(let s): return [s.sessionId]
+                                        default:                 return []
+                                        }
                                     }
                                     guard let summary = state.harness.summary(forSessionIds: ids) else { return }
                                     state.activateHarnessSession(

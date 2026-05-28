@@ -382,6 +382,34 @@ struct HarnessServiceTests {
         #expect(service.activityBySession["session-1"]?.state == .idle)
     }
 
+    @Test func setExternalActivityUpsertsBusyState() {
+        let (service, _) = makeService()
+        service.setExternalActivity(sessionId: "acp-1", agent: .claude, state: .busy)
+        #expect(service.activityBySession["acp-1"]?.state == .busy)
+        #expect(service.activityBySession["acp-1"]?.agent == .claude)
+    }
+
+    @Test func setExternalActivityReplacesExistingState() {
+        let (service, _) = makeService()
+        service.setExternalActivity(sessionId: "acp-1", agent: .claude, state: .busy)
+        service.setExternalActivity(sessionId: "acp-1", agent: .claude, state: .permissionRequest)
+        #expect(service.activityBySession["acp-1"]?.state == .permissionRequest)
+    }
+
+    @Test func setExternalActivityDoesNotPostNotifications() {
+        let (service, collector) = makeService()
+        service.setExternalActivity(sessionId: "acp-1", agent: .claude, state: .awaitingInput)
+        #expect(collector.requests.isEmpty)
+    }
+
+    @Test func setExternalActivityContributesToSummary() {
+        let (service, _) = makeService()
+        service.setExternalActivity(sessionId: "acp-1", agent: .claude, state: .busy)
+        let s = service.summary(forSessionIds: ["acp-1"])
+        #expect(s?.state == .running)
+        #expect(s?.primarySessionId == "acp-1")
+    }
+
     @Test func forgetSession_cancelsCursorIdleDebounce() async throws {
         let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
         service.handleSocketEvent(
