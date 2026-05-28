@@ -185,8 +185,8 @@ struct ACPMessageList: View {
         switch m {
         case .user(_, let text, let attachments):
             UserMessageRow(text: text, attachments: attachments)
-        case .agent(_, let buf):
-            AgentMessageRow(buffer: buf)
+        case .agent(let id, let buf):
+            AgentMessageRow(messageId: id.uuidString, transcript: transcript, buffer: buf)
         case .thought(_, let buf):
             ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
@@ -351,9 +351,11 @@ private struct UserMessageRow: View {
 // MARK: - Agent prose (markdown-rendered, full-width)
 
 private struct AgentMessageRow: View {
+    let messageId: String
+    let transcript: ACPTranscript
     @ObservedObject var buffer: StreamingText
     var body: some View {
-        ACPMarkdownText(raw: buffer.value)
+        ACPMarkdownText(raw: buffer.value, cache: transcript.markdownCache(forMessage: messageId))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

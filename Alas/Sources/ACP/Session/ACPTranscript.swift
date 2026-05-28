@@ -20,4 +20,25 @@ final class ACPTranscript: ObservableObject {
     /// stableId + StreamingText identity equality keep the ForEach row
     /// tree stable across ticks.
     @Published var streamingTick: UInt32 = 0
+
+    // MARK: - Per-message markdown caches
+
+    private var markdownCaches: [String: ACPMarkdownBlockCache] = [:]
+
+    func markdownCache(forMessage id: String) -> ACPMarkdownBlockCache {
+        if let c = markdownCaches[id] { return c }
+        let c = ACPMarkdownBlockCache()
+        markdownCaches[id] = c
+        return c
+    }
+
+    func dropMarkdownCache(forMessage id: String) {
+        markdownCaches.removeValue(forKey: id)
+    }
+
+    /// Clear all per-message caches; call when the transcript itself is
+    /// discarded (e.g. session close).
+    func resetMarkdownCaches() {
+        markdownCaches.removeAll()
+    }
 }
