@@ -1317,6 +1317,22 @@ final class AppState {
               let worktree = worktree(withId: worktreeId),
               let project = projects.first(where: { $0.id == worktree.projectId }) else { return nil }
 
+        // When the user has opted out of cross-quit persistence and none of
+        // the tab's leaves have a live session (the only way to reach this
+        // branch is a relaunch where the registry is empty for these
+        // leaves), drop the persisted tab instead of opening fresh shells.
+        // Otherwise the toggle would only strip the `zmx attach` wrapper and
+        // still resurrect a plain shell in the same tab slot on every
+        // relaunch.
+        if !config.terminal.keepSessionsAlive {
+            let hasLiveLeaf = state.root.leaves()
+                .contains { terminal.registry.session(for: $0.id) != nil }
+            if !hasLiveLeaf {
+                tabs.close(worktreeId: worktreeId, tabId: tabId)
+                return nil
+            }
+        }
+
         for leaf in state.root.leaves() {
             // Idempotent: skip leaves whose session is already alive in the
             // registry. The leaf's id is the stable identity used as both
