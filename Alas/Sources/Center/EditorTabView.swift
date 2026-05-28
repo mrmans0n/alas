@@ -275,12 +275,14 @@ struct EditorTabView: View {
                 buffer?.languageOverride = newLanguage
             },
             onOpenSettings: {
+                appState.pendingSettingsSection = .code
                 openWindow(id: "settings")
             },
             onInstall: {
                 // The existing InstallNudgeBanner below the breadcrumb already
                 // handles inline install flows; from the badge popover we
                 // surface the install entry via Settings → Code.
+                appState.pendingSettingsSection = .code
                 openWindow(id: "settings")
             }
         )

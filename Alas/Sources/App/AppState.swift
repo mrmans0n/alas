@@ -10,6 +10,7 @@ final class AppState {
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
     var selectedWorktreeId: String?
+    var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
     private var _tabs: TabsManager?
     var tabs: TabsManager {

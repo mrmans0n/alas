@@ -64,14 +64,24 @@ struct SettingsWindow: View {
         .ignoresSafeArea()
         .onAppear {
             showsDebug = AdvancedSettingsVisibility.isEnabled()
+            consumePendingSettingsSection()
             if !showsDebug, section == .debug {
                 section = .agents
             }
             state.rescanAgents()
         }
+        .onChange(of: state.pendingSettingsSection) {
+            consumePendingSettingsSection()
+        }
     }
 
     private func closeWindow() {
         NSApp.keyWindow?.close()
+    }
+
+    private func consumePendingSettingsSection() {
+        guard let pending = state.pendingSettingsSection else { return }
+        section = pending
+        state.pendingSettingsSection = nil
     }
 }
