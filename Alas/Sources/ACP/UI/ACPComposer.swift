@@ -8,6 +8,8 @@ struct ACPInputField: NSViewRepresentable {
     /// Returns `true` when the host accepted the submission (and the
     /// textview should be cleared) or `false` to keep the draft in
     /// place (e.g. session not ready, prompt already in flight).
+    let onDraftChange: (ACPComposerDraft) -> Void
+    let onDraftClear: () -> Void
     let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -24,6 +26,7 @@ struct ACPInputField: NSViewRepresentable {
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
         textView.insertionPointColor = NSColor.controlAccentColor
         context.coordinator.textView = textView
+        context.coordinator.restoreInitialDraft(into: textView)
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
         let coord = context.coordinator
@@ -53,20 +56,39 @@ struct ACPInputField: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(worktreeRoot: worktreeRoot, onSubmit: onSubmit)
+        Coordinator(
+            worktreeRoot: worktreeRoot,
+            initialDraft: session.composerDraft,
+            onDraftChange: onDraftChange,
+            onDraftClear: onDraftClear,
+            onSubmit: onSubmit
+        )
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         let worktreeRoot: URL
+        let initialDraft: ACPComposerDraft
+        let onDraftChange: (ACPComposerDraft) -> Void
+        let onDraftClear: () -> Void
         let onSubmit: (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
         var promptSuggestions: [ACPPromptSuggestion] = []
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
         var theme: Theme?
         weak var textView: NSTextView?
+        private var restoringDraft = false
 
-        init(worktreeRoot: URL, onSubmit: @escaping (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool) {
+        init(
+            worktreeRoot: URL,
+            initialDraft: ACPComposerDraft,
+            onDraftChange: @escaping (ACPComposerDraft) -> Void,
+            onDraftClear: @escaping () -> Void,
+            onSubmit: @escaping (_ text: String, _ attachments: [ACPMessage.Attachment]) -> Bool
+        ) {
             self.worktreeRoot = worktreeRoot
+            self.initialDraft = initialDraft
+            self.onDraftChange = onDraftChange
+            self.onDraftClear = onDraftClear
             self.onSubmit = onSubmit
         }
 
@@ -103,6 +125,8 @@ struct ACPInputField: NSViewRepresentable {
                   let storage = tv.textStorage
             else { return }
             ACPMarkdownLiveStyler.restyle(storage)
+            guard !restoringDraft else { return }
+            onDraftChange(Self.draft(from: storage))
         }
 
         func submit(_ textView: NSTextView) {
@@ -115,7 +139,64 @@ struct ACPInputField: NSViewRepresentable {
             // though the callback rejected the prompt.
             if onSubmit(text, attachments) {
                 textView.string = ""
+                onDraftClear()
             }
+        }
+
+        func restoreInitialDraft(into textView: NSTextView) {
+            guard !initialDraft.isEmpty, let storage = textView.textStorage else { return }
+            restoringDraft = true
+            storage.setAttributedString(Self.attributedString(from: initialDraft))
+            ACPMarkdownLiveStyler.restyle(storage)
+            textView.needsDisplay = true
+            restoringDraft = false
+        }
+
+        static func draft(from attributed: NSAttributedString) -> ACPComposerDraft {
+            var segments: [ACPComposerDraft.Segment] = []
+            attributed.enumerateAttribute(
+                .attachmentURI,
+                in: NSRange(location: 0, length: attributed.length)
+            ) { value, range, _ in
+                if let uri = value as? String,
+                   let chip = attributed.attribute(.attachment, at: range.location, effectiveRange: nil)
+                            as? ACPMentionChipAttachment {
+                    segments.append(.mention(displayName: chip.displayName, uri: uri))
+                } else if let uri = value as? String {
+                    let segment = attributed.attributedSubstring(from: range).string
+                    let displayName = segment.trimmingCharacters(in: .init(charactersIn: "@ "))
+                    segments.append(.mention(displayName: displayName, uri: uri))
+                } else {
+                    let text = attributed.attributedSubstring(from: range).string
+                    if !text.isEmpty {
+                        segments.append(.text(text))
+                    }
+                }
+            }
+            return ACPComposerDraft(segments: segments)
+        }
+
+        static func attributedString(from draft: ACPComposerDraft) -> NSAttributedString {
+            let result = NSMutableAttributedString(string: "")
+            let baseAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+            ]
+            for segment in draft.segments {
+                switch segment {
+                case .text(let text):
+                    result.append(NSAttributedString(string: text, attributes: baseAttributes))
+                case .mention(let displayName, let uri):
+                    let attachment = ACPMentionChipAttachment(displayName: displayName, uri: uri)
+                    let chip = NSMutableAttributedString(attachment: attachment)
+                    chip.addAttributes([
+                        .attachmentURI: uri,
+                        .toolTip: URL(string: uri)?.path ?? uri,
+                    ], range: NSRange(location: 0, length: chip.length))
+                    result.append(chip)
+                }
+            }
+            return result
         }
 
         /// Walks the attributed string. Mention chips (attachments tagged
@@ -313,6 +394,7 @@ final class ACPNSTextView: NSTextView {
         chipString.append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 13)]))
         textStorage?.append(chipString)
         setSelectedRange(NSRange(location: (textStorage?.length ?? 0), length: 0))
+        didChangeText()
     }
 
     private func insertSlash(_ suggestion: ACPPromptSuggestion) {

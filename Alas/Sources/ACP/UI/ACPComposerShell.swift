@@ -49,6 +49,8 @@ struct ACPComposer: View {
                 session: session,
                 worktreeRoot: worktreeRoot,
                 actions: actions,
+                onDraftChange: { draft in manager.persistComposerDraft(draft, for: session) },
+                onDraftClear: { manager.clearComposerDraft(for: session) },
                 onSubmit: onSubmit
             )
             .frame(minHeight: 44, maxHeight: 140)
