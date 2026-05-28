@@ -66,20 +66,11 @@ struct NewWorktreeDialog: View {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
                 DialogField(label: "Open after create") {
-                    launchSurfaceSegmented
-                }
-                if openAfterCreate, !pickerAgents.isEmpty {
-                    DialogField(label: "Launch agent") {
-                        Picker("", selection: $launchAgentId) {
-                            if launchMode == .terminal {
-                                Text("None").tag("none")
-                            }
-                            ForEach(pickerAgents) { agent in
-                                Text(agent.displayName).tag(agent.id)
-                            }
+                    HStack(spacing: 8) {
+                        launchSurfaceSegmented
+                        if openAfterCreate, !pickerAgents.isEmpty {
+                            launchAgentPicker
                         }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
                     }
                 }
                 if let createErrorMessage {
@@ -329,6 +320,25 @@ struct NewWorktreeDialog: View {
         Self.acpSegmentEnabled(enabledAgents: state.agentRegistry.enabled())
     }
 
+    private var launchAgentPicker: some View {
+        Picker("", selection: $launchAgentId) {
+            if launchMode == .terminal {
+                Text("None").tag("none")
+            }
+            ForEach(pickerAgents) { agent in
+                Label {
+                    Text(agent.displayName)
+                } icon: {
+                    Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
+                }
+                .tag(agent.id)
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .fixedSize()
+    }
+
     private var launchSurfaceSegmented: some View {
         HStack(spacing: 0) {
             HStack(spacing: 2) {
@@ -357,8 +367,9 @@ struct NewWorktreeDialog: View {
                 segment(
                     isSelected: openAfterCreate && launchMode == .acp,
                     icon: "sparkle",
-                    label: "ACP chat",
-                    isEnabled: acpSegmentEnabled
+                    label: "Chat",
+                    isEnabled: acpSegmentEnabled,
+                    disabledHelp: "Enable an ACP-capable agent in Settings → Agents."
                 ) {
                     openAfterCreate = true
                     launchMode = .acp
@@ -385,6 +396,7 @@ struct NewWorktreeDialog: View {
         icon: String,
         label: String,
         isEnabled: Bool,
+        disabledHelp: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -413,7 +425,14 @@ struct NewWorktreeDialog: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
-        .help(isEnabled ? "" : "Enable an ACP-capable agent in Settings → Agents.")
+        .modifier(SegmentHelpModifier(text: isEnabled ? nil : disabledHelp))
+    }
+
+    private struct SegmentHelpModifier: ViewModifier {
+        let text: String?
+        func body(content: Content) -> some View {
+            if let text { content.help(text) } else { content }
+        }
     }
 
     // MARK: - Launch surface helpers
