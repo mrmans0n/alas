@@ -107,10 +107,6 @@ struct ACPComposer: View {
             if let agent = agentLookup(session.agentId) {
                 AgentLogoView(agent: agent).frame(width: 14, height: 14)
             }
-            Text("ACP").font(.system(size: 10, weight: .semibold))
-                .tracking(0.5)
-                .textCase(.uppercase)
-                .foregroundStyle(theme.color("fg-muted"))
             Rectangle().fill(theme.color("line")).frame(width: 0.5, height: 12).padding(.horizontal, 2)
             kbdLabel("⏎")
             Text("send").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
@@ -159,16 +155,28 @@ struct ACPComposer: View {
             )
         }
         .buttonStyle(.plain)
-        .help(autoRunHelpText)
+        .disabled(autoRunDisabled)
+        .opacity(autoRunDisabled ? 0.5 : 1.0)
+        .help(autoRunHelp)
     }
 
-    private var autoRunHelpText: String {
+    private var autoRunDisabled: Bool {
+        if session.chipState.autoRun == .ignored { return true }
+        switch session.streamingState {
+        case .streaming, .sending: return true
+        default: return !session.attached || session.disconnected
+        }
+    }
+
+    private var autoRunHelp: String {
         if session.chipState.autoRun == .ignored {
             return "Auto-run has no effect — this agent doesn't request permissions"
         }
-        return session.autoRunEnabled
-            ? "Auto-run is ON — agent runs tools without asking"
-            : "Click to skip permission prompts"
+        if case .streaming = session.streamingState { return "Auto-run cannot be changed while streaming" }
+        if case .sending = session.streamingState { return "Auto-run cannot be changed while sending" }
+        if !session.attached { return "Agent connecting…" }
+        if session.disconnected { return "Agent disconnected" }
+        return session.autoRunEnabled ? "Auto-run is ON — agent runs tools without asking" : "Click to skip permission prompts"
     }
 
     /// Mirrors the design's outlined-pill treatment: dark accent-tinted
