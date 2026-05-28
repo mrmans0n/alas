@@ -225,7 +225,8 @@ private enum RegexFallbackHighlighter {
             "rename from ",
             "rename to ",
             "copy from ",
-            "copy to "
+            "copy to ",
+            "\\ No newline at end of file"
         ].contains(where: { line.hasPrefix($0) })
     }
 

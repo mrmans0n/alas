@@ -304,6 +304,7 @@ struct TreeSitterHighlighterTests {
         new mode 100755
         rename from old.txt
         rename to new.txt
+        \\ No newline at end of file
         """
         let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "patch")
 
@@ -313,6 +314,7 @@ struct TreeSitterHighlighterTests {
         #expect(capture(for: "new mode 100755", in: src, spans: spans) == .keyword)
         #expect(capture(for: "rename from old.txt", in: src, spans: spans) == .keyword)
         #expect(capture(for: "rename to new.txt", in: src, spans: spans) == .keyword)
+        #expect(capture(for: #"\ No newline at end of file"#, in: src, spans: spans) == .keyword)
     }
 
     @Test("markup, CSS, and SQL fallback emit useful spans")
