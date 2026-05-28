@@ -58,4 +58,17 @@ struct ACPCodeBlockHighlighterTests {
         #expect(font?.isFixedPitch == true)
         #expect(color == EditorTheme(theme: theme).defaultFG)
     }
+
+    @Test("highlighted output bridges to Swift AttributedString")
+    func highlightedOutputBridgesToSwiftAttributedString() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let nsAttributed = ACPCodeBlockHighlighter.attributedString(
+            code: "let value = 1",
+            language: "swift",
+            theme: theme
+        )
+        let swiftAttributed = AttributedString(nsAttributed)
+
+        #expect(String(swiftAttributed.characters) == "let value = 1")
+    }
 }

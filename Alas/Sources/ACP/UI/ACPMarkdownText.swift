@@ -269,13 +269,17 @@ private struct CodeBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(theme.color("fg"))
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10).padding(.vertical, 8)
+                Text(AttributedString(ACPCodeBlockHighlighter.attributedString(
+                    code: code,
+                    language: language,
+                    theme: theme
+                )))
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(theme.color("fg"))
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10).padding(.vertical, 8)
             }
         }
         .background(theme.color("bg-0").opacity(0.6))
