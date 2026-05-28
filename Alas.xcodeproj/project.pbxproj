@@ -93,7 +93,6 @@
 		1BC03FAEA1E89F3A74A98DE4 /* AppConfigShortcutsCodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45513A6B9EAA4E9744502597 /* AppConfigShortcutsCodingTests.swift */; };
 		1C5D64F032EAD5EA28B2482B /* ACPComposerActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0206F856D9639147D0A4BF /* ACPComposerActions.swift */; };
 		1D66F354E7488D0CDAC39BE2 /* TreeSitterRust in Frameworks */ = {isa = PBXBuildFile; productRef = 8007CCE96A65B912CE519EF0 /* TreeSitterRust */; };
-		1DB47076C613039ECE164F28 /* ACPPlanCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E3365E06CDDF9C235A03BA6 /* ACPPlanCard.swift */; };
 		1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */; };
 		1DF096E0925EFA91B9033642 /* AppConfigChangesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333EA07C2BCA5E18F55E2613 /* AppConfigChangesTests.swift */; };
 		1E5EA96E9798649521CE1427 /* ACPAdapterInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFAFB40F5FACBC726C7E4172 /* ACPAdapterInstaller.swift */; };
@@ -1040,7 +1039,6 @@
 		5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileType.swift; sourceTree = "<group>"; };
 		5DD723B8C15EF2413C5D935D /* BlockedLanguageServerNudgeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedLanguageServerNudgeResolver.swift; sourceTree = "<group>"; };
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
-		5E3365E06CDDF9C235A03BA6 /* ACPPlanCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPlanCard.swift; sourceTree = "<group>"; };
 		5F128D8543DA5FC5C39C22E9 /* ACPPermissionDecisionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionDecisionLog.swift; sourceTree = "<group>"; };
 		5F931B1EEA7F04855BAE5A43 /* WorkingTreeStageAllActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkingTreeStageAllActionTests.swift; sourceTree = "<group>"; };
 		6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeInstallerTests.swift; sourceTree = "<group>"; };
@@ -2282,7 +2280,6 @@
 				E49006251DFBE67CCD0C4008 /* ACPMentionPicker.swift */,
 				3F79A184C86BE6C6BF72EB57 /* ACPMessageList.swift */,
 				0BCD93747BF71CB256038314 /* ACPPermissionPrompt.swift */,
-				5E3365E06CDDF9C235A03BA6 /* ACPPlanCard.swift */,
 				B7AAAEB5A9C69FC459AAD70B /* ACPPlanPill.swift */,
 				2CDDDC4C6146165CA4C7474E /* ACPPlanPillState.swift */,
 				987ABA2B4C9EA522DC9860B9 /* ACPQueuedBubble.swift */,
@@ -3106,7 +3103,6 @@
 				0BBFEE487AF71AD858B19EC5 /* ACPPermissionPrompt.swift in Sources */,
 				52A5CDD852333A0C4BDC6995 /* ACPPermissionRequest.swift in Sources */,
 				823AA3E801A11C535C9438BD /* ACPPermissionScope.swift in Sources */,
-				1DB47076C613039ECE164F28 /* ACPPlanCard.swift in Sources */,
 				B055F47062645975A500E2EF /* ACPPlanPill.swift in Sources */,
 				CF6CC4CD0C7841CA79DB0E4E /* ACPPlanPillState.swift in Sources */,
 				7556121D51C54458FCAFED2A /* ACPProtocolVersion.swift in Sources */,
