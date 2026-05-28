@@ -3,8 +3,8 @@ import Testing
 
 @Suite
 struct ZmxSunPathBudgetTests {
-    /// Longest socket basename we ever produce:
-    ///   "alas-" + UUID() + ".sock" = 5 + 36 + 5 = 46 chars
+    /// Longest socket basename we currently support:
+    ///   legacy "alas-" + UUID + ".sock" = 46 chars
     /// Plus the path separator after the directory = 47 chars overhead.
     /// sun_path holds 104 bytes including the NUL terminator, so usable
     /// path is 103 bytes — budget allows directories up to 103 - 47 = 56 chars.
