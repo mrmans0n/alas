@@ -34,6 +34,34 @@ struct ACPSessionRunnerTests {
         #expect(rows[0].kind == "agent")
     }
 
+    @Test("sending a prompt resumes transcript tail following")
+    func sendResumesTranscriptTailFollowing() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.followsTranscriptTail = false
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        runner.send(text: "new turn", attachments: [])
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.followsTranscriptTail)
+        #expect(session.messages.count == 1)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("sliceLines honours line + limit parameters")
     func sliceLinesRange() {
         let full = "one\ntwo\nthree\nfour\nfive"

@@ -24,6 +24,17 @@ struct ACPSessionTests {
         else { Issue.record("expected user message") }
     }
 
+    @Test("transcript tail following is runtime state")
+    func transcriptTailFollowingDefaultsToEnabled() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        #expect(session.followsTranscriptTail)
+
+        session.followsTranscriptTail = false
+        session.apply(.agentMessageChunk(.text("background update")))
+
+        #expect(!session.followsTranscriptTail)
+    }
+
     @Test("plan update creates / replaces the plan message")
     func plan() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
