@@ -13,9 +13,9 @@ struct ACPChipState: Equatable {
 /// composer knows which RPC to send when the user changes the selection.
 struct ChipSpec: Equatable {
     enum Source: Equatable {
-        case modes                           // dispatch via session/set_mode
+        case mode                            // dispatch via session/set_mode
         case configOption(id: String)        // dispatch via session/set_config_option
-        case models                          // dispatch via session/set_model
+        case model                           // dispatch via session/set_model
     }
     let source: Source
     let options: [Item]
@@ -42,7 +42,7 @@ extension ACPChipState {
         let routing = ACPAgentProfiles.routing(for: agentId)
 
         let models: ChipSpec? = availableModels.isEmpty ? nil : ChipSpec(
-            source: .models,
+            source: .model,
             options: availableModels.map {
                 ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
             },
@@ -51,13 +51,11 @@ extension ACPChipState {
         let mode = chipSpec(from: routing.modeSource,
                             modes: availableModes,
                             currentMode: currentMode,
-                            configOptions: configOptions,
-                            agentId: agentId)
+                            configOptions: configOptions)
         let thinking = chipSpec(from: routing.thinkingSource,
                                 modes: availableModes,
                                 currentMode: currentMode,
-                                configOptions: configOptions,
-                                agentId: agentId)
+                                configOptions: configOptions)
         return ACPChipState(models: models, mode: mode,
                             thinking: thinking, autoRun: routing.autoRun)
     }
@@ -66,8 +64,7 @@ extension ACPChipState {
         from source: ACPAgentProfiles.ChipSource,
         modes: [ACPModeInfo],
         currentMode: String?,
-        configOptions: [ACPConfigOption],
-        agentId: String
+        configOptions: [ACPConfigOption]
     ) -> ChipSpec? {
         switch source {
         case .none:
@@ -75,7 +72,7 @@ extension ACPChipState {
         case .modes:
             guard !modes.isEmpty else { return nil }
             return ChipSpec(
-                source: .modes,
+                source: .mode,
                 options: modes.map {
                     ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
                 },

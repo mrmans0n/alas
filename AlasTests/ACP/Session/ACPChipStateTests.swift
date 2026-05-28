@@ -34,7 +34,7 @@ struct ACPChipStateTests {
         #expect(state.models?.options.count == 1)
         #expect(state.mode?.options.count == 2)
         #expect(state.mode?.currentId == "default")
-        #expect(state.mode?.source == .modes)
+        #expect(state.mode?.source == .mode)
         #expect(state.thinking?.currentId == "high")
         if case .configOption(let id)? = state.thinking?.source { #expect(id == "effort") }
         else { Issue.record("expected configOption source") }
@@ -53,7 +53,7 @@ struct ACPChipStateTests {
         #expect(state.mode == nil)
         #expect(state.thinking?.options.count == 3)
         #expect(state.thinking?.currentId == "medium")
-        #expect(state.thinking?.source == .modes)
+        #expect(state.thinking?.source == .mode)
         #expect(state.autoRun == .ignored)
     }
 
