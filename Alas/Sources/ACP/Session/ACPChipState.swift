@@ -46,7 +46,7 @@ extension ACPChipState {
         // `availableModels` list. Either way the chip dispatches via the
         // source tag on `ChipSpec`.
         let models: ChipSpec? =
-            modelChipFromConfigOptions(configOptions)
+            chipFromCategoryConfigOption(category: "model", in: configOptions)
             ?? (availableModels.isEmpty ? nil : ChipSpec(
                 source: .model,
                 options: availableModels.map {
@@ -54,10 +54,13 @@ extension ACPChipState {
                 },
                 currentId: currentModel))
 
-        let mode = chipSpec(from: routing.modeSource,
-                            modes: availableModes,
-                            currentMode: currentMode,
-                            configOptions: configOptions)
+        // Same precedence rule for Mode: a `category: "mode"` configOption
+        // wins over the legacy `availableModes` list.
+        let mode = chipFromCategoryConfigOption(category: "mode", in: configOptions)
+            ?? chipSpec(from: routing.modeSource,
+                        modes: availableModes,
+                        currentMode: currentMode,
+                        configOptions: configOptions)
         let thinking = chipSpec(from: routing.thinkingSource,
                                 modes: availableModes,
                                 currentMode: currentMode,
@@ -107,15 +110,19 @@ extension ACPChipState {
             currentId: opt.currentValue)
     }
 
-    /// Finds a configOption that advertises itself as a model selector
-    /// (`category == "model"`, with `"Model"` as an alias for older
-    /// drafts). Returns nil when no such option exists, in which case the
-    /// caller falls back to the legacy `availableModels` list.
-    private static func modelChipFromConfigOptions(_ options: [ACPConfigOption]) -> ChipSpec? {
-        let modelCategories: Set<String> = ["model", "Model"]
+    /// Finds a configOption that advertises itself for the given category
+    /// (e.g. `"model"`, `"mode"`). Older drafts capitalized the marker, so
+    /// the caller accepts both forms by listing each spelling. Returns nil
+    /// when no matching option exists, in which case the caller falls back
+    /// to the legacy list.
+    private static func chipFromCategoryConfigOption(
+        category: String,
+        in options: [ACPConfigOption]
+    ) -> ChipSpec? {
+        let accepted: Set<String> = [category, category.prefix(1).uppercased() + category.dropFirst()]
         guard let opt = options.first(where: {
             guard let c = $0.category else { return false }
-            return modelCategories.contains(c)
+            return accepted.contains(c)
         }) else { return nil }
         return selectOption(id: opt.id, in: options)
     }

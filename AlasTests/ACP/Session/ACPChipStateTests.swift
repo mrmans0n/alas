@@ -137,6 +137,44 @@ struct ACPChipStateTests {
         } else { Issue.record("expected configOption source for model chip") }
     }
 
+    @Test("Mode chip sources from category=mode configOption when present")
+    func modeFromConfigOption() {
+        let modeOpt = configOption("posture",
+                                   current: "plan",
+                                   options: [("build","Build"),("plan","Plan")],
+                                   category: "mode")
+        let state = ACPChipState.normalize(
+            agentId: "future-agent",
+            availableModels: [model("m","M")],
+            currentModel: "m",
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [modeOpt])
+        #expect(state.mode?.currentId == "plan")
+        if case .configOption(let id)? = state.mode?.source {
+            #expect(id == "posture")
+        } else { Issue.record("expected configOption source for mode chip") }
+    }
+
+    @Test("configOption mode selector wins over legacy availableModes")
+    func modeConfigOptionWinsOverLegacy() {
+        let modeOpt = configOption("posture",
+                                   current: "plan",
+                                   options: [("build","Build"),("plan","Plan")],
+                                   category: "mode")
+        let state = ACPChipState.normalize(
+            agentId: "claude",
+            availableModels: [model("opus","Opus")],
+            currentModel: "opus",
+            availableModes: [mode("legacy","Legacy")],
+            currentMode: "legacy",
+            configOptions: [modeOpt])
+        if case .configOption(let id)? = state.mode?.source {
+            #expect(id == "posture")
+        } else { Issue.record("configOption mode chip should win") }
+        #expect(state.mode?.currentId == "plan")
+    }
+
     @Test("configOption model selector wins over legacy availableModels")
     func modelConfigOptionWinsOverLegacy() {
         let modelOpt = configOption("preset",
