@@ -300,6 +300,8 @@ struct TreeSitterHighlighterTests {
         let src = """
         diff -u a b
         new file mode 100644
+        old mode 100644
+        new mode 100755
         rename from old.txt
         rename to new.txt
         """
@@ -307,6 +309,8 @@ struct TreeSitterHighlighterTests {
 
         #expect(capture(for: "diff -u a b", in: src, spans: spans) == .keyword)
         #expect(capture(for: "new file mode 100644", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "old mode 100644", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "new mode 100755", in: src, spans: spans) == .keyword)
         #expect(capture(for: "rename from old.txt", in: src, spans: spans) == .keyword)
         #expect(capture(for: "rename to new.txt", in: src, spans: spans) == .keyword)
     }
@@ -342,6 +346,16 @@ struct TreeSitterHighlighterTests {
 
         #expect(capture(for: "class", in: src, spans: spans) == .attribute)
         #expect(capture(for: "disabled", in: src, spans: spans) == .attribute)
+        #expect(capture(for: #""primary""#, in: src, spans: spans) == .string)
+    }
+
+    @Test("markup fallback does not classify assigned text outside tags as attributes")
+    func markupFallbackDoesNotClassifyAssignedTextOutsideTagsAsAttributes() throws {
+        let src = #"x = 1 <button class="primary">Save</button>"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+
+        #expect(capture(for: "x", in: src, spans: spans) != .attribute)
+        #expect(capture(for: "class", in: src, spans: spans) == .attribute)
         #expect(capture(for: #""primary""#, in: src, spans: spans) == .string)
     }
 

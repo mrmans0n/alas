@@ -218,6 +218,8 @@ private enum RegexFallbackHighlighter {
             "index ",
             "new file mode ",
             "deleted file mode ",
+            "old mode ",
+            "new mode ",
             "similarity index ",
             "dissimilarity index ",
             "rename from ",
@@ -256,7 +258,7 @@ private enum RegexFallbackHighlighter {
     }
 
     private static func markupSpans(source: String) -> [HighlightSpan] {
-        let pattern = #"(<!--[\s\S]*?-->)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(<\/?[A-Za-z][A-Za-z0-9:-]*)|([A-Za-z_:][A-Za-z0-9_:.-]*)(?=\s*\=)"#
+        let pattern = #"(<!--[\s\S]*?-->)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(<\/?[A-Za-z][A-Za-z0-9:-]*)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let nsSource = source as NSString
         var spans: [HighlightSpan] = []
@@ -269,8 +271,6 @@ private enum RegexFallbackHighlighter {
                 capture = .string
             } else if match.range(at: 3).location != NSNotFound {
                 capture = .keyword
-            } else if match.range(at: 4).location != NSNotFound {
-                capture = .attribute
             } else {
                 capture = .plain
             }
