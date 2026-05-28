@@ -854,6 +854,15 @@ final class AppState {
         saveProjects()
     }
 
+    func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
+        projectsManager.setWorktreeLaunchDefaults(
+            projectId: projectId,
+            openAfterCreate: openAfterCreate,
+            launcherMode: launcherMode
+        )
+        saveProjects()
+    }
+
     /// Archive (hide) a worktree. Closes all tabs/terminals/harness state for
     /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
     /// the archived worktree was selected. Does NOT touch git or disk.

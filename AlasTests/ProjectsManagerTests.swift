@@ -90,6 +90,39 @@ struct ProjectsManagerTests {
         #expect(mgr.projects[0].color == "#d77b88")
         #expect(mgr.projects[1] == other)
     }
+
+    @Test func setWorktreeLaunchDefaultsPersistsPerProject() {
+        let project = ProjectConfig(
+            id: "project-1",
+            name: "Alpha",
+            path: "/tmp/alpha",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0)
+        )
+        let mgr = ProjectsManager(persistedProjects: [project])
+
+        #expect(mgr.projects[0].worktreeOpenAfterCreate == nil)
+        #expect(mgr.projects[0].worktreeDefaultLauncherMode == nil)
+
+        mgr.setWorktreeLaunchDefaults(
+            projectId: "project-1",
+            openAfterCreate: false,
+            launcherMode: .acp
+        )
+
+        #expect(mgr.projects[0].worktreeOpenAfterCreate == false)
+        #expect(mgr.projects[0].worktreeDefaultLauncherMode == .acp)
+    }
+
+    @Test func setWorktreeLaunchDefaultsIgnoresMissingProject() {
+        let mgr = ProjectsManager(persistedProjects: [])
+        mgr.setWorktreeLaunchDefaults(
+            projectId: "missing",
+            openAfterCreate: true,
+            launcherMode: .terminal
+        )
+        #expect(mgr.projects.isEmpty)
+    }
 }
 
 extension ProjectsManagerTests {

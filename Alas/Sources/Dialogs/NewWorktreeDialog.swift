@@ -104,28 +104,11 @@ struct NewWorktreeDialog: View {
             if branch.isEmpty {
                 branch = state.config.worktrees.branchPrefix
             }
-            launchMode = state.config.agents.defaultLauncherMode
-            if launchMode == .acp, !acpSegmentEnabled {
-                // Fall back to terminal if the default surface is ACP
-                // but no ACP-capable agent is enabled.
-                launchMode = .terminal
-            }
-            openAfterCreate = true
-            let initialAgent = effectiveAutoLaunchAgent?.id ?? "none"
-            launchAgentId = Self.resolvedLaunchAgent(
-                initialAgentId: initialAgent,
-                mode: launchMode,
-                enabledAgents: state.agentRegistry.enabled()
-            )
+            applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
         }
         .onChange(of: projectId) { _, _ in
-            let initialAgent = effectiveAutoLaunchAgent?.id ?? "none"
-            launchAgentId = Self.resolvedLaunchAgent(
-                initialAgentId: initialAgent,
-                mode: launchMode,
-                enabledAgents: state.agentRegistry.enabled()
-            )
+            applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
         }
         .onChange(of: branch) { _, _ in
@@ -220,6 +203,24 @@ struct NewWorktreeDialog: View {
         }
     }
 
+    private func applyLaunchDefaults(for selectedProjectId: String) {
+        let project = state.projects.first { $0.id == selectedProjectId }
+        let defaults = Self.resolvedLaunchDefaults(
+            projectOpenAfterCreate: project?.worktreeOpenAfterCreate,
+            projectLauncherMode: project?.worktreeDefaultLauncherMode,
+            globalLauncherMode: state.config.agents.defaultLauncherMode,
+            acpSegmentEnabled: acpSegmentEnabled
+        )
+        launchMode = defaults.launchMode
+        openAfterCreate = defaults.openAfterCreate
+        let initialAgent = effectiveAutoLaunchAgent?.id ?? "none"
+        launchAgentId = Self.resolvedLaunchAgent(
+            initialAgentId: initialAgent,
+            mode: launchMode,
+            enabledAgents: state.agentRegistry.enabled()
+        )
+    }
+
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         let dest = URL(fileURLWithPath: renderedPath)
@@ -251,6 +252,11 @@ struct NewWorktreeDialog: View {
             createErrorMessage = "A worktree already exists at this path."
             return
         }
+        state.setWorktreeLaunchDefaults(
+            projectId: project.id,
+            openAfterCreate: openAfterCreate,
+            launcherMode: launchMode
+        )
         createErrorMessage = nil
         presented = false
     }
@@ -466,5 +472,21 @@ struct NewWorktreeDialog: View {
             }
             return capable.first?.id ?? "none"
         }
+    }
+
+    /// Resolve launch mode and openAfterCreate from per-project config,
+    /// falling back to global defaults. Returns the effective values.
+    nonisolated static func resolvedLaunchDefaults(
+        projectOpenAfterCreate: Bool?,
+        projectLauncherMode: AppConfig.LauncherMode?,
+        globalLauncherMode: AppConfig.LauncherMode,
+        acpSegmentEnabled: Bool
+    ) -> (openAfterCreate: Bool, launchMode: AppConfig.LauncherMode) {
+        var mode = projectLauncherMode ?? globalLauncherMode
+        if mode == .acp, !acpSegmentEnabled {
+            mode = .terminal
+        }
+        let open = projectOpenAfterCreate ?? true
+        return (open, mode)
     }
 }
