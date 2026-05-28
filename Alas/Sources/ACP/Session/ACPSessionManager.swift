@@ -216,7 +216,7 @@ extension ACPSessionManager {
     }
 
     private static func mergeEnv(extra: [String: String]) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+        var env = ACPProcessEnvironment.augmented()
         // Strip env vars that mark this process as running INSIDE a coding
         // agent's session. Without this, `claude-code-acp` (and likely any
         // other Anthropic-aware tool we spawn) refuses to start, reporting

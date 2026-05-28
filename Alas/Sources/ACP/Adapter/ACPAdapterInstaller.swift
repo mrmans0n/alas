@@ -15,6 +15,19 @@ enum ACPInstallError: LocalizedError {
     }
 }
 
+enum ACPProcessEnvironment {
+    static func augmented(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment,
+        additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
+    ) -> [String: String] {
+        var env = environment
+        env["PATH"] = AgentPath.augment(
+            base: env["PATH"] ?? "",
+            wellKnown: additionalPathDirectories)
+        return env
+    }
+}
+
 enum ACPInstallerRegistry {
     static func installer(for agentID: String) -> ACPAdapterInstaller? {
         switch agentID {
