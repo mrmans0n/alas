@@ -9,16 +9,19 @@ struct ACPToolCallContentTests {
         let items = try decode("tool-call-content-blocks")
         #expect(items.count == 3)
         guard case .content(.text(let s)) = items[0] else {
-            Issue.record("expected .content(.text)"); return
+            Issue.record("expected .content(.text)")
+            return
         }
         #expect(s == "hello")
         guard case .content(.resourceLink(let uri, let name)) = items[1] else {
-            Issue.record("expected .content(.resourceLink)"); return
+            Issue.record("expected .content(.resourceLink)")
+            return
         }
         #expect(uri == "file:///tmp/x.txt")
         #expect(name == "x.txt")
         guard case .content(.image(let uri2, let mime)) = items[2] else {
-            Issue.record("expected .content(.image)"); return
+            Issue.record("expected .content(.image)")
+            return
         }
         #expect(uri2 == "file:///tmp/y.png")
         #expect(mime == "image/png")
@@ -29,13 +32,15 @@ struct ACPToolCallContentTests {
         let items = try decode("tool-call-content-diff")
         #expect(items.count == 2)
         guard case .diff(let path, let old, let new) = items[0] else {
-            Issue.record("expected .diff"); return
+            Issue.record("expected .diff")
+            return
         }
         #expect(path == "src/foo.swift")
         #expect(old == "let a = 1\n")
         #expect(new == "let a = 2\n")
         guard case .diff(_, let old2, _) = items[1] else {
-            Issue.record("expected .diff"); return
+            Issue.record("expected .diff")
+            return
         }
         #expect(old2 == nil)
     }
@@ -45,7 +50,8 @@ struct ACPToolCallContentTests {
         let items = try decode("tool-call-content-terminal")
         #expect(items.count == 1)
         guard case .terminal(let id) = items[0] else {
-            Issue.record("expected .terminal"); return
+            Issue.record("expected .terminal")
+            return
         }
         #expect(id == "term-42")
     }
