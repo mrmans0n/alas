@@ -187,6 +187,7 @@ extension ACPSessionManager {
             session.currentModel = result.currentModel
             session.currentMode = result.currentMode
             session.promptSuggestions = result.promptSuggestions
+            session.availableConfigOptions = result.configOptions
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
                                           worktreePath: worktreePath,
