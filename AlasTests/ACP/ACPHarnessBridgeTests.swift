@@ -137,6 +137,27 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession[session.id] == nil)
     }
 
+    @Test("manager.detach resets streamingState so the bridge clears its harness entry")
+    func managerDetachClearsBridgeEntry() async throws {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bridge-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(agentId: "claude")
+        bridge.attach(manager: manager)
+        session.streamingState = .awaitingPermission
+        await Task.yield()
+        #expect(harness.activityBySession[session.id]?.state == .permissionRequest)
+
+        await manager.detach(sessionId: session.id)
+        await Task.yield()
+
+        #expect(session.streamingState == .idle)
+        #expect(harness.activityBySession[session.id] == nil)
+    }
+
     @Test("detach stops observing and clears all the manager's sessions")
     func detachStopsObservation() async throws {
         let harness = makeHarness()

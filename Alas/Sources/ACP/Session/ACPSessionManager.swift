@@ -213,7 +213,14 @@ extension ACPSessionManager {
             runner.stop()
             await runner.connection.shutdown()
         }
-        sessions[sessionId]?.attached = false
+        // Reset transient state so a later reopen of the same session
+        // doesn't surface stale `streamingState` (e.g. an `.awaitingPermission`
+        // left over from a closed tab would otherwise leave the sidebar work
+        // badge stuck on `[wait]` via the harness bridge).
+        if let session = sessions[sessionId] {
+            session.attached = false
+            session.streamingState = .idle
+        }
     }
 
     private static func mergeEnv(extra: [String: String]) -> [String: String] {
