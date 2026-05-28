@@ -12,27 +12,37 @@ import AppKit
 /// blank out an agent message.
 struct ACPMarkdownText: View {
     let raw: String
+    var cache: ACPMarkdownBlockCache? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(parse(raw).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(currentBlocks().enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
         }
+    }
+
+    private func currentBlocks() -> [Block] {
+        if let cache {
+            cache.update(with: raw)
+            let tailBlocks = ACPMarkdownText.parse(cache.tailUnparsed)
+            return cache.stableBlocks + tailBlocks
+        }
+        return ACPMarkdownText.parse(raw)
     }
 
     @ViewBuilder
     private func view(for block: Block) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(inlineMarkdown(text))
+            Text(ACPMarkdownText.inlineMarkdown(text))
                 .font(.system(size: headingSize(level), weight: .bold))
                 .foregroundStyle(theme.color("fg"))
                 .textSelection(.enabled)
                 .padding(.top, level == 1 ? 4 : 2)
         case .paragraph(let text):
-            Text(inlineMarkdown(text))
+            Text(ACPMarkdownText.inlineMarkdown(text))
                 .font(.system(size: 13.5))
                 .foregroundStyle(theme.color("fg"))
                 .lineSpacing(3)
@@ -43,7 +53,7 @@ struct ACPMarkdownText: View {
                 Rectangle()
                     .fill(theme.color("accent").opacity(0.55))
                     .frame(width: 2)
-                Text(inlineMarkdown(text))
+                Text(ACPMarkdownText.inlineMarkdown(text))
                     .font(.system(size: 13).italic())
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineSpacing(2)
@@ -80,7 +90,7 @@ struct ACPMarkdownText: View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(0..<columnCount, id: \.self) { i in
                 let value = i < cells.count ? cells[i] : ""
-                Text(inlineMarkdown(value))
+                Text(ACPMarkdownText.inlineMarkdown(value))
                     .font(.system(size: isHeader ? 11.5 : 12, weight: isHeader ? .semibold : .regular))
                     .foregroundStyle(isHeader ? theme.color("fg-muted") : theme.color("fg"))
                     .frame(minWidth: 80, alignment: .leading)
@@ -102,23 +112,40 @@ struct ACPMarkdownText: View {
         }
     }
 
+    // MARK: - Inline memoization
+
+    private static let inlineCache: NSCache<NSString, NSAttributedString> = {
+        let c = NSCache<NSString, NSAttributedString>()
+        c.countLimit = 512
+        return c
+    }()
+
     /// Inline parser: bold / italic / inline code / links via the
-    /// system AttributedString initializer.
-    private func inlineMarkdown(_ s: String) -> AttributedString {
-        if let attr = try? AttributedString(
+    /// system AttributedString initializer. Results are memoized in a
+    /// process-static NSCache; stable blocks stay warm across chunks.
+    static func inlineMarkdown(_ s: String) -> AttributedString {
+        let key = s as NSString
+        if let hit = inlineCache.object(forKey: key) {
+            return AttributedString(hit)
+        }
+        let attr: AttributedString
+        if let parsed = try? AttributedString(
             markdown: s,
             options: AttributedString.MarkdownParsingOptions(
                 interpretedSyntax: .inlineOnlyPreservingWhitespace
             )
         ) {
-            return attr
+            attr = parsed
+        } else {
+            attr = AttributedString(s)
         }
-        return AttributedString(s)
+        inlineCache.setObject(NSAttributedString(attr), forKey: key)
+        return attr
     }
 
     // MARK: - Block parser
 
-    enum Block {
+    enum Block: Equatable {
         case heading(level: Int, text: String)
         case paragraph(String)
         case quote(String)
@@ -131,7 +158,7 @@ struct ACPMarkdownText: View {
     ///   |----|----|
     ///   | a  | b  |
     /// Returns header cells + body rows + number of consumed lines, or nil.
-    private func matchTable(from lines: [String], at start: Int) -> ([String], [[String]], Int)? {
+    private static func matchTable(from lines: [String], at start: Int) -> ([String], [[String]], Int)? {
         guard start + 1 < lines.count else { return nil }
         let head = lines[start].trimmingCharacters(in: .whitespaces)
         let sep = lines[start + 1].trimmingCharacters(in: .whitespaces)
@@ -160,7 +187,7 @@ struct ACPMarkdownText: View {
         return (header, rows, j - start)
     }
 
-    private func splitTableRow(_ raw: String) -> [String] {
+    private static func splitTableRow(_ raw: String) -> [String] {
         var s = raw
         if s.hasPrefix("|") { s.removeFirst() }
         if s.hasSuffix("|") { s.removeLast() }
@@ -170,7 +197,7 @@ struct ACPMarkdownText: View {
 
     /// Detect `# Heading` / `## Subheading` etc. (1–6 `#`s, then whitespace,
     /// then content). Returns `(level, text)` or nil.
-    private func matchHeading(_ line: String) -> (Int, String)? {
+    private static func matchHeading(_ line: String) -> (Int, String)? {
         var level = 0
         var idx = line.startIndex
         while idx < line.endIndex, line[idx] == "#", level < 6 {
@@ -183,7 +210,7 @@ struct ACPMarkdownText: View {
         return (level, String(body))
     }
 
-    private func parse(_ text: String) -> [Block] {
+    static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var i = 0
         let lines = text.components(separatedBy: "\n")
