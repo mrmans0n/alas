@@ -252,6 +252,29 @@ struct TreeSitterHighlighterTests {
         #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
     }
 
+    @Test("diff fallback resets header state for each file block")
+    func diffFallbackResetsHeaderStateForEachFileBlock() throws {
+        let src = """
+        diff --git a/first.md b/first.md
+        index 1111111..2222222 100644
+        --- a/first.md
+        +++ b/first.md
+        @@ -1 +1 @@
+        +first line
+        diff --git a/second.md b/second.md
+        index 3333333..4444444 100644
+        --- a/second.md
+        +++ b/second.md
+        @@ -1 +1 @@
+        +++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+
+        #expect(capture(for: "--- a/second.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ b/second.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
+    }
+
     @Test("markup, CSS, and SQL fallback emit useful spans")
     func chatFallbackBasics() throws {
         let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "html")

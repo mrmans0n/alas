@@ -178,6 +178,9 @@ private enum RegexFallbackHighlighter {
                 contentRange.length -= 1
             }
             let text = nsSource.substring(with: contentRange)
+            if text.hasPrefix("diff --git ") {
+                inHunk = false
+            }
             if let capture = diffCapture(for: text, inHunk: inHunk) {
                 spans.append(HighlightSpan(range: contentRange, capture: capture))
             }
