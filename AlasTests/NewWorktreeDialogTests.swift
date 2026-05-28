@@ -251,4 +251,55 @@ struct NewWorktreeDialogTests {
         )
         #expect(resolved == "none")
     }
+
+    // MARK: - Per-project launch defaults
+
+    @Test func resolvedLaunchDefaultsUsesProjectPreference() {
+        let result = NewWorktreeDialog.resolvedLaunchDefaults(
+            projectOpenAfterCreate: false,
+            projectLauncherMode: .acp,
+            globalLauncherMode: .terminal,
+            acpSegmentEnabled: true
+        )
+        #expect(result.openAfterCreate == false)
+        #expect(result.launchMode == .acp)
+        #expect(result.persistableLaunchMode == .acp)
+    }
+
+    @Test func resolvedLaunchDefaultsFallsBackToGlobalWhenProjectIsNil() {
+        let result = NewWorktreeDialog.resolvedLaunchDefaults(
+            projectOpenAfterCreate: nil,
+            projectLauncherMode: nil,
+            globalLauncherMode: .acp,
+            acpSegmentEnabled: true
+        )
+        #expect(result.openAfterCreate == true)
+        #expect(result.launchMode == .acp)
+        #expect(result.persistableLaunchMode == .acp)
+    }
+
+    @Test func resolvedLaunchDefaultsFallsBackToTerminalWhenACPDisabled() {
+        let result = NewWorktreeDialog.resolvedLaunchDefaults(
+            projectOpenAfterCreate: nil,
+            projectLauncherMode: .acp,
+            globalLauncherMode: .terminal,
+            acpSegmentEnabled: false
+        )
+        #expect(result.openAfterCreate == true)
+        #expect(result.launchMode == .terminal)
+        // persistableLaunchMode preserves the intended .acp preference
+        #expect(result.persistableLaunchMode == .acp)
+    }
+
+    @Test func resolvedLaunchDefaultsProjectOpenAfterCreateOverridesGlobal() {
+        let result = NewWorktreeDialog.resolvedLaunchDefaults(
+            projectOpenAfterCreate: false,
+            projectLauncherMode: nil,
+            globalLauncherMode: .terminal,
+            acpSegmentEnabled: true
+        )
+        #expect(result.openAfterCreate == false)
+        #expect(result.launchMode == .terminal)
+        #expect(result.persistableLaunchMode == .terminal)
+    }
 }

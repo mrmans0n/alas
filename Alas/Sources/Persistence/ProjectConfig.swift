@@ -82,9 +82,14 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var hiddenWorktreePaths: [String] = []
     var worktreeOrder: [String] = []
     var startupScripts: ProjectStartupScripts = .defaults
+    /// Per-project "open after create" preference. `nil` = use global default (true).
+    var worktreeOpenAfterCreate: Bool?
+    /// Per-project launcher mode preference. `nil` = use global default.
+    var worktreeDefaultLauncherMode: AppConfig.LauncherMode?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, path, color, addedAt, hiddenWorktreePaths, worktreeOrder, startupScripts
+        case id, name, path, color, addedAt, hiddenWorktreePaths, worktreeOrder, startupScripts,
+             worktreeOpenAfterCreate, worktreeDefaultLauncherMode
     }
 
     init(
@@ -95,7 +100,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         addedAt: Date,
         hiddenWorktreePaths: [String] = [],
         worktreeOrder: [String] = [],
-        startupScripts: ProjectStartupScripts = .defaults
+        startupScripts: ProjectStartupScripts = .defaults,
+        worktreeOpenAfterCreate: Bool? = nil,
+        worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil
     ) {
         self.id = id
         self.name = name
@@ -105,6 +112,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.hiddenWorktreePaths = hiddenWorktreePaths
         self.worktreeOrder = worktreeOrder
         self.startupScripts = startupScripts
+        self.worktreeOpenAfterCreate = worktreeOpenAfterCreate
+        self.worktreeDefaultLauncherMode = worktreeDefaultLauncherMode
     }
 
     // Tolerant decode: older projects.json files predate hiddenWorktreePaths
@@ -120,5 +129,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeOrder = (try? c.decode([String].self, forKey: .worktreeOrder)) ?? []
         startupScripts = (try? c.decode(ProjectStartupScripts.self, forKey: .startupScripts))
             ?? .defaults
+        worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)
+        worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
     }
 }

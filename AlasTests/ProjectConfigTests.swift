@@ -87,4 +87,42 @@ struct ProjectConfigTests {
         #expect(file.projects[0].hiddenWorktreePaths == ["/tmp/alpha/wt"])
         #expect(file.projects[0].startupScripts == .defaults)
     }
+
+    @Test func decodingOlderProjectWithoutLaunchDefaultsYieldsNil() throws {
+        let json = """
+        {
+          "version": 1,
+          "projects": [{
+            "id": "abc",
+            "name": "alpha",
+            "path": "/tmp/alpha",
+            "color": "#5fb7c4",
+            "addedAt": 0
+          }]
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let file = try decoder.decode(ProjectsFile.self, from: json)
+        #expect(file.projects[0].worktreeOpenAfterCreate == nil)
+        #expect(file.projects[0].worktreeDefaultLauncherMode == nil)
+    }
+
+    @Test func roundTripPreservesLaunchDefaults() throws {
+        let project = ProjectConfig(
+            id: "abc", name: "alpha", path: "/tmp/alpha",
+            color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0),
+            worktreeOpenAfterCreate: false,
+            worktreeDefaultLauncherMode: .acp
+        )
+        let file = ProjectsFile(projects: [project])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(file)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(ProjectsFile.self, from: data)
+        #expect(decoded.projects[0].worktreeOpenAfterCreate == false)
+        #expect(decoded.projects[0].worktreeDefaultLauncherMode == .acp)
+    }
 }

@@ -169,6 +169,12 @@ final class ProjectsManager {
         hiddenSet(projectId: projectId).contains(canonical(path))
     }
 
+    func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].worktreeOpenAfterCreate = openAfterCreate
+        projects[idx].worktreeDefaultLauncherMode = launcherMode
+    }
+
     func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let key = canonical(path)
