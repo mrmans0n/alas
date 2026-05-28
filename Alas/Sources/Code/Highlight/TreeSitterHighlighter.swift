@@ -286,7 +286,6 @@ private enum RegexFallbackHighlighter {
     private static func booleanAttributeSpans(source: String, existingSpans: [HighlightSpan]) -> [HighlightSpan] {
         let attributePattern = #"\s+([A-Za-z_:][A-Za-z0-9_:.-]*)(?=\s*(?:=|/?>|\s))"#
         guard let attributeRegex = try? NSRegularExpression(pattern: attributePattern) else { return [] }
-        let nsSource = source as NSString
         let protectedSpans = existingSpans.filter { $0.capture == .comment || $0.capture == .string }
         var spans: [HighlightSpan] = []
         for tagRange in openingTagRanges(source: source, protectedSpans: protectedSpans) {
