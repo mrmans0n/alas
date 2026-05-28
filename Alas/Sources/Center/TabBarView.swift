@@ -47,7 +47,7 @@ struct TabBarView: View {
                     titleLookup: titleLookup,
                     tab: tab,
                     active: tab.id == activeId,
-                    showClose: tabs.count > 1,
+                    showClose: true,
                     harnessInfo: harnessLookup(tab.id),
                     dirty: dirtyLookup(tab.id),
                     onActivate: { onActivate(tab.id) },
