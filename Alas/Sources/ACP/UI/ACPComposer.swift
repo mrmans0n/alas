@@ -63,6 +63,9 @@ struct ACPInputField: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.promptSuggestions = session.promptSuggestions
         context.coordinator.theme = context.environment.theme
+        if let textView = nsView.documentView as? NSTextView {
+            context.coordinator.syncPersistedDraft(session.composerDraft, into: textView)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -87,6 +90,7 @@ struct ACPInputField: NSViewRepresentable {
         var theme: Theme?
         weak var textView: NSTextView?
         private var restoringDraft = false
+        private var lastSyncedDraft: ACPComposerDraft
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
 
@@ -99,6 +103,7 @@ struct ACPInputField: NSViewRepresentable {
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
+            self.lastSyncedDraft = initialDraft
             self.onDraftChange = onDraftChange
             self.onDraftClear = onDraftClear
             self.onSubmit = onSubmit
@@ -139,7 +144,9 @@ struct ACPInputField: NSViewRepresentable {
             ACPMarkdownLiveStyler.restyle(storage)
             guard !restoringDraft else { return }
             pendingSubmitID = nil
-            onDraftChange(Self.draft(from: storage))
+            let draft = Self.draft(from: storage)
+            lastSyncedDraft = draft
+            onDraftChange(draft)
         }
 
         func submit(_ textView: NSTextView) {
@@ -153,8 +160,11 @@ struct ACPInputField: NSViewRepresentable {
             let submitID = nextSubmitID
             nextSubmitID += 1
             if onSubmit(text, attachments, draft, { [weak self, weak textView] succeeded in
-                guard let self else { return }
-                self.finishSubmit(id: submitID, draft: draft, succeeded: succeeded, textView: textView)
+                if let self {
+                    self.finishSubmit(id: submitID, draft: draft, succeeded: succeeded, textView: textView)
+                }
+                // Durable draft finalization lives with the submit owner, so
+                // tab switches can outlive this coordinator.
             }) {
                 pendingSubmitID = submitID
                 clearVisibleDraft(in: textView)
@@ -166,6 +176,16 @@ struct ACPInputField: NSViewRepresentable {
             restore(initialDraft, into: textView)
         }
 
+        func syncPersistedDraft(_ draft: ACPComposerDraft, into textView: NSTextView) {
+            let currentDraft = Self.draft(from: textView.attributedString())
+            if currentDraft == draft {
+                lastSyncedDraft = draft
+                return
+            }
+            guard currentDraft == lastSyncedDraft else { return }
+            restore(draft, into: textView)
+        }
+
         private func restore(_ draft: ACPComposerDraft, into textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
             restoringDraft = true
@@ -173,6 +193,7 @@ struct ACPInputField: NSViewRepresentable {
             ACPMarkdownLiveStyler.restyle(storage)
             textView.needsDisplay = true
             restoringDraft = false
+            lastSyncedDraft = draft
         }
 
         private func clearVisibleDraft(in textView: NSTextView) {

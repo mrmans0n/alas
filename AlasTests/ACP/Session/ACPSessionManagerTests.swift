@@ -42,10 +42,12 @@ struct ACPSessionManagerTests {
 
         mgr.persistComposerDraft(draft, for: session)
         #expect(session.composerDraft == draft)
+        #expect(session.composerDraftRevision == 1)
         #expect(try store.loadComposerDraft(sessionId: session.id) == draft)
 
         mgr.persistComposerDraft(.empty, for: session)
         #expect(session.composerDraft == .empty)
+        #expect(session.composerDraftRevision == 2)
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
     }
 
@@ -61,5 +63,46 @@ struct ACPSessionManagerTests {
 
         #expect(session.composerDraft == .empty)
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
+    }
+
+    @Test("conditional composer draft clear only clears the submitted draft")
+    func conditionalComposerDraftClear() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-conditional-clear-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let submitted = ACPComposerDraft(segments: [.text("sent")])
+        let newer = ACPComposerDraft(segments: [.text("newer")])
+
+        mgr.persistComposerDraft(submitted, for: session)
+        let submittedRevision = session.composerDraftRevision
+        mgr.clearComposerDraft(for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
+        #expect(session.composerDraft == .empty)
+        #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
+
+        mgr.persistComposerDraft(newer, for: session)
+        mgr.clearComposerDraft(for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
+        #expect(session.composerDraft == newer)
+        #expect(try store.loadComposerDraft(sessionId: session.id) == newer)
+    }
+
+    @Test("conditional composer draft persist does not overwrite a newer draft revision")
+    func conditionalComposerDraftPersistByRevision() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-conditional-persist-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let submitted = ACPComposerDraft(segments: [.text("sent")])
+
+        mgr.persistComposerDraft(submitted, for: session)
+        let submittedRevision = session.composerDraftRevision
+        mgr.persistComposerDraft(submitted, for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
+        #expect(session.composerDraft == submitted)
+        #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
+
+        mgr.persistComposerDraft(submitted, for: session)
+        mgr.persistComposerDraft(.empty, for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
+        #expect(session.composerDraft == submitted)
+        #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
     }
 }

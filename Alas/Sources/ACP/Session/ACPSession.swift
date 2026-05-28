@@ -20,6 +20,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false
     @Published var composerDraft: ACPComposerDraft = .empty
+    @Published private(set) var composerDraftRevision: Int = 0
     @Published var pendingPermission: PendingPermission?
     @Published var streamingState: StreamingState = .idle
     @Published var setupState: SetupState = .checking
@@ -42,6 +43,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// as the persistence key in `ACPSessionStore`.
     /// Not persisted — recreated on each `attach()` if missing.
     var remoteSessionId: String?
+
+    func replaceComposerDraft(_ draft: ACPComposerDraft) {
+        composerDraft = draft
+        composerDraftRevision += 1
+    }
 
     enum StreamingState: Equatable { case idle, sending, streaming, awaitingPermission }
     enum SetupState: Equatable {

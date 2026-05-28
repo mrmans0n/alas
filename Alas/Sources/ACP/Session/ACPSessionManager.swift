@@ -59,7 +59,7 @@ final class ACPSessionManager: ObservableObject {
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
         if let loadedDraft = try? store.loadComposerDraft(sessionId: id) {
-            session.composerDraft = loadedDraft
+            session.replaceComposerDraft(loadedDraft)
         }
         sessions[id] = session
         try? store.upsertSession(touch(row))
@@ -114,7 +114,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func persistComposerDraft(_ draft: ACPComposerDraft, for session: ACPSession) {
-        session.composerDraft = draft
+        session.replaceComposerDraft(draft)
         if draft.isEmpty {
             try? store.deleteComposerDraft(sessionId: session.id)
         } else {
@@ -124,8 +124,31 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func clearComposerDraft(for session: ACPSession) {
-        session.composerDraft = .empty
+        session.replaceComposerDraft(.empty)
         try? store.deleteComposerDraft(sessionId: session.id)
+    }
+
+    func clearComposerDraft(
+        for session: ACPSession,
+        ifCurrentDraftEquals expected: ACPComposerDraft,
+        revision expectedRevision: Int
+    ) {
+        guard session.composerDraft == expected,
+              session.composerDraftRevision == expectedRevision
+        else { return }
+        clearComposerDraft(for: session)
+    }
+
+    func persistComposerDraft(
+        _ draft: ACPComposerDraft,
+        for session: ACPSession,
+        ifCurrentDraftEquals expected: ACPComposerDraft,
+        revision expectedRevision: Int
+    ) {
+        guard session.composerDraft == expected,
+              session.composerDraftRevision == expectedRevision
+        else { return }
+        persistComposerDraft(draft, for: session)
     }
 
     func refreshRecent() {

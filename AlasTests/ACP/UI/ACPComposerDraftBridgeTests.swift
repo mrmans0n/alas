@@ -146,6 +146,53 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
     }
 
+    @Test("persisted draft sync clears a remounted submitted draft")
+    func persistedDraftSyncClearsRemountedSubmittedDraft() {
+        let submittedDraft = ACPComposerDraft(segments: [.text("already sent")])
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: submittedDraft))
+        var changedDrafts: [ACPComposerDraft] = []
+        var clearCount = 0
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: submittedDraft,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: { clearCount += 1 },
+            onSubmit: { _, _, _, _ in true }
+        )
+
+        coordinator.syncPersistedDraft(.empty, into: textView)
+
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == .empty)
+        #expect(changedDrafts.isEmpty)
+        #expect(clearCount == 0)
+    }
+
+    @Test("persisted draft sync does not overwrite unsynced local edits")
+    func persistedDraftSyncDoesNotOverwriteUnsyncedLocalEdits() {
+        let submittedDraft = ACPComposerDraft(segments: [.text("already sent")])
+        let localDraft = ACPComposerDraft(segments: [.text("still typing")])
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: localDraft))
+        var changedDrafts: [ACPComposerDraft] = []
+        var clearCount = 0
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: submittedDraft,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: { clearCount += 1 },
+            onSubmit: { _, _, _, _ in true }
+        )
+
+        coordinator.syncPersistedDraft(.empty, into: textView)
+
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == localDraft)
+        #expect(changedDrafts.isEmpty)
+        #expect(clearCount == 0)
+    }
+
     @Test("serializes plain text and mention chips in order")
     func serializesAttributedDraft() {
         let attributed = NSMutableAttributedString(string: "Read ")

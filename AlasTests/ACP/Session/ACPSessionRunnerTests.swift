@@ -36,6 +36,133 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.streamingState == .idle)
     }
 
+    @Test("send treats user-cancelled prompt errors as accepted completion")
+    func sendTreatsCancelledPromptErrorsAsAcceptedCompletion() async throws {
+        let (runner, mock) = try makeRunner()
+        let promptStarted = AsyncGate()
+        let finishPrompt = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptStarted.open()
+            await finishPrompt.wait()
+            throw ACPClientError.noScript(method: "session/prompt")
+        }
+
+        var completion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            completion = succeeded
+        }
+        await promptStarted.wait()
+
+        await runner.userCancel()
+        await finishPrompt.open()
+
+        for _ in 0..<20 where completion == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(completion == true)
+        #expect(runner.session.lastError == nil)
+        #expect(runner.session.streamingState == .idle)
+        #expect(mock.sent.contains { $0.method == "session/cancel" })
+    }
+
+    @Test("cancelled prompt completion does not idle a newer prompt")
+    func cancelledPromptCompletionDoesNotIdleNewerPrompt() async throws {
+        let (runner, mock) = try makeRunner()
+        let promptCounter = AsyncCounter()
+        let firstStarted = AsyncGate()
+        let finishFirst = AsyncGate()
+        let secondStarted = AsyncGate()
+        let finishSecond = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let promptNumber = await promptCounter.next()
+            if promptNumber == 1 {
+                await firstStarted.open()
+                await finishFirst.wait()
+                throw ACPClientError.noScript(method: "session/prompt")
+            }
+            await secondStarted.open()
+            await finishSecond.wait()
+            return Data("{}".utf8)
+        }
+
+        var firstCompletion: Bool?
+        var secondCompletion: Bool?
+        runner.send(text: "first", attachments: []) { succeeded in
+            firstCompletion = succeeded
+        }
+        await firstStarted.wait()
+        await runner.userCancel()
+
+        runner.send(text: "second", attachments: []) { succeeded in
+            secondCompletion = succeeded
+        }
+        await secondStarted.wait()
+        await finishFirst.open()
+
+        for _ in 0..<20 where firstCompletion == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(firstCompletion == nil)
+        #expect(secondCompletion == nil)
+        #expect(runner.session.streamingState == .sending)
+
+        await finishSecond.open()
+        for _ in 0..<20 where secondCompletion == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(secondCompletion == true)
+        #expect(runner.session.streamingState == .idle)
+    }
+
+    @Test("cancelled prompt success does not complete over a newer prompt")
+    func cancelledPromptSuccessDoesNotCompleteOverNewerPrompt() async throws {
+        let (runner, mock) = try makeRunner()
+        let promptCounter = AsyncCounter()
+        let firstStarted = AsyncGate()
+        let finishFirst = AsyncGate()
+        let secondStarted = AsyncGate()
+        let finishSecond = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let promptNumber = await promptCounter.next()
+            if promptNumber == 1 {
+                await firstStarted.open()
+                await finishFirst.wait()
+                return Data("{}".utf8)
+            }
+            await secondStarted.open()
+            await finishSecond.wait()
+            return Data("{}".utf8)
+        }
+
+        var firstCompletion: Bool?
+        var secondCompletion: Bool?
+        runner.send(text: "first", attachments: []) { succeeded in
+            firstCompletion = succeeded
+        }
+        await firstStarted.wait()
+        await runner.userCancel()
+
+        runner.send(text: "second", attachments: []) { succeeded in
+            secondCompletion = succeeded
+        }
+        await secondStarted.wait()
+        await finishFirst.open()
+
+        for _ in 0..<20 where runner.session.streamingState != .sending {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(firstCompletion == nil)
+        #expect(secondCompletion == nil)
+        #expect(runner.session.streamingState == .sending)
+
+        await finishSecond.open()
+        for _ in 0..<20 where secondCompletion == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(secondCompletion == true)
+        #expect(runner.session.streamingState == .idle)
+    }
+
     @Test("emitted session/update lands on the session and persists a message row")
     func runnerWiresUpdates() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
@@ -127,5 +254,36 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path
         )
         return (runner, mock)
+    }
+}
+
+private actor AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let continuations = waiters
+        waiters.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+}
+
+private actor AsyncCounter {
+    private var value = 0
+
+    func next() -> Int {
+        value += 1
+        return value
     }
 }

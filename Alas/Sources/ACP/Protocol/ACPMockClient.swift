@@ -3,6 +3,7 @@ import Foundation
 final class ACPMockClient: ACPClient, @unchecked Sendable {
     private(set) var sent: [ACPRequest] = []
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
+    private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
@@ -25,6 +26,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
         sent.append(request)
+        if let script = asyncScripts[request.method] {
+            return ACPResponse(body: try await script(request))
+        }
         guard let script = scripts[request.method] else {
             throw ACPClientError.noScript(method: request.method)
         }
@@ -53,6 +57,10 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
 
     func script(method: String, _ handler: @escaping (ACPRequest) throws -> Data) {
         scripts[method] = handler
+    }
+
+    func scriptAsync(method: String, _ handler: @escaping (ACPRequest) async throws -> Data) {
+        asyncScripts[method] = handler
     }
 
     func shutdown() async {
