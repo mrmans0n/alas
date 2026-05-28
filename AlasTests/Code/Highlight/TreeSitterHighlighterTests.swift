@@ -203,6 +203,32 @@ struct TreeSitterHighlighterTests {
         #expect(yaml.contains(where: { $0.capture == .property }))
     }
 
+    @Test("diff fallback colors added, removed, and hunk lines")
+    func diffFallbackBasics() throws {
+        let src = """
+        @@ -1,2 +1,2 @@
+        -old line
+        +new line
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+        #expect(spans.contains(where: { $0.capture == .keyword }))
+        #expect(spans.contains(where: { $0.capture == .string }))
+        #expect(spans.contains(where: { $0.capture == .comment }))
+    }
+
+    @Test("markup, CSS, and SQL fallback emit useful spans")
+    func chatFallbackBasics() throws {
+        let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "html")
+        let css = TreeSitterHighlighter.highlight(source: #".primary { display: flex; color: #fff; }"#, fileExtension: "css")
+        let sql = TreeSitterHighlighter.highlight(source: #"SELECT id FROM users WHERE active = true;"#, fileExtension: "sql")
+
+        #expect(html.contains(where: { $0.capture == .keyword }))
+        #expect(html.contains(where: { $0.capture == .attribute }))
+        #expect(html.contains(where: { $0.capture == .string }))
+        #expect(css.contains(where: { $0.capture == .keyword }))
+        #expect(sql.contains(where: { $0.capture == .keyword }))
+    }
+
     @Test("string literal captured")
     func stringLiteral() throws {
         let src = #"let x = "hi""#

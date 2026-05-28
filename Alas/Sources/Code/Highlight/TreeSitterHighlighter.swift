@@ -129,6 +129,11 @@ private enum RegexFallbackHighlighter {
     static func highlight(source: String, fileExtension ext: String) -> [HighlightSpan] {
         let language = language(forFileExtension: ext)
         guard language != "plain" else { return [] }
+        switch language {
+        case "diff": return diffSpans(source: source)
+        case "markup": return markupSpans(source: source)
+        default: break
+        }
         let keywords = keywordSet(for: language)
         let pattern = #"(//[^\n]*|/\*[\s\S]*?\*/|#[^\n]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -144,10 +149,57 @@ private enum RegexFallbackHighlighter {
                 capture = .string
             } else if match.range(at: 3).location != NSNotFound {
                 capture = .number
-            } else if keywords.contains(text) {
+            } else if keywords.contains(text) || keywords.contains(text.lowercased()) {
                 capture = .keyword
             } else if text.first?.isUppercase == true {
                 capture = .type
+            } else {
+                capture = .plain
+            }
+            if capture != .plain {
+                spans.append(HighlightSpan(range: match.range, capture: capture))
+            }
+        }
+        return spans
+    }
+
+    private static func diffSpans(source: String) -> [HighlightSpan] {
+        let pattern = #"(?m)^(@@.*@@|diff --git .*$|index .*$|--- .*$|\+\+\+ .*$|\+.*$|-.*$)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsSource = source as NSString
+        var spans: [HighlightSpan] = []
+        regex.enumerateMatches(in: source, range: NSRange(location: 0, length: nsSource.length)) { match, _, _ in
+            guard let match else { return }
+            let text = nsSource.substring(with: match.range)
+            let capture: HighlightCapture
+            if text.hasPrefix("+"), !text.hasPrefix("+++") {
+                capture = .string
+            } else if text.hasPrefix("-"), !text.hasPrefix("---") {
+                capture = .comment
+            } else {
+                capture = .keyword
+            }
+            spans.append(HighlightSpan(range: match.range, capture: capture))
+        }
+        return spans
+    }
+
+    private static func markupSpans(source: String) -> [HighlightSpan] {
+        let pattern = #"(<!--[\s\S]*?-->)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(<\/?[A-Za-z][A-Za-z0-9:-]*)|([A-Za-z_:][A-Za-z0-9_:.-]*)(?=\=)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsSource = source as NSString
+        var spans: [HighlightSpan] = []
+        regex.enumerateMatches(in: source, range: NSRange(location: 0, length: nsSource.length)) { match, _, _ in
+            guard let match else { return }
+            let capture: HighlightCapture
+            if match.range(at: 1).location != NSNotFound {
+                capture = .comment
+            } else if match.range(at: 2).location != NSNotFound {
+                capture = .string
+            } else if match.range(at: 3).location != NSNotFound {
+                capture = .keyword
+            } else if match.range(at: 4).location != NSNotFound {
+                capture = .attribute
             } else {
                 capture = .plain
             }
@@ -167,6 +219,10 @@ private enum RegexFallbackHighlighter {
         case "py": return "python"
         case "ts", "tsx", "js", "jsx": return "ts"
         case "kt", "kts": return "kotlin"
+        case "diff", "patch": return "diff"
+        case "html", "xml": return "markup"
+        case "css", "scss", "sass": return "css"
+        case "sql": return "sql"
         default: return "plain"
         }
     }
@@ -202,6 +258,19 @@ private enum RegexFallbackHighlighter {
                 "is", "as", "by", "where", "out", "reified", "inline", "noinline", "crossinline",
                 "operator", "infix", "tailrec", "suspend", "internal", "public", "private", "protected",
                 "expect", "actual", "const", "vararg", "dynamic", "external"
+            ]
+        case "css":
+            return [
+                "display", "flex", "grid", "block", "inline", "none", "color", "background", "border",
+                "margin", "padding", "position", "relative", "absolute", "fixed", "var", "calc",
+                "media", "import", "font", "width", "height", "min", "max"
+            ]
+        case "sql":
+            return [
+                "select", "from", "where", "join", "inner", "left", "right", "full", "outer", "on",
+                "insert", "into", "update", "delete", "values", "set", "create", "alter", "drop",
+                "table", "view", "index", "and", "or", "not", "null", "true", "false", "group",
+                "by", "order", "having", "limit", "offset", "as", "distinct"
             ]
         default:
             return []
