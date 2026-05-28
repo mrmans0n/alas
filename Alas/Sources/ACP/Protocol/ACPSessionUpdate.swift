@@ -102,7 +102,7 @@ struct ACPToolCallPayload: Codable, Equatable {
     let title: String
     let kind: String?
     let status: String
-    let content: [ACPContentBlock]?
+    let content: [ACPToolCallContent]?
     let locations: [ACPToolLocation]?
     let rawInput: AnyCodable?
     let rawOutput: AnyCodable?
@@ -111,7 +111,7 @@ struct ACPToolCallPayload: Codable, Equatable {
 struct ACPToolCallUpdate: Codable, Equatable {
     let toolCallId: String
     let status: String?
-    let content: [ACPContentBlock]?
+    let content: [ACPToolCallContent]?
     let rawOutput: AnyCodable?
 }
 

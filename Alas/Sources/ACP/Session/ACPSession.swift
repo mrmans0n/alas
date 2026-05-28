@@ -160,19 +160,50 @@ final class ACPSession: ObservableObject, Identifiable {
 
     // MARK: helpers
 
-    /// Concatenate the agent's text content blocks into one string. Non-
-    /// text blocks (resource links, images) are noted as bracketed
-    /// placeholders so the user knows something non-text arrived.
-    private static func flatten(_ blocks: [ACPContentBlock]) -> String {
+    /// Concatenate tool-call content entries into one text blob suitable
+    /// for the expanded tool card. Non-text variants are rendered as
+    /// readable placeholders so the user can see something happened.
+    private static func flatten(_ items: [ACPToolCallContent]) -> String {
         var out: [String] = []
-        for b in blocks {
-            switch b {
-            case .text(let s):                  out.append(s)
-            case .resourceLink(let uri, let n): out.append("[\(n ?? uri)]")
-            case .image(_, _):                  out.append("[image]")
+        for item in items {
+            switch item {
+            case .content(.text(let s)):
+                out.append(s)
+            case .content(.resourceLink(let uri, let name)):
+                out.append("[\(name ?? uri)]")
+            case .content(.image(_, _)):
+                out.append("[image]")
+            case .diff(let path, let old, let new):
+                var lines: [String] = ["--- \(path)"]
+                if let old, !old.isEmpty {
+                    for line in Self.diffLines(old) {
+                        lines.append("-\(line)")
+                    }
+                }
+                for line in Self.diffLines(new) {
+                    lines.append("+\(line)")
+                }
+                out.append(lines.joined(separator: "\n"))
+            case .terminal(let id):
+                // Placeholder until the follow-up wires real terminal output.
+                out.append("[terminal: \(id)]")
+            case .unknown:
+                // Skipped rather than rendered empty.
+                continue
             }
         }
         return out.joined(separator: "\n")
+    }
+
+    /// Split a diff hunk into lines while preserving blank lines inside
+    /// the content. Drops the empty trailing substring that
+    /// `split(omittingEmptySubsequences: false)` produces for inputs
+    /// ending in a newline — without this, every normal source-file diff
+    /// renders with a spurious empty `-` or `+` line.
+    private static func diffLines(_ s: String) -> [Substring] {
+        var parts = s.split(separator: "\n", omittingEmptySubsequences: false)
+        if parts.last?.isEmpty == true { parts.removeLast() }
+        return parts
     }
 
     /// First non-empty line of `full`, truncated to ~80 chars. Used as

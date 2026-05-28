@@ -19,6 +19,10 @@ struct ACPSessionUpdateTests {
             #expect(tc.toolCallId == "tc-1")
             #expect(tc.title == "read_file")
             #expect(tc.status == "in_progress")
+            #expect(tc.content?.count == 1)
+            if case .content(.text(let s)) = tc.content?.first {
+                #expect(s == "reading…")
+            } else { Issue.record("expected wrapped text content") }
         } else { Issue.record("expected toolCall") }
     }
 
