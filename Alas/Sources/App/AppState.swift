@@ -344,6 +344,21 @@ final class AppState {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
         tabs.loadAll(worktreeIds: allWorktreeIds)
+        // When cross-quit persistence is disabled, drop every persisted
+        // terminal tab right after load — across all worktrees, before
+        // any lazy-display path could observe them — so orphan zmx
+        // daemon sessions get killed via `closeTab` and inactive /
+        // other-worktree tabs don't linger waiting for someone to open
+        // them (which is the only thing that drives the per-tab guard
+        // in `restoreTerminalTabIfNeeded`).
+        if !config.terminal.keepSessionsAlive {
+            for worktreeId in allWorktreeIds {
+                for tab in tabs.tabs(forWorktree: worktreeId) {
+                    guard case .terminal = tab else { continue }
+                    closeTab(worktreeId: worktreeId, tabId: tab.id)
+                }
+            }
+        }
         // Persisted terminal-tab leaves are now in memory — refresh their
         // hook symlinks so zmx-persisted shells in undisplayed tabs deliver
         // hooks/CLI requests to the live harness immediately, rather than

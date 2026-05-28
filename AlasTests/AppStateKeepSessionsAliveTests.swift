@@ -76,4 +76,61 @@ struct AppStateKeepSessionsAliveTests {
 
         #expect(state.tabs.tabs(forWorktree: trees[0].id).map(\.id) == [tab.id])
     }
+
+    /// `reloadTabs` runs once on launch and is the only path that touches
+    /// every persisted terminal tab across every worktree. When
+    /// `keepSessionsAlive` is off, it must prune them all — including
+    /// inactive tabs and tabs in worktrees the user isn't viewing — so
+    /// orphan daemon sessions get killed and stale tabs don't linger.
+    @Test func reloadTabsPrunesAllTerminalTabsWhenKeepAliveFalse() async throws {
+        let repo = try await makeRepo(name: "reload-prune")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        state.selectedWorktreeId = trees[0].id
+
+        // Persist two terminal tabs and one non-terminal tab. The
+        // non-terminal one must survive the prune.
+        _ = state.tabs.appendTerminal(worktreeId: trees[0].id, title: "a", sessionId: "leaf-a")
+        _ = state.tabs.appendTerminal(worktreeId: trees[0].id, title: "b", sessionId: "leaf-b")
+        let editor = state.tabs.appendEditor(
+            worktreeId: trees[0].id, title: "c.txt", relativePath: "c.txt"
+        )
+
+        state.config.terminal.keepSessionsAlive = false
+        state.reloadTabs()
+
+        let remaining = state.tabs.tabs(forWorktree: trees[0].id)
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.id == editor.id)
+    }
+
+    /// Counter-test: with the setting on, `reloadTabs` must not prune
+    /// terminal tabs.
+    @Test func reloadTabsKeepsTerminalTabsWhenKeepAliveTrue() async throws {
+        let repo = try await makeRepo(name: "reload-keep")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        state.selectedWorktreeId = trees[0].id
+
+        let term = state.tabs.appendTerminal(
+            worktreeId: trees[0].id, title: "a", sessionId: "leaf-a"
+        )
+
+        state.config.terminal.keepSessionsAlive = true
+        state.reloadTabs()
+
+        #expect(state.tabs.tabs(forWorktree: trees[0].id).map(\.id) == [term.id])
+    }
 }
