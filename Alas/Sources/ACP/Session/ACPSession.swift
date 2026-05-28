@@ -102,6 +102,12 @@ final class ACPSession: ObservableObject, Identifiable {
             availableModels = ms
         case .currentModeUpdate(let modeId):
             currentMode = modeId
+        case .currentModelUpdate:
+            // Handled in Task 7 (wire chipState into ACPSession)
+            break
+        case .sessionConfigOptionsUpdate:
+            // Handled in Task 7 (wire chipState into ACPSession)
+            break
         case .availableCommandsUpdate(let cmds):
             promptSuggestions = cmds
         case .unknown:
