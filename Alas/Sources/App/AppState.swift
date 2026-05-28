@@ -1324,11 +1324,17 @@ final class AppState {
         // Otherwise the toggle would only strip the `zmx attach` wrapper and
         // still resurrect a plain shell in the same tab slot on every
         // relaunch.
+        //
+        // Use `closeTab` (not `tabs.close`) so harness detector state is
+        // unregistered and `terminal.closeSession` issues the best-effort
+        // `zmx kill` for each leaf — otherwise daemon-side sessions left
+        // over from a previous keep-alive=true run stay orphaned with no
+        // tab left to control them.
         if !config.terminal.keepSessionsAlive {
             let hasLiveLeaf = state.root.leaves()
                 .contains { terminal.registry.session(for: $0.id) != nil }
             if !hasLiveLeaf {
-                tabs.close(worktreeId: worktreeId, tabId: tabId)
+                closeTab(worktreeId: worktreeId, tabId: tabId)
                 return nil
             }
         }
