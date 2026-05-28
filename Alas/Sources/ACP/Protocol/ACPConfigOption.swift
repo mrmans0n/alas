@@ -58,6 +58,26 @@ struct ACPConfigOptionItem: Codable, Equatable, Identifiable, Hashable {
         self.name = name
         self.description = description
     }
+
+    // Wire format uses `value` for the option identifier; accept both
+    // shapes so older draft payloads (which used `id`) keep decoding.
+    enum CodingKeys: String, CodingKey { case id, value, name, description }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let v = try? c.decode(String.self, forKey: .value) {
+            id = v
+        } else {
+            id = try c.decode(String.self, forKey: .id)
+        }
+        name = try c.decode(String.self, forKey: .name)
+        description = try? c.decode(String.self, forKey: .description)
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .value)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(description, forKey: .description)
+    }
 }
 
 /// Params for the `session/set_config_option` request — the method that
@@ -66,4 +86,29 @@ struct ACPSessionSetConfigOptionParams: Codable, Equatable {
     let sessionId: String
     let configId: String
     let value: String
+}
+
+/// Result of `session/set_config_option`. The agent returns the complete
+/// refreshed `configOptions` list because a single change can ripple to
+/// dependent options (e.g. codex's reasoning effort altering available
+/// model variants). Empty when the agent doesn't echo state back; the
+/// caller keeps its optimistic local update in that case.
+struct ACPSessionSetConfigOptionResult: Codable, Equatable {
+    let configOptions: [ACPConfigOption]
+
+    enum CodingKeys: String, CodingKey { case configOptions }
+
+    init(configOptions: [ACPConfigOption] = []) {
+        self.configOptions = configOptions
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        configOptions = (try? c.decode([ACPConfigOption].self, forKey: .configOptions)) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(configOptions, forKey: .configOptions)
+    }
 }

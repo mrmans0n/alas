@@ -58,6 +58,16 @@ struct ACPSessionUpdateTests {
         } else { Issue.record("expected sessionConfigOptionsUpdate") }
     }
 
+    @Test("decodes config_option_update (canonical spec discriminator)")
+    func configOptionCanonical() throws {
+        let env = try decode("session-update-config-option")
+        if case .sessionConfigOptionsUpdate(let opts) = env.params!.update {
+            #expect(opts.count == 1)
+            #expect(opts[0].id == "effort")
+            #expect(opts[0].options.first?.id == "low")
+        } else { Issue.record("expected sessionConfigOptionsUpdate") }
+    }
+
     private func decode(_ name: String) throws -> JSONRPCEnvelope<ACPSessionUpdateParams> {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

@@ -36,7 +36,7 @@ struct ACPConnectionTests {
         }
 
         let conn = ACPConnection(client: mock)
-        try await conn.setConfigOption(sessionId: "sess-1", configId: "effort", value: "high")
+        _ = try await conn.setConfigOption(sessionId: "sess-1", configId: "effort", value: "high")
 
         let req = try #require(mock.sent.last)
         #expect(req.method == "session/set_config_option")
@@ -45,5 +45,33 @@ struct ACPConnectionTests {
         #expect(params.sessionId == "sess-1")
         #expect(params.configId == "effort")
         #expect(params.value == "high")
+    }
+
+    @Test("setConfigOption returns refreshed configOptions from response")
+    func setConfigOptionAppliesResponse() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/set_config_option") { _ in
+            """
+            {"configOptions":[
+                {"id":"effort","name":"Effort","type":"select","currentValue":"high",
+                 "options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}
+            ]}
+            """.data(using: .utf8)!
+        }
+
+        let conn = ACPConnection(client: mock)
+        let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: "high")
+        #expect(result.count == 1)
+        #expect(result[0].currentValue == "high")
+        #expect(result[0].options.count == 2)
+    }
+
+    @Test("setConfigOption returns empty when agent omits the echo")
+    func setConfigOptionEmptyResponse() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/set_config_option") { _ in Data() }
+        let conn = ACPConnection(client: mock)
+        let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: "high")
+        #expect(result.isEmpty)
     }
 }

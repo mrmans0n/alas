@@ -270,8 +270,17 @@ struct ACPComposer: View {
             case .model:
                 try? await runner.connection.setModel(sessionId: remoteId, modelId: selectedId)
             case .configOption(let id):
-                try? await runner.connection.setConfigOption(
-                    sessionId: remoteId, configId: id, value: selectedId)
+                // The agent's response carries the refreshed configOptions
+                // (including dependent updates — e.g. switching reasoning
+                // effort can reshape available model variants). Overwrite
+                // the optimistic local update so dependent chips stay in
+                // sync. Empty response → keep the optimistic state.
+                if let updated = try? await runner.connection.setConfigOption(
+                    sessionId: remoteId, configId: id, value: selectedId),
+                   !updated.isEmpty {
+                    session.availableConfigOptions = updated
+                    manager.persist(session)
+                }
             }
         }
     }

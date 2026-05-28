@@ -30,6 +30,26 @@ struct ACPConfigOptionTests {
         #expect(opt.options[2].description == "Use more reasoning")
     }
 
+    @Test("option items decode the `value` wire key")
+    func decodeOptionValueKey() throws {
+        let json = """
+        {
+          "id": "effort",
+          "name": "Effort",
+          "type": "select",
+          "currentValue": "high",
+          "options": [
+            { "value": "low", "name": "Low" },
+            { "value": "high", "name": "High" }
+          ]
+        }
+        """.data(using: .utf8)!
+        let opt = try JSONDecoder().decode(ACPConfigOption.self, from: json)
+        #expect(opt.options.count == 2)
+        #expect(opt.options[0].id == "low")
+        #expect(opt.options[1].id == "high")
+    }
+
     @Test("non-select type decodes with empty options")
     func decodeUnknownType() throws {
         let json = """

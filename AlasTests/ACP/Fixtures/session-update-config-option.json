@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"sess-abc",
+  "update":{"sessionUpdate":"config_option_update","configOptions":[
+    {"id":"effort","name":"Effort","type":"select","currentValue":"high",
+     "options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}
+  ]}
+}}

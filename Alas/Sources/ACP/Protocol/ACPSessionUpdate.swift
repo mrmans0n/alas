@@ -43,7 +43,9 @@ enum ACPSessionUpdate: Codable, Equatable {
             self = .currentModeUpdate(modeId: try c.decode(String.self, forKey: .modeId))
         case "current_model_update":
             self = .currentModelUpdate(modelId: try c.decode(String.self, forKey: .modelId))
-        case "session_config_options_update":
+        // Spec uses `config_option_update`; some drafts/implementations
+        // emit `session_config_options_update`. Accept both.
+        case "config_option_update", "session_config_options_update":
             self = .sessionConfigOptionsUpdate(
                 try c.decode([ACPConfigOption].self, forKey: .configOptions))
         case "available_commands_update":
