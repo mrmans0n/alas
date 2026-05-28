@@ -216,6 +216,25 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .comment }))
     }
 
+    @Test("diff fallback classifies headers and changed marker runs exactly")
+    func diffFallbackExactMarkerClassification() throws {
+        let src = """
+        diff --git a/file.md b/file.md
+        index 1111111..2222222 100644
+        --- a/file.md
+        +++ b/file.md
+        @@ -1,2 +1,2 @@
+        ---- heading
+        ++++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+
+        #expect(capture(for: "--- a/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ b/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "---- heading", in: src, spans: spans) == .comment)
+        #expect(capture(for: "++++ heading", in: src, spans: spans) == .string)
+    }
+
     @Test("markup, CSS, and SQL fallback emit useful spans")
     func chatFallbackBasics() throws {
         let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "html")
@@ -227,6 +246,16 @@ struct TreeSitterHighlighterTests {
         #expect(html.contains(where: { $0.capture == .string }))
         #expect(css.contains(where: { $0.capture == .keyword }))
         #expect(sql.contains(where: { $0.capture == .keyword }))
+    }
+
+    @Test("markup fallback captures spaced and boolean attributes exactly")
+    func markupFallbackExactAttributes() throws {
+        let src = #"<button class = "primary" disabled>Save</button>"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+
+        #expect(capture(for: "class", in: src, spans: spans) == .attribute)
+        #expect(capture(for: "disabled", in: src, spans: spans) == .attribute)
+        #expect(capture(for: #""primary""#, in: src, spans: spans) == .string)
     }
 
     @Test("string literal captured")
@@ -258,5 +287,11 @@ struct TreeSitterHighlighterTests {
         let spans = await session.highlight(source: #"let value = "hello""#, fileExtension: "swift", edits: [])
         let captures = Set(spans.map { $0.capture })
         #expect(captures.contains(.string))
+    }
+
+    private func capture(for substring: String, in source: String, spans: [HighlightSpan]) -> HighlightCapture? {
+        guard let range = source.range(of: substring) else { return nil }
+        let nsRange = NSRange(range, in: source)
+        return spans.first(where: { $0.range == nsRange })?.capture
     }
 }

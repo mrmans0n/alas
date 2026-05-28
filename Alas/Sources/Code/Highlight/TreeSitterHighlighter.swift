@@ -172,10 +172,10 @@ private enum RegexFallbackHighlighter {
             guard let match else { return }
             let text = nsSource.substring(with: match.range)
             let capture: HighlightCapture
-            if text.hasPrefix("+"), !text.hasPrefix("+++") {
-                capture = .string
-            } else if text.hasPrefix("-"), !text.hasPrefix("---") {
-                capture = .comment
+            if text.hasPrefix("+") {
+                capture = text.hasPrefix("+++ ") ? .keyword : .string
+            } else if text.hasPrefix("-") {
+                capture = text.hasPrefix("--- ") ? .keyword : .comment
             } else {
                 capture = .keyword
             }
@@ -185,7 +185,7 @@ private enum RegexFallbackHighlighter {
     }
 
     private static func markupSpans(source: String) -> [HighlightSpan] {
-        let pattern = #"(<!--[\s\S]*?-->)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(<\/?[A-Za-z][A-Za-z0-9:-]*)|([A-Za-z_:][A-Za-z0-9_:.-]*)(?=\=)"#
+        let pattern = #"(<!--[\s\S]*?-->)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(<\/?[A-Za-z][A-Za-z0-9:-]*)|([A-Za-z_:][A-Za-z0-9_:.-]*)(?=\s*\=)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let nsSource = source as NSString
         var spans: [HighlightSpan] = []
@@ -205,6 +205,28 @@ private enum RegexFallbackHighlighter {
             }
             if capture != .plain {
                 spans.append(HighlightSpan(range: match.range, capture: capture))
+            }
+        }
+        spans.append(contentsOf: booleanAttributeSpans(source: source, existingSpans: spans))
+        return spans
+    }
+
+    private static func booleanAttributeSpans(source: String, existingSpans: [HighlightSpan]) -> [HighlightSpan] {
+        let tagPattern = #"<[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*?)?/?>"#
+        let attributePattern = #"\s+([A-Za-z_:][A-Za-z0-9_:.-]*)(?=\s*(?:=|/?>|\s))"#
+        guard let tagRegex = try? NSRegularExpression(pattern: tagPattern),
+              let attributeRegex = try? NSRegularExpression(pattern: attributePattern) else { return [] }
+        let nsSource = source as NSString
+        var spans: [HighlightSpan] = []
+        tagRegex.enumerateMatches(in: source, range: NSRange(location: 0, length: nsSource.length)) { tagMatch, _, _ in
+            guard let tagMatch else { return }
+            attributeRegex.enumerateMatches(in: source, range: tagMatch.range) { attributeMatch, _, _ in
+                guard let attributeMatch else { return }
+                let range = attributeMatch.range(at: 1)
+                guard range.location != NSNotFound,
+                      !existingSpans.contains(where: { $0.capture == .attribute && $0.range == range }),
+                      !spans.contains(where: { $0.range == range }) else { return }
+                spans.append(HighlightSpan(range: range, capture: .attribute))
             }
         }
         return spans
