@@ -1037,11 +1037,12 @@ final class AppState {
     }
 
     /// Activate a specific harness session: bring the app to front, select
-    /// the worktree, activate the terminal tab hosting `sessionId`, and
-    /// focus the pane within that tab that owns the session (so keyboard
-    /// input and the tab-bar harness badge follow the user's intent).
-    /// If the tab is no longer present (session was closed mid-flight) the
-    /// worktree is still selected so the user lands somewhere sensible.
+    /// the worktree, activate the terminal or ACP tab hosting `sessionId`.
+    /// For terminal tabs the owning leaf is also focused (so keyboard input
+    /// follows the user's intent); ACP tabs are single-pane so no leaf
+    /// focusing is needed. If the tab is no longer present (session was
+    /// closed mid-flight) the worktree is still selected so the user lands
+    /// somewhere sensible.
     func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
         selectedWorktreeId = worktreeId
         var matchedTabId: TabID?
