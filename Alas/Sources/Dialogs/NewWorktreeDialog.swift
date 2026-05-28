@@ -212,14 +212,17 @@ struct NewWorktreeDialog: View {
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         let dest = URL(fileURLWithPath: renderedPath)
+        let surface: WorktreeLaunchSurface = {
+            if !openTerminal { return .none }
+            return .terminal(agentId: launchAgentId == "none" ? nil : launchAgentId)
+        }()
         let id = state.createWorktree(
             projectId: project.id,
             base: base,
             branch: branch,
             destination: dest,
             runStartup: runStartup,
-            openTerminal: openTerminal,
-            launchAgentId: launchAgentId == "none" ? nil : launchAgentId
+            launchSurface: surface
         )
         guard !id.isEmpty else {
             createErrorMessage = "A worktree already exists at this path."

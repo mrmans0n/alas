@@ -435,8 +435,7 @@ final class AppState {
         branch: String,
         destination: URL,
         runStartup: Bool,
-        openTerminal: Bool,
-        launchAgentId: String? = nil
+        launchSurface: WorktreeLaunchSurface
     ) -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -515,22 +514,6 @@ final class AppState {
                 }
                 guard projects.contains(where: { $0.id == projectId }) else { return }
 
-                // Resolve the per-creation agent into a command line that
-                // will run inside the new terminal session — appended to
-                // the session's startup script so the agent gets a real
-                // TTY and the user can interact with it. Bypass-perms
-                // semantics still come from config (project override >
-                // global). If no terminal is being opened we silently skip
-                // auto-launch: a detached background spawn for an
-                // interactive CLI (claude, codex, gemini) would just exit
-                // immediately on the EOF from its missing stdin.
-                let launchAgentCommand: String? = {
-                    guard let id = launchAgentId,
-                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
-                    else { return nil }
-                    return self.agentStartupCommand(for: agent, project: project)
-                }()
-
                 do {
                     let wasHidden = projectsManager.isWorktreeHidden(
                         projectId: project.id,
@@ -548,15 +531,24 @@ final class AppState {
                     }
 
                     selectedWorktreeId = newWorktree.id
-                    // Force the terminal open when an agent was picked —
-                    // launching an interactive CLI without a visible
-                    // session is functionally a no-op.
-                    let shouldOpenTerminal = openTerminal || launchAgentCommand != nil
-                    if shouldOpenTerminal {
+
+                    switch launchSurface {
+                    case .none:
+                        break
+                    case .terminal(let agentId):
+                        let suffix: String? = {
+                            guard let id = agentId,
+                                  let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
+                            else { return nil }
+                            return self.agentStartupCommand(for: agent, project: project)
+                        }()
                         _ = try? openTerminalTab(
                             for: newWorktree,
-                            startupScriptSuffix: launchAgentCommand
+                            startupScriptSuffix: suffix
                         )
+                    case .acp:
+                        // Wired in the next task — fall through to no-op for now.
+                        break
                     }
                 } catch {
                     projectsManager.setOperationState(
