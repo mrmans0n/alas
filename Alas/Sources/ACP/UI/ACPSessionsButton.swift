@@ -218,7 +218,7 @@ private struct EditableSessionTitle: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
                 .focused($focused)
-                .frame(maxWidth: .infinity)
+                .frame(minWidth: 120, maxWidth: .infinity)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(theme.color("bg-0").opacity(0.7))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
