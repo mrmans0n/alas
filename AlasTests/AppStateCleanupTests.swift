@@ -176,7 +176,7 @@ struct AppStateCleanupTests {
             branch: "opt-b",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
         #expect(!id.isEmpty)
         let trees = state.projectsManager.worktrees(projectId: project.id)
@@ -205,7 +205,7 @@ struct AppStateCleanupTests {
             branch: "existing-path",
             destination: existing.path,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
 
         #expect(id.isEmpty)
@@ -227,7 +227,7 @@ struct AppStateCleanupTests {
             branch: "fail-b",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
 
         try await waitForOperationStateMatching(state.projectsManager, id: id) { state in
@@ -257,7 +257,7 @@ struct AppStateCleanupTests {
             branch: "retry-b",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
         try await waitForOperationStateMatching(state.projectsManager, id: failedId) { state in
             if case .createFailed = state { return true }
@@ -270,7 +270,7 @@ struct AppStateCleanupTests {
             branch: "retry-b",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
 
         #expect(retryId == failedId)
@@ -685,7 +685,7 @@ struct AppStateCleanupTests {
             branch: "race/wt",
             destination: destination,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
 
         // Immediately remove the project — before the async create finishes.

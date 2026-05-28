@@ -108,7 +108,7 @@ struct SidebarView: View {
                                         branch: wt.branch,
                                         destination: wt.path,
                                         runStartup: false,
-                                        openTerminal: false
+                                        launchSurface: .none
                                     )
                                 },
                                 onRetryDelete: { wt in state.deleteWorktree(wt) },

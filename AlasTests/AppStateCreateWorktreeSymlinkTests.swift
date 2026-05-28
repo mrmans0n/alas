@@ -68,7 +68,7 @@ struct AppStateCreateWorktreeSymlinkTests {
             branch: "symlink-branch",
             destination: destinationThroughSymlink,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
         #expect(!optimisticId.isEmpty)
 

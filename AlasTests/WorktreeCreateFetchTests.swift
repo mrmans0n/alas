@@ -163,7 +163,7 @@ struct WorktreeCreateFetchTests {
             branch: "fetched-branch",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
         #expect(!id.isEmpty)
 
@@ -194,7 +194,7 @@ struct WorktreeCreateFetchTests {
             branch: "local-branch",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
         #expect(!id.isEmpty)
 
@@ -226,7 +226,7 @@ struct WorktreeCreateFetchTests {
             branch: "fail-continue-branch",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
         #expect(!id.isEmpty)
 
@@ -254,7 +254,7 @@ struct WorktreeCreateFetchTests {
             branch: "no-fetch-branch",
             destination: dest,
             runStartup: false,
-            openTerminal: false
+            launchSurface: .none
         )
         #expect(!id.isEmpty)
 
