@@ -235,6 +235,23 @@ struct TreeSitterHighlighterTests {
         #expect(capture(for: "++++ heading", in: src, spans: spans) == .string)
     }
 
+    @Test("diff fallback classifies post-hunk file marker lines as changed content")
+    func diffFallbackPostHunkMarkerLines() throws {
+        let src = """
+        --- a/file.md
+        +++ b/file.md
+        @@ -1,2 +1,2 @@
+        --- heading
+        +++ heading
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "diff")
+
+        #expect(capture(for: "--- a/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "+++ b/file.md", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "--- heading", in: src, spans: spans) == .comment)
+        #expect(capture(for: "+++ heading", in: src, spans: spans) == .string)
+    }
+
     @Test("markup, CSS, and SQL fallback emit useful spans")
     func chatFallbackBasics() throws {
         let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "html")
@@ -248,6 +265,17 @@ struct TreeSitterHighlighterTests {
         #expect(sql.contains(where: { $0.capture == .keyword }))
     }
 
+    @Test("CSS fallback does not treat hashes as line comments")
+    func cssFallbackDoesNotTreatHashesAsLineComments() throws {
+        let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "css")
+        let swallowedRange = NSRange(src.range(of: "#fff; background")!, in: src)
+
+        #expect(capture(for: "background", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "display", in: src, spans: spans) == .keyword)
+        #expect(!spans.contains(where: { $0.capture == .comment && NSIntersectionRange($0.range, swallowedRange).length == swallowedRange.length }))
+    }
+
     @Test("markup fallback captures spaced and boolean attributes exactly")
     func markupFallbackExactAttributes() throws {
         let src = #"<button class = "primary" disabled>Save</button>"#
@@ -256,6 +284,16 @@ struct TreeSitterHighlighterTests {
         #expect(capture(for: "class", in: src, spans: spans) == .attribute)
         #expect(capture(for: "disabled", in: src, spans: spans) == .attribute)
         #expect(capture(for: #""primary""#, in: src, spans: spans) == .string)
+    }
+
+    @Test("markup fallback does not recover boolean attributes inside comments or strings")
+    func markupFallbackSkipsBooleanAttributesInsideCommentsAndStrings() throws {
+        let src = #"<!-- <button disabled> --> <input disabled value="<tag disabled>">"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+
+        #expect(capture(for: "disabled", occurrence: 0, in: src, spans: spans) != .attribute)
+        #expect(capture(for: "disabled", occurrence: 1, in: src, spans: spans) == .attribute)
+        #expect(capture(for: "disabled", occurrence: 2, in: src, spans: spans) != .attribute)
     }
 
     @Test("string literal captured")
@@ -293,5 +331,26 @@ struct TreeSitterHighlighterTests {
         guard let range = source.range(of: substring) else { return nil }
         let nsRange = NSRange(range, in: source)
         return spans.first(where: { $0.range == nsRange })?.capture
+    }
+
+    private func capture(
+        for substring: String,
+        occurrence: Int,
+        in source: String,
+        spans: [HighlightSpan]
+    ) -> HighlightCapture? {
+        guard let range = range(of: substring, occurrence: occurrence, in: source) else { return nil }
+        let nsRange = NSRange(range, in: source)
+        return spans.first(where: { $0.range == nsRange })?.capture
+    }
+
+    private func range(of substring: String, occurrence: Int, in source: String) -> Range<String.Index>? {
+        var searchRange = source.startIndex..<source.endIndex
+        for index in 0...occurrence {
+            guard let range = source.range(of: substring, range: searchRange) else { return nil }
+            if index == occurrence { return range }
+            searchRange = range.upperBound..<source.endIndex
+        }
+        return nil
     }
 }

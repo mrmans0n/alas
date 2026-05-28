@@ -132,6 +132,7 @@ private enum RegexFallbackHighlighter {
         switch language {
         case "diff": return diffSpans(source: source)
         case "markup": return markupSpans(source: source)
+        case "css": return cssSpans(source: source)
         default: break
         }
         let keywords = keywordSet(for: language)
@@ -164,7 +165,42 @@ private enum RegexFallbackHighlighter {
     }
 
     private static func diffSpans(source: String) -> [HighlightSpan] {
-        let pattern = #"(?m)^(@@.*@@|diff --git .*$|index .*$|--- .*$|\+\+\+ .*$|\+.*$|-.*$)"#
+        let nsSource = source as NSString
+        var spans: [HighlightSpan] = []
+        var offset = 0
+        var inHunk = false
+        while offset < nsSource.length {
+            let lineRange = nsSource.lineRange(for: NSRange(location: offset, length: 0))
+            var contentRange = lineRange
+            while contentRange.length > 0 {
+                let char = nsSource.character(at: contentRange.location + contentRange.length - 1)
+                guard char == 10 || char == 13 else { break }
+                contentRange.length -= 1
+            }
+            let text = nsSource.substring(with: contentRange)
+            if let capture = diffCapture(for: text, inHunk: inHunk) {
+                spans.append(HighlightSpan(range: contentRange, capture: capture))
+            }
+            if text.hasPrefix("@@"), text.contains("@@") {
+                inHunk = true
+            }
+            offset = lineRange.location + lineRange.length
+        }
+        return spans
+    }
+
+    private static func diffCapture(for line: String, inHunk: Bool) -> HighlightCapture? {
+        if line.hasPrefix("@@"), line.contains("@@") { return .keyword }
+        if line.hasPrefix("diff --git ") || line.hasPrefix("index ") { return .keyword }
+        if !inHunk, line.hasPrefix("--- ") || line.hasPrefix("+++ ") { return .keyword }
+        if line.hasPrefix("+") { return .string }
+        if line.hasPrefix("-") { return .comment }
+        return nil
+    }
+
+    private static func cssSpans(source: String) -> [HighlightSpan] {
+        let keywords = keywordSet(for: "css")
+        let pattern = #"(/\*[\s\S]*?\*/)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(#(?:[0-9A-Fa-f]{3,8}|[A-Za-z_][A-Za-z0-9_-]*))|(\b\d+(?:\.\d+)?\b)|([A-Za-z_-][A-Za-z0-9_-]*)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let nsSource = source as NSString
         var spans: [HighlightSpan] = []
@@ -172,14 +208,20 @@ private enum RegexFallbackHighlighter {
             guard let match else { return }
             let text = nsSource.substring(with: match.range)
             let capture: HighlightCapture
-            if text.hasPrefix("+") {
-                capture = text.hasPrefix("+++ ") ? .keyword : .string
-            } else if text.hasPrefix("-") {
-                capture = text.hasPrefix("--- ") ? .keyword : .comment
-            } else {
+            if match.range(at: 1).location != NSNotFound {
+                capture = .comment
+            } else if match.range(at: 2).location != NSNotFound {
+                capture = .string
+            } else if match.range(at: 3).location != NSNotFound || match.range(at: 4).location != NSNotFound {
+                capture = .number
+            } else if keywords.contains(text) || keywords.contains(text.lowercased()) {
                 capture = .keyword
+            } else {
+                capture = .plain
             }
-            spans.append(HighlightSpan(range: match.range, capture: capture))
+            if capture != .plain {
+                spans.append(HighlightSpan(range: match.range, capture: capture))
+            }
         }
         return spans
     }
@@ -212,24 +254,67 @@ private enum RegexFallbackHighlighter {
     }
 
     private static func booleanAttributeSpans(source: String, existingSpans: [HighlightSpan]) -> [HighlightSpan] {
-        let tagPattern = #"<[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*?)?/?>"#
         let attributePattern = #"\s+([A-Za-z_:][A-Za-z0-9_:.-]*)(?=\s*(?:=|/?>|\s))"#
-        guard let tagRegex = try? NSRegularExpression(pattern: tagPattern),
-              let attributeRegex = try? NSRegularExpression(pattern: attributePattern) else { return [] }
+        guard let attributeRegex = try? NSRegularExpression(pattern: attributePattern) else { return [] }
         let nsSource = source as NSString
+        let protectedSpans = existingSpans.filter { $0.capture == .comment || $0.capture == .string }
         var spans: [HighlightSpan] = []
-        tagRegex.enumerateMatches(in: source, range: NSRange(location: 0, length: nsSource.length)) { tagMatch, _, _ in
-            guard let tagMatch else { return }
-            attributeRegex.enumerateMatches(in: source, range: tagMatch.range) { attributeMatch, _, _ in
+        for tagRange in openingTagRanges(source: source, protectedSpans: protectedSpans) {
+            attributeRegex.enumerateMatches(in: source, range: tagRange) { attributeMatch, _, _ in
                 guard let attributeMatch else { return }
                 let range = attributeMatch.range(at: 1)
                 guard range.location != NSNotFound,
+                      !protectedSpans.contains(where: { contains($0.range, range) }),
                       !existingSpans.contains(where: { $0.capture == .attribute && $0.range == range }),
                       !spans.contains(where: { $0.range == range }) else { return }
                 spans.append(HighlightSpan(range: range, capture: .attribute))
             }
         }
         return spans
+    }
+
+    private static func openingTagRanges(source: String, protectedSpans: [HighlightSpan]) -> [NSRange] {
+        let nsSource = source as NSString
+        var ranges: [NSRange] = []
+        var offset = 0
+        while offset < nsSource.length {
+            guard nsSource.character(at: offset) == 60,
+                  !protectedSpans.contains(where: { contains($0.range, NSRange(location: offset, length: 1)) }),
+                  offset + 1 < nsSource.length else {
+                offset += 1
+                continue
+            }
+            let next = nsSource.character(at: offset + 1)
+            guard isMarkupNameStart(next) else {
+                offset += 1
+                continue
+            }
+            var cursor = offset + 1
+            var quote: unichar?
+            while cursor < nsSource.length {
+                let char = nsSource.character(at: cursor)
+                if let currentQuote = quote {
+                    if char == currentQuote { quote = nil }
+                } else if char == 34 || char == 39 {
+                    quote = char
+                } else if char == 62 {
+                    ranges.append(NSRange(location: offset, length: cursor - offset + 1))
+                    offset = cursor
+                    break
+                }
+                cursor += 1
+            }
+            offset += 1
+        }
+        return ranges
+    }
+
+    private static func contains(_ outer: NSRange, _ inner: NSRange) -> Bool {
+        inner.location >= outer.location && NSMaxRange(inner) <= NSMaxRange(outer)
+    }
+
+    private static func isMarkupNameStart(_ char: unichar) -> Bool {
+        (char >= 65 && char <= 90) || (char >= 97 && char <= 122)
     }
 
     private static func language(forFileExtension ext: String) -> String {
