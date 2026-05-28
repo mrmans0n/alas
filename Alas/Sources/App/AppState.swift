@@ -1053,6 +1053,15 @@ final class AppState {
             matchedLeafId = leaf.id
             break
         }
+        // Fall through to ACP tabs: no leaf focusing needed — an ACP tab
+        // is a single pane.
+        if matchedTabId == nil {
+            for tab in tabs.tabs(forWorktree: worktreeId) {
+                guard case .acpSession(let s) = tab, s.sessionId == sessionId else { continue }
+                matchedTabId = tab.id
+                break
+            }
+        }
         if let tabId = matchedTabId {
             if let leafId = matchedLeafId {
                 _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leafId)
