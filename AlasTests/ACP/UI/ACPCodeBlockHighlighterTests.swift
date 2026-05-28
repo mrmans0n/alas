@@ -11,6 +11,8 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "python") == "py")
         #expect(ACPCodeLanguage.highlighterExtension(for: "typescript") == "ts")
         #expect(ACPCodeLanguage.highlighterExtension(for: "javascript") == "js")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "md") == "md")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "markdown") == "md")
         #expect(ACPCodeLanguage.highlighterExtension(for: "shell") == "sh")
         #expect(ACPCodeLanguage.highlighterExtension(for: "zsh") == "sh")
         #expect(ACPCodeLanguage.highlighterExtension(for: "c++") == "cpp")

@@ -29,6 +29,7 @@ enum ACPCodeLanguage {
         case "ts", "typescript": return "ts"
         case "tsx": return "tsx"
         case "sh", "bash", "shell", "zsh", "console", "terminal": return "sh"
+        case "md", "markdown": return "md"
         case "json": return "json"
         case "yaml", "yml": return "yaml"
         case "toml": return "toml"
