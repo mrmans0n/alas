@@ -52,12 +52,17 @@ enum ACPAgentProfiles {
     }
 
     /// The unknown-agent Thinking heuristic: pick a configOption whose id
-    /// matches a known thinking name OR whose category is "ThoughtLevel".
+    /// matches a known thinking name OR whose category is a thought-level
+    /// marker. Spec uses `thought_level`; older drafts used `ThoughtLevel`.
     /// Returns nil if no candidate exists.
     static func heuristicThinkingId(from options: [ACPConfigOption]) -> String? {
         let knownIds: Set<String> = ["effort", "reasoning_effort", "thinking", "thinking_level"]
+        let thoughtCategories: Set<String> = ["thought_level", "ThoughtLevel"]
         if let byId = options.first(where: { knownIds.contains($0.id) }) { return byId.id }
-        if let byCategory = options.first(where: { $0.category == "ThoughtLevel" }) {
+        if let byCategory = options.first(where: {
+            guard let c = $0.category else { return false }
+            return thoughtCategories.contains(c)
+        }) {
             return byCategory.id
         }
         return nil

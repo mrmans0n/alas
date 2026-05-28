@@ -65,6 +65,18 @@ struct ACPAgentProfilesTests {
         #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == "brainpower")
     }
 
+    @Test("heuristic picks thought_level-category option (canonical spec)")
+    func heuristicBySnakeCaseCategory() {
+        let opts = [
+            ACPConfigOption(id: "speed", name: "Speed", currentValue: "fast",
+                            options: [ACPConfigOptionItem(id: "fast", name: "Fast")]),
+            ACPConfigOption(id: "reasoning", name: "Reasoning", category: "thought_level",
+                            currentValue: "high",
+                            options: [ACPConfigOptionItem(id: "high", name: "High")])
+        ]
+        #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == "reasoning")
+    }
+
     @Test("heuristic prefers known id over ThoughtLevel category")
     func heuristicKnownIdWins() {
         let opts = [
