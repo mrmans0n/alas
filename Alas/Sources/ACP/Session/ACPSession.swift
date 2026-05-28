@@ -24,6 +24,10 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
     @Published var disconnected: Bool = false
+    /// Runtime-only transcript scroll intent. When true, the ACP message
+    /// list follows new content and restores to the latest bottom after
+    /// returning to this session. Set false when the user scrolls upward.
+    @Published var followsTranscriptTail: Bool = true
     /// True once a runner has been started for this session — meaning
     /// `initialize` + `session/new` succeeded and we have a live agent on
     /// stdio. Reset to false on detach or when the process exits. The

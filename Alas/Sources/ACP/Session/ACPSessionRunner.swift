@@ -253,6 +253,9 @@ extension ACPSessionRunner {
             await MainActor.run {
                 let before = self.session.messages.count
                 let titleBefore = self.session.title
+                if !self.session.followsTranscriptTail {
+                    self.session.followsTranscriptTail = true
+                }
                 self.session.recordUserPrompt(text: text, attachments: attachments)
                 self.persistFromIndex(before)
                 // First-prompt path auto-renames the session to the
