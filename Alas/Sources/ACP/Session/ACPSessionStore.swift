@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 2
+    static let targetSchemaVersion = 3
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -27,6 +27,7 @@ final class ACPSessionStore {
         let current = Int((rows.first?["version"] as? Int64) ?? 0)
         if current < 1 { try migrate_to_v1() }
         if current < 2 { try migrate_to_v2() }
+        if current < 3 { try migrate_to_v3() }
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -78,6 +79,20 @@ final class ACPSessionStore {
     private func migrate_to_v2() throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS composer_drafts (
+          session_id  TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          payload     BLOB NOT NULL,
+          updated_at  INTEGER NOT NULL
+        )
+        """)
+    }
+
+    private func migrate_to_v3() throws {
+        // One row per session holds the JSON-encoded queue payload.
+        // We rewrite the whole row on every mutation — items are small
+        // and queue churn is low, so the cost is negligible. ON DELETE
+        // CASCADE keeps the row in lockstep with the session.
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_queue (
           session_id  TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
           payload     BLOB NOT NULL,
           updated_at  INTEGER NOT NULL
@@ -211,5 +226,34 @@ extension ACPSessionStore {
             updatedAt: (r["updated_at"] as? Int64) ?? 0,
             lastOpenedAt: (r["last_opened_at"] as? Int64) ?? 0,
             archived: ((r["archived"] as? Int64) ?? 0) != 0)
+    }
+}
+
+extension ACPSessionStore {
+    /// Replace the persisted queue for `sessionId` with `items`. An empty
+    /// array deletes the row so `loadQueue` returns `[]` cleanly without
+    /// an empty-array JSON blob lingering.
+    func upsertQueue(sessionId: String, items: [QueuedPrompt]) throws {
+        if items.isEmpty {
+            try db.exec("DELETE FROM session_queue WHERE session_id = ?", bindings: [sessionId])
+            return
+        }
+        let payload = try JSONEncoder().encode(items)
+        let now = Int64(Date().timeIntervalSince1970)
+        try db.exec("""
+        INSERT INTO session_queue (session_id, payload, updated_at)
+        VALUES (?,?,?)
+        ON CONFLICT(session_id) DO UPDATE SET
+            payload = excluded.payload,
+            updated_at = excluded.updated_at
+        """, bindings: [sessionId, payload, now])
+    }
+
+    func loadQueue(sessionId: String) throws -> [QueuedPrompt] {
+        let rows = try db.query(
+            "SELECT payload FROM session_queue WHERE session_id = ?",
+            bindings: [sessionId])
+        guard let payload = rows.first?["payload"] as? Data else { return [] }
+        return (try? JSONDecoder().decode([QueuedPrompt].self, from: payload)) ?? []
     }
 }

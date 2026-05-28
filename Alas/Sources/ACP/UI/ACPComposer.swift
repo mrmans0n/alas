@@ -5,6 +5,7 @@ typealias ACPComposerSubmitCompletion = @MainActor (_ succeeded: Bool) -> Void
 typealias ACPComposerSubmitHandler = (
     _ text: String,
     _ attachments: [ACPMessage.Attachment],
+    _ intent: ACPSubmitIntent,
     _ draft: ACPComposerDraft,
     _ completion: @escaping ACPComposerSubmitCompletion
 ) -> Bool
@@ -13,6 +14,10 @@ struct ACPInputField: NSViewRepresentable {
     @ObservedObject var session: ACPSession
     let worktreeRoot: URL
     let actions: ACPComposerActions
+    /// True when ⏎ should submit with `.auto` intent (the default mapping
+    /// — queue while busy). False when the user inverted the setting so
+    /// ⏎ steers; the placeholder reverses accordingly while busy.
+    let sendOnEnter: Bool
     /// Persists the current composer draft after text storage changes.
     let onDraftChange: (ACPComposerDraft) -> Void
     /// Clears the persisted draft after an accepted submission.
@@ -40,9 +45,9 @@ struct ACPInputField: NSViewRepresentable {
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
         let coord = context.coordinator
-        actions.submit = { [weak coord] in
+        actions.submitWithIntent = { [weak coord] intent in
             guard let coord, let tv = coord.textView else { return }
-            coord.submit(tv)
+            coord.submit(tv, intent: intent)
         }
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -63,8 +68,26 @@ struct ACPInputField: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.promptSuggestions = session.promptSuggestions
         context.coordinator.theme = context.environment.theme
-        if let textView = nsView.documentView as? NSTextView {
-            context.coordinator.syncPersistedDraft(session.composerDraft, into: textView)
+        context.coordinator.sendOnEnter = sendOnEnter
+        if let tv = nsView.documentView as? ACPNSTextView {
+            tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
+            tv.needsDisplay = true
+            context.coordinator.syncPersistedDraft(session.composerDraft, into: tv)
+        }
+    }
+
+    /// When busy, the placeholder advertises whichever action ⏎ will
+    /// trigger under the current settings — so a user who inverted the
+    /// shortcut (sendOnEnter = false) sees "Steer the agent…" instead of
+    /// being told ⏎ queues.
+    static func placeholder(for state: ACPSession.StreamingState,
+                            sendOnEnter: Bool) -> String {
+        switch state {
+        case .idle: return "Plan, ask, or build — type / for commands"
+        case .sending, .streaming, .awaitingPermission:
+            return sendOnEnter
+                ? "Queue a follow-up… (⌥⏎ to steer)"
+                : "Steer the agent… (⌥⏎ to queue)"
         }
     }
 
@@ -72,6 +95,7 @@ struct ACPInputField: NSViewRepresentable {
         Coordinator(
             worktreeRoot: worktreeRoot,
             initialDraft: session.composerDraft,
+            sendOnEnter: sendOnEnter,
             onDraftChange: onDraftChange,
             onDraftClear: onDraftClear,
             onSubmit: onSubmit
@@ -81,6 +105,14 @@ struct ACPInputField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         let worktreeRoot: URL
         let initialDraft: ACPComposerDraft
+        /// Keyboard-only inversion flag. The coordinator resolves the
+        /// raw modifier-derived intent (`.auto` for ⏎, `.steer` for ⌥⏎)
+        /// against this and emits a FINAL intent to `onSubmit`. The
+        /// toolbar send button bypasses the coordinator's keyboard
+        /// handler, so mouse clicks are never inverted — clicking the
+        /// visible ↑ button always submits with the intent the button's
+        /// help text advertises.
+        var sendOnEnter: Bool
         let onDraftChange: (ACPComposerDraft) -> Void
         let onDraftClear: () -> Void
         let onSubmit: ACPComposerSubmitHandler
@@ -97,12 +129,14 @@ struct ACPInputField: NSViewRepresentable {
         init(
             worktreeRoot: URL,
             initialDraft: ACPComposerDraft,
+            sendOnEnter: Bool,
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
             onSubmit: @escaping ACPComposerSubmitHandler
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
+            self.sendOnEnter = sendOnEnter
             self.lastSyncedDraft = initialDraft
             self.onDraftChange = onDraftChange
             self.onDraftClear = onDraftClear
@@ -124,11 +158,22 @@ struct ACPInputField: NSViewRepresentable {
             if selector == #selector(NSResponder.insertNewline(_:)) {
                 let event = NSApp.currentEvent
                 let shift = event?.modifierFlags.contains(.shift) == true
+                let option = event?.modifierFlags.contains(.option) == true
                 if shift {
                     textView.insertText("\n", replacementRange: textView.selectedRange())
                     return true
                 }
-                submit(textView)
+                // Resolve the keyboard mapping HERE so the upstream
+                // handler receives a final intent. The toolbar send
+                // button goes through `actions.submitWithIntent` (which
+                // calls `submit(_:intent:)` directly) and bypasses this
+                // resolution — clicking ↑ always submits with the
+                // intent the button advertises.
+                let raw: ACPSubmitIntent = option ? .steer : .auto
+                let final: ACPSubmitIntent = sendOnEnter
+                    ? raw
+                    : (raw == .auto ? .steer : .auto)
+                submit(textView, intent: final)
                 return true
             }
             return false
@@ -149,7 +194,7 @@ struct ACPInputField: NSViewRepresentable {
             onDraftChange(draft)
         }
 
-        func submit(_ textView: NSTextView) {
+        func submit(_ textView: NSTextView, intent: ACPSubmitIntent = .auto) {
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -159,7 +204,7 @@ struct ACPInputField: NSViewRepresentable {
             // draft deletion waits for the async prompt completion.
             let submitID = nextSubmitID
             nextSubmitID += 1
-            if onSubmit(text, attachments, draft, { [weak self, weak textView] succeeded in
+            if onSubmit(text, attachments, intent, draft, { [weak self, weak textView] succeeded in
                 if let self {
                     self.finishSubmit(id: submitID, draft: draft, succeeded: succeeded, textView: textView)
                 }

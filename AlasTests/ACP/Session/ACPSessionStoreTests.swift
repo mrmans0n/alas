@@ -9,11 +9,11 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
-    @Test("opens a fresh DB at schema version 2")
+    @Test("opens a fresh DB at schema version 3")
     func freshSchema() throws {
         let store = try tmpStore()
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
-        #expect(ACPSessionStore.targetSchemaVersion == 2)
+        #expect(ACPSessionStore.targetSchemaVersion == 3)
     }
 
     @Test("re-opening doesn't double-apply migrations")
@@ -23,8 +23,8 @@ struct ACPSessionStoreSchemaTests {
         _ = try ACPSessionStore(path: url.path) // must not throw
     }
 
-    @Test("migrates schema version 1 to version 2")
-    func migratesV1ToV2() throws {
+    @Test("migrates schema version 1 to current target")
+    func migratesV1ToCurrent() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")
         do {
             let db = try SQLiteDatabase(path: url.path)
@@ -73,7 +73,7 @@ struct ACPSessionStoreSchemaTests {
         }
 
         let store = try ACPSessionStore(path: url.path)
-        #expect(try store.currentSchemaVersion() == 2)
+        #expect(try store.currentSchemaVersion() == 3)
 
         let draft = ACPComposerDraft(segments: [.text("migrated")])
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",

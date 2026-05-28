@@ -41,6 +41,16 @@ final class ACPSession: ObservableObject, Identifiable {
     /// as the persistence key in `ACPSessionStore`.
     /// Not persisted — recreated on each `attach()` if missing.
     var remoteSessionId: String?
+    @Published var queue: [QueuedPrompt] = []
+    @Published var steerUndo: SteerUndoState?
+
+    struct SteerUndoState: Equatable {
+        /// Unique per-snapshot id used by SwiftUI for view diffing — letting
+        /// us reset the 5s timer-task whenever a new steer happens before
+        /// the previous toast has expired.
+        let id: UUID
+        let snapshot: [QueuedPrompt]
+    }
 
     func replaceComposerDraft(_ draft: ACPComposerDraft) {
         composerDraft = draft
@@ -135,6 +145,96 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
         transcript.messages.append(.fileEdit(id: UUID(), edit))
+    }
+
+    /// Append a new pending item to the tail of the queue. Used by the
+    /// runner when the user submits while the agent is busy (or while
+    /// the queue is already non-empty — see ACPSubmitRoute).
+    func enqueue(blocks: [ACPContentBlock]) {
+        queue.append(QueuedPrompt(blocks: blocks))
+    }
+
+    /// Remove a specific item by id. The drag-handle X on the bubble
+    /// calls this. Safe on .sending items because the UI hides X then —
+    /// but we double-guard here to avoid yanking an in-flight RPC.
+    func removeFromQueue(id: UUID) {
+        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
+        if queue[idx].status == .sending { return }
+        queue.remove(at: idx)
+    }
+
+    /// Reorder within the queue. Refuses to move a `.sending` head — the
+    /// UI hides the grip on `.sending` items, this is the belt-and-
+    /// suspenders guard.
+    func moveInQueue(from src: Int, to dst: Int) {
+        guard src >= 0, src < queue.count, dst >= 0, dst <= queue.count else { return }
+        if queue.indices.contains(src), queue[src].status == .sending { return }
+        // If moving across the .sending head (index 0 when sending), refuse.
+        if !queue.isEmpty, queue[0].status == .sending, dst == 0 { return }
+        let item = queue.remove(at: src)
+        queue.insert(item, at: min(dst, queue.count))
+    }
+
+    /// Edit the prompt blocks of a `.pending` item. No-op for `.sending`.
+    func editQueueItem(id: UUID, blocks: [ACPContentBlock]) {
+        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
+        if queue[idx].status == .sending { return }
+        queue[idx].blocks = blocks
+    }
+
+    /// Remove all `.pending` items; return the snapshot in original order so
+    /// the steer-undo toast (or the "Clear queue" header button) can restore
+    /// them. A `.sending` item is left in place — it's mid-RPC.
+    @discardableResult
+    func clearPendingQueue() -> [QueuedPrompt] {
+        let snapshot = queue.filter { $0.status == .pending }
+        queue.removeAll { $0.status == .pending }
+        return snapshot
+    }
+
+    /// Re-prepend a previously-cleared snapshot. Used by the steer-undo
+    /// toast. If a `.sending` head exists (e.g. the steer redirect already
+    /// completed and the flusher promoted a follow-up to in-flight before
+    /// the user tapped Undo), the restored items go AFTER it — otherwise
+    /// the in-flight `sendNow`'s `popQueueHead` would key off the wrong
+    /// item and the `.sending` head would stay stranded in the queue.
+    func restorePendingSnapshot(_ snapshot: [QueuedPrompt]) {
+        let insertAt = (queue.first?.status == .sending) ? 1 : 0
+        queue.insert(contentsOf: snapshot, at: insertAt)
+    }
+
+    /// Mark the head item `.sending`. Called by the flusher right before
+    /// it spawns the prompt RPC. Clears any previous `lastError` so a
+    /// retried item displays cleanly while in-flight.
+    func markQueueHeadSending() {
+        guard !queue.isEmpty, queue[0].status == .pending else { return }
+        queue[0].status = .sending
+        queue[0].lastError = nil
+    }
+
+    /// Pop the head only if it's currently `.sending`. Returns it. Used by
+    /// the flusher's success path.
+    @discardableResult
+    func popQueueHead() -> QueuedPrompt? {
+        guard !queue.isEmpty, queue[0].status == .sending else { return nil }
+        return queue.removeFirst()
+    }
+
+    /// Roll the `.sending` head back to `.pending` with an error message.
+    /// Used by the flusher's failure path. Keeps the item at the head so
+    /// the user sees "Retry" on the bubble.
+    func setQueueHeadError(_ message: String) {
+        guard !queue.isEmpty else { return }
+        queue[0].status = .pending
+        queue[0].lastError = message
+    }
+
+    /// Replace the queue wholesale with a normalized restore set. Called
+    /// from `ACPSessionManager.openSession` after pulling rows from the
+    /// store. `.sending` items get flipped to `.pending` here so the
+    /// flusher re-attempts on next idle.
+    func restoreQueue(_ items: [QueuedPrompt]) {
+        queue = items.map { $0.normalizedAfterRestore() }
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when

@@ -7,6 +7,13 @@ struct ACPMessageList: View {
     let onOpenDiff: (String) -> Void
     let policy: ACPPermissionPolicy?
     let scopeKey: String
+    /// Callbacks invoked by the pending bubbles + header. The host wires
+    /// these to the runner.
+    let onQueueEdit: (QueuedPrompt) -> Void
+    let onQueueRemove: (UUID) -> Void
+    let onQueueRetry: (UUID) -> Void
+    let onQueueReorder: (Int, Int) -> Void
+    let onQueueClearAll: () -> Void
     @Environment(\.theme) private var theme
     @State private var viewportHeight: CGFloat = 0
     @State private var tailFrame: CGRect = .zero
@@ -29,6 +36,7 @@ struct ACPMessageList: View {
     private var scrollSignature: Int {
         var hasher = Hasher()
         hasher.combine(transcript.messages.count)
+        hasher.combine(session.queue.count)
         // Streaming chunks mutate the buffer in place without re-publishing
         // the transcript array; the tick gives the body a reason to re-eval
         // so this signature changes and the tail-scroll fires per chunk.
@@ -71,6 +79,27 @@ struct ACPMessageList: View {
                         if transcript.streamingState == .streaming {
                             StreamingCaret().frame(width: 8, height: 14)
                                 .id("__streaming_caret__")
+                        }
+                        if session.queue.count > 1 {
+                            ACPQueueHeader(count: session.queue.count, onClear: onQueueClearAll)
+                                .id("__queue_header__")
+                        }
+                        ForEach(Array(session.queue.enumerated()), id: \.element.id) { idx, item in
+                            ACPQueuedBubble(
+                                item: item,
+                                onEdit: { onQueueEdit(item) },
+                                onRemove: { onQueueRemove(item.id) },
+                                onRetry: { onQueueRetry(item.id) }
+                            )
+                            .dropDestination(for: String.self) { items, _ in
+                                guard let s = items.first,
+                                      let uuid = UUID(uuidString: s),
+                                      let src = session.queue.firstIndex(where: { $0.id == uuid })
+                                else { return false }
+                                onQueueReorder(src, idx)
+                                return true
+                            }
+                            .id("__queue_\(item.id)")
                         }
                         // Invisible tail spacer that the auto-scroll pins to
                         // the viewport bottom; this guarantees the streaming

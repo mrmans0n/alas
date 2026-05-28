@@ -22,9 +22,10 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
-            onSubmit: { _, _, submittedDraft, onFinished in
+            onSubmit: { _, _, _, submittedDraft, onFinished in
                 #expect(submittedDraft == draft)
                 completion = onFinished
                 return true
@@ -32,7 +33,7 @@ struct ACPComposerDraftBridgeTests {
         )
         coordinator.textView = textView
 
-        coordinator.submit(textView)
+        coordinator.submit(textView, intent: .auto)
         #expect(textView.string.isEmpty)
         #expect(changedDrafts.isEmpty)
         #expect(clearCount == 0)
@@ -56,9 +57,10 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
-            onSubmit: { _, _, submittedDraft, onFinished in
+            onSubmit: { _, _, _, submittedDraft, onFinished in
                 #expect(submittedDraft == draft)
                 completion = onFinished
                 return true
@@ -90,9 +92,10 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
-            onSubmit: { _, _, draft, onFinished in
+            onSubmit: { _, _, _, draft, onFinished in
                 #expect(draft == submittedDraft)
                 completion = onFinished
                 return true
@@ -126,9 +129,10 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
-            onSubmit: { _, _, draft, onFinished in
+            onSubmit: { _, _, _, draft, onFinished in
                 #expect(draft == submittedDraft)
                 completion = onFinished
                 return true
@@ -157,9 +161,10 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: submittedDraft,
+            sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
-            onSubmit: { _, _, _, _ in true }
+            onSubmit: { _, _, _, _, _ in true }
         )
 
         coordinator.syncPersistedDraft(.empty, into: textView)
@@ -181,9 +186,10 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: submittedDraft,
+            sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
-            onSubmit: { _, _, _, _ in true }
+            onSubmit: { _, _, _, _, _ in true }
         )
 
         coordinator.syncPersistedDraft(.empty, into: textView)
@@ -191,6 +197,36 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == localDraft)
         #expect(changedDrafts.isEmpty)
         #expect(clearCount == 0)
+    }
+
+    @Test("toolbar send button bypasses keyboard inversion (sendOnEnter=false)")
+    func toolbarSubmitBypassesInversion() {
+        // Regression: the inversion was previously applied to ALL submits
+        // upstream of the composer, including the toolbar send button.
+        // With `acpSendOnEnter = false`, a plain ↑ click would have been
+        // converted to `.steer` (cancel + discard) instead of `.auto`
+        // (queue/send). The fix moves the keyboard inversion INTO the
+        // coordinator's `doCommandBy`; `submit(_:intent:)` (which the
+        // button calls via `actions.submitWithIntent`) emits the intent
+        // verbatim.
+        let textView = NSTextView()
+        textView.string = "hello"
+        var received: ACPSubmitIntent?
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            sendOnEnter: false,           // user inverted the setting
+            onDraftChange: { _ in },
+            onDraftClear: {},
+            onSubmit: { _, _, intent, _, _ in
+                received = intent
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.submit(textView, intent: .auto)
+        #expect(received == .auto)        // NOT inverted by the button path
     }
 
     @Test("serializes plain text and mention chips in order")
