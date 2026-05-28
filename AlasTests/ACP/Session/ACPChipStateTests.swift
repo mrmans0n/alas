@@ -116,4 +116,43 @@ struct ACPChipStateTests {
             configOptions: [])
         #expect(state.models == nil)
     }
+
+    @Test("Models chip sources from category=model configOption when present")
+    func modelFromConfigOption() {
+        let modelOpt = configOption("preset",
+                                    current: "sonnet",
+                                    options: [("opus","Opus"),("sonnet","Sonnet")],
+                                    category: "model")
+        let state = ACPChipState.normalize(
+            agentId: "future-agent",
+            availableModels: [],
+            currentModel: nil,
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [modelOpt])
+        #expect(state.models?.currentId == "sonnet")
+        #expect(state.models?.options.count == 2)
+        if case .configOption(let id)? = state.models?.source {
+            #expect(id == "preset")
+        } else { Issue.record("expected configOption source for model chip") }
+    }
+
+    @Test("configOption model selector wins over legacy availableModels")
+    func modelConfigOptionWinsOverLegacy() {
+        let modelOpt = configOption("preset",
+                                    current: "sonnet",
+                                    options: [("opus","Opus"),("sonnet","Sonnet")],
+                                    category: "model")
+        let state = ACPChipState.normalize(
+            agentId: "claude",
+            availableModels: [model("legacy","Legacy")],
+            currentModel: "legacy",
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [modelOpt])
+        #expect(state.models?.currentId == "sonnet")
+        if case .configOption(let id)? = state.models?.source {
+            #expect(id == "preset")
+        } else { Issue.record("configOption model chip should win") }
+    }
 }

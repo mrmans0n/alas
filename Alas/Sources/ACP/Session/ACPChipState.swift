@@ -41,12 +41,18 @@ extension ACPChipState {
     ) -> ACPChipState {
         let routing = ACPAgentProfiles.routing(for: agentId)
 
-        let models: ChipSpec? = availableModels.isEmpty ? nil : ChipSpec(
-            source: .model,
-            options: availableModels.map {
-                ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
-            },
-            currentId: currentModel)
+        // Prefer a `category: "model"` configOption when the agent advertises
+        // one (the stabilized ACP path); fall back to the legacy
+        // `availableModels` list. Either way the chip dispatches via the
+        // source tag on `ChipSpec`.
+        let models: ChipSpec? =
+            modelChipFromConfigOptions(configOptions)
+            ?? (availableModels.isEmpty ? nil : ChipSpec(
+                source: .model,
+                options: availableModels.map {
+                    ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
+                },
+                currentId: currentModel))
 
         let mode = chipSpec(from: routing.modeSource,
                             modes: availableModes,
@@ -99,5 +105,18 @@ extension ACPChipState {
                 ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
             },
             currentId: opt.currentValue)
+    }
+
+    /// Finds a configOption that advertises itself as a model selector
+    /// (`category == "model"`, with `"Model"` as an alias for older
+    /// drafts). Returns nil when no such option exists, in which case the
+    /// caller falls back to the legacy `availableModels` list.
+    private static func modelChipFromConfigOptions(_ options: [ACPConfigOption]) -> ChipSpec? {
+        let modelCategories: Set<String> = ["model", "Model"]
+        guard let opt = options.first(where: {
+            guard let c = $0.category else { return false }
+            return modelCategories.contains(c)
+        }) else { return nil }
+        return selectOption(id: opt.id, in: options)
     }
 }
