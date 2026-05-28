@@ -34,6 +34,9 @@ final class ACPSessionRunner {
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var seq: Int64 = 0
+    private var nextPromptID = 0
+    private var activePromptID: Int?
+    private var cancelledPromptIDs: Set<Int> = []
 
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
          sessionId: String, worktreePath: String,
@@ -227,6 +230,10 @@ final class ACPSessionRunner {
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
         await MainActor.run {
+            if let promptID = activePromptID {
+                cancelledPromptIDs.insert(promptID)
+                activePromptID = nil
+            }
             policy.userCancelled()
             let changedIndices = session.cancelInFlightToolCalls()
             for i in changedIndices {
@@ -243,14 +250,24 @@ final class ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
-    func send(text: String, attachments: [ACPMessage.Attachment]) {
+    func send(
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
+    ) {
         var blocks: [ACPContentBlock] = [.text(text)]
         for a in attachments {
             blocks.append(.resourceLink(uri: a.uri, name: a.name))
         }
-        Task { [weak self] in
-            guard let self else { return }
+        let promptID = nextPromptID
+        nextPromptID += 1
+        Task { [weak self, onPromptFinished] in
+            guard let self else {
+                await MainActor.run { onPromptFinished?(false) }
+                return
+            }
             await MainActor.run {
+                self.activePromptID = promptID
                 let before = self.session.messages.count
                 let titleBefore = self.session.title
                 if !self.session.followsTranscriptTail {
@@ -278,11 +295,33 @@ extension ACPSessionRunner {
                 // composer accepts the next prompt; leaving it on
                 // `.streaming` froze the UI on Stop after every
                 // successful reply.
-                await MainActor.run { self.session.streamingState = .idle }
+                await MainActor.run {
+                    let isActivePrompt = self.activePromptID == promptID
+                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    if isActivePrompt {
+                        self.activePromptID = nil
+                        self.session.streamingState = .idle
+                    }
+                    self.cancelledPromptIDs.remove(promptID)
+                    if !hasNewerActivePrompt {
+                        onPromptFinished?(true)
+                    }
+                }
             } catch {
                 await MainActor.run {
-                    self.session.lastError = "prompt failed: \(error.localizedDescription)"
-                    self.session.streamingState = .idle
+                    let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
+                    let isActivePrompt = self.activePromptID == promptID
+                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    if isActivePrompt {
+                        self.activePromptID = nil
+                        self.session.streamingState = .idle
+                    }
+                    if !wasCancelled, isActivePrompt {
+                        self.session.lastError = "prompt failed: \(error.localizedDescription)"
+                    }
+                    if !hasNewerActivePrompt {
+                        onPromptFinished?(wasCancelled)
+                    }
                 }
             }
         }
