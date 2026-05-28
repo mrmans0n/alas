@@ -1,0 +1,5 @@
+[
+  {"type":"content","content":{"type":"text","text":"hello"}},
+  {"type":"content","content":{"type":"resource_link","uri":"file:///tmp/x.txt","name":"x.txt"}},
+  {"type":"content","content":{"type":"image","uri":"file:///tmp/y.png","mimeType":"image/png"}}
+]
