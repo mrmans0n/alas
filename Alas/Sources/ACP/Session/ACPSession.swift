@@ -379,3 +379,17 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 }
+
+extension ACPSession {
+    /// Items of the latest `.plan` message in the transcript, or nil if
+    /// no plan message has arrived yet. The plan is stored in-line in
+    /// `transcript.messages` and overwritten in place by the protocol;
+    /// this property is just a convenience for view code that wants to
+    /// read it without scanning the message list itself.
+    var currentPlan: [ACPMessage.PlanItem]? {
+        for m in transcript.messages.reversed() {
+            if case .plan(_, let items) = m { return items }
+        }
+        return nil
+    }
+}
