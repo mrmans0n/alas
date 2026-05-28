@@ -48,8 +48,11 @@ struct ACPPlanPill: View {
         }
         .buttonStyle(.plain)
         .help("Plan — click to view all steps")
-        .popover(isPresented: $popoverOpen, arrowEdge: .bottom) {
-            ACPPlanPopover(items: session.currentPlan ?? [], state: state)
+        .popover(isPresented: $popoverOpen, arrowEdge: .top) {
+            let items = session.currentPlan ?? []
+            if let popoverState = ACPPlanPillState(items: items) {
+                ACPPlanPopover(items: items, state: popoverState)
+            }
         }
     }
 
