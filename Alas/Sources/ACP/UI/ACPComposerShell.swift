@@ -137,24 +137,20 @@ struct ACPComposer: View {
             session.autoRunEnabled.toggle()
             manager.persist(session)
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: session.autoRunEnabled ? "bolt.fill" : "bolt")
-                    .font(.system(size: 10, weight: .bold))
-                Text("Auto-run")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(autoRunFg)
-            .padding(.horizontal, 8)
-            .frame(height: 24)
-            .background(
-                RoundedRectangle(cornerRadius: 6).fill(autoRunBg)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(autoRunBorder, lineWidth: 0.75)
-            )
+            Image(systemName: session.autoRunEnabled ? "bolt.fill" : "bolt")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(autoRunFg)
+                .frame(width: 28, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6).fill(autoRunBg)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(autoRunBorder, lineWidth: 0.75)
+                )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Auto-run")
         .disabled(autoRunDisabled)
         .opacity(autoRunDisabled ? 0.5 : 1.0)
         .help(autoRunHelp)
@@ -176,7 +172,9 @@ struct ACPComposer: View {
         if case .sending = session.streamingState { return "Auto-run cannot be changed while sending" }
         if !session.attached { return "Agent connecting…" }
         if session.disconnected { return "Agent disconnected" }
-        return session.autoRunEnabled ? "Auto-run is ON — agent runs tools without asking" : "Click to skip permission prompts"
+        return session.autoRunEnabled
+            ? "Auto-run is ON — agent runs tools without asking"
+            : "Click to skip permission prompts"
     }
 
     /// Mirrors the design's outlined-pill treatment: dark accent-tinted
@@ -184,17 +182,17 @@ struct ACPComposer: View {
     /// gradient — that styling diverges from the handoff.
     private var autoRunBg: Color {
         session.autoRunEnabled
-            ? theme.color("warn").opacity(0.20)
+            ? theme.color("caution").opacity(0.20)
             : theme.color("bg-3").opacity(0.7)
     }
     private var autoRunBorder: Color {
         session.autoRunEnabled
-            ? theme.color("warn").opacity(0.55)
+            ? theme.color("caution").opacity(0.55)
             : theme.color("line")
     }
     private var autoRunFg: Color {
         session.autoRunEnabled
-            ? Color.blend(theme.color("warn"), .white, t: 0.55)
+            ? Color.blend(theme.color("caution"), .white, t: 0.55)
             : theme.color("fg-muted")
     }
 
