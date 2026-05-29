@@ -5,11 +5,13 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
+    private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let fileRequests: AsyncStream<ACPFileRequest>
+    let terminalRequests: AsyncStream<ACPTerminalRequest>
     let incomingStderr: AsyncStream<Data>
 
     private let stateLock = NSLock()
@@ -42,9 +44,44 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.fileRequests = AsyncStream { fC = $0 }
         self.filesCont = fC
 
+        var tC: AsyncStream<ACPTerminalRequest>.Continuation!
+        self.terminalRequests = AsyncStream { tC = $0 }
+        self.terminalsCont = tC
+
         var eC: AsyncStream<Data>.Continuation!
         self.incomingStderr = AsyncStream { eC = $0 }
         self.stderrCont = eC
+    }
+
+    /// Test-only initialiser: accepts a pre-built transport directly,
+    /// skipping the real-subprocess setup.
+    init(transport: JSONRPCStdioTransporting) {
+        self.transport = transport
+
+        var uC: AsyncStream<ACPSessionUpdateParams>.Continuation!
+        self.incomingUpdates = AsyncStream { uC = $0 }
+        self.updatesCont = uC
+
+        var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
+        self.permissionRequests = AsyncStream { pC = $0 }
+        self.permsCont = pC
+
+        var fC: AsyncStream<ACPFileRequest>.Continuation!
+        self.fileRequests = AsyncStream { fC = $0 }
+        self.filesCont = fC
+
+        var tC: AsyncStream<ACPTerminalRequest>.Continuation!
+        self.terminalRequests = AsyncStream { tC = $0 }
+        self.terminalsCont = tC
+
+        var eC: AsyncStream<Data>.Continuation!
+        self.incomingStderr = AsyncStream { eC = $0 }
+        self.stderrCont = eC
+    }
+
+    /// Convenience factory for tests — wraps `init(transport:)`.
+    static func makeForTesting(transport: JSONRPCStdioTransporting) -> ACPStdioClient {
+        ACPStdioClient(transport: transport)
     }
 
     func start() throws {
@@ -72,6 +109,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             updatesCont.finish()
             permsCont.finish()
             filesCont.finish()
+            terminalsCont.finish()
             stderrCont.finish()
         }
     }
@@ -114,6 +152,21 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         case "fs/write_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsWriteParams>.self, from: data),
                let id = env.id, let p = env.params { filesCont.yield(.write(id: id, params: p)) }
+        case "terminal/create":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalCreateParams>.self, from: data),
+               let id = env.id, let p = env.params { terminalsCont.yield(.create(id: id, params: p)) }
+        case "terminal/output":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalOutputParams>.self, from: data),
+               let id = env.id, let p = env.params { terminalsCont.yield(.output(id: id, params: p)) }
+        case "terminal/wait_for_exit":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
+               let id = env.id, let p = env.params { terminalsCont.yield(.waitForExit(id: id, params: p)) }
+        case "terminal/kill":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
+               let id = env.id, let p = env.params { terminalsCont.yield(.kill(id: id, params: p)) }
+        case "terminal/release":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
+               let id = env.id, let p = env.params { terminalsCont.yield(.release(id: id, params: p)) }
         default:
             break
         }
@@ -186,6 +239,13 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     }
 
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        Task { [weak self] in
+            guard let self else { return }
+            self.respondFile(id: id, result: result)
+        }
+    }
+
+    func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
         Task { [weak self] in
             guard let self else { return }
             self.respondFile(id: id, result: result)

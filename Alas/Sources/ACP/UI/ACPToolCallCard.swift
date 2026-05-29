@@ -8,6 +8,7 @@ struct ACPToolCallCard: View {
     let toolCall: ACPMessage.ToolCall
     @State private var expanded = false
     @Environment(\.theme) private var theme
+    @Environment(\.acpTerminalHost) private var terminalHost
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -56,33 +57,42 @@ struct ACPToolCallCard: View {
 
     @ViewBuilder
     private var expandedBody: some View {
-        if toolCall.content.isEmpty {
-            HStack(spacing: 6) {
-                if toolCall.status == "in_progress" || toolCall.status == "pending" {
-                    Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
-                    Text("Working…")
-                } else if toolCall.status == "canceled" || toolCall.status == "cancelled" {
-                    Text("Canceled.")
-                } else {
-                    Text("No output.")
+        VStack(alignment: .leading, spacing: 0) {
+            if toolCall.content.isEmpty && toolCall.terminalIds.isEmpty {
+                HStack(spacing: 6) {
+                    if toolCall.status == "in_progress" || toolCall.status == "pending" {
+                        Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
+                        Text("Working…")
+                    } else if toolCall.status == "canceled" || toolCall.status == "cancelled" {
+                        Text("Canceled.")
+                    } else {
+                        Text("No output.")
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-faint"))
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(theme.color("bg-0").opacity(0.55))
+            } else {
+                if !toolCall.content.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(toolCall.content)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(theme.color("fg-muted"))
+                            .lineSpacing(2)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                    }
+                    .background(theme.color("bg-0").opacity(0.55))
+                }
+                if let host = terminalHost {
+                    ForEach(toolCall.terminalIds, id: \.self) { tid in
+                        ACPTerminalTailView(terminalId: tid, host: host)
+                    }
                 }
             }
-            .font(.system(size: 11))
-            .foregroundStyle(theme.color("fg-faint"))
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(theme.color("bg-0").opacity(0.55))
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(toolCall.content)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(theme.color("fg-muted"))
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.vertical, 10)
-            }
-            .background(theme.color("bg-0").opacity(0.55))
         }
     }
 
@@ -147,5 +157,16 @@ struct ACPToolCallCard: View {
                 .foregroundStyle(theme.color("accent"))
         }
         .frame(width: 18, height: 18)
+    }
+}
+
+private struct ACPTerminalHostKey: EnvironmentKey {
+    static let defaultValue: ACPTerminalHost? = nil
+}
+
+extension EnvironmentValues {
+    var acpTerminalHost: ACPTerminalHost? {
+        get { self[ACPTerminalHostKey.self] }
+        set { self[ACPTerminalHostKey.self] = newValue }
     }
 }

@@ -30,9 +30,16 @@ final class ACPSessionRunner {
     /// contents for an open dirty buffer, falling back to disk when the
     /// closure returns `nil`. Lets the agent see what the user sees.
     private let onLiveBufferRead: ((String) -> String?)?
+    /// The sanitized + extras-merged env the agent process itself was
+    /// launched with. Used to seed the terminal host so agent-spawned
+    /// commands inherit exactly the same view — including the stripped
+    /// CLAUDECODE/CLAUDE_SESSION_ID markers that would otherwise leak
+    /// back in via a re-augment from `ProcessInfo`.
+    private let agentEnv: [String: String]
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
+    private var terminalsTask: Task<Void, Never>?
     private var seq: Int64 = 0
     private var steerUndoExpiryTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -53,6 +60,7 @@ final class ACPSessionRunner {
 
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
          sessionId: String, worktreePath: String,
+         agentEnv: [String: String] = ProcessInfo.processInfo.environment,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil)
     {
@@ -61,6 +69,7 @@ final class ACPSessionRunner {
         self.store = store
         self.sessionId = sessionId
         self.worktreePath = worktreePath
+        self.agentEnv = agentEnv
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.policy = ACPPermissionPolicy(
@@ -107,6 +116,14 @@ final class ACPSessionRunner {
                 self.connection.client.respondToPermission(id: id, response: response)
             }
         }
+
+        // Agent-spawned terminals must see the exact env the agent
+        // itself was launched with — same augmented PATH (npm / cargo
+        // resolve under launchd's minimal PATH) and same scrubbed
+        // CLAUDECODE/CLAUDE_SESSION_ID markers (otherwise a Claude-
+        // aware CLI run from the terminal refuses to start).
+        session.terminalHost.updateContext(sessionCwd: worktreePath,
+                                           sessionEnv: agentEnv)
 
         filesTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -182,12 +199,103 @@ final class ACPSessionRunner {
                 }
             }
         }
+
+        terminalsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await req in self.connection.client.terminalRequests {
+                self.handleTerminalRequest(req)
+            }
+        }
     }
 
     func stop() {
         updatesTask?.cancel()
         permissionsTask?.cancel()
         filesTask?.cancel()
+        terminalsTask?.cancel()
+        // Kill agent-spawned subprocesses now. ACPSessionManager keeps
+        // the ACPSession cached after detach, so the session's deinit-
+        // time killAll() won't fire on tab close — without this an
+        // active `npm test`/`sleep`/server outlives the agent.
+        session.terminalHost.killAll()
+    }
+
+    private func handleTerminalRequest(_ req: ACPTerminalRequest) {
+        let host = self.session.terminalHost
+        switch req {
+        case .create(let id, let p):
+            do {
+                let res = try host.create(p)
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .success(try JSONEncoder().encode(res)))
+            } catch ACPTerminalHostError.tooManyTerminals {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32000, message: "too many terminals", data: nil)))
+            } catch ACPTerminalHostError.spawnFailed(let msg) {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32000, message: msg, data: nil)))
+            } catch {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
+            }
+        case .output(let id, let p):
+            do {
+                let res = try host.output(p)
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .success(try JSONEncoder().encode(res)))
+            } catch ACPTerminalHostError.notFound {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32602, message: "terminal not found", data: nil)))
+            } catch {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
+            }
+        case .waitForExit(let id, let p):
+            // Capture only the host + client so a long-running waitForExit
+            // doesn't pin the runner (and its session) in memory if the
+            // session is torn down before the agent's underlying process
+            // exits. ACPTerminalHost has no back-reference to ACPSession,
+            // so this lets the session deinit (and its killAll()) run
+            // while the wait task is still parked on the host.
+            let client = self.connection.client
+            Task { @MainActor in
+                do {
+                    let res = try await host.waitForExit(p)
+                    client.respondToTerminalRequest(
+                        id: id, result: .success(try JSONEncoder().encode(res)))
+                } catch ACPTerminalHostError.notFound {
+                    client.respondToTerminalRequest(
+                        id: id, result: .failure(.init(code: -32602, message: "terminal not found", data: nil)))
+                } catch {
+                    client.respondToTerminalRequest(
+                        id: id, result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
+                }
+            }
+        case .kill(let id, let p):
+            do {
+                try host.kill(p)
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .success(Data("null".utf8)))
+            } catch ACPTerminalHostError.notFound {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32602, message: "terminal not found", data: nil)))
+            } catch {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
+            }
+        case .release(let id, let p):
+            do {
+                try host.release(p)
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .success(Data("null".utf8)))
+            } catch ACPTerminalHostError.notFound {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32602, message: "terminal not found", data: nil)))
+            } catch {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
+            }
+        }
     }
 
     /// Cancel ownership of any in-flight prompt RPC. The unstructured
@@ -300,6 +408,7 @@ final class ACPSessionRunner {
             }
             policy.userCancelled()
             let changedIndices = session.cancelInFlightToolCalls()
+            session.terminalHost.killAll()
             for i in changedIndices {
                 let m = session.transcript.messages[i]
                 if let payload = try? ACPMessageCodec.encode(m) {

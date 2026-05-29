@@ -36,7 +36,9 @@ struct ACPStdioClientTests {
             method: "initialize",
             params: ACPInitializeParams(
                 protocolVersion: 1,
-                clientCapabilities: .init(fs: .init(readTextFile: true, writeTextFile: true)))
+                clientCapabilities: .init(
+                    fs: .init(readTextFile: true, writeTextFile: true),
+                    terminal: true))
         ))
         let init_ = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         #expect(init_.protocolVersion == 1)

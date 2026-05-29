@@ -46,8 +46,13 @@ protocol ACPClient: AnyObject {
     /// Filesystem requests (`fs/read_text_file`, `fs/write_text_file`).
     var fileRequests: AsyncStream<ACPFileRequest> { get }
 
+    /// Terminal requests (`terminal/create`, `terminal/output`,
+    /// `terminal/wait_for_exit`, `terminal/kill`, `terminal/release`).
+    var terminalRequests: AsyncStream<ACPTerminalRequest> { get }
+
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse)
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
+    func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
 
     func shutdown() async
 }

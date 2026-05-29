@@ -11,7 +11,9 @@ final class ACPConnection: @unchecked Sendable {
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
                                 protocolVersion: ACPProtocolVersion.current,
-                                clientCapabilities: .init(fs: .init(readTextFile: true, writeTextFile: true))))
+                                clientCapabilities: .init(
+                                    fs: .init(readTextFile: true, writeTextFile: true),
+                                    terminal: true)))
         _ = try await client.send(req)
     }
 

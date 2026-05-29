@@ -10,6 +10,7 @@ final class ACPSession: ObservableObject, Identifiable {
     let worktreeId: String
     let createdAt: Date
     let transcript = ACPTranscript()
+    let terminalHost: ACPTerminalHost = ACPTerminalHost(sessionCwd: "/", sessionEnv: [:])
 
     @Published var title: String
     @Published var availableModels: [ACPModelInfo] = []
@@ -90,6 +91,12 @@ final class ACPSession: ObservableObject, Identifiable {
         self.hydrationState = hydrationState
     }
 
+    deinit {
+        // Foundation cannot await main-actor methods from deinit; dispatch.
+        let host = terminalHost
+        Task { @MainActor in host.killAll() }
+    }
+
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
         transcript.messages.append(.user(id: UUID(), text: text, attachments: attachments))
         if title == "" || title == "New session" {
@@ -111,7 +118,9 @@ final class ACPSession: ObservableObject, Identifiable {
             appendStreaming(text: txt, locate: { lastThought() },
                             makeNew: { .thought(id: UUID(), StreamingText(txt)) })
         case .toolCall(let payload):
-            let full = payload.content.flatMap { Self.flatten($0) } ?? ""
+            let items = payload.content ?? []
+            let full = Self.stripWrappingFence(Self.flatten(items),
+                                               isFinal: Self.isFinalStatus(payload.status))
             transcript.messages.append(.toolCall(.init(
                 toolCallId: payload.toolCallId,
                 title: payload.title,
@@ -119,14 +128,22 @@ final class ACPSession: ObservableObject, Identifiable {
                 status: payload.status,
                 content: full,
                 preview: Self.previewLine(full),
-                locations: payload.locations?.map(\.path) ?? [])))
+                locations: payload.locations?.map(\.path) ?? [],
+                terminalIds: Self.extractTerminalIds(items))))
         case .toolCallUpdate(let u):
             updateToolCall(id: u.toolCallId) { tc in
                 if let s = u.status { tc.status = s }
                 if let c = u.content {
-                    let full = Self.flatten(c)
+                    // ACP content updates are full replacement snapshots,
+                    // so terminalIds tracks the *current* content — assign
+                    // unconditionally, including the empty case, so a
+                    // text/diff-only final update doesn't leave a stale
+                    // terminal tail rendering in the card.
+                    let full = Self.stripWrappingFence(Self.flatten(c),
+                                                      isFinal: Self.isFinalStatus(tc.status))
                     tc.content = full
                     tc.preview = Self.previewLine(full)
+                    tc.terminalIds = Self.extractTerminalIds(c)
                 }
             }
         case .plan(let entries):
@@ -314,9 +331,10 @@ final class ACPSession: ObservableObject, Identifiable {
                     lines.append("+\(line)")
                 }
                 out.append(lines.joined(separator: "\n"))
-            case .terminal(let id):
-                // Placeholder until the follow-up wires real terminal output.
-                out.append("[terminal: \(id)]")
+            case .terminal:
+                // IDs are tracked on tc.terminalIds; the UI renders the live
+                // tail structurally, so no text placeholder is appended here.
+                continue
             case .unknown:
                 // Skipped rather than rendered empty.
                 continue
@@ -344,6 +362,50 @@ final class ACPSession: ObservableObject, Identifiable {
         let s = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
         return s.count > 80 ? String(s.prefix(80)) + "…" : s
+    }
+
+    private static func extractTerminalIds(_ items: [ACPToolCallContent]) -> [String] {
+        items.compactMap { if case .terminal(let id) = $0 { return id } else { return nil } }
+    }
+
+    /// Best-effort strip of a single pair of markdown code fences that
+    /// wrap the entire tool output. Claude sometimes returns its output
+    /// inside a ```…``` block; Codex returns raw text. The opening fence
+    /// is only recognized at line 1 col 0 so a fence inside the real
+    /// output is left alone. The trailing fence is dropped only when
+    /// `isFinal` is true — mid-stream we can't tell a closing ``` from a
+    /// line of real output that happens to be three backticks.
+    static func stripWrappingFence(_ full: String, isFinal: Bool) -> String {
+        guard !full.isEmpty else { return full }
+        var lines = full.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let first = lines.first, isOpeningFence(first) else { return full }
+        lines.removeFirst()
+        if isFinal {
+            var trailingEmpty = 0
+            while let last = lines.last, last.isEmpty {
+                lines.removeLast()
+                trailingEmpty += 1
+            }
+            if lines.last == "```" {
+                lines.removeLast()
+            } else {
+                for _ in 0..<trailingEmpty { lines.append("") }
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func isOpeningFence(_ line: String) -> Bool {
+        guard line.hasPrefix("```") else { return false }
+        let rest = line.dropFirst(3)
+        return rest.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "+" || $0 == "-" }
+    }
+
+    private static func isFinalStatus(_ status: String) -> Bool {
+        switch status {
+        case "completed", "failed", "canceled", "cancelled": return true
+        default: return false
+        }
     }
 
     private func text(of block: ACPContentBlock) -> String {

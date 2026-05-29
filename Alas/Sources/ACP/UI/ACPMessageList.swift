@@ -283,6 +283,7 @@ struct ACPMessageList: View {
             ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
             ACPToolCallCard(toolCall: tc)
+                .environment(\.acpTerminalHost, session.terminalHost)
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: { onOpenDiff(edit.path) })
         case .plan:

@@ -53,6 +53,9 @@ struct ACPInitializeParams: Codable, Equatable {
 
 struct ACPClientCapabilities: Codable, Equatable {
     let fs: ACPFsCapabilities
+    /// Agents must check `clientCapabilities.terminal` during initialize
+    /// and only invoke `terminal/*` methods when it is true (ACP spec).
+    let terminal: Bool
 
     struct ACPFsCapabilities: Codable, Equatable {
         let readTextFile: Bool

@@ -7,10 +7,14 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
+    private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let fileRequests: AsyncStream<ACPFileRequest>
+    let terminalRequests: AsyncStream<ACPTerminalRequest>
+
+    var terminalResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
 
     init() {
         var u: AsyncStream<ACPSessionUpdateParams>.Continuation!
@@ -22,6 +26,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         var f: AsyncStream<ACPFileRequest>.Continuation!
         self.fileRequests = AsyncStream { f = $0 }
         self.filesCont = f
+        var t: AsyncStream<ACPTerminalRequest>.Continuation!
+        self.terminalRequests = AsyncStream { t = $0 }
+        self.terminalsCont = t
     }
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
@@ -45,6 +52,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     func emit(_ update: ACPSessionUpdateParams) { updatesCont.yield(update) }
     func emitPermission(id: JSONRPCID, params: ACPPermissionRequestParams) { permsCont.yield((id, params)) }
     func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }
+    func emitTerminal(_ req: ACPTerminalRequest) { terminalsCont.yield(req) }
 
     var permissionResponses: [JSONRPCID: ACPPermissionResponse] = [:]
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
@@ -53,6 +61,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     var fileResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
         fileResponses[id] = result
+    }
+    func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        terminalResponses[id] = result
     }
 
     func script(method: String, _ handler: @escaping (ACPRequest) throws -> Data) {
@@ -67,5 +78,6 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         updatesCont.finish()
         permsCont.finish()
         filesCont.finish()
+        terminalsCont.finish()
     }
 }
