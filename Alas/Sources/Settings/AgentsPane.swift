@@ -68,6 +68,17 @@ struct AgentsPane: View {
                     }
                 }
 
+                SettingsGroup(title: "Chat") {
+                    SettingsRow(name: "While busy, ⏎ queues; ⌥⏎ steers",
+                                desc: "Turn off to swap — ⏎ steers and ⌥⏎ queues. Steering cancels the running turn and discards any pending queue items.") {
+                        AlasToggle(on: Binding(
+                            get: { state.config.harness.acpSendOnEnter },
+                            set: { state.config.harness.acpSendOnEnter = $0
+                            state.saveConfig() }
+                        ))
+                    }
+                }
+
                 SettingsGroup(title: "Harness") {
                     HStack(alignment: .top, spacing: 16) {
                         VStack(alignment: .leading, spacing: 2) {

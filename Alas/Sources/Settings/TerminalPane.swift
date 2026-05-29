@@ -126,14 +126,6 @@ struct TerminalPane: View {
                                 desc: "Show a clickable notification when a detected harness is waiting for input.") {
                         AlasToggle(on: state.bind(\.harness.notifyOnAwaiting))
                     }
-                    SettingsRow(name: "While busy, ⏎ queues; ⌥⏎ steers",
-                                desc: "Turn off to swap — ⏎ steers and ⌥⏎ queues. Steering cancels the running turn and discards any pending queue items.") {
-                        AlasToggle(on: Binding(
-                            get: { state.config.harness.acpSendOnEnter },
-                            set: { state.config.harness.acpSendOnEnter = $0
-                            state.saveConfig() }
-                        ))
-                    }
                     ForEach(installerRegistry.supportedAgents) { agent in
                         SettingsRow(name: agent.displayName) {
                             HStack {
