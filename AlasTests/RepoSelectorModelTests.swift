@@ -291,6 +291,37 @@ struct RepoSelectorModelTests {
         #expect(inSection == [wb, wa, wc])
     }
 
+    @Test func emptyQueryPutsCurrentWorktreesProjectFirst() {
+        // Switching usually means jumping to another worktree in the same
+        // repo, so the project owning the current worktree sorts first —
+        // ahead of more-recent and alphabetically-earlier projects.
+        let model = RepoSelectorModel()
+        let acme = project("p-acme", name: "acme")
+        let beta = project("p-beta", name: "beta")
+        let alas = project("p-alas", name: "alas")
+        let acmeW = worktree("acme-w", projectId: "p-acme", branch: "main")
+        let betaW = worktree("beta-w", projectId: "p-beta", branch: "main")
+        let alasW = worktree("alas-w", projectId: "p-alas", branch: "main")
+        var r = RepoSelectorRecents()
+        r.bumpProject("p-acme")  // acme is the most-recently-touched project
+        let e = env(
+            projects: [acme, beta, alas],
+            worktrees: [
+                "p-acme": [acmeW],
+                "p-beta": [betaW],
+                "p-alas": [alasW]
+            ],
+            recents: r,
+            currentWorktreeId: "beta-w"  // current lives in beta
+        )
+        let rows = model.rows(environment: e)
+        let headerOrder = rows.compactMap { row -> String? in
+            if case .projectHeader(let pid) = row { return pid } else { return nil }
+        }
+        // beta first (owns current), then recency (acme), then alpha (alas).
+        #expect(headerOrder == ["p-beta", "p-acme", "p-alas"])
+    }
+
     @Test func emptyQueryProjectWithZeroWorktreesStillShowsHeaderAndNewWorktreeAction() {
         let model = RepoSelectorModel()
         let e = env(
