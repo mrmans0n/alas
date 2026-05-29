@@ -86,9 +86,8 @@ final class ACPSessionRunner {
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
                 await MainActor.run {
-                    let before = self.session.transcript.messages.count
-                    self.session.apply(u.update)
-                    self.persistFromIndex(before)
+                    let dirty = self.session.apply(u.update)
+                    self.persistIndices(dirty)
                 }
             }
             // The for-await also exits when the task gets cancelled —
@@ -804,6 +803,31 @@ extension ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// Persist the specific message rows touched by an `apply()` call.
+    /// Use this instead of `persistFromIndex` when the caller can name
+    /// exactly which indices changed — a plan or tool-call update may
+    /// mutate a row anywhere in the transcript, not just the trailing
+    /// one, so the count-delta heuristic in `persistFromIndex` would
+    /// write back the wrong row.
+    func persistIndices(_ indices: Set<Int>) {
+        guard !indices.isEmpty else { return }
+        let messages = session.transcript.messages
+        let now = Int64(Date().timeIntervalSince1970)
+        let existingCount = (try? store.loadMessages(sessionId: sessionId).count) ?? 0
+        for i in indices.sorted() {
+            guard i >= 0, i < messages.count else { continue }
+            let m = messages[i]
+            guard let payload = try? ACPMessageCodec.encode(m) else { continue }
+            let id = "msg-\(sessionId)-\(i)"
+            if i < existingCount {
+                try? store.updateMessagePayload(id: id, payload: payload)
+            } else {
+                try? store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
+                                         seq: Int64(i), payload: payload, createdAt: now)
+            }
+        }
+    }
+
     /// Persist messages from the apply() boundary. Three cases:
     ///   1. apply() appended N >= 1 new messages: persist them as new rows.
     ///   2. apply() mutated the trailing message in place (chunk-merge,
