@@ -1,17 +1,22 @@
 import SwiftUI
 
 /// Floaty pill that lives in the ACP toolbar and surfaces the latest
-/// plan from the session. Shows `done / total`, the current step name,
-/// a slim progress bar, and an "animated snake" border that travels
-/// around the rounded rectangle while any step is in-progress. Click
-/// expands a popover with the full checklist.
+/// plan from the session's transcript. Shows `done / total`, the current
+/// step name, a slim progress bar, and an "animated snake" border that
+/// travels around the rounded rectangle while any step is in-progress.
+/// Click expands a popover with the full checklist.
+///
+/// Observes `ACPTranscript` directly rather than `ACPSession` so the pill
+/// re-renders when only the plan changes (`apply(.plan)` mutates
+/// `transcript.messages` only; `ACPSession` does not forward
+/// `transcript.objectWillChange`).
 struct ACPPlanPill: View {
-    @ObservedObject var session: ACPSession
+    @ObservedObject var transcript: ACPTranscript
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
 
     var body: some View {
-        if let state = ACPPlanPillState(items: session.currentPlan) {
+        if let state = ACPPlanPillState(items: transcript.currentPlan) {
             pill(state: state)
         } else {
             EmptyView()
@@ -49,7 +54,7 @@ struct ACPPlanPill: View {
         .buttonStyle(.plain)
         .help("Plan — click to view all steps")
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-            let items = session.currentPlan ?? []
+            let items = transcript.currentPlan ?? []
             if let popoverState = ACPPlanPillState(items: items) {
                 ACPPlanPopover(items: items, state: popoverState)
             }

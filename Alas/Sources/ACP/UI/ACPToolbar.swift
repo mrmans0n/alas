@@ -17,7 +17,7 @@ struct ACPToolbar: View {
                 worktree: worktree,
                 agentLookup: agentLookup
             )
-            ACPPlanPill(session: session)
+            ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
         }
         .padding(.horizontal, 12)

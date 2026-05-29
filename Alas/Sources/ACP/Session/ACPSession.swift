@@ -385,17 +385,3 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 }
 
-extension ACPSession {
-    /// Items of the plan emitted for the current turn — the latest `.plan`
-    /// message that comes after the latest `.user` prompt. Returns nil
-    /// when no plan has arrived for this turn yet, even if an older turn
-    /// left a plan behind. The pill renders the *current* turn's work, not
-    /// stale progress from a previous prompt.
-    var currentPlan: [ACPMessage.PlanItem]? {
-        for m in transcript.messages.reversed() {
-            if case .user = m { return nil }
-            if case .plan(_, let items) = m { return items }
-        }
-        return nil
-    }
-}

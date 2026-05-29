@@ -3,8 +3,8 @@ import Testing
 @testable import Alas
 
 @MainActor
-@Suite("ACPSession.currentPlan")
-struct ACPSessionCurrentPlanTests {
+@Suite("ACPTranscript.currentPlan")
+struct ACPTranscriptCurrentPlanTests {
     private func makeSession() -> ACPSession {
         ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
     }
@@ -16,7 +16,7 @@ struct ACPSessionCurrentPlanTests {
             .agent(id: UUID(), StreamingText("hi")),
             .user(id: UUID(), text: "hello", attachments: [])
         ]
-        #expect(session.currentPlan == nil)
+        #expect(session.transcript.currentPlan == nil)
     }
 
     @Test("returns the items of the latest plan message")
@@ -33,14 +33,14 @@ struct ACPSessionCurrentPlanTests {
             .plan(id: UUID(), secondItems),
             .agent(id: UUID(), StreamingText("after"))
         ]
-        #expect(session.currentPlan == secondItems)
+        #expect(session.transcript.currentPlan == secondItems)
     }
 
     @Test("returns empty array for an empty plan items array")
     func emptyPlanItems() {
         let session = makeSession()
         session.transcript.messages = [.plan(id: UUID(), [])]
-        #expect(session.currentPlan == [])
+        #expect(session.transcript.currentPlan == [])
     }
 
     @Test("returns nil after a new user prompt follows the previous plan")
@@ -56,7 +56,7 @@ struct ACPSessionCurrentPlanTests {
             .user(id: UUID(), text: "second prompt", attachments: [])
         ]
         // The previous turn's plan must not leak into the new turn.
-        #expect(session.currentPlan == nil)
+        #expect(session.transcript.currentPlan == nil)
     }
 
     @Test("returns the current turn's plan when it sits after the latest user prompt")
@@ -70,7 +70,7 @@ struct ACPSessionCurrentPlanTests {
             .user(id: UUID(), text: "second", attachments: []),
             .plan(id: UUID(), currentTurnItems)
         ]
-        #expect(session.currentPlan == currentTurnItems)
+        #expect(session.transcript.currentPlan == currentTurnItems)
     }
 
     @Test("apply(.plan) appends a fresh plan when the previous one belongs to an earlier turn")
@@ -96,7 +96,7 @@ struct ACPSessionCurrentPlanTests {
         } else {
             Issue.record("expected new plan appended at end")
         }
-        #expect(session.currentPlan == [ACPMessage.PlanItem(content: "new", status: "in_progress")])
+        #expect(session.transcript.currentPlan == [ACPMessage.PlanItem(content: "new", status: "in_progress")])
     }
 
     @Test("apply(.plan) overwrites in place while the current turn's plan progresses")
@@ -117,6 +117,6 @@ struct ACPSessionCurrentPlanTests {
         } else {
             Issue.record("expected plan message at index 1")
         }
-        #expect(session.currentPlan == [ACPMessage.PlanItem(content: "step", status: "in_progress")])
+        #expect(session.transcript.currentPlan == [ACPMessage.PlanItem(content: "step", status: "in_progress")])
     }
 }
