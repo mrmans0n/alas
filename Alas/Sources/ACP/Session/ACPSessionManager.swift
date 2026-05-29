@@ -357,6 +357,11 @@ extension ACPSessionManager {
             stale.stop()
         }
         runners[sessionId] = nil
+        // Clear any error from the prior attempt so the UI doesn't keep
+        // showing a stale failure banner while we spawn fresh. If this
+        // attempt also fails, the catch branches below will repopulate
+        // `lastError` with the new reason.
+        session.lastError = nil
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {

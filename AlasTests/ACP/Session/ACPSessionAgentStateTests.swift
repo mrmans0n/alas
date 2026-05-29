@@ -94,6 +94,29 @@ struct ACPSessionManagerAttachStateTests {
         #expect(session.agentState == .spawning)
         #expect(mgr.runners[session.id] == nil)
     }
+
+    /// Stale lastError from a prior failed attempt must not leak through to
+    /// the recovery banner once the user retries — the next attach clears it
+    /// upfront so a successful retry doesn't show a phantom failure.
+    @Test("attach clears stale lastError before spawning")
+    func attachClearsStaleLastError() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-attach-clear-err-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        // Bogus agentId so attach() hits the spec-missing branch (which
+        // repopulates lastError with its own message — but the clear at
+        // the top of attach should happen first).
+        let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        session.lastError = "previous failure that should not leak"
+        session.agentState = .disconnected
+
+        await mgr.attach(to: session.id, freshlyCreated: false)
+
+        // After attach: lastError reflects THIS attempt's failure, not the
+        // stale one. (The spec-missing branch doesn't set lastError, so
+        // it should now be nil — only the agentState carries the failure.)
+        #expect(session.lastError == nil || session.lastError?.contains("previous failure") == false)
+    }
 }
 
 @MainActor
