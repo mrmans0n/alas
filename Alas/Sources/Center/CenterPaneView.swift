@@ -85,6 +85,16 @@ struct CenterPaneView: View {
                 titleLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }) else { return nil }
                     return state.tabs.displayTerminalTitle(for: tab)
+                },
+                planProgressLookup: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          case .acpSession(let s) = tab,
+                          let mgr = state.acpManager(for: worktree),
+                          let session = mgr.placeholderSession(id: s.sessionId),
+                          let items = session.transcript.currentPlan,
+                          !items.isEmpty else { return nil }
+                    let done = items.filter { $0.status == "completed" }.count
+                    return (done: done, total: items.count)
                 }
             )
             Group {

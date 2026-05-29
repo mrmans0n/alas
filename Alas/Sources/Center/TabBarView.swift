@@ -25,6 +25,7 @@ struct TabBarView: View {
     let sidebarHidden: Bool
     let onMove: (TabID, TabID) -> Void
     let titleLookup: (TabID) -> String?
+    let planProgressLookup: (TabID) -> (done: Int, total: Int)?
     @Environment(\.theme) var theme
 
     private var isTerminalActive: Bool {
@@ -50,6 +51,7 @@ struct TabBarView: View {
                     showClose: true,
                     harnessInfo: harnessLookup(tab.id),
                     dirty: dirtyLookup(tab.id),
+                    planProgress: planProgressLookup(tab.id),
                     onActivate: { onActivate(tab.id) },
                     onClose: { onClose(tab.id) }
                 )
@@ -123,6 +125,7 @@ private struct TabButton: View {
     let showClose: Bool
     let harnessInfo: (agent: AgentKind, state: ActivityState)?
     let dirty: Bool
+    let planProgress: (done: Int, total: Int)?
     let onActivate: () -> Void
     let onClose: () -> Void
     @Environment(\.theme) var theme
@@ -142,6 +145,15 @@ private struct TabButton: View {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(theme.color("fg-faint"))
+            }
+            if let progress = planProgress {
+                Text("\(progress.done) / \(progress.total)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(theme.color("accent"))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(theme.color("accent").opacity(0.12))
+                    .clipShape(Capsule())
             }
             if showClose {
                 Button(action: onClose) {
