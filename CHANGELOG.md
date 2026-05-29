@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-05-30
+
+### ✨ Features
+
+- Default code and terminal fonts to JetBrainsMono Nerd Font (#373).
+- Export ACP session as Markdown + per-message copy (#369).
+- Surface current worktree's repo first in cmd+K (#368).
+
+### 🐛 Fixes
+
+- Persist plan/tool-call updates that mutate a non-trailing row (#372).
+- Force LC_ALL=C so worktree-remove works in non-English locales (#370).
+
+### 🏗️ Internal
+
+- Move chat queue/steer toggle to Agents > Chat (#367).
+
+### 📚 Docs
+
+- Add screenshots for ACP, terminal, diff, and Markdown.
+
 ## [0.4.6] - 2026-05-29
 
 ### ✨ Features
