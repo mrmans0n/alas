@@ -210,7 +210,7 @@ private func alasGhosttyAction(
 
     case GHOSTTY_ACTION_CLOSE_WINDOW, GHOSTTY_ACTION_CLOSE_TAB:
         guard let sv = surfaceView else { return true }
-        DispatchQueue.main.async { sv.processExitHandler?() }
+        DispatchQueue.main.async { sv.processExitHandler?(false) }
         return true
 
     case GHOSTTY_ACTION_QUIT:
@@ -247,7 +247,7 @@ private func alasGhosttyAction(
 
     case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
         guard let sv = surfaceView else { return false }
-        DispatchQueue.main.async { sv.processExitHandler?() }
+        DispatchQueue.main.async { sv.processExitHandler?(false) }
         return true
 
     default:
@@ -333,5 +333,5 @@ private func alasGhosttyCloseSurface(
     guard let ud = userdata else { return }
     let sv = Unmanaged<AlasGhostty.SurfaceView>.fromOpaque(ud).takeUnretainedValue()
     AlasGhostty.logger.info("close_surface_cb processAlive=\(processAlive)")
-    DispatchQueue.main.async { sv.processExitHandler?() }
+    DispatchQueue.main.async { sv.processExitHandler?(processAlive) }
 }
