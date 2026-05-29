@@ -80,7 +80,8 @@ final class RepoSelectorModel {
         let projectOrder = orderedProjects(
             projects: projects,
             worktreesByProject: worktreesByProject,
-            recents: recents
+            recents: recents,
+            currentId: currentId
         )
         for project in projectOrder {
             rows.append(.projectHeader(projectId: project.id))
@@ -181,13 +182,21 @@ final class RepoSelectorModel {
         return refs
     }
 
-    /// Projects ordered by the recency of their most-recently-touched
-    /// worktree. Projects with no recents fall back to alpha order on name.
+    /// Projects ordered with the current worktree's project first (switching
+    /// usually means jumping within the same repo), then by the recency of
+    /// their most-recently-touched worktree. Projects with no recents fall
+    /// back to alpha order on name.
     private func orderedProjects(
         projects: [ProjectConfig],
         worktreesByProject: [String: [Worktree]],
-        recents: RepoSelectorRecents
+        recents: RepoSelectorRecents,
+        currentId: String?
     ) -> [ProjectConfig] {
+        // The project owning the currently-selected worktree always sorts
+        // first, regardless of recency or alpha.
+        let currentProjectId = currentId.flatMap { id in
+            worktreesByProject.first { $0.value.contains { $0.id == id } }?.key
+        }
         // Build a "most-recent index" per project: lower = more recent.
         // Projects with no recents get .max so they sort to the back.
         let validProjectIds = Set(projects.map(\.id))
@@ -196,6 +205,15 @@ final class RepoSelectorModel {
             uniqueKeysWithValues: recentProjectIds.enumerated().map { ($0.element, $0.offset) }
         )
         return projects.sorted { a, b in
+            if let currentProjectId {
+                let aCurrent = a.id == currentProjectId
+                let bCurrent = b.id == currentProjectId
+                // Only decide on current-project priority when exactly one of
+                // them is the current project — returning `true` when both are
+                // (i.e. comparing the element with itself) would break the
+                // strict-weak-ordering contract of `sorted(by:)`.
+                if aCurrent != bCurrent { return aCurrent }
+            }
             let ai = projectRecencyIndex[a.id] ?? Int.max
             let bi = projectRecencyIndex[b.id] ?? Int.max
             if ai != bi { return ai < bi }
