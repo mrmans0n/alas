@@ -77,12 +77,14 @@ extension AlasGhostty {
         /// Called (on main thread) whenever the terminal title changes.
         var titleHandler: ((String) -> Void)?
 
-        /// Called (on main thread) when the child process exits or the surface is closed.
-        /// `processAlive` reflects the value Ghostty supplied via `close_surface_cb`:
-        /// `false` means the shell process is gone and the UI should dismiss the pane;
-        /// `true` means Ghostty asked us to tear down a surface whose shell is still
-        /// running (e.g. an internal close request), which the manual-close paths
-        /// already handle. Receivers should no-op when `processAlive == true`.
+        /// Called (on main thread) when the pane should be dismissed.
+        /// `processAlive == false` is the dismiss signal — emitted authoritatively
+        /// by `close_surface_cb` when the shell exits, and conventionally by the
+        /// `CLOSE_WINDOW`/`CLOSE_TAB`/`SHOW_CHILD_EXITED` Ghostty actions to mean
+        /// "Alas should tear down this pane regardless of shell liveness."
+        /// `processAlive == true` only arrives from `close_surface_cb` when Ghostty
+        /// is tearing down a surface whose shell is still running because we asked
+        /// it to (manual-close path); receivers should no-op in that case.
         var processExitHandler: ((_ processAlive: Bool) -> Void)?
 
         // Current working directory, derived from Ghostty's GHOSTTY_ACTION_PWD events

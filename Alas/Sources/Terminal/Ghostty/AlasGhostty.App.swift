@@ -210,6 +210,8 @@ private func alasGhosttyAction(
 
     case GHOSTTY_ACTION_CLOSE_WINDOW, GHOSTTY_ACTION_CLOSE_TAB:
         guard let sv = surfaceView else { return true }
+        // Shell may still be running (user hit cmd-W inside Ghostty); we pass
+        // false to signal "dismiss the pane regardless," not as a liveness claim.
         DispatchQueue.main.async { sv.processExitHandler?(false) }
         return true
 
