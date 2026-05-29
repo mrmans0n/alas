@@ -58,6 +58,7 @@ struct ACPMessageList: View {
         var hasher = Hasher()
         hasher.combine(transcript.messages.count)
         hasher.combine(session.queue.count)
+        hasher.combine(session.queue.first?.status)
         // Streaming chunks mutate the buffer in place without re-publishing
         // the transcript array; the tick gives the body a reason to re-eval
         // so this signature changes and the tail-scroll fires per chunk.
@@ -123,26 +124,28 @@ struct ACPMessageList: View {
                             StreamingCaret().frame(width: 8, height: 14)
                                 .id("__streaming_caret__")
                         }
-                        if session.queue.count > 1 {
-                            ACPQueueHeader(count: session.queue.count, onClear: onQueueClearAll)
+                        if session.visibleQueueCount > 1 {
+                            ACPQueueHeader(count: session.visibleQueueCount, onClear: onQueueClearAll)
                                 .id("__queue_header__")
                         }
                         ForEach(Array(session.queue.enumerated()), id: \.element.id) { idx, item in
-                            ACPQueuedBubble(
-                                item: item,
-                                onEdit: { onQueueEdit(item) },
-                                onRemove: { onQueueRemove(item.id) },
-                                onRetry: { onQueueRetry(item.id) }
-                            )
-                            .dropDestination(for: String.self) { items, _ in
-                                guard let s = items.first,
-                                      let uuid = UUID(uuidString: s),
-                                      let src = session.queue.firstIndex(where: { $0.id == uuid })
-                                else { return false }
-                                onQueueReorder(src, idx)
-                                return true
+                            if item.status != .sending {
+                                ACPQueuedBubble(
+                                    item: item,
+                                    onEdit: { onQueueEdit(item) },
+                                    onRemove: { onQueueRemove(item.id) },
+                                    onRetry: { onQueueRetry(item.id) }
+                                )
+                                .dropDestination(for: String.self) { items, _ in
+                                    guard let s = items.first,
+                                          let uuid = UUID(uuidString: s),
+                                          let src = session.queue.firstIndex(where: { $0.id == uuid })
+                                    else { return false }
+                                    onQueueReorder(src, idx)
+                                    return true
+                                }
+                                .id("__queue_\(item.id)")
                             }
-                            .id("__queue_\(item.id)")
                         }
                         // Invisible tail spacer that the auto-scroll pins to
                         // the viewport bottom; this guarantees the streaming
