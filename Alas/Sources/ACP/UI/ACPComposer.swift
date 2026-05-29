@@ -256,14 +256,9 @@ struct ACPInputField: NSViewRepresentable {
         ) {
             guard pendingSubmitID == id else { return }
             pendingSubmitID = nil
-            if succeeded {
-                onDraftClear()
-            } else {
-                onDraftChange(draft)
-                if let textView {
-                    restore(draft, into: textView)
-                }
-            }
+            // Draft was already cleared when the submit was accepted.
+            // Don't re-persist sent text as a draft on failure — the
+            // message is in the transcript (or queue) regardless.
         }
 
         static func draft(from attributed: NSAttributedString) -> ACPComposerDraft {

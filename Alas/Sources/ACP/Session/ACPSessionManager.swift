@@ -198,28 +198,6 @@ final class ACPSessionManager: ObservableObject {
         try? store.upsertQueue(sessionId: session.id, items: session.queue)
     }
 
-    func clearComposerDraft(
-        for session: ACPSession,
-        ifCurrentDraftEquals expected: ACPComposerDraft,
-        revision expectedRevision: Int
-    ) {
-        guard session.composerDraft == expected,
-              session.composerDraftRevision == expectedRevision
-        else { return }
-        clearComposerDraft(for: session)
-    }
-
-    func persistComposerDraft(
-        _ draft: ACPComposerDraft,
-        for session: ACPSession,
-        ifCurrentDraftEquals expected: ACPComposerDraft,
-        revision expectedRevision: Int
-    ) {
-        guard session.composerDraft == expected,
-              session.composerDraftRevision == expectedRevision
-        else { return }
-        persistComposerDraft(draft, for: session)
-    }
 
     func refreshRecent() {
         recent = (try? store.recentSessions()) ?? []

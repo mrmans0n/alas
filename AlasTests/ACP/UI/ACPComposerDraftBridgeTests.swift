@@ -6,8 +6,8 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
-    @Test("accepted submit restores structured draft when async completion fails")
-    func acceptedSubmitRestoresDraftWhenCompletionFails() {
+    @Test("accepted submit does not restore draft when async completion fails")
+    func acceptedSubmitDoesNotRestoreDraftWhenCompletionFails() {
         let draft = ACPComposerDraft(segments: [
             .text("Read "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
@@ -38,15 +38,17 @@ struct ACPComposerDraftBridgeTests {
         #expect(changedDrafts.isEmpty)
         #expect(clearCount == 0)
 
+        // Sent messages must not reappear as drafts even when the
+        // prompt RPC fails — the message is already in the transcript.
         completion?(false)
 
-        #expect(changedDrafts == [draft])
+        #expect(changedDrafts.isEmpty)
         #expect(clearCount == 0)
-        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == draft)
+        #expect(textView.string.isEmpty)
     }
 
-    @Test("accepted submit clears persisted draft when async completion succeeds")
-    func acceptedSubmitClearsDraftWhenCompletionSucceeds() {
+    @Test("accepted submit does not trigger draft clear callback from async completion")
+    func acceptedSubmitNoDraftClearFromCompletion() {
         let draft = ACPComposerDraft(segments: [.text("hello")])
         let textView = NSTextView()
         textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: draft))
@@ -71,8 +73,10 @@ struct ACPComposerDraftBridgeTests {
         coordinator.submit(textView)
         completion?(true)
 
+        // Draft clearing now happens eagerly in the submit owner
+        // (ACPTabView), not via the composer's finishSubmit callback.
         #expect(changedDrafts.isEmpty)
-        #expect(clearCount == 1)
+        #expect(clearCount == 0)
         #expect(textView.string.isEmpty)
     }
 
