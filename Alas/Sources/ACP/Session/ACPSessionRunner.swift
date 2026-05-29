@@ -98,8 +98,7 @@ final class ACPSessionRunner {
             // the unexpected stream-end.
             if Task.isCancelled { return }
             await MainActor.run {
-                self.session.disconnected = true
-                self.session.attached = false
+                self.session.agentState = .disconnected
                 self.session.transcript.streamingState = .idle
                 // No flushQueueIfIdle() here: the connection is dead, so
                 // the next prompt would just fail. The queue stays put
@@ -469,11 +468,24 @@ extension ACPSessionRunner {
         intent: ACPSubmitIntent,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        let blocks = Self.blocks(text: text, attachments: attachments)
+        send(blocks: blocks, intent: intent, onPromptFinished: onPromptFinished)
+    }
+
+    /// Build the canonical `[ACPContentBlock]` array from a composer-shaped
+    /// `(text, attachments)` pair: leading text block followed by one
+    /// `.resourceLink` per attachment. Shared with
+    /// `ACPSessionManager.enqueueWhileRecovering` so prompts persisted before
+    /// the runner exists look identical on the wire to ones the runner enqueues.
+    static func blocks(
+        text: String,
+        attachments: [ACPMessage.Attachment]
+    ) -> [ACPContentBlock] {
         var blocks: [ACPContentBlock] = [.text(text)]
         for a in attachments {
             blocks.append(.resourceLink(uri: a.uri, name: a.name))
         }
-        send(blocks: blocks, intent: intent, onPromptFinished: onPromptFinished)
+        return blocks
     }
 
     /// Primary entry. Resolves the routing then dispatches to one of:
@@ -593,7 +605,7 @@ extension ACPSessionRunner {
                 // a `lastError` against the dead connection. Bail out
                 // and tell the composer the submit didn't land so its
                 // draft stays put.
-                guard self.session.attached, !self.session.disconnected else {
+                guard self.session.agentState == .ready else {
                     onPromptFinished?(false)
                     return
                 }

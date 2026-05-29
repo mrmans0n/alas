@@ -24,17 +24,25 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published private(set) var composerDraftRevision: Int = 0
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
-    @Published var disconnected: Bool = false
     /// Runtime-only transcript scroll intent. When true, the ACP message
     /// list follows new content and restores to the latest bottom after
     /// returning to this session. Set false when the user scrolls upward.
     @Published var followsTranscriptTail: Bool = true
-    /// True once a runner has been started for this session — meaning
-    /// `initialize` + `session/new` succeeded and we have a live agent on
-    /// stdio. Reset to false on detach or when the process exits. The
-    /// composer's send button watches this so users can't queue prompts
-    /// against a not-yet-attached agent.
-    @Published var attached: Bool = false
+    /// Lifecycle state of the agent process backing this session.
+    /// Single source of truth for the composer, header pill, and runner
+    /// registry checks.
+    /// Note: `AgentState.idle` means "no runner spawned yet" (process
+    /// lifecycle), distinct from `StreamingState.idle` which means
+    /// "runner is attached but not currently mid-prompt" (turn lifecycle).
+    @Published var agentState: AgentState = .idle
+
+    enum AgentState: Equatable {
+        case idle
+        case spawning
+        case ready
+        case disconnected
+        case failed(String)
+    }
     /// Tracks whether the session's persisted state (messages, queue, draft,
     /// row fields) has been loaded from SQLite. `.loading` is the initial
     /// state for sessions returned by `placeholderSession`; `.ready` is the
