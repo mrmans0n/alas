@@ -44,6 +44,18 @@ struct ACPDiffGeneratorTests {
         #expect(dels.contains { $0.text == "beta" })
     }
 
+    @Test("new file without trailing newline sets noTrailingNewline on last line")
+    func newFileNoTrailingNewline() async throws {
+        let diff = try await ACPDiffGenerator.generate(
+            oldText: nil,
+            newText: "line1\nline2\nline3"
+        )
+        #expect(diff.hunks.count == 1)
+        let hunk = diff.hunks[0]
+        #expect(hunk.lines.count == 3)
+        #expect(hunk.lines.last?.noTrailingNewline == true)
+    }
+
     @Test("new empty file produces empty diff")
     func newEmptyFile() async throws {
         let diff = try await ACPDiffGenerator.generate(

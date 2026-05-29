@@ -5,11 +5,12 @@ enum ACPDiffGenerator {
         let old = oldText ?? ""
         let new = newText
 
-        if old.isEmpty && new.isEmpty {
+        if oldText == nil && new.isEmpty {
             return ParsedDiff(hunks: [])
         }
 
         if oldText == nil {
+            let hasTrailingNewline = new.hasSuffix("\n")
             var lines = new.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             if let last = lines.last, last.isEmpty { _ = lines.popLast() }
             let hunkLines = lines.enumerated().map { (i, text) in
@@ -17,7 +18,8 @@ enum ACPDiffGenerator {
                     kind: .add,
                     text: text,
                     oldNumber: nil,
-                    newNumber: i + 1
+                    newNumber: i + 1,
+                    noTrailingNewline: !hasTrailingNewline && i == lines.count - 1
                 )
             }
             let hunk = ParsedDiff.Hunk(
