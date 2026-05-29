@@ -26,6 +26,12 @@ final class TerminalService {
     /// Called when a session is closed so the provider can release any
     /// per-session state (e.g. unlink the symlink).
     @ObservationIgnored var socketReleaseHandler: ((String) -> Void)?
+    /// Fires when the shell process inside a session exits, as reported by
+    /// Ghostty's `close_surface_cb`. `processAlive == false` is the dismiss
+    /// signal (shell is gone — or a Ghostty action requested teardown);
+    /// `processAlive == true` means a manual-close path is already in flight
+    /// and the receiver should no-op. Always invoked on the main thread.
+    @ObservationIgnored var onSessionProcessExited: ((_ leafId: String, _ worktreeId: String, _ processAlive: Bool) -> Void)?
     @ObservationIgnored let zmxClient: ZmxClient
 
     /// Default initializer used by production code paths (AppState).
@@ -130,6 +136,11 @@ final class TerminalService {
             app: app,
             configuration: surfaceConfig
         )
+        let capturedLeafId = sessionId
+        let capturedWorktreeId = worktree.id
+        surface.processExitHandler = { [weak self] processAlive in
+            self?.onSessionProcessExited?(capturedLeafId, capturedWorktreeId, processAlive)
+        }
         let session = TerminalSession(
             id: sessionId,
             worktreeId: worktree.id,
