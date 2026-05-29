@@ -101,6 +101,29 @@ enum ACPMessage: Equatable {
         let path: String
         var added: Int
         var removed: Int
+        var oldText: String?
+        var newText: String
+
+        init(path: String, added: Int, removed: Int, oldText: String? = nil, newText: String = "") {
+            self.path = path
+            self.added = added
+            self.removed = removed
+            self.oldText = oldText
+            self.newText = newText
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case path, added, removed, oldText, newText
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            path = try c.decode(String.self, forKey: .path)
+            added = try c.decode(Int.self, forKey: .added)
+            removed = try c.decode(Int.self, forKey: .removed)
+            oldText = try c.decodeIfPresent(String.self, forKey: .oldText)
+            newText = try c.decodeIfPresent(String.self, forKey: .newText) ?? ""
+        }
     }
 
     struct PlanItem: Codable, Equatable, Hashable, Sendable {

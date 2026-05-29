@@ -19,6 +19,8 @@ struct ACPFileWriterTests {
                                       content: "one\ntwo\nthree\n")
         #expect(result.added == 3)
         #expect(result.removed == 0)
+        #expect(result.oldText == nil)
+        #expect(result.newText == "one\ntwo\nthree\n")
         #expect(FileManager.default.fileExists(atPath: wt.appendingPathComponent("a.txt").path))
     }
 
@@ -30,8 +32,10 @@ struct ACPFileWriterTests {
         try "alpha\nbeta\ngamma\n".write(to: p, atomically: true, encoding: .utf8)
         let writer = ACPFileWriter(worktreeRoot: wt)
         let result = try writer.write(path: p.path, content: "alpha\nGAMMA\ndelta\n")
-        #expect(result.added == 2)   // GAMMA, delta
-        #expect(result.removed == 2) // beta, gamma
+        #expect(result.added == 2)
+        #expect(result.removed == 2)
+        #expect(result.oldText == "alpha\nbeta\ngamma\n")
+        #expect(result.newText == "alpha\nGAMMA\ndelta\n")
     }
 
     @Test("rejects writes outside the worktree")
