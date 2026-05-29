@@ -178,15 +178,24 @@ private struct ACPSessionView: View {
                 // submits; the toolbar send button bypasses the keyboard
                 // inversion and supplies its own intent directly. No
                 // further resolution here.
+                let draftRevision = session.composerDraftRevision
                 runner.send(text: text, attachments: attachments, intent: intent) { succeeded in
+                    if succeeded {
+                        manager.clearComposerDraft(
+                            for: session,
+                            ifCurrentDraftEquals: draft,
+                            revision: draftRevision
+                        )
+                    } else {
+                        manager.persistComposerDraft(
+                            draft,
+                            for: session,
+                            ifCurrentDraftEquals: draft,
+                            revision: draftRevision
+                        )
+                    }
                     onPromptFinished(succeeded)
                 }
-                // Clear the draft immediately once the submit is accepted.
-                // The message is already recorded in the transcript (or
-                // enqueued), so it must not linger as a draft — otherwise a
-                // crash or tab-close during streaming would resurrect the
-                // sent text on next open.
-                manager.clearComposerDraft(for: session)
                 return true
             }
 
