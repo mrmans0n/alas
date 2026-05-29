@@ -325,7 +325,7 @@ struct AppConfig: Codable, Equatable {
             startupScript: "",
             worktreeCreateScript: "",
             inheritParentEnv: true,
-            fontFamily: "JetBrains Mono",
+            fontFamily: "JetBrainsMono Nerd Font",
             fontSize: 13,
             cursorStyle: "beam",
             cursorBlink: true,
@@ -336,7 +336,7 @@ struct AppConfig: Codable, Equatable {
         ),
         harness: Harness(notifyOnFinish: true, notifyOnAwaiting: true),
         code: Code(
-            fontFamily: "SF Mono",
+            fontFamily: "JetBrainsMono Nerd Font",
             fontSize: 13,
             formatOnSave: false,
             showLineNumbers: true,
@@ -463,7 +463,7 @@ extension AppConfig {
             let startupScript = (try? termContainer.decode(String.self, forKey: .startupScript)) ?? ""
             let worktreeCreateScript = (try? termContainer.decode(String.self, forKey: .worktreeCreateScript)) ?? ""
             let inheritParentEnv = (try? termContainer.decode(Bool.self, forKey: .inheritParentEnv)) ?? true
-            let fontFamily = (try? termContainer.decode(String.self, forKey: .fontFamily)) ?? "JetBrains Mono"
+            let fontFamily = (try? termContainer.decode(String.self, forKey: .fontFamily)) ?? "JetBrainsMono Nerd Font"
             let fontSize = (try? termContainer.decode(Int.self, forKey: .fontSize)) ?? 13
             let cursorStyle = (try? termContainer.decode(String.self, forKey: .cursorStyle)) ?? "beam"
             let cursorBlink = (try? termContainer.decode(Bool.self, forKey: .cursorBlink)) ?? true
@@ -493,7 +493,7 @@ extension AppConfig {
                 startupScript: "",
                 worktreeCreateScript: "",
                 inheritParentEnv: true,
-                fontFamily: "JetBrains Mono",
+                fontFamily: "JetBrainsMono Nerd Font",
                 fontSize: 13,
                 cursorStyle: "beam",
                 cursorBlink: true,
@@ -505,7 +505,7 @@ extension AppConfig {
         }
         harness = try c.decode(Harness.self, forKey: .harness)
         if let codeContainer = try? c.nestedContainer(keyedBy: AppConfig.Code.CodingKeys.self, forKey: .code) {
-            let fontFamily = (try? codeContainer.decode(String.self, forKey: .fontFamily)) ?? "SF Mono"
+            let fontFamily = (try? codeContainer.decode(String.self, forKey: .fontFamily)) ?? "JetBrainsMono Nerd Font"
             let rawSize = (try? codeContainer.decode(Int.self, forKey: .fontSize)) ?? 13
             let fontSize = max(8, min(64, rawSize))
             let formatOnSave = (try? codeContainer.decode(Bool.self, forKey: .formatOnSave)) ?? false
@@ -524,7 +524,7 @@ extension AppConfig {
             )
         } else {
             code = Code(
-                fontFamily: "SF Mono",
+                fontFamily: "JetBrainsMono Nerd Font",
                 fontSize: 13,
                 formatOnSave: false,
                 showLineNumbers: true,

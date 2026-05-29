@@ -544,6 +544,10 @@ struct EditorBufferTests {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "let answer = 42\n")
         let appState = AppState()
+        // Use a guaranteed-available system monospace font so the test
+        // doesn't depend on whether the bundled Nerd Font is registered
+        // in the test process.
+        appState.config.code.fontFamily = "Menlo"
         let buffer = appState.tabs.buffer(
             worktreeId: "wt",
             tabId: "tab",
@@ -583,6 +587,7 @@ struct EditorBufferTests {
         _ = try writeFile(root, "a.md", "alpha\n")
         _ = try writeFile(root, "b.swift", "let beta = 1\n")
         let appState = AppState()
+        appState.config.code.fontFamily = "Menlo"
         let bufferA = appState.tabs.buffer(
             worktreeId: "wt",
             tabId: "tab-a",

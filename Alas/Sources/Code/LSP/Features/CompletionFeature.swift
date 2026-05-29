@@ -34,7 +34,7 @@ final class CompletionFeature {
         getTheme: @escaping () -> Theme = {
             (try? Theme.loadBundled(id: "cool-slate")) ?? Theme(id: "fallback", name: "Fallback", tokens: [:])
         },
-        getMonoFontFamily: @escaping () -> String = { "SF Mono" },
+        getMonoFontFamily: @escaping () -> String = { "JetBrainsMono Nerd Font" },
         getMonoFontSize: @escaping () -> Int = { 13 },
         prepareForCompletionRequest: @escaping @MainActor () async -> Void = {}
     ) {
