@@ -21,7 +21,6 @@ struct ACPMessageList: View {
     let onLoadFullToolCallContent: (String) -> String?
     @Environment(\.theme) private var theme
     @State private var isRestoringTail = false
-    @State private var userInterruptedTailRestore = false
     @State private var headFrame: CGRect = .zero
     @State private var lastHeadStepAt: Date = .distantPast
 
@@ -165,9 +164,11 @@ struct ACPMessageList: View {
                 .background(
                     ACPScrollEventObserver(
                         onPaused: {
-                            if isRestoringTail {
-                                userInterruptedTailRestore = true
-                            }
+                            // The classifier short-circuits to .noChange while
+                            // isRestoringTail is true, so this fires only after
+                            // the restore animation settles. A mid-animation
+                            // upward scroll is silently absorbed; the 0.12-0.18s
+                            // window is short enough to accept that.
                             setFollowsTranscriptTail(false)
                         },
                         onAtBottom: {
@@ -229,7 +230,6 @@ struct ACPMessageList: View {
 
     private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) {
         isRestoringTail = true
-        userInterruptedTailRestore = false
         let scroll = {
             proxy.scrollTo("__composer_spacer__", anchor: .bottom)
         }
@@ -241,9 +241,7 @@ struct ACPMessageList: View {
             scroll()
         }
         let releaseRestoring = {
-            if !userInterruptedTailRestore {
-                setFollowsTranscriptTail(true)
-            }
+            setFollowsTranscriptTail(true)
             isRestoringTail = false
         }
         if animated {
