@@ -66,6 +66,9 @@ struct ACPComposer: View {
             .onAppear {
                 hasText = session.composerDraft.hasContent
             }
+            .onChange(of: session.composerDraftRevision) { _, _ in
+                hasText = session.composerDraft.hasContent
+            }
 
             HStack(spacing: 8) {
                 hint
@@ -317,13 +320,6 @@ struct ACPComposer: View {
                     manager.persist(session)
                 }
             }
-        }
-    }
-
-    private var isBusy: Bool {
-        switch session.transcript.streamingState {
-        case .streaming, .sending, .awaitingPermission: return true
-        case .idle: return false
         }
     }
 
