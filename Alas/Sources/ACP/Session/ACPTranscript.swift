@@ -59,10 +59,35 @@ final class ACPTranscript: ObservableObject {
     /// when no plan has arrived for this turn yet, even if an older turn
     /// left a plan behind. The toolbar pill renders the *current* turn's
     /// work, not stale progress from a previous prompt.
+    /// (See also `latestPlan`, which is turn-stable and treats an empty plan as nil.)
     var currentPlan: [ACPMessage.PlanItem]? {
         for m in messages.reversed() {
             if case .user = m { return nil }
             if case .plan(_, let items) = m { return items }
+        }
+        return nil
+    }
+
+    /// The most recent plan emitted in this session, ignoring turn
+    /// boundaries. Unlike `currentPlan`, this survives the gap between
+    /// a fresh user prompt and the next `.plan` arrival — so the sidebar
+    /// can stay visible across turns per spec §6 ("stays until the next
+    /// plan or session reset").
+    ///
+    /// Returns nil when no plan message has ever arrived, or when the
+    /// most recent plan is empty. Note: unlike `currentPlan`, which returns an empty array for an empty current-turn plan, `latestPlan` normalises empty to nil — the sidebar uses this to decide whether to render at all.
+    ///
+    /// **Sidebar-only intent.** The toolbar pill deliberately keeps reading
+    /// `currentPlan` so it reflects the *active* turn — a per-turn signal
+    /// matches the pill's "what's the agent doing right now" framing. The
+    /// turn-stable semantics here exist only because the sidebar wants the
+    /// previous plan to linger across the brief gap when a new user prompt
+    /// has landed but the next `.plan` hasn't yet arrived.
+    var latestPlan: [ACPMessage.PlanItem]? {
+        for m in messages.reversed() {
+            if case .plan(_, let items) = m {
+                return items.isEmpty ? nil : items
+            }
         }
         return nil
     }

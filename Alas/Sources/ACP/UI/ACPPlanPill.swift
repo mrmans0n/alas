@@ -1,5 +1,21 @@
 import SwiftUI
 
+/// Environment flag set by `ACPSessionView` when the inline plan
+/// sidebar is currently visible. The toolbar pill reads this and
+/// renders nothing when true (the sidebar is the canonical surface).
+///
+/// Spec §3 / §4a — pill and sidebar are mutually exclusive.
+private struct ACPPlanSidebarVisibleKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var acpPlanSidebarVisible: Bool {
+        get { self[ACPPlanSidebarVisibleKey.self] }
+        set { self[ACPPlanSidebarVisibleKey.self] = newValue }
+    }
+}
+
 /// Floaty pill that lives in the ACP toolbar and surfaces the latest
 /// plan from the session's transcript. Shows `done / total`, the current
 /// step name, a slim progress bar, and an "animated snake" border that
@@ -13,13 +29,23 @@ import SwiftUI
 struct ACPPlanPill: View {
     @ObservedObject var transcript: ACPTranscript
     @Environment(\.theme) private var theme
+    @Environment(\.acpPlanSidebarVisible) private var sidebarVisible
     @State private var popoverOpen = false
 
     var body: some View {
-        if let state = ACPPlanPillState(items: transcript.currentPlan) {
-            pill(state: state)
-        } else {
-            EmptyView()
+        // .onChange lives on the outer Group so it keeps firing even
+        // when the gate below collapses to EmptyView — without that, a
+        // popover open at the moment the sidebar appears would never
+        // be told to close, and would linger next to the sidebar.
+        Group {
+            if !sidebarVisible, let state = ACPPlanPillState(items: transcript.currentPlan) {
+                pill(state: state)
+            } else {
+                EmptyView()
+            }
+        }
+        .onChange(of: sidebarVisible) { _, nowVisible in
+            if nowVisible { popoverOpen = false }
         }
     }
 
@@ -54,9 +80,9 @@ struct ACPPlanPill: View {
         .buttonStyle(.plain)
         .help("Plan — click to view all steps")
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-            let items = transcript.currentPlan ?? []
-            if let popoverState = ACPPlanPillState(items: items) {
-                ACPPlanPopover(items: items, state: popoverState)
+            if let items = transcript.currentPlan, !items.isEmpty {
+                ACPPlanChecklist(items: items)
+                    .frame(width: 320)
             }
         }
     }
@@ -132,80 +158,5 @@ struct ACPPlanPill: View {
             }
         }
         .frame(width: 48, height: 4)
-    }
-}
-
-/// Popover body: full plan checklist, current step highlighted.
-private struct ACPPlanPopover: View {
-    let items: [ACPMessage.PlanItem]
-    let state: ACPPlanPillState
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider().background(theme.color("line"))
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    row(item: item)
-                }
-            }
-            .padding(.vertical, 6)
-        }
-        .frame(width: 320)
-        .background(theme.color("bg-1"))
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 10))
-                .foregroundStyle(theme.color("accent"))
-            Text("Plan")
-                .font(.system(size: 10.5, weight: .semibold))
-                .tracking(0.5)
-                .textCase(.uppercase)
-                .foregroundStyle(theme.color("accent"))
-            Text("\(state.done) / \(state.total)")
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundStyle(theme.color("fg-faint"))
-            Spacer()
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(theme.color("bg-2").opacity(0.4))
-    }
-
-    @ViewBuilder
-    private func row(item: ACPMessage.PlanItem) -> some View {
-        HStack(spacing: 10) {
-            mark(for: item)
-            Text(item.content)
-                .font(.system(size: 12))
-                .foregroundStyle(item.status == "completed" ? theme.color("fg-faint") : theme.color("fg"))
-                .strikethrough(item.status == "completed", color: theme.color("fg-faint").opacity(0.5))
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 5)
-        .background(item.status == "in_progress" ? theme.color("accent").opacity(0.10) : Color.clear)
-    }
-
-    @ViewBuilder
-    private func mark(for item: ACPMessage.PlanItem) -> some View {
-        switch item.status {
-        case "completed":
-            Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(theme.color("add"))
-                .frame(width: 12)
-        case "in_progress":
-            Spinner(lineWidth: 1.5, duration: 0.7)
-                .frame(width: 10, height: 10)
-                .frame(width: 12)
-        default:
-            Circle()
-                .fill(theme.color("fg-faint").opacity(0.6))
-                .frame(width: 5, height: 5)
-                .frame(width: 12)
-        }
     }
 }

@@ -45,6 +45,29 @@ private struct ACPSessionView: View {
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
     @Environment(\.theme) private var theme
+    @State private var showPlanSidebar: Bool = false
+
+    /// Re-evaluated on every width / plan change. Pure call into the
+    /// hysteresis reducer; the `.spring` wrap lives at the call site.
+    ///
+    /// Intentionally not debounced. Spec §5 mentioned an ~80ms debounce
+    /// against divider-drag thrash, but the 80pt hysteresis dead band +
+    /// the spring animation absorb that case in practice — and the
+    /// per-tick work here is just an isEmpty check, a Bool compare, and
+    /// an equality test. Revisit if profiling shows otherwise.
+    private func updatePlanSidebar(paneWidth: CGFloat) {
+        let hasPlan = (session.transcript.latestPlan?.isEmpty == false)
+        let next = ACPPlanSidebarVisibility.next(
+            paneWidth: paneWidth,
+            hasPlan: hasPlan,
+            current: showPlanSidebar
+        )
+        if next != showPlanSidebar {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                showPlanSidebar = next
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,6 +87,7 @@ private struct ACPSessionView: View {
             }
             transcriptAndComposer
         }
+        .environment(\.acpPlanSidebarVisible, showPlanSidebar)
         .task(id: sessionId) {
             await hydrateAndAttach()
         }
@@ -100,110 +124,127 @@ private struct ACPSessionView: View {
     }
 
     private var transcriptAndComposer: some View {
-        ZStack(alignment: .bottom) {
-            if isConnecting {
-                ACPConnectingPlaceholder(
-                    agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
-                )
-            } else {
-                ACPMessageList(
-                    session: session,
-                    transcript: session.transcript,
-                    onOpenDiff: { relativePath in
-                        state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
-                    },
-                    // Use the runner's policy (where the agent's continuation
-                    // lives) — otherwise the user's click can't resolve the
-                    // pending permission request.
-                    policy: manager.runners[sessionId]?.policy,
-                    scopeKey: scopeKey(for: session.transcript.pendingPermission),
-                    onQueueEdit: { item in
-                        // Inline editor is a future enhancement (see plan §4.4).
-                        // For v1, clicking the pencil removes the item from
-                        // the queue so the user can re-type in the composer.
-                        session.removeFromQueue(id: item.id)
-                        manager.persistQueue(for: session)
-                        // Discarding the head can unblock a successor
-                        // that was waiting behind a `lastError` head.
-                        manager.runners[sessionId]?.flushQueueIfIdle()
-                    },
-                    onQueueRemove: { id in
-                        session.removeFromQueue(id: id)
-                        manager.persistQueue(for: session)
-                        manager.runners[sessionId]?.flushQueueIfIdle()
-                    },
-                    onQueueRetry: { id in
-                        guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
-                        session.queue[idx].lastError = nil
-                        manager.persistQueue(for: session)
-                        manager.runners[sessionId]?.flushQueueIfIdle()
-                    },
-                    onQueueReorder: { src, dst in
-                        session.moveInQueue(from: src, to: dst)
-                        manager.persistQueue(for: session)
-                        // Reordering can move a clean prompt to the head
-                        // where it can finally drain.
-                        manager.runners[sessionId]?.flushQueueIfIdle()
-                    },
-                    onQueueClearAll: {
-                        session.clearPendingQueue()
-                        manager.persistQueue(for: session)
-                        // No-op if the queue is now empty, but if a
-                        // `.sending` head survives the clear and the
-                        // user re-enqueues, the next idle drain still
-                        // needs to fire from this path.
-                        manager.runners[sessionId]?.flushQueueIfIdle()
-                    }
-                )
-            }
-
-            ACPComposer(
-                session: session,
-                manager: manager,
-                worktreeRoot: worktree.path,
-                agentLookup: { state.agent(id: $0) },
-                sendOnEnter: state.config.harness.acpSendOnEnter
-            ) { text, attachments, intent, draft, onPromptFinished -> Bool in
-                guard session.attached, !session.disconnected,
-                      let runner = manager.runners[sessionId] else { return false }
-                // `intent` is already resolved by the composer for keyboard
-                // submits; the toolbar send button bypasses the keyboard
-                // inversion and supplies its own intent directly. No
-                // further resolution here.
-                let draftRevision = session.composerDraftRevision
-                runner.send(text: text, attachments: attachments, intent: intent) { succeeded in
-                    if succeeded {
-                        manager.clearComposerDraft(
-                            for: session,
-                            ifCurrentDraftEquals: draft,
-                            revision: draftRevision
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                ZStack(alignment: .bottom) {
+                    if isConnecting {
+                        ACPConnectingPlaceholder(
+                            agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
                         )
                     } else {
-                        manager.persistComposerDraft(
-                            draft,
-                            for: session,
-                            ifCurrentDraftEquals: draft,
-                            revision: draftRevision
+                        ACPMessageList(
+                            session: session,
+                            transcript: session.transcript,
+                            onOpenDiff: { relativePath in
+                                state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
+                            },
+                            // Use the runner's policy (where the agent's continuation
+                            // lives) — otherwise the user's click can't resolve the
+                            // pending permission request.
+                            policy: manager.runners[sessionId]?.policy,
+                            scopeKey: scopeKey(for: session.transcript.pendingPermission),
+                            onQueueEdit: { item in
+                                // Inline editor is a future enhancement (see plan §4.4).
+                                // For v1, clicking the pencil removes the item from
+                                // the queue so the user can re-type in the composer.
+                                session.removeFromQueue(id: item.id)
+                                manager.persistQueue(for: session)
+                                // Discarding the head can unblock a successor
+                                // that was waiting behind a `lastError` head.
+                                manager.runners[sessionId]?.flushQueueIfIdle()
+                            },
+                            onQueueRemove: { id in
+                                session.removeFromQueue(id: id)
+                                manager.persistQueue(for: session)
+                                manager.runners[sessionId]?.flushQueueIfIdle()
+                            },
+                            onQueueRetry: { id in
+                                guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
+                                session.queue[idx].lastError = nil
+                                manager.persistQueue(for: session)
+                                manager.runners[sessionId]?.flushQueueIfIdle()
+                            },
+                            onQueueReorder: { src, dst in
+                                session.moveInQueue(from: src, to: dst)
+                                manager.persistQueue(for: session)
+                                // Reordering can move a clean prompt to the head
+                                // where it can finally drain.
+                                manager.runners[sessionId]?.flushQueueIfIdle()
+                            },
+                            onQueueClearAll: {
+                                session.clearPendingQueue()
+                                manager.persistQueue(for: session)
+                                // No-op if the queue is now empty, but if a
+                                // `.sending` head survives the clear and the
+                                // user re-enqueues, the next idle drain still
+                                // needs to fire from this path.
+                                manager.runners[sessionId]?.flushQueueIfIdle()
+                            }
                         )
                     }
-                    onPromptFinished(succeeded)
-                }
-                return true
-            }
 
-            if let undo = session.steerUndo, !undo.snapshot.isEmpty {
-                VStack {
-                    Spacer()
-                    ACPSteerUndoToast(
-                        discardedCount: undo.snapshot.count,
-                        onUndo: { manager.runners[sessionId]?.steerUndo() },
-                        onDismiss: { session.steerUndo = nil }
-                    )
-                    .id(undo.id)
-                    .padding(.bottom, 200)
+                    ACPComposer(
+                        session: session,
+                        manager: manager,
+                        worktreeRoot: worktree.path,
+                        agentLookup: { state.agent(id: $0) },
+                        sendOnEnter: state.config.harness.acpSendOnEnter
+                    ) { text, attachments, intent, draft, onPromptFinished -> Bool in
+                        guard session.attached, !session.disconnected,
+                              let runner = manager.runners[sessionId] else { return false }
+                        // `intent` is already resolved by the composer for keyboard
+                        // submits; the toolbar send button bypasses the keyboard
+                        // inversion and supplies its own intent directly. No
+                        // further resolution here.
+                        let draftRevision = session.composerDraftRevision
+                        runner.send(text: text, attachments: attachments, intent: intent) { succeeded in
+                            if succeeded {
+                                manager.clearComposerDraft(
+                                    for: session,
+                                    ifCurrentDraftEquals: draft,
+                                    revision: draftRevision
+                                )
+                            } else {
+                                manager.persistComposerDraft(
+                                    draft,
+                                    for: session,
+                                    ifCurrentDraftEquals: draft,
+                                    revision: draftRevision
+                                )
+                            }
+                            onPromptFinished(succeeded)
+                        }
+                        return true
+                    }
+
+                    if let undo = session.steerUndo, !undo.snapshot.isEmpty {
+                        VStack {
+                            Spacer()
+                            ACPSteerUndoToast(
+                                discardedCount: undo.snapshot.count,
+                                onUndo: { manager.runners[sessionId]?.steerUndo() },
+                                onDismiss: { session.steerUndo = nil }
+                            )
+                            .id(undo.id)
+                            .padding(.bottom, 200)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .transition(.opacity)
+                    }
                 }
-                .frame(maxWidth: .infinity)
-                .transition(.opacity)
+
+                if showPlanSidebar {
+                    ACPPlanSidebar(transcript: session.transcript)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .onAppear { updatePlanSidebar(paneWidth: proxy.size.width) }
+            .onChange(of: proxy.size.width) { _, newWidth in
+                updatePlanSidebar(paneWidth: newWidth)
+            }
+            .onChange(of: session.transcript.latestPlan) { _, _ in
+                updatePlanSidebar(paneWidth: proxy.size.width)
             }
         }
     }
