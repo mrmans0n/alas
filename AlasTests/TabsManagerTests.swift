@@ -658,7 +658,8 @@ struct TabsManagerPaneTests {
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
         guard case .terminal(let initial) = tab,
               case .leaf(let originalLeaf) = initial.root else {
-            Issue.record("expected single-leaf terminal tab"); return
+            Issue.record("expected single-leaf terminal tab")
+            return
         }
         _ = mgr.splitFocusedLeaf(
             worktreeId: "wt", tabId: tab.id, axis: .vertical,
@@ -669,7 +670,8 @@ struct TabsManagerPaneTests {
             worktreeId: "wt", tabId: tab.id, leafId: originalLeaf.id
         ))
         guard case .leafRemoved(let outcomeTab, let closedLeafId) = outcome else {
-            Issue.record("expected .leafRemoved"); return
+            Issue.record("expected .leafRemoved")
+            return
         }
         #expect(closedLeafId == originalLeaf.id)
         if case .terminal(let s) = outcomeTab, case .leaf(let l) = s.root {
@@ -685,7 +687,8 @@ struct TabsManagerPaneTests {
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
         guard case .terminal(let initial) = tab,
               case .leaf(let originalLeaf) = initial.root else {
-            Issue.record("expected single-leaf terminal tab"); return
+            Issue.record("expected single-leaf terminal tab")
+            return
         }
         _ = mgr.splitFocusedLeaf(
             worktreeId: "wt", tabId: tab.id, axis: .vertical,
@@ -696,12 +699,14 @@ struct TabsManagerPaneTests {
             worktreeId: "wt", tabId: tab.id, leafId: "new"
         ))
         guard case .leafRemoved(_, let closedLeafId) = outcome else {
-            Issue.record("expected .leafRemoved"); return
+            Issue.record("expected .leafRemoved")
+            return
         }
         #expect(closedLeafId == "new")
         guard case .terminal(let persisted) = (mgr.tabs(forWorktree: "wt").first(where: { $0.id == tab.id })!),
               case .leaf(let persistedLeaf) = persisted.root else {
-            Issue.record("expected single-leaf root"); return
+            Issue.record("expected single-leaf root")
+            return
         }
         #expect(persistedLeaf.id == originalLeaf.id)
         #expect(persisted.focusedLeafId == originalLeaf.id)
@@ -712,13 +717,15 @@ struct TabsManagerPaneTests {
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
         guard case .terminal(let initial) = tab,
               case .leaf(let onlyLeaf) = initial.root else {
-            Issue.record("expected single-leaf terminal tab"); return
+            Issue.record("expected single-leaf terminal tab")
+            return
         }
         let outcome = try #require(mgr.removeLeaf(
             worktreeId: "wt", tabId: tab.id, leafId: onlyLeaf.id
         ))
         guard case .tabRemoved(let closedLeafId) = outcome else {
-            Issue.record("expected .tabRemoved"); return
+            Issue.record("expected .tabRemoved")
+            return
         }
         #expect(closedLeafId == onlyLeaf.id)
     }
@@ -752,7 +759,8 @@ struct TabsManagerPaneTests {
             worktreeId: "wt", tabId: tab.id, leafId: "new"
         ))
         guard case .leafRemoved = first else {
-            Issue.record("expected .leafRemoved"); return
+            Issue.record("expected .leafRemoved")
+            return
         }
         // Second removal of the same leaf must be a quiet no-op — the
         // process-exit handler relies on this to race manual close.
