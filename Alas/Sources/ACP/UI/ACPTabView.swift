@@ -42,6 +42,8 @@ private struct ACPSessionView: View {
     /// list gets a stale `""` scope and persisted allow/reject_always
     /// decisions land under the wrong key.
     @ObservedObject var transcript: ACPTranscript
+    @State private var updateState: AdapterUpdateState?
+    @State private var dismissedLatest: String?
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -53,20 +55,7 @@ private struct ACPSessionView: View {
                 state: state,
                 worktree: worktree
             )
-            if case .needsSetup(let reason) = session.setupState,
-               !state.config.harness.dismissedACPSetupNudges.contains(session.agentId) {
-                if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
-                    ACPSetupNudgeBanner(
-                        agentID: session.agentId,
-                        agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
-                        installer: installer,
-                        onDismiss: { dismissNudge() },
-                        onInstalled: { await reattach() }
-                    )
-                } else {
-                    setupReasonBanner(reason: reason)
-                }
-            }
+            adapterBanner()
             if let err = session.lastError {
                 errorBanner(err)
             }
@@ -219,6 +208,44 @@ private struct ACPSessionView: View {
         }
     }
 
+    @ViewBuilder
+    private func adapterBanner() -> some View {
+        let dismissedSetup = state.config.harness.dismissedACPSetupNudges.contains(session.agentId)
+        let decision = ACPAdapterUpdateBannerDecider.decide(
+            setupState: session.setupState,
+            updateState: updateState,
+            dismissedLatest: dismissedLatest)
+
+        switch decision {
+        case .showInstall where !dismissedSetup:
+            if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
+                ACPSetupNudgeBanner(
+                    agentID: session.agentId,
+                    agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+                    installer: installer,
+                    mode: .install,
+                    onDismiss: { dismissNudge() },
+                    onInstalled: { await reattach() }
+                )
+            } else if case .needsSetup(let reason) = session.setupState {
+                setupReasonBanner(reason: reason)
+            }
+        case .showUpdate(let current, let latest):
+            if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
+                ACPSetupNudgeBanner(
+                    agentID: session.agentId,
+                    agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+                    installer: installer,
+                    mode: .update(current: current, latest: latest),
+                    onDismiss: { dismissUpdate(latest: latest) },
+                    onInstalled: { await reattachAfterUpdate() }
+                )
+            }
+        default:
+            EmptyView()
+        }
+    }
+
     private func scopeKey(for pending: ACPSession.PendingPermission?) -> String {
         guard let p = pending else { return "" }
         return "tool:\(p.params.toolCall.title ?? p.params.toolCall.toolCallId)"
@@ -244,6 +271,23 @@ private struct ACPSessionView: View {
         }
     }
 
+    private func dismissUpdate(latest: String) {
+        Task {
+            await state.acpAdapterUpdateStore.dismiss(agentID: session.agentId, latest: latest)
+            await MainActor.run { dismissedLatest = latest }
+        }
+    }
+
+    private func reattachAfterUpdate() async {
+        await state.acpAdapterUpdateStore.clear(agentID: session.agentId)
+        await MainActor.run {
+            updateState = nil
+            dismissedLatest = nil
+        }
+        await reattach()
+        await refreshAdapterUpdateState()
+    }
+
     private func setupReasonBanner(reason: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle").foregroundStyle(theme.color("fg-faint"))
@@ -267,6 +311,33 @@ private struct ACPSessionView: View {
         let freshlyCreated = manager.runners[sessionId] == nil
             && session.transcript.messages.isEmpty
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
+        await refreshAdapterUpdateState()
+    }
+
+    /// After attach: if the adapter is ready and has an npm package, ask the
+    /// store for its cached update state (or compute it on cache miss).
+    /// Silent on failure.
+    private func refreshAdapterUpdateState() async {
+        guard case .ready = session.setupState else { return }
+        guard let spec = ACPLaunchCatalog.spec(for: session.agentId),
+              let pkg = spec.npmPackageName
+        else { return }
+
+        let store = state.acpAdapterUpdateStore
+        let checker = ACPAdapterVersionChecker()
+        let result = await store.checkOrCompute(agentID: session.agentId) {
+            await checker.check(packageName: pkg)
+        }
+        var dismissed: String? = nil
+        if case .available(_, let latest) = result,
+           await store.isDismissed(agentID: session.agentId, latest: latest) {
+            dismissed = latest
+        }
+
+        await MainActor.run {
+            self.updateState = result
+            self.dismissedLatest = dismissed
+        }
     }
 
     private func hydrationFailureBanner(message: String) -> some View {
