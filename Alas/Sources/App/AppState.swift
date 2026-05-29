@@ -1581,12 +1581,13 @@ final class AppState {
     /// to the pasteboard. Silent on success, matching `onCopyPath`.
     func copyACPSessionMarkdown(worktreeId: String, tabId: TabID) {
         Task { @MainActor in
-            guard let session = await acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
-            Clipboard.copy(ACPTranscriptMarkdown.document(
-                title: session.title,
-                agentName: agent(id: session.agentId)?.displayName,
-                messages: session.transcript.messages
-            ))
+            await withHydratedACPSession(worktreeId: worktreeId, tabId: tabId) { session in
+                Clipboard.copy(ACPTranscriptMarkdown.document(
+                    title: session.title,
+                    agentName: agent(id: session.agentId)?.displayName,
+                    messages: session.transcript.messages
+                ))
+            }
         }
     }
 
@@ -1595,41 +1596,55 @@ final class AppState {
     /// shared file-action error handler.
     func exportACPSessionMarkdown(worktreeId: String, tabId: TabID) {
         Task { @MainActor in
-            guard let session = await acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
-            let markdown = ACPTranscriptMarkdown.document(
-                title: session.title,
-                agentName: agent(id: session.agentId)?.displayName,
-                messages: session.transcript.messages
-            )
-            let panel = NSSavePanel()
-            panel.title = "Save Session as Markdown"
-            panel.message = "Choose where to save this conversation."
-            panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
-            panel.canCreateDirectories = true
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            do {
-                try markdown.write(to: url, atomically: true, encoding: .utf8)
-            } catch {
-                showFileActionError(title: "Export Failed", message: error.localizedDescription)
+            await withHydratedACPSession(worktreeId: worktreeId, tabId: tabId) { session in
+                let markdown = ACPTranscriptMarkdown.document(
+                    title: session.title,
+                    agentName: agent(id: session.agentId)?.displayName,
+                    messages: session.transcript.messages
+                )
+                let panel = NSSavePanel()
+                panel.title = "Save Session as Markdown"
+                panel.message = "Choose where to save this conversation."
+                panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
+                panel.canCreateDirectories = true
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do {
+                    try markdown.write(to: url, atomically: true, encoding: .utf8)
+                } catch {
+                    showFileActionError(title: "Export Failed", message: error.localizedDescription)
+                }
             }
         }
     }
 
-    /// Resolve the in-memory `ACPSession` backing an ACP session tab,
-    /// hydrating it first. Reopened-but-inactive tabs hold only a
-    /// `.loading` placeholder with an empty transcript until they're
-    /// shown (hydration is driven by `ACPTabView`'s `.task`), so reading
-    /// `transcript.messages` here without hydrating would serialize an
-    /// empty conversation. `hydrateIfNeeded` is a no-op once `.ready`.
-    /// Returns nil for non-ACP tabs or when the session no longer exists.
-    private func acpSession(worktreeId: String, tabId: TabID) async -> ACPSession? {
+    /// Resolve + hydrate the ACP session backing a tab, run `body` with it,
+    /// then release. Reopened-but-inactive tabs hold only a `.loading`
+    /// placeholder with an empty transcript until they're shown (hydration
+    /// is driven by `ACPTabView`'s `.task`), so reading `transcript.messages`
+    /// without hydrating would serialize an empty conversation;
+    /// `hydrateIfNeeded` is a no-op once `.ready`.
+    ///
+    /// The retain/release pair bounds the lifetime of a session we
+    /// materialize purely for a one-off export: `releaseSession` evicts it
+    /// again once `body` returns, instead of leaving a full transcript
+    /// resident at refcount 0 until the app quits. A session that's also
+    /// open in a visible tab already holds its own retain, so this just
+    /// balances out and leaves it untouched — and the retain also stops the
+    /// session being evicted mid-export if its tab disappears underneath us.
+    /// No-op for non-ACP tabs or when the session no longer exists.
+    private func withHydratedACPSession(
+        worktreeId: String, tabId: TabID, _ body: (ACPSession) -> Void
+    ) async {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .acpSession(let tabState) = tab,
               let worktree = worktree(withId: worktreeId),
               let mgr = acpManager(for: worktree),
-              mgr.placeholderSession(id: tabState.sessionId) != nil else { return nil }
+              mgr.placeholderSession(id: tabState.sessionId) != nil else { return }
+        mgr.retainSession(id: tabState.sessionId)
+        defer { mgr.releaseSession(id: tabState.sessionId) }
         await mgr.hydrateIfNeeded(id: tabState.sessionId)
-        return mgr.sessions[tabState.sessionId]
+        guard let session = mgr.sessions[tabState.sessionId] else { return }
+        body(session)
     }
 
     func closeTab(worktreeId: String, tabId: TabID) {
