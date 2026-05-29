@@ -222,6 +222,16 @@ final class ACPSession: ObservableObject, Identifiable {
         queue.insert(contentsOf: snapshot, at: insertAt)
     }
 
+    /// Number of queue items that should render as bubbles below the
+    /// transcript. Excludes the `.sending` head because its prompt has
+    /// already been appended to the transcript by `ACPSessionRunner.sendNow`
+    /// (and the composer's Stop pill conveys the in-flight state). Without
+    /// this, the user sees the same message twice — once in the transcript,
+    /// once as a "Sending" queued bubble.
+    var visibleQueueCount: Int {
+        queue.reduce(0) { $0 + ($1.status == .sending ? 0 : 1) }
+    }
+
     /// Mark the head item `.sending`. Called by the flusher right before
     /// it spawns the prompt RPC. Clears any previous `lastError` so a
     /// retried item displays cleanly while in-flight.
