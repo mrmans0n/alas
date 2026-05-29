@@ -384,10 +384,18 @@ struct ACPComposer: View {
         .help(sendHelpText)
     }
 
-    /// Disabled only when the agent isn't reachable. State.streaming /
-    /// .sending no longer disable — they queue.
+    // TODO(harness): SwiftUI rendering test for `sendDisabled` requires
+    // snapshot infrastructure we don't have; the invariant we care about
+    // (button enabled whenever `manager.submit` would accept the prompt
+    // — i.e. for all agent states, including .disconnected / .failed /
+    // .idle so mouse-only users can drive recovery) is inspection-
+    // verifiable here and exercised by the `submit` tests above.
     private var sendDisabled: Bool {
-        session.agentState != .ready
+        // Intentionally NOT gated on `agentState`: `manager.submit(...)`
+        // accepts prompts in every state (queueing + kicking reattach
+        // when not `.ready`). The send button must mirror Enter-to-submit
+        // so mouse-only users can recover a disconnected session.
+        false
     }
 
     private var sendHelpText: String {
