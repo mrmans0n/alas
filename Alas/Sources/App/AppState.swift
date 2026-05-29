@@ -1580,45 +1580,55 @@ final class AppState {
     /// Copy the active ACP session's conversation (user + agent, Markdown)
     /// to the pasteboard. Silent on success, matching `onCopyPath`.
     func copyACPSessionMarkdown(worktreeId: String, tabId: TabID) {
-        guard let session = acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
-        let markdown = ACPTranscriptMarkdown.document(
-            title: session.title,
-            agentName: agent(id: session.agentId)?.displayName,
-            messages: session.transcript.messages
-        )
-        Clipboard.copy(markdown)
+        Task { @MainActor in
+            guard let session = await acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
+            Clipboard.copy(ACPTranscriptMarkdown.document(
+                title: session.title,
+                agentName: agent(id: session.agentId)?.displayName,
+                messages: session.transcript.messages
+            ))
+        }
     }
 
     /// Save the active ACP session's conversation to a `.md` file via a
     /// save panel. Cancel is a no-op; write failures surface through the
     /// shared file-action error handler.
     func exportACPSessionMarkdown(worktreeId: String, tabId: TabID) {
-        guard let session = acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
-        let markdown = ACPTranscriptMarkdown.document(
-            title: session.title,
-            agentName: agent(id: session.agentId)?.displayName,
-            messages: session.transcript.messages
-        )
-        let panel = NSSavePanel()
-        panel.title = "Save Session as Markdown"
-        panel.message = "Choose where to save this conversation."
-        panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try markdown.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            showFileActionError(title: "Export Failed", message: error.localizedDescription)
+        Task { @MainActor in
+            guard let session = await acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
+            let markdown = ACPTranscriptMarkdown.document(
+                title: session.title,
+                agentName: agent(id: session.agentId)?.displayName,
+                messages: session.transcript.messages
+            )
+            let panel = NSSavePanel()
+            panel.title = "Save Session as Markdown"
+            panel.message = "Choose where to save this conversation."
+            panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do {
+                try markdown.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                showFileActionError(title: "Export Failed", message: error.localizedDescription)
+            }
         }
     }
 
-    /// Resolve the in-memory `ACPSession` backing an ACP session tab.
-    /// Returns nil for non-ACP tabs or when the session has been evicted.
-    private func acpSession(worktreeId: String, tabId: TabID) -> ACPSession? {
+    /// Resolve the in-memory `ACPSession` backing an ACP session tab,
+    /// hydrating it first. Reopened-but-inactive tabs hold only a
+    /// `.loading` placeholder with an empty transcript until they're
+    /// shown (hydration is driven by `ACPTabView`'s `.task`), so reading
+    /// `transcript.messages` here without hydrating would serialize an
+    /// empty conversation. `hydrateIfNeeded` is a no-op once `.ready`.
+    /// Returns nil for non-ACP tabs or when the session no longer exists.
+    private func acpSession(worktreeId: String, tabId: TabID) async -> ACPSession? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .acpSession(let tabState) = tab,
               let worktree = worktree(withId: worktreeId),
-              let mgr = acpManager(for: worktree) else { return nil }
+              let mgr = acpManager(for: worktree),
+              mgr.placeholderSession(id: tabState.sessionId) != nil else { return nil }
+        await mgr.hydrateIfNeeded(id: tabState.sessionId)
         return mgr.sessions[tabState.sessionId]
     }
 
