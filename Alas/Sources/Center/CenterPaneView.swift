@@ -94,6 +94,13 @@ struct CenterPaneView: View {
                         return t.isEmpty ? nil : t
                     }
                     return state.tabs.displayTerminalTitle(for: tab)
+                },
+                transcriptLookup: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          case .acpSession(let s) = tab,
+                          let mgr = state.acpManager(for: worktree),
+                          let session = mgr.placeholderSession(id: s.sessionId) else { return nil }
+                    return session.transcript
                 }
             )
             Group {
