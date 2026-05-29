@@ -413,12 +413,40 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
     }
 }
 
+// MARK: - Hover copy button
+
+/// Hover-revealed affordance that copies a message's raw Markdown to the
+/// pasteboard as plain text. The caller passes exactly the text
+/// `ACPTranscriptMarkdown.messageBody` would return for this row.
+private struct ACPHoverCopyButton: View {
+    let markdown: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(markdown, forType: .string)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(.system(size: 10.5))
+                .foregroundStyle(theme.color("fg-muted"))
+                .padding(4)
+                .background(theme.color("bg-3").opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .help("Copy message as Markdown")
+    }
+}
+
 // MARK: - User bubble (right-aligned)
 
 private struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
     @Environment(\.theme) private var theme
+    @State private var hovering = false
 
     var body: some View {
         HStack {
@@ -457,6 +485,12 @@ private struct UserMessageRow: View {
                     .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
             }
             .frame(maxWidth: 540, alignment: .trailing)
+            .overlay(alignment: .topLeading) {
+                if hovering {
+                    ACPHoverCopyButton(markdown: text).offset(x: -6, y: -6)
+                }
+            }
+            .onHover { hovering = $0 }
         }
         .frame(maxWidth: .infinity)
     }
@@ -468,9 +502,16 @@ private struct AgentMessageRow: View {
     let messageId: String
     let transcript: ACPTranscript
     @ObservedObject var buffer: StreamingText
+    @State private var hovering = false
     var body: some View {
         ACPMarkdownText(raw: buffer.value, cache: transcript.markdownCache(forMessage: messageId))
             .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .topTrailing) {
+                if hovering {
+                    ACPHoverCopyButton(markdown: buffer.value).offset(x: -2, y: -6)
+                }
+            }
+            .onHover { hovering = $0 }
     }
 }
 

@@ -56,6 +56,12 @@ struct CenterPaneView: View {
                 onRenameACPSession: { id in
                     state.renameACPSessionTab(worktreeId: worktree.id, tabId: id)
                 },
+                onCopyACPSession: { id in
+                    state.copyACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                },
+                onExportACPSession: { id in
+                    state.exportACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                },
                 onNewTerminal: openTerminal,
                 enabledAgents: state.agentRegistry.enabled(),
                 onLaunchAgent: { agentId in

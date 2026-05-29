@@ -15,6 +15,8 @@ struct TabBarView: View {
     let onCopyRelativePath: (TabID) -> Void
     let onRenameTerminal: (TabID) -> Void
     let onRenameACPSession: (TabID) -> Void
+    let onCopyACPSession: (TabID) -> Void
+    let onExportACPSession: (TabID) -> Void
     let onNewTerminal: () -> Void
     let enabledAgents: [AgentDefinition]
     let onLaunchAgent: (String) -> Void
@@ -69,6 +71,8 @@ struct TabBarView: View {
                     }
                     if case .acpSession = tab {
                         Button("Rename…") { onRenameACPSession(tab.id) }
+                        Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
+                        Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
                         Divider()
                     }
                     Button("Close") { onClose(tab.id) }
