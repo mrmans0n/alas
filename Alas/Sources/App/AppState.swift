@@ -40,6 +40,7 @@ final class AppState {
     private let terminalSessionOpener: TerminalSessionOpener?
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
+    let acpAdapterUpdateStore = ACPAdapterUpdateStore()
     @ObservationIgnored
     private var lspManager: WorkspaceLSPManager?
 

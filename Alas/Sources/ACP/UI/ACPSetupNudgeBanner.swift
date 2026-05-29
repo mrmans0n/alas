@@ -1,17 +1,83 @@
 import SwiftUI
 
+enum ACPSetupNudgeMode: Equatable {
+    case install
+    case update(current: String, latest: String)
+}
+
+/// Kept out of the SwiftUI struct so tests can call it without a view hierarchy.
+enum ACPSetupNudgeBannerCopy {
+    static func idleMessage(mode: ACPSetupNudgeMode, agentDisplayName: String) -> String {
+        switch mode {
+        case .install:
+            return "\(agentDisplayName) requires the ACP adapter to be installed."
+        case .update(let current, let latest):
+            return "\(agentDisplayName) adapter update available (\(current) → \(latest))."
+        }
+    }
+
+    static func installedMessage(mode: ACPSetupNudgeMode, agentDisplayName: String) -> String {
+        switch mode {
+        case .install:
+            return "\(agentDisplayName) adapter installed — connecting…"
+        case .update:
+            return "\(agentDisplayName) adapter updated — reconnecting…"
+        }
+    }
+
+    static func installingMessage(mode: ACPSetupNudgeMode, agentDisplayName: String) -> String {
+        switch mode {
+        case .install: return "Installing \(agentDisplayName) adapter…"
+        case .update:  return "Updating \(agentDisplayName) adapter…"
+        }
+    }
+
+    static func errorMessage(mode: ACPSetupNudgeMode, detail: String) -> String {
+        switch mode {
+        case .install: return "Install failed: \(detail)"
+        case .update:  return "Update failed: \(detail)"
+        }
+    }
+
+    static func installButtonTitle(mode: ACPSetupNudgeMode, errored: Bool) -> String {
+        if errored { return "Retry" }
+        switch mode {
+        case .install: return "Install"
+        case .update:  return "Update"
+        }
+    }
+}
+
 struct ACPSetupNudgeBanner: View {
     let agentID: String
     let agentDisplayName: String
     let installer: ACPAdapterInstaller
+    let mode: ACPSetupNudgeMode
     let onDismiss: () -> Void
     /// Called after a successful install. Lets the parent re-run setup
     /// check + attach so the chat connects without a manual reload.
     let onInstalled: () async -> Void
+
     @State private var status: Status = .idle
     @Environment(\.theme) private var theme
 
     enum Status: Equatable { case idle, installing, installed, error(String) }
+
+    init(
+        agentID: String,
+        agentDisplayName: String,
+        installer: ACPAdapterInstaller,
+        mode: ACPSetupNudgeMode = .install,
+        onDismiss: @escaping () -> Void,
+        onInstalled: @escaping () async -> Void
+    ) {
+        self.agentID = agentID
+        self.agentDisplayName = agentDisplayName
+        self.installer = installer
+        self.mode = mode
+        self.onDismiss = onDismiss
+        self.onInstalled = onInstalled
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -68,10 +134,14 @@ struct ACPSetupNudgeBanner: View {
     }
     private var message: String {
         switch status {
-        case .idle:                 return "\(agentDisplayName) requires the ACP adapter to be installed."
-        case .installing:           return "Installing \(agentDisplayName) adapter…"
-        case .installed:            return "\(agentDisplayName) adapter installed — connecting…"
-        case .error(let detail):    return "Install failed: \(detail)"
+        case .idle:
+            return ACPSetupNudgeBannerCopy.idleMessage(mode: mode, agentDisplayName: agentDisplayName)
+        case .installing:
+            return ACPSetupNudgeBannerCopy.installingMessage(mode: mode, agentDisplayName: agentDisplayName)
+        case .installed:
+            return ACPSetupNudgeBannerCopy.installedMessage(mode: mode, agentDisplayName: agentDisplayName)
+        case .error(let detail):
+            return ACPSetupNudgeBannerCopy.errorMessage(mode: mode, detail: detail)
         }
     }
     private var showsInstallButton: Bool {
@@ -80,9 +150,13 @@ struct ACPSetupNudgeBanner: View {
         default:            return false
         }
     }
+    private var isErrored: Bool {
+        if case .error = status { return true }
+        return false
+    }
+
     private var installButtonTitle: String {
-        if case .error = status { return "Retry" }
-        return "Install"
+        ACPSetupNudgeBannerCopy.installButtonTitle(mode: mode, errored: isErrored)
     }
 
     private func runInstall() {

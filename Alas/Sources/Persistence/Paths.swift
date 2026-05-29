@@ -41,3 +41,9 @@ extension Paths {
         acpSessionsRoot.appendingPathComponent("\(id).sqlite")
     }
 }
+
+extension Paths {
+    static var acpAdapterUpdatesFile: URL {
+        appSupportRoot.appendingPathComponent("acp-adapter-updates.json")
+    }
+}
