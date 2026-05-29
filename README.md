@@ -34,7 +34,7 @@ Coding agents are most useful when you can run several of them — one per workt
 
   ![Markdown source and rendered preview side-by-side](art/alas-markdown.png)
 
-- **Native and signed.** Signed + notarized + stapled. No Gatekeeper popups, no quarantine flags.
+- **Native and signed.** No web weirdness, no Gatekeeper popups, no quarantine flags.
 
 ## Develop
 
