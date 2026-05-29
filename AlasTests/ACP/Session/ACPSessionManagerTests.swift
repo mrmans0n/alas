@@ -27,8 +27,8 @@ struct ACPSessionManagerTests {
         try store.upsertComposerDraft(sessionId: "s", draft: draft, updatedAt: 123)
 
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
-        let session = try #require(mgr.openSession(id: "s"))
-
+        let session = try #require(mgr.placeholderSession(id: "s"))
+        await mgr.hydrateIfNeeded(id: "s")
         #expect(session.composerDraft == draft)
     }
 

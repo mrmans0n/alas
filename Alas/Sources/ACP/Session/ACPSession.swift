@@ -34,6 +34,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// composer's send button watches this so users can't queue prompts
     /// against a not-yet-attached agent.
     @Published var attached: Bool = false
+    /// Tracks whether the session's persisted state (messages, queue, draft,
+    /// row fields) has been loaded from SQLite. `.loading` is the initial
+    /// state for sessions returned by `placeholderSession`; `.ready` is the
+    /// initial state for sessions returned by `createSession`. `.failed`
+    /// surfaces a hydration error to the view.
+    @Published var hydrationState: HydrationState
     /// ACP session id assigned by the agent on `session/new` (or the
     /// id we passed to `session/load`). Used for every subsequent
     /// protocol call (`session/prompt`, `session/cancel`, etc).
@@ -57,6 +63,11 @@ final class ACPSession: ObservableObject, Identifiable {
         composerDraftRevision += 1
     }
 
+    enum HydrationState: Equatable {
+        case loading
+        case ready
+        case failed(String)
+    }
     enum StreamingState: Equatable { case idle, sending, streaming, awaitingPermission }
     enum SetupState: Equatable {
         case checking
@@ -68,12 +79,15 @@ final class ACPSession: ObservableObject, Identifiable {
         let params: ACPPermissionRequestParams
     }
 
-    init(id: ID, agentId: String, worktreeId: String, title: String, createdAt: Date = Date()) {
+    init(id: ID, agentId: String, worktreeId: String, title: String,
+         createdAt: Date = Date(),
+         hydrationState: HydrationState = .ready) {
         self.id = id
         self.agentId = agentId
         self.worktreeId = worktreeId
         self.title = title
         self.createdAt = createdAt
+        self.hydrationState = hydrationState
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {

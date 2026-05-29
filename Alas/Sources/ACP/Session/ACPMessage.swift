@@ -35,10 +35,12 @@ enum ACPMessage: Equatable {
         }
     }
 
-    struct Attachment: Codable, Equatable, Hashable { let uri: String
-    let name: String? }
+    struct Attachment: Codable, Equatable, Hashable, Sendable {
+        let uri: String
+        let name: String?
+    }
 
-    struct ToolCall: Codable, Equatable, Hashable {
+    struct ToolCall: Codable, Equatable, Hashable, Sendable {
         let toolCallId: String
         var title: String
         var kind: String?
@@ -95,13 +97,13 @@ enum ACPMessage: Equatable {
         }
     }
 
-    struct FileEdit: Codable, Equatable, Hashable {
+    struct FileEdit: Codable, Equatable, Hashable, Sendable {
         let path: String
         var added: Int
         var removed: Int
     }
 
-    struct PlanItem: Codable, Equatable, Hashable {
+    struct PlanItem: Codable, Equatable, Hashable, Sendable {
         let content: String
         var status: String   // "pending" | "in_progress" | "completed"
     }

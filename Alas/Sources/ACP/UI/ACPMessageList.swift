@@ -19,6 +19,8 @@ struct ACPMessageList: View {
     @State private var tailFrame: CGRect = .zero
     @State private var isRestoringTail = false
     @State private var userInterruptedTailRestore = false
+    @State private var headFrame: CGRect = .zero
+    @State private var lastHeadStepAt: Date = .distantPast
 
     /// Height of an invisible spacer at the tail of the VStack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -27,7 +29,26 @@ struct ACPMessageList: View {
     /// above the composer instead of behind it.
     private let composerSpacerHeight: CGFloat = 220
     private let tailTolerance: CGFloat = 36
+    /// Step the visible head back when the "Earlier messages…" marker
+    /// crosses this many points from the top edge during scroll.
+    private let headStepScrollThreshold: CGFloat = 200
+    /// Minimum gap between automatic head-back steps so a single scroll
+    /// doesn't decrement multiple times before layout settles.
+    private let headStepDebounceInterval: TimeInterval = 0.3
     private var scrollSpaceName: String { "acp-message-list-\(session.id)" }
+
+    /// Window-sliced, plan-filtered list of rows to render. The slice
+    /// bounds first-paint cost on long transcripts (`visibleHead` is
+    /// reset to `max(0, count - tailWindow)` after hydration); the
+    /// filter drops `.plan` entries because the toolbar pill renders
+    /// the current turn's plan instead of an inline card.
+    private var visibleMessages: [ACPMessage] {
+        let head = min(transcript.visibleHead, transcript.messages.count)
+        return transcript.messages[head...].filter {
+            if case .plan = $0 { return false }
+            return true
+        }
+    }
 
     /// Cheap signature of the entire transcript. SwiftUI re-evaluates when
     /// any cell mutates (e.g. an agent_message_chunk merging into the
@@ -63,21 +84,35 @@ struct ACPMessageList: View {
         return hasher.finalize()
     }
 
-    /// Messages excluding plan entries — the plan now lives in the
-    /// toolbar pill, not in the transcript scroll list.
-    private var displayedMessages: [ACPMessage] {
-        transcript.messages.filter {
-            if case .plan = $0 { return false }
-            return true
-        }
-    }
-
     var body: some View {
         ScrollViewReader { proxy in
             GeometryReader { viewport in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(displayedMessages, id: \.stableId) { message in
+                        if transcript.visibleHead > 0 {
+                            Button {
+                                transcript.stepHeadBack()
+                            } label: {
+                                Text("Earlier messages\u{2026}")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(theme.color("fg-muted"))
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(theme.color("bg-1").opacity(0.6))
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.bottom, 4)
+                            .background(
+                                GeometryReader { headGeom in
+                                    Color.clear.preference(
+                                        key: ACPHeadFramePreferenceKey.self,
+                                        value: headGeom.frame(in: .named(scrollSpaceName))
+                                    )
+                                }
+                            )
+                        }
+                        ForEach(visibleMessages, id: \.stableId) { message in
                             row(for: message)
                         }
                         if transcript.pendingPermission != nil, let policy = policy {
@@ -145,6 +180,26 @@ struct ACPMessageList: View {
                 }
                 .onPreferenceChange(ACPTailFramePreferenceKey.self) { frame in
                     tailFrame = frame
+                }
+                .onPreferenceChange(ACPHeadFramePreferenceKey.self) { frame in
+                    headFrame = frame
+                    // Step back when the head marker enters the threshold
+                    // band at the top of the viewport; debounce so a single
+                    // scroll doesn't decrement multiple times before SwiftUI
+                    // lays out the newly-revealed rows.
+                    // `frame.maxY > 0` ensures the marker is actually
+                    // visible — without it, restoring to the tail of a
+                    // long transcript puts the marker far above the
+                    // viewport (negative minY *and* negative maxY) and the
+                    // initial preference fire would still satisfy
+                    // `minY < threshold`, defeating the window before the
+                    // user scrolled.
+                    guard transcript.visibleHead > 0 else { return }
+                    guard frame.minY < headStepScrollThreshold, frame.maxY > 0 else { return }
+                    let now = Date()
+                    guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
+                    lastHeadStepAt = now
+                    transcript.stepHeadBack()
                 }
                 .onChange(of: scrollSignature) { _, _ in
                     if session.followsTranscriptTail {
@@ -241,6 +296,13 @@ struct ACPMessageList: View {
 private struct ACPTailFramePreferenceKey: PreferenceKey {
     static let defaultValue: CGRect = .zero
 
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
+
+private struct ACPHeadFramePreferenceKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         value = nextValue()
     }

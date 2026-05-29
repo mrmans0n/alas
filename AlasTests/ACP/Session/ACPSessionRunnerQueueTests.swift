@@ -461,7 +461,8 @@ struct ACPSessionRunnerQueueTests {
         let mock2 = ACPMockClient()
         mock2.script(method: "session/prompt") { _ in Data("null".utf8) }
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: FileManager.default.temporaryDirectory.path, store: store)
-        let session2 = mgr.openSession(id: "rt")!
+        let session2 = mgr.placeholderSession(id: "rt")!
+        await mgr.hydrateIfNeeded(id: "rt")
         #expect(session2.queue.count == 2)
         // .sending was normalized to .pending on restore.
         #expect(session2.queue[0].status == .pending)

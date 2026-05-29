@@ -2338,6 +2338,7 @@ final class AppState {
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 store: store,
+                hydratorPath: dbURL.path,
                 onDirtyCheck: { [weak self] path in
                     self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
                 },
@@ -2416,7 +2417,7 @@ final class AppState {
         } else {
             title = "ACP session"
         }
-        _ = mgr.openSession(id: sessionId)
+        _ = mgr.placeholderSession(id: sessionId)
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
     }
