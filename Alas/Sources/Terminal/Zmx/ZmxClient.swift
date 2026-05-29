@@ -124,8 +124,20 @@ final class ZmxClient: Sendable {
 
     /// Environment passed to every zmx invocation. Pins `ZMX_DIR` so the
     /// CLI talks to the same daemon/socket dir Alas-spawned shells will use.
+    ///
+    /// Strips `ZMX_SESSION` and `ZMX_SESSION_PREFIX` for the same reason
+    /// `EnvBuilder` strips them from spawned pane shells: if Alas itself
+    /// was launched from a zmx-attached terminal, those vars leak into
+    /// `ProcessInfo.environment`. With `ZMX_SESSION_PREFIX` left in env,
+    /// `zmx kill <bare-name>`/`zmx ls` resolve to `<prefix><bare-name>`
+    /// while the bare name is what `EnvBuilder` (which strips the prefix
+    /// from the shell env) and `wrap` actually used to create the
+    /// session — so cleanup targets a different name and the real
+    /// session leaks.
     private func zmxEnv() -> [String: String] {
         var inherited = ProcessInfo.processInfo.environment
+        inherited.removeValue(forKey: "ZMX_SESSION")
+        inherited.removeValue(forKey: "ZMX_SESSION_PREFIX")
         if let dir = env.zmxDir { inherited["ZMX_DIR"] = dir.path }
         return inherited
     }
