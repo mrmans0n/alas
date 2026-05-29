@@ -944,6 +944,10 @@ final class AppState {
         terminal.socketReleaseHandler = { [weak self] leafId in
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
+        terminal.onSessionProcessExited = { [weak self] leafId, worktreeId, processAlive in
+            guard !processAlive else { return }
+            self?.closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
+        }
         harness.socketServer.onCLIRequest = { [weak self] request in
             await MainActor.run {
                 guard let self else { return .error("Alas is not available.") }
@@ -1174,6 +1178,35 @@ final class AppState {
             )
         } catch {
             AlasGhostty.logger.error("splitFocusedPane failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Called when Ghostty reports that the shell in `leafId` has exited.
+    /// Locates the owning tab, removes the leaf from the pane tree, and
+    /// either closes the tab (when it was the last leaf) or tears down the
+    /// dead session and lets the sibling collapse take over the freed space.
+    /// Idempotent: if the leaf is no longer in any tab (manual close raced
+    /// ahead), returns without side effects.
+    func closePaneForProcessExit(worktreeId: String, leafId: String) {
+        let owningTabId = tabs.tabs(forWorktree: worktreeId).first { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.root.find(leafId: leafId) != nil
+        }?.id
+        guard let tabId = owningTabId else { return }
+        guard let outcome = tabs.removeLeaf(
+            worktreeId: worktreeId, tabId: tabId, leafId: leafId
+        ) else { return }
+        switch outcome {
+        case .tabRemoved:
+            closeTab(worktreeId: worktreeId, tabId: tabId)
+        case .leafRemoved:
+            terminal.closeSession(
+                id: leafId,
+                worktreeId: worktreeId,
+                projectPath: projectPath(forWorktreeId: worktreeId)
+            )
+            harness.detector.unregister(sessionId: leafId)
+            harness.forgetSession(leafId)
         }
     }
 
