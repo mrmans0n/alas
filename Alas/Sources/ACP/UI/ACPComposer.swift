@@ -130,12 +130,15 @@ struct ACPInputField: NSViewRepresentable {
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
         private var pendingRestyleWork: DispatchWorkItem?
+        private var pendingRestyleGeneration = 0
+        private var pendingRestyleRange: NSRange?
         private static let restyleDebounceInterval: Double = 0.5
 
         func flushPendingRestyleNow() {
             guard let work = pendingRestyleWork else { return }
             pendingRestyleWork = nil
             work.perform()
+            pendingRestyleGeneration += 1
             work.cancel()
         }
 
@@ -201,13 +204,21 @@ struct ACPInputField: NSViewRepresentable {
             else { return }
             guard !restoringDraft else { return }
             pendingSubmitID = nil
+            let draft = Self.draft(from: storage)
+            lastSyncedDraft = draft
+            onDraftChange(draft)
+            pendingRestyleRange = pendingRestyleRange.map { existing in
+                NSUnionRange(existing, ACPMarkdownLiveStyler.editedLineRange(in: storage) ?? existing)
+            } ?? ACPMarkdownLiveStyler.editedLineRange(in: storage)
             pendingRestyleWork?.cancel()
+            pendingRestyleGeneration += 1
+            let generation = pendingRestyleGeneration
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                ACPMarkdownLiveStyler.restyle(storage)
-                let draft = Self.draft(from: storage)
-                self.lastSyncedDraft = draft
-                self.onDraftChange(draft)
+                guard self.pendingRestyleGeneration == generation else { return }
+                ACPMarkdownLiveStyler.restyle(storage, in: self.pendingRestyleRange)
+                self.pendingRestyleRange = nil
+                self.pendingRestyleWork = nil
             }
             pendingRestyleWork = work
             DispatchQueue.main.asyncAfter(
