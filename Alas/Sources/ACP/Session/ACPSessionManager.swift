@@ -505,14 +505,13 @@ extension ACPSessionManager {
                 // without the stream-end branch flipping agentState. Reflect
                 // reality (`.disconnected`, same surface as the runner's
                 // stream-end branch) so `reattach()` actually fires a fresh
-                // attach instead of no-opping on `.ready`. The prompt is
-                // already accepted at this point; fire `onCompleted`
-                // synchronously so the composer can clear its draft instead
-                // of waiting on the full reattach handshake (which can take
-                // seconds).
+                // attach instead of no-opping on `.ready`. Defer `onCompleted`
+                // to the next tick so it runs after the composer's submit
+                // closure returns and registers its pending id (without the
+                // hop the completion fires too early and gets ignored).
                 session.agentState = .disconnected
                 enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
-                onCompleted(true)
+                Task { @MainActor in onCompleted(true) }
                 Task { @MainActor in await reattach(to: sessionId) }
                 return true
             }
@@ -529,12 +528,13 @@ extension ACPSessionManager {
             return true
 
         case .idle, .disconnected, .failed:
-            // Prompt is accepted the moment it lands in the queue; fire
-            // `onCompleted` before awaiting reattach so the composer
-            // clears its draft immediately rather than after the full
-            // attach handshake completes.
+            // Prompt is accepted the moment it lands in the queue. Defer
+            // `onCompleted` to the next tick so it runs after the composer's
+            // submit closure returns and registers its pending id — firing
+            // synchronously here would race the composer's bookkeeping and
+            // get ignored, leaving the persisted draft uncleared.
             enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
-            onCompleted(true)
+            Task { @MainActor in onCompleted(true) }
             Task { @MainActor in await reattach(to: sessionId) }
             return true
         }
