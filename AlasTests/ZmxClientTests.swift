@@ -104,17 +104,17 @@ struct ZmxClientTests {
     }
 
     /// If Alas itself was launched from a zmx-attached terminal,
-    /// `ProcessInfo.environment` carries `ZMX_SESSION_PREFIX` (and/or
-    /// `ZMX_SESSION`). Letting those leak into `zmx kill`/`zmx ls` makes
-    /// the CLI resolve a bare `alas-XYZ` name as `<prefix>alas-XYZ`,
-    /// while the session zmx actually created (via `EnvBuilder` + `wrap`,
-    /// which both strip the prefix) is plain `alas-XYZ` — so cleanup
-    /// targets the wrong name and the real session leaks. Mirror
-    /// `EnvBuilder`'s strip on the CLI-invocation env.
+    /// `ProcessInfo.environment` carries `ZMX_SESSION`. Letting it leak
+    /// into `zmx attach` (which the kill/ls calls don't issue, but the
+    /// daemon's leader client does) trips zmx's switchSesh path. Mirror
+    /// `EnvBuilder`'s strip on the CLI-invocation env so both sides agree.
+    /// `ZMX_SESSION_PREFIX` is intentionally kept — it's a user-configured
+    /// knob that has to flow through identically to both shell-side and
+    /// CLI-side paths for name resolution to stay consistent.
     @Test
-    func killSessionStripsLeakedZmxSessionEnvVars() {
+    func killSessionStripsZmxSessionButKeepsPrefix() {
         setenv("ZMX_SESSION", "alas-leaked-name", 1)
-        setenv("ZMX_SESSION_PREFIX", "alas-leaked-prefix-", 1)
+        setenv("ZMX_SESSION_PREFIX", "team-", 1)
         defer {
             unsetenv("ZMX_SESSION")
             unsetenv("ZMX_SESSION_PREFIX")
@@ -126,7 +126,7 @@ struct ZmxClientTests {
         #expect(recorder.calls.count == 1)
         let call = recorder.calls[0]
         #expect(call.env["ZMX_SESSION"] == nil)
-        #expect(call.env["ZMX_SESSION_PREFIX"] == nil)
+        #expect(call.env["ZMX_SESSION_PREFIX"] == "team-")
         // ZMX_DIR pinning is preserved.
         #expect(call.env["ZMX_DIR"] == "/tmp/alas-zmx-test")
     }

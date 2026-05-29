@@ -89,12 +89,14 @@ struct EnvBuilderTests {
         #expect(env["TERMINFO"] == nil)
     }
 
-    /// zmx injects ZMX_SESSION/ZMX_SESSION_PREFIX into the shells it spawns.
-    /// If Alas inherits that env and forwards it into a freshly-spawned pane,
-    /// any later `zmx attach <other>` from that shell silently hits zmx's
-    /// switchSesh path and re-binds the pane to a different daemon's session,
-    /// leaving one Alas tab piped into another tab's shell. See zmx#151.
-    @Test func stripsZmxSessionVarsFromInheritedParent() {
+    /// zmx injects ZMX_SESSION into the shells it spawns. If Alas inherits
+    /// that env and forwards it into a freshly-spawned pane, any later
+    /// `zmx attach <other>` from that shell silently hits zmx's switchSesh
+    /// path and re-binds the pane to a different daemon's session, leaving
+    /// one Alas tab piped into another tab's shell. See zmx#151.
+    /// `ZMX_SESSION_PREFIX` is left intact so user-configured prefixes flow
+    /// through to both the spawned shell and Alas's own zmx CLI calls.
+    @Test func stripsZmxSessionButKeepsPrefixFromInheritedParent() {
         let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
         let wt = Worktree(id: "w", projectId: "p", name: "m", branch: "m",
                           path: URL(fileURLWithPath: "/wt"),
@@ -106,12 +108,12 @@ struct EnvBuilderTests {
             parent: [
                 "PATH": "/x",
                 "ZMX_SESSION": "alas-foo",
-                "ZMX_SESSION_PREFIX": "alas-",
+                "ZMX_SESSION_PREFIX": "team-",
             ]
         )
         #expect(env["PATH"] == "/x")
         #expect(env["ZMX_SESSION"] == nil)
-        #expect(env["ZMX_SESSION_PREFIX"] == nil)
+        #expect(env["ZMX_SESSION_PREFIX"] == "team-")
     }
 
     @Test func zmxDirIsEmittedWhenProvided() {

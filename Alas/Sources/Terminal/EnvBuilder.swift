@@ -9,8 +9,12 @@ enum EnvBuilder {
         // terminal, or because we're building env for a sibling pane), passing
         // it through means a subsequent `zmx attach <other>` from anywhere in
         // the new shell falls into zmx's switchSesh path and re-attaches the
-        // pane to a different session. See zmx#151.
-        "ZMX_SESSION", "ZMX_SESSION_PREFIX",
+        // pane to a different session. See zmx#151. Note: ZMX_SESSION_PREFIX
+        // is intentionally NOT stripped — it's a user-facing zmx config knob
+        // (prefixes session names for all commands), and as long as both
+        // spawned shells and Alas's own zmx CLI invocations see the same
+        // prefix, name resolution stays consistent.
+        "ZMX_SESSION",
     ]
 
     static func build(
