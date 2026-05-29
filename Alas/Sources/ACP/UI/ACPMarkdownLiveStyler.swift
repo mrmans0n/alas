@@ -28,6 +28,10 @@ enum ACPMarkdownLiveStyler {
     }()
 
     static func restyle(_ storage: NSTextStorage) {
+        restyle(storage, in: nil)
+    }
+
+    static func restyle(_ storage: NSTextStorage, in requestedRange: NSRange?) {
         guard storage.length > 0 else { return }
 
         // Restrict the styling work to the line(s) touched by the latest
@@ -39,14 +43,10 @@ enum ACPMarkdownLiveStyler {
         // the start would miss the freshly-orphaned line below. On a
         // fresh restyle with no edit info, fall back to full storage.
         let target: NSRange
-        let edited = storage.editedRange
-        if edited.location != NSNotFound, edited.location <= storage.length {
-            let nsString = storage.string as NSString
-            let startLoc = min(edited.location, storage.length)
-            let endLoc = min(edited.location + edited.length, storage.length)
-            let startLine = nsString.lineRange(for: NSRange(location: startLoc, length: 0))
-            let endLine = nsString.lineRange(for: NSRange(location: endLoc, length: 0))
-            target = NSUnionRange(startLine, endLine)
+        if let requestedRange {
+            target = lineRangeCovering(requestedRange, in: storage)
+        } else if let edited = editedLineRange(in: storage) {
+            target = edited
         } else {
             target = NSRange(location: 0, length: storage.length)
         }
@@ -81,6 +81,23 @@ enum ACPMarkdownLiveStyler {
             .foregroundColor: NSColor(calibratedRed: 0.78, green: 0.86, blue: 0.92, alpha: 1),
             .backgroundColor: NSColor.white.withAlphaComponent(0.06),
         ])
+    }
+
+    static func editedLineRange(in storage: NSTextStorage) -> NSRange? {
+        let edited = storage.editedRange
+        guard edited.location != NSNotFound, edited.location <= storage.length else {
+            return nil
+        }
+        return lineRangeCovering(edited, in: storage)
+    }
+
+    private static func lineRangeCovering(_ range: NSRange, in storage: NSTextStorage) -> NSRange {
+        let nsString = storage.string as NSString
+        let startLoc = min(range.location, storage.length)
+        let endLoc = min(range.location + range.length, storage.length)
+        let startLine = nsString.lineRange(for: NSRange(location: startLoc, length: 0))
+        let endLine = nsString.lineRange(for: NSRange(location: endLoc, length: 0))
+        return NSUnionRange(startLine, endLine)
     }
 
     private static func apply(regex: NSRegularExpression,

@@ -76,6 +76,10 @@ struct ACPInputField: NSViewRepresentable {
         }
     }
 
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.flushPendingRestyleNow()
+    }
+
     /// When busy, the placeholder advertises whichever action ⏎ will
     /// trigger under the current settings — so a user who inverted the
     /// shortcut (sendOnEnter = false) sees "Steer the agent…" instead of
@@ -125,6 +129,18 @@ struct ACPInputField: NSViewRepresentable {
         private var lastSyncedDraft: ACPComposerDraft
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
+        private var pendingRestyleWork: DispatchWorkItem?
+        private var pendingRestyleGeneration = 0
+        private var pendingRestyleRange: NSRange?
+        private static let restyleDebounceInterval: Double = 0.5
+
+        func flushPendingRestyleNow() {
+            guard let work = pendingRestyleWork else { return }
+            pendingRestyleWork = nil
+            work.perform()
+            pendingRestyleGeneration += 1
+            work.cancel()
+        }
 
         init(
             worktreeRoot: URL,
@@ -186,15 +202,33 @@ struct ACPInputField: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView,
                   let storage = tv.textStorage
             else { return }
-            ACPMarkdownLiveStyler.restyle(storage)
             guard !restoringDraft else { return }
             pendingSubmitID = nil
             let draft = Self.draft(from: storage)
             lastSyncedDraft = draft
             onDraftChange(draft)
+            pendingRestyleRange = pendingRestyleRange.map { existing in
+                NSUnionRange(existing, ACPMarkdownLiveStyler.editedLineRange(in: storage) ?? existing)
+            } ?? ACPMarkdownLiveStyler.editedLineRange(in: storage)
+            pendingRestyleWork?.cancel()
+            pendingRestyleGeneration += 1
+            let generation = pendingRestyleGeneration
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.pendingRestyleGeneration == generation else { return }
+                ACPMarkdownLiveStyler.restyle(storage, in: self.pendingRestyleRange)
+                self.pendingRestyleRange = nil
+                self.pendingRestyleWork = nil
+            }
+            pendingRestyleWork = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + Self.restyleDebounceInterval,
+                execute: work
+            )
         }
 
         func submit(_ textView: NSTextView, intent: ACPSubmitIntent = .auto) {
+            flushPendingRestyleNow()
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }

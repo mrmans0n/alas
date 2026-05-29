@@ -76,6 +76,94 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string.isEmpty)
     }
 
+    @Test("submit flushes pending draft before accepting")
+    func submitFlushesPendingDraftBeforeAccepting() {
+        let draft = ACPComposerDraft(segments: [.text("hello")])
+        let textView = NSTextView()
+        textView.string = "hello"
+        var events: [String] = []
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            sendOnEnter: true,
+            onDraftChange: {
+                #expect($0 == draft)
+                events.append("draft")
+            },
+            onDraftClear: { events.append("clear") },
+            onSubmit: { _, _, _, submittedDraft, _ in
+                #expect(submittedDraft == draft)
+                events.append("submit")
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(events == ["draft"])
+        coordinator.submit(textView)
+
+        #expect(events == ["draft", "submit"])
+    }
+
+    @Test("flushed pending restyle does not publish again after visible draft clears")
+    func flushedPendingRestyleDoesNotPublishAgainAfterVisibleDraftClears() async throws {
+        let draft = ACPComposerDraft(segments: [.text("hello")])
+        let textView = NSTextView()
+        textView.string = "hello"
+        var changedDrafts: [ACPComposerDraft] = []
+        var completion: (@MainActor (Bool) -> Void)?
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            sendOnEnter: true,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: {},
+            onSubmit: { _, _, _, _, onFinished in
+                completion = onFinished
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.flushPendingRestyleNow()
+        coordinator.submit(textView)
+        completion?(true)
+        try await Task.sleep(nanoseconds: 650_000_000)
+
+        #expect(changedDrafts == [draft])
+    }
+
+    @Test("debounced restyle includes every line dirtied during the debounce")
+    func debouncedRestyleIncludesEveryDirtyLine() {
+        let textView = NSTextView()
+        textView.string = "one\ntwo"
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            sendOnEnter: true,
+            onDraftChange: { _ in },
+            onDraftClear: {},
+            onSubmit: { _, _, _, _, _ in true }
+        )
+        coordinator.textView = textView
+
+        textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 3), with: "**one**")
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        textView.textStorage?.replaceCharacters(in: NSRange(location: 8, length: 3), with: "**two**")
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.flushPendingRestyleNow()
+
+        let attributed = textView.attributedString()
+        let firstFont = attributed.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        let secondFont = attributed.attribute(.font, at: 10, effectiveRange: nil) as? NSFont
+        #expect(firstFont?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+        #expect(secondFont?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+    }
+
     @Test("successful completion does not clear newer draft after intervening edit")
     func successfulCompletionDoesNotClearNewerDraftAfterInterveningEdit() {
         let submittedDraft = ACPComposerDraft(segments: [.text("hello")])
@@ -106,6 +194,7 @@ struct ACPComposerDraftBridgeTests {
         coordinator.submit(textView)
         textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.flushPendingRestyleNow()
         completion?(true)
 
         #expect(changedDrafts == [newerDraft])
@@ -143,6 +232,7 @@ struct ACPComposerDraftBridgeTests {
         coordinator.submit(textView)
         textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.flushPendingRestyleNow()
         completion?(false)
 
         #expect(changedDrafts == [newerDraft])
