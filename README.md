@@ -4,6 +4,8 @@
 
 Spin up agents across worktrees, hop between them like browser tabs, and keep the terminal, diff, and files in one place. Native macOS, built on [libghostty](https://github.com/ghostty-org/ghostty).
 
+![Alas — agent session with worktree sidebar and changes panel](art/alas-acp.png)
+
 ## Install
 
 ```bash
@@ -20,9 +22,18 @@ Coding agents are most useful when you can run several of them — one per workt
 
 - **Parallel worktrees, one window.** Every repo lives in the sidebar with all its linked worktrees underneath. Switching is instant; your terminal sessions, tabs, and scroll positions persist per worktree.
 - **Long-lived terminals.** Ghostty under the hood. Sessions survive window changes and worktree switches — no more re-running `claude` or `codex` after every context shift.
+
+  ![Terminal pane with a live agent run and per-worktree changes](art/alas-terminal.png)
+
 - **Git that gets out of the way.** Right-pane changes list with file-level staging, inline diffs, AI-drafted commit messages, and a commit composer that doesn't make you leave your editor.
+
+  ![Inline diff view with file list and per-hunk changes](art/alas-diff.png)
+
 - **Harness-aware.** Detects Claude Code, Codex, and other agent harnesses running in your worktrees and surfaces their state — hook activity, project config, and per-harness watchers.
 - **Tabs for everything.** Terminals, file viewers, diffs, and Markdown — open in tabs, drag to reorder, restore on relaunch.
+
+  ![Markdown source and rendered preview side-by-side](art/alas-markdown.png)
+
 - **Native and signed.** Signed + notarized + stapled. No Gatekeeper popups, no quarantine flags.
 
 ## Develop
