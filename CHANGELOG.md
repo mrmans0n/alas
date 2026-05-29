@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-05-29
+
+### ✨ Features
+
+- Add an ACP plan pill in the toolbar (#347).
+- chat queue + steering (#341).
+
+### 🐛 Fixes
+
+- strip ZMX_SESSION from inherited env to stop cross-pane re-attach (#351).
+
+### 🏗️ Internal
+
+- debounce SQLite composer draft writes (#350).
+- fast-path composer draft extraction when no chips (#349).
+- trim per-keystroke styling work in composer (#348).
+
 ## [0.4.4] - 2026-05-29
 
 ### ✨ Features
