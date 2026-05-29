@@ -13,17 +13,51 @@ enum ACPMarkdownLiveStyler {
     private static let italicUnder = try! NSRegularExpression(pattern: "(?<!_)_([^_\\n]+?)_(?!_)")
     private static let code = try! NSRegularExpression(pattern: "`([^`\\n]+?)`")
 
-    static func restyle(_ storage: NSTextStorage) {
-        let full = NSRange(location: 0, length: storage.length)
-        guard full.length > 0 else { return }
+    // Fonts cached once. Every restyle() call previously asked
+    // NSFontManager.shared for the italic variant — that's a global
+    // lock acquire per keystroke, and the two italic spellings shared
+    // the same lookup. baseFont/boldFont/codeFont were also being
+    // re-allocated per call.
+    private static let baseFont: NSFont = .systemFont(ofSize: 13)
+    private static let boldFont: NSFont = .boldSystemFont(ofSize: 13)
+    private static let codeFont: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
+    private static let italicFont: NSFont = {
+        let family = NSFont.systemFont(ofSize: 13).familyName ?? "System"
+        return NSFontManager.shared.font(withFamily: family, traits: .italicFontMask, weight: 5, size: 13)
+            ?? NSFont.systemFont(ofSize: 13)
+    }()
 
-        let baseFont = NSFont.systemFont(ofSize: 13)
-        let codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    static func restyle(_ storage: NSTextStorage) {
+        guard storage.length > 0 else { return }
+
+        // Restrict the styling work to the line(s) touched by the latest
+        // edit. The regex patterns above never cross a newline, so any
+        // span that could need (re)styling is contained in the lineRange
+        // of the edited range. We need BOTH the line at the start of the
+        // edit and the line at the end — inserting a newline puts the
+        // insertion point at the boundary, and `lineRange(for:)` of just
+        // the start would miss the freshly-orphaned line below. On a
+        // fresh restyle with no edit info, fall back to full storage.
+        let target: NSRange
+        let edited = storage.editedRange
+        if edited.location != NSNotFound, edited.location <= storage.length {
+            let nsString = storage.string as NSString
+            let startLoc = min(edited.location, storage.length)
+            let endLoc = min(edited.location + edited.length, storage.length)
+            let startLine = nsString.lineRange(for: NSRange(location: startLoc, length: 0))
+            let endLine = nsString.lineRange(for: NSRange(location: endLoc, length: 0))
+            target = NSUnionRange(startLine, endLine)
+        } else {
+            target = NSRange(location: 0, length: storage.length)
+        }
+        guard target.length > 0 else { return }
 
         storage.beginEditing()
+        defer { storage.endEditing() }
+
         // Reset to defaults — but preserve our chip attribute so existing
         // mentions don't get bulldozed by every keystroke.
-        storage.enumerateAttribute(.attachmentURI, in: full) { value, range, _ in
+        storage.enumerateAttribute(.attachmentURI, in: target) { value, range, _ in
             if value == nil {
                 storage.setAttributes([
                     .font: baseFont,
@@ -32,47 +66,39 @@ enum ACPMarkdownLiveStyler {
             }
         }
 
-        apply(regex: bold, in: storage, range: full, attrs: [
-            .font: NSFont.boldSystemFont(ofSize: 13),
+        apply(regex: bold, in: storage, range: target, attrs: [
+            .font: boldFont,
             .foregroundColor: NSColor.labelColor,
         ])
-        apply(regex: italicStar, in: storage, range: full, attrs: [
-            .font: NSFontManager.shared.font(withFamily: NSFont.systemFont(ofSize: 13).familyName ?? "System",
-                                             traits: .italicFontMask, weight: 5, size: 13)
-                ?? NSFont.systemFont(ofSize: 13),
+        let italicAttrs: [NSAttributedString.Key: Any] = [
+            .font: italicFont,
             .foregroundColor: NSColor.labelColor,
-        ])
-        apply(regex: italicUnder, in: storage, range: full, attrs: [
-            .font: NSFontManager.shared.font(withFamily: NSFont.systemFont(ofSize: 13).familyName ?? "System",
-                                             traits: .italicFontMask, weight: 5, size: 13)
-                ?? NSFont.systemFont(ofSize: 13),
-            .foregroundColor: NSColor.labelColor,
-        ])
-        apply(regex: code, in: storage, range: full, attrs: [
+        ]
+        apply(regex: italicStar, in: storage, range: target, attrs: italicAttrs)
+        apply(regex: italicUnder, in: storage, range: target, attrs: italicAttrs)
+        apply(regex: code, in: storage, range: target, attrs: [
             .font: codeFont,
             .foregroundColor: NSColor(calibratedRed: 0.78, green: 0.86, blue: 0.92, alpha: 1),
             .backgroundColor: NSColor.white.withAlphaComponent(0.06),
         ])
-
-        storage.endEditing()
     }
 
     private static func apply(regex: NSRegularExpression,
-                               in storage: NSTextStorage,
-                               range: NSRange,
-                               attrs: [NSAttributedString.Key: Any]) {
-        let str = storage.string as NSString
+                              in storage: NSTextStorage,
+                              range: NSRange,
+                              attrs: [NSAttributedString.Key: Any]) {
         regex.enumerateMatches(in: storage.string, range: range) { match, _, _ in
             guard let m = match else { return }
             // Don't double-style chip mentions.
             var skip = false
             storage.enumerateAttribute(.attachmentURI, in: m.range) { v, _, stop in
-                if v != nil { skip = true
-                stop.pointee = true }
+                if v != nil {
+                    skip = true
+                    stop.pointee = true
+                }
             }
             if skip { return }
             storage.addAttributes(attrs, range: m.range)
-            _ = str
         }
     }
 }
