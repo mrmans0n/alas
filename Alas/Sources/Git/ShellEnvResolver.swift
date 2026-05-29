@@ -54,7 +54,7 @@ final class ShellEnvResolver {
         let result = try await Process.run(
             shell,
             args: [
-                "-l", "-i", "-c",
+                "-l", "-c",
                 #"printf '%s' "\#(sentinelStart)"; printenv PATH; printf '%s' "\#(sentinelEnd)""#
             ],
             timeout: 2

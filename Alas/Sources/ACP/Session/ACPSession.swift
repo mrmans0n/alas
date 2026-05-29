@@ -130,19 +130,29 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    func apply(_ update: ACPSessionUpdate) {
+    /// Returns the set of transcript message indices that were appended or
+    /// mutated by this update. Updates that only touch non-message state
+    /// (model lists, mode, etc) return an empty set. The caller uses this
+    /// to persist exactly the rows that changed — necessary because a
+    /// `.plan` or `.toolCallUpdate` can mutate a message anywhere in the
+    /// transcript, not just the trailing row.
+    @discardableResult
+    func apply(_ update: ACPSessionUpdate) -> Set<Int> {
         switch update {
         case .agentMessageChunk(let block):
             let txt = text(of: block)
-            appendStreaming(text: txt, locate: { lastAgent() },
-                            makeNew: { .agent(id: UUID(), StreamingText(txt)) })
+            let i = appendStreaming(text: txt, locate: { lastAgent() },
+                                    makeNew: { .agent(id: UUID(), StreamingText(txt)) })
+            return [i]
         case .userMessageChunk(let block):
             // Agents rarely emit these; treat as informational.
             transcript.messages.append(.systemNotice(id: UUID(), text: text(of: block)))
+            return [transcript.messages.count - 1]
         case .agentThoughtChunk(let block):
             let txt = text(of: block)
-            appendStreaming(text: txt, locate: { lastThought() },
-                            makeNew: { .thought(id: UUID(), StreamingText(txt)) })
+            let i = appendStreaming(text: txt, locate: { lastThought() },
+                                    makeNew: { .thought(id: UUID(), StreamingText(txt)) })
+            return [i]
         case .toolCall(let payload):
             let items = payload.content ?? []
             let full = Self.stripWrappingFence(Self.flatten(items),
@@ -156,8 +166,9 @@ final class ACPSession: ObservableObject, Identifiable {
                 preview: Self.previewLine(full),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: Self.extractTerminalIds(items))))
+            return [transcript.messages.count - 1]
         case .toolCallUpdate(let u):
-            updateToolCall(id: u.toolCallId) { tc in
+            let touched = updateToolCall(id: u.toolCallId) { tc in
                 if let s = u.status { tc.status = s }
                 if let c = u.content {
                     // ACP content updates are full replacement snapshots,
@@ -172,6 +183,7 @@ final class ACPSession: ObservableObject, Identifiable {
                     tc.terminalIds = Self.extractTerminalIds(c)
                 }
             }
+            return touched.map { [$0] } ?? []
         case .plan(let entries):
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
             // Overwrite the existing plan in place only if it belongs to
@@ -183,21 +195,28 @@ final class ACPSession: ObservableObject, Identifiable {
                 .flatMap { $0 > lastUserIdx ? $0 : nil }
             if let i = currentTurnPlanIdx, case .plan(let existingId, _) = transcript.messages[i] {
                 transcript.messages[i] = .plan(id: existingId, items)
+                return [i]
             } else {
                 transcript.messages.append(.plan(id: UUID(), items))
+                return [transcript.messages.count - 1]
             }
         case .availableModelsUpdate(let ms):
             availableModels = ms
+            return []
         case .currentModeUpdate(let modeId):
             currentMode = modeId
+            return []
         case .currentModelUpdate(let modelId):
             currentModel = modelId
+            return []
         case .sessionConfigOptionsUpdate(let opts):
             availableConfigOptions = opts
+            return []
         case .availableCommandsUpdate(let cmds):
             promptSuggestions = cmds
+            return []
         case .unknown:
-            break
+            return []
         }
     }
 
@@ -471,28 +490,32 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         return nil
     }
+    /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
                                 locate: () -> Int?,
-                                makeNew: () -> ACPMessage) {
+                                makeNew: () -> ACPMessage) -> Int {
         if let i = locate() {
             switch transcript.messages[i] {
             case .agent(_, let buf), .thought(_, let buf):
                 buf.append(addition)
                 transcript.streamingTick &+= 1
-                return
+                return i
             default:
                 break
             }
         }
         transcript.messages.append(makeNew())
+        return transcript.messages.count - 1
     }
-    private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) {
+    /// Returns the index of the matching tool call, or nil if no match.
+    private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) -> Int? {
         for i in transcript.messages.indices {
             if case .toolCall(var tc) = transcript.messages[i], tc.toolCallId == id {
                 mutate(&tc)
                 transcript.messages[i] = .toolCall(tc)
-                return
+                return i
             }
         }
+        return nil
     }
 }

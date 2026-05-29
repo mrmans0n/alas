@@ -192,6 +192,64 @@ struct ACPSessionRunnerTests {
         #expect(rows[0].kind == "agent")
     }
 
+    @Test("in-place plan update persists to disk even when plan is not the trailing message")
+    func planUpdatePersistsWhenNotTrailingMessage() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        runner.start()
+
+        // Initial plan: 3 pending. Lands as messages[0].
+        mock.emit(.init(sessionId: "s", update: .plan([
+            .init(content: "a", priority: nil, status: "pending"),
+            .init(content: "b", priority: nil, status: "pending"),
+            .init(content: "c", priority: nil, status: "pending"),
+        ])))
+        // Agent text follows so the plan is no longer the trailing message.
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("working..."))))
+        // Plan status update: first item now completed. apply() overwrites
+        // messages[0] in place — the trailing message stays the agent row.
+        mock.emit(.init(sessionId: "s", update: .plan([
+            .init(content: "a", priority: nil, status: "completed"),
+            .init(content: "b", priority: nil, status: "in_progress"),
+            .init(content: "c", priority: nil, status: "pending"),
+        ])))
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // In-memory plan is correct.
+        if case .plan(_, let items) = session.transcript.messages[0] {
+            #expect(items[0].status == "completed")
+        } else {
+            Issue.record("expected plan at messages[0]")
+        }
+
+        // Persisted plan row must reflect the latest update — otherwise a
+        // hydrated session shows 0/N until the agent re-emits the plan.
+        let rows = try store.loadMessages(sessionId: "s")
+        let planRow = try #require(rows.first(where: { $0.kind == "plan" }))
+        let decoded = try ACPMessageWire.decode(kind: planRow.kind, payload: planRow.payload)
+        guard case .plan(let storedItems) = decoded else {
+            Issue.record("expected plan wire variant")
+            return
+        }
+        #expect(storedItems[0].status == "completed")
+        #expect(storedItems[1].status == "in_progress")
+        #expect(storedItems[2].status == "pending")
+    }
+
     @Test("sending a prompt resumes transcript tail following")
     func sendResumesTranscriptTailFollowing() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

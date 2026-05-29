@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct ProcessResult {
@@ -104,7 +105,7 @@ extension Process {
                     "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                     stderr
                 )
-                process.terminate()
+                terminateProcessWithEscalation(process)
             }
         }
 
@@ -121,7 +122,7 @@ extension Process {
             await exit.wait()
         } onCancel: {
             stdinWriter?.close()
-            if process.isRunning { process.terminate() }
+            terminateProcessWithEscalation(process)
         }
         watchdog.cancel()
         stdinWriter?.close()
@@ -286,14 +287,14 @@ extension Process {
                     "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                     stderr
                 )
-                process.terminate()
+                terminateProcessWithEscalation(process)
             }
         }
 
         await withTaskCancellationHandler {
             await exit.wait()
         } onCancel: {
-            if process.isRunning { process.terminate() }
+            terminateProcessWithEscalation(process)
         }
         watchdog.cancel()
 
@@ -312,6 +313,17 @@ extension Process {
             stdout: outAccum.snapshot(),
             stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? ""
         )
+    }
+}
+
+private func terminateProcessWithEscalation(_ process: Process) {
+    guard process.isRunning else { return }
+    let pid = process.processIdentifier
+    process.terminate()
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+        if process.isRunning {
+            kill(pid, SIGKILL)
+        }
     }
 }
 
