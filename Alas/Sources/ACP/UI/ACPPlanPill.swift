@@ -33,10 +33,19 @@ struct ACPPlanPill: View {
     @State private var popoverOpen = false
 
     var body: some View {
-        if !sidebarVisible, let state = ACPPlanPillState(items: transcript.currentPlan) {
-            pill(state: state)
-        } else {
-            EmptyView()
+        // .onChange lives on the outer Group so it keeps firing even
+        // when the gate below collapses to EmptyView — without that, a
+        // popover open at the moment the sidebar appears would never
+        // be told to close, and would linger next to the sidebar.
+        Group {
+            if !sidebarVisible, let state = ACPPlanPillState(items: transcript.currentPlan) {
+                pill(state: state)
+            } else {
+                EmptyView()
+            }
+        }
+        .onChange(of: sidebarVisible) { _, nowVisible in
+            if nowVisible { popoverOpen = false }
         }
     }
 
@@ -75,12 +84,6 @@ struct ACPPlanPill: View {
                 ACPPlanChecklist(items: items)
                     .frame(width: 320)
             }
-        }
-        // The body gate hides the pill once the sidebar appears, but a
-        // popover attached to a view that leaves the tree is not
-        // guaranteed to auto-dismiss on macOS — explicitly close it.
-        .onChange(of: sidebarVisible) { _, nowVisible in
-            if nowVisible { popoverOpen = false }
         }
     }
 

@@ -4,7 +4,6 @@ import Testing
 
 @Suite("ACPPlanSidebarVisibility")
 struct ACPPlanSidebarVisibilityTests {
-
     @Test("no plan → hidden regardless of width")
     func hiddenWithoutPlan() {
         #expect(ACPPlanSidebarVisibility.next(paneWidth: 2000, hasPlan: false, current: false) == false)
