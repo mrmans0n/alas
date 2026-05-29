@@ -1586,8 +1586,7 @@ final class AppState {
             agentName: agent(id: session.agentId)?.displayName,
             messages: session.transcript.messages
         )
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(markdown, forType: .string)
+        Clipboard.copy(markdown)
     }
 
     /// Save the active ACP session's conversation to a `.md` file via a
