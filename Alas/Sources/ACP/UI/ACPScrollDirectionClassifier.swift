@@ -23,13 +23,16 @@ enum ACPScrollDirectionClassifier {
         newOffsetY: CGFloat,
         viewportHeight: CGFloat,
         contentHeight: CGFloat,
-        isRestoring: Bool
+        isRestoring: Bool,
+        isUserDriven: Bool = false
     ) -> ACPScrollDecision {
-        if isRestoring { return .noChange }
-        guard let prev = previousOffsetY else { return .noChange }
-        if newOffsetY < prev - upwardEpsilon { return .userScrolledUp }
+        if isRestoring {
+            return isUserDriven ? .userScrolledUp : .noChange
+        }
         let distanceFromBottom = max(0, contentHeight - viewportHeight - newOffsetY)
         if distanceFromBottom <= bottomTolerance { return .userAtBottom }
+        guard let prev = previousOffsetY else { return .noChange }
+        if newOffsetY < prev - upwardEpsilon { return .userScrolledUp }
         return .noChange
     }
 }

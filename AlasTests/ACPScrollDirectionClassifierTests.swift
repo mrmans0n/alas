@@ -14,13 +14,61 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .noChange)
     }
 
-    @Test func isRestoringSuppressesAllDecisions() {
+    @Test func isRestoringSuppressesDownwardRestoreDecisions() {
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 500,
+            newOffsetY: 2000,
+            viewportHeight: 600,
+            contentHeight: 5000,
+            isRestoring: true
+        )
+        #expect(decision == .noChange)
+    }
+
+    @Test func isRestoringStillAllowsUpwardInterrupts() {
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 2000,
             newOffsetY: 500,
             viewportHeight: 600,
             contentHeight: 5000,
-            isRestoring: true
+            isRestoring: true,
+            isUserDriven: true
+        )
+        #expect(decision == .userScrolledUp)
+    }
+
+    @Test func isRestoringUserInputPausesEvenWhenOffsetMovesDownward() {
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 4300,
+            newOffsetY: 4400,
+            viewportHeight: 600,
+            contentHeight: 5000,
+            isRestoring: true,
+            isUserDriven: true
+        )
+        #expect(decision == .userScrolledUp)
+    }
+
+    @Test func isRestoringIgnoresProgrammaticUpwardRestores() {
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 2000,
+            newOffsetY: 500,
+            viewportHeight: 600,
+            contentHeight: 5000,
+            isRestoring: true,
+            isUserDriven: false
+        )
+        #expect(decision == .noChange)
+    }
+
+    @Test func isRestoringIgnoresProgrammaticBottomHits() {
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 4300,
+            newOffsetY: 4400,
+            viewportHeight: 600,
+            contentHeight: 5000,
+            isRestoring: true,
+            isUserDriven: false
         )
         #expect(decision == .noChange)
     }
@@ -75,6 +123,18 @@ struct ACPScrollDirectionClassifierTests {
         // contentH - viewportH - newY = 5000 - 600 - 4380 = 20 <= 36
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 4300,
+            newOffsetY: 4380,
+            viewportHeight: 600,
+            contentHeight: 5000,
+            isRestoring: false
+        )
+        #expect(decision == .userAtBottom)
+    }
+
+    @Test func upwardClampWithinBottomToleranceStaysAtBottom() {
+        // Content shrink can clamp the scroll offset upward while still at tail.
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: 4400,
             newOffsetY: 4380,
             viewportHeight: 600,
             contentHeight: 5000,

@@ -164,11 +164,6 @@ struct ACPMessageList: View {
                 .background(
                     ACPScrollEventObserver(
                         onPaused: {
-                            // The classifier short-circuits to .noChange while
-                            // isRestoringTail is true, so this fires only after
-                            // the restore animation settles. A mid-animation
-                            // upward scroll is silently absorbed; the 0.12-0.18s
-                            // window is short enough to accept that.
                             setFollowsTranscriptTail(false)
                         },
                         onAtBottom: {
@@ -241,7 +236,6 @@ struct ACPMessageList: View {
             scroll()
         }
         let releaseRestoring = {
-            setFollowsTranscriptTail(true)
             isRestoringTail = false
         }
         if animated {
@@ -346,7 +340,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(observer)
             }
             observedScrollView = scrollView
-            lastOffsetY = nil
+            lastOffsetY = scrollView.contentView.bounds.origin.y
             scrollView.contentView.postsBoundsChangedNotifications = true
             observer = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
@@ -373,13 +367,24 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
                 newOffsetY: newY,
                 viewportHeight: viewportH,
                 contentHeight: contentH,
-                isRestoring: isRestoring()
+                isRestoring: isRestoring(),
+                isUserDriven: Self.isUserDrivenScrollEvent
             )
             lastOffsetY = newY
             switch decision {
             case .userScrolledUp: onPaused()
             case .userAtBottom: onAtBottom()
             case .noChange: break
+            }
+        }
+
+        private static var isUserDrivenScrollEvent: Bool {
+            guard let event = NSApp.currentEvent else { return false }
+            switch event.type {
+            case .scrollWheel, .leftMouseDragged, .gesture, .magnify, .swipe:
+                return true
+            default:
+                return false
             }
         }
     }
