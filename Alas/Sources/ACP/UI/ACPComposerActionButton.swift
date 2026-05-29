@@ -41,7 +41,7 @@ struct ACPComposerActionButton: View {
             .background(
                 RoundedRectangle(cornerRadius: 7).fill(theme.color("accent"))
             )
-            .overlay(badgeOverlay)
+            .overlay(alignment: .topTrailing) { badgeOverlay }
         }
         .buttonStyle(.plain)
         .help("Send (⏎)")
@@ -87,7 +87,7 @@ struct ACPComposerActionButton: View {
                 .padding(.horizontal, 11)
                 .frame(height: 26)
                 .background(theme.color("bg-3"))
-                .overlay(badgeOverlay)
+                .overlay(alignment: .topTrailing) { badgeOverlay }
             }
             .buttonStyle(.plain)
             .help("Queue (⏎). Hold ⌥ to steer.")
@@ -151,7 +151,6 @@ struct ACPComposerActionButton: View {
                 .background(Capsule().fill(theme.color("warn")))
                 .overlay(Capsule().strokeBorder(theme.color("bg-0"), lineWidth: 1))
                 .offset(x: 6, y: -6)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 .allowsHitTesting(false)
         }
     }
