@@ -16,6 +16,14 @@ final class ACPMarkdownBlockCache {
     private var stablePrefixLength: Int = 0
     private var lastFullText: String = ""
 
+    #if DEBUG
+    /// Approximate UTF-8 byte size of the retained text + a small per-stable-block
+    /// constant covering the parsed AST overhead. Used by `MemoryDiagnostics`.
+    var byteEstimate: UInt64 {
+        UInt64(lastFullText.utf8.count) + UInt64(stableBlocks.count) * 128
+    }
+    #endif
+
     func update(with full: String) {
         // Detect non-extending updates and reset.
         if !full.hasPrefix(lastFullText) {

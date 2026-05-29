@@ -312,5 +312,13 @@ struct AlasApp: App {
             }
             .keyboardShortcut(state.shortcut(for: .resetFontSize))
         }
+        #if DEBUG
+        CommandMenu("Debug") {
+            Button("Memory Report…") {
+                openMemoryReport(state: state)
+            }
+            .keyboardShortcut("M", modifiers: [.command, .shift, .control])
+        }
+        #endif
     }
 }

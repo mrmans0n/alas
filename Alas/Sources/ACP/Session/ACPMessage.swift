@@ -60,6 +60,27 @@ enum ACPMessage: Equatable {
         /// content the agent emitted.
         var terminalIds: [String]
 
+        /// Set when `content` has been truncated to save memory. The full
+        /// content is still in SQLite (`ACPSessionStore.loadMessages`) and
+        /// can be refetched on demand for an expanded card.
+        var isContentTruncated: Bool = false
+
+        /// How many characters of `content` we keep in memory for an
+        /// off-window completed tool call. Tuned to fit the collapsed-card
+        /// teaser + a small head of context — the rest is paged in if the
+        /// user expands.
+        static let truncatedTailBytes: Int = 4096
+
+        /// Replace `content` with its first `truncatedTailBytes` characters
+        /// and mark the message as truncated. No-op if already truncated.
+        mutating func truncateForOffWindow() {
+            guard !isContentTruncated else { return }
+            if content.count > Self.truncatedTailBytes {
+                content = String(content.prefix(Self.truncatedTailBytes))
+            }
+            isContentTruncated = true
+        }
+
         init(toolCallId: String, title: String, kind: String? = nil,
              status: String, content: String = "", preview: String? = nil,
              locations: [String] = [], terminalIds: [String] = [])
@@ -103,6 +124,30 @@ enum ACPMessage: Equatable {
             try c.encodeIfPresent(preview, forKey: .preview)
             try c.encode(locations, forKey: .locations)
             try c.encode(terminalIds, forKey: .terminalIds)
+        }
+
+        // Manual Equatable/Hashable: `isContentTruncated` is an in-memory-only
+        // flag that flips when off-window content is truncated. Two tool calls
+        // representing the same logical row must remain equal across that
+        // boundary, so we exclude the flag from both conformances.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.toolCallId == rhs.toolCallId
+                && lhs.title == rhs.title
+                && lhs.kind == rhs.kind
+                && lhs.status == rhs.status
+                && lhs.content == rhs.content
+                && lhs.preview == rhs.preview
+                && lhs.locations == rhs.locations
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(toolCallId)
+            hasher.combine(title)
+            hasher.combine(kind)
+            hasher.combine(status)
+            hasher.combine(content)
+            hasher.combine(preview)
+            hasher.combine(locations)
         }
     }
 

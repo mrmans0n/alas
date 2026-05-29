@@ -16,6 +16,11 @@ final class ACPSessionManager: ObservableObject {
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
+    #if DEBUG
+    /// Number of attached runners. Public-but-namespaced read accessor for
+    /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
+    var runnerCountForDiagnostics: Int { runners.count }
+    #endif
     /// Per-session debounced write tasks for `composer_drafts`. The
     /// in-memory `session.composerDraft` updates on every keystroke;
     /// the SQLite write only fires after a brief idle (or a forced
@@ -25,6 +30,12 @@ final class ACPSessionManager: ObservableObject {
     private static let draftDebounceNanos: UInt64 = 300_000_000
     private let hydrator: ACPSessionHydrator?
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
+
+    /// Per-session UI refcount. When this drops to zero AND the session is
+    /// not `attached`, the cached `ACPSession` is evicted from `sessions`.
+    /// Re-opening through `placeholderSession` + `hydrateIfNeeded` recreates
+    /// it cleanly from SQLite.
+    private var sessionRefCounts: [ACPSession.ID: Int] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
          hydratorPath: String? = nil,
@@ -191,14 +202,61 @@ final class ACPSessionManager: ObservableObject {
         // session reference — otherwise a tab-switch-while-typing
         // window can lose the last ~300ms of input.
         flushPendingDraftWrite(for: id)
+        sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
+        sessionRefCounts.removeValue(forKey: id)
     }
 
     func deleteSession(id: ACPSession.ID) {
         cancelPendingDraftWrite(for: id)
+        sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
+        sessionRefCounts.removeValue(forKey: id)
         try? store.deleteSession(id: id)
         refreshRecent()
+    }
+
+    /// Increment the UI refcount for `id`. No-op if the session isn't
+    /// currently cached (e.g. typo'd id, or already evicted by a prior
+    /// release). Callers must pair every retain with exactly one release.
+    func retainSession(id: ACPSession.ID) {
+        guard sessions[id] != nil else { return }
+        sessionRefCounts[id, default: 0] += 1
+    }
+
+    /// Decrement the UI refcount for `id`. When it reaches zero AND the
+    /// session is not `attached`, the cached `ACPSession` is evicted
+    /// (markdown caches torn down). Releases beyond the retain count are
+    /// silently ignored so a missed retain (e.g. id-typo) can't underflow.
+    func releaseSession(id: ACPSession.ID) {
+        guard let current = sessionRefCounts[id], current > 0 else { return }
+        let next = current - 1
+        if next == 0 {
+            sessionRefCounts.removeValue(forKey: id)
+            evictIfIdle(id: id)
+        } else {
+            sessionRefCounts[id] = next
+        }
+    }
+
+    /// Drops the cached `ACPSession` when its refcount is zero AND no live
+    /// runner is attached. Sessions whose agent process is spawning or ready
+    /// stay resident so in-flight streaming still has somewhere to land.
+    private func evictIfIdle(id: ACPSession.ID) {
+        guard let session = sessions[id] else { return }
+        switch session.agentState {
+        case .spawning, .ready: return
+        case .idle, .disconnected, .failed: break
+        }
+        guard (sessionRefCounts[id] ?? 0) == 0 else { return }
+        // Flush the debounced composer-draft write SYNCHRONOUSLY before
+        // dropping the in-memory session. Otherwise a typing burst that
+        // ends within the 300ms debounce window loses its tail when the
+        // session is evicted — the timer task fires on a nil `sessions[id]`
+        // and silently returns.
+        flushPendingDraftWrite(for: id)
+        session.transcript.resetMarkdownCaches()
+        sessions[id] = nil
     }
 
     func setArchived(id: ACPSession.ID, archived: Bool) {
@@ -331,6 +389,21 @@ final class ACPSessionManager: ObservableObject {
 
     func refreshRecent() {
         recent = (try? store.recentSessions()) ?? []
+    }
+
+    /// Loads the full persisted `content` for a tool call. Used by the
+    /// tool-call card when expanding a message whose in-memory content
+    /// was truncated to save memory. Returns nil if the row is gone or
+    /// the payload can't be decoded.
+    func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) -> String? {
+        guard let stored = try? store.loadMessages(sessionId: sessionId) else { return nil }
+        for row in stored where row.kind == "tool_call" {
+            if let tc = try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: row.payload),
+               tc.toolCallId == toolCallId {
+                return tc.content
+            }
+        }
+        return nil
     }
 }
 
@@ -578,6 +651,12 @@ extension ACPSessionManager {
             runner.stop()
             await runner.connection.shutdown()
         }
+        // SwiftUI's `.onDisappear` retain release for a closing tab can
+        // arrive BEFORE this async detach starts, so the release runs while
+        // agentState is still `.ready` and short-circuits eviction. Re-check
+        // now that state is `.idle` so a closed-while-attached session
+        // doesn't keep its transcript + caches resident indefinitely.
+        evictIfIdle(id: sessionId)
     }
 
     private static func mergeEnv(extra: [String: String]) -> [String: String] {

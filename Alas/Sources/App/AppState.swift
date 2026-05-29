@@ -2337,6 +2337,15 @@ final class AppState {
     @ObservationIgnored
     private lazy var acpHarnessBridge = ACPHarnessBridge(harness: harness)
 
+    #if DEBUG
+    @ObservationIgnored
+    lazy var memoryDiagnostics: MemoryDiagnostics = {
+        let d = MemoryDiagnostics()
+        d.startTicker(interval: 30)
+        return d
+    }()
+    #endif
+
     /// Returns `true` when the editor has a live, dirty (unsaved) buffer for
     /// the given absolute path within the given worktree.
     func editorHasDirtyBuffer(for absolutePath: String, worktreeId: String) -> Bool {
@@ -2382,6 +2391,9 @@ final class AppState {
             )
             acpManagers[worktree.id] = mgr
             acpHarnessBridge.attach(manager: mgr)
+            #if DEBUG
+            memoryDiagnostics.attach(manager: mgr)
+            #endif
             return mgr
         } catch {
             return nil
@@ -2401,6 +2413,9 @@ final class AppState {
         // manager down — otherwise the last ~300ms of typing in any
         // composer for this worktree never reaches SQLite.
         manager.flushPendingDraftWrites()
+        #if DEBUG
+        memoryDiagnostics.detach(worktreeId: worktreeId)
+        #endif
         acpHarnessBridge.detach(worktreeId: worktreeId)
         let sessionIds = Array(manager.runners.keys)
         // Synchronously cancel the runner's async loops so they stop

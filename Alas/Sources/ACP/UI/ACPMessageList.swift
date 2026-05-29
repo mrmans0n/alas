@@ -14,6 +14,11 @@ struct ACPMessageList: View {
     let onQueueRetry: (UUID) -> Void
     let onQueueReorder: (Int, Int) -> Void
     let onQueueClearAll: () -> Void
+    /// Resolves the full persisted content of a tool call by id when an
+    /// expanded card's in-memory content was truncated. Wired by the host
+    /// to `ACPSessionManager.reloadFullToolCallContent`. Returns nil when
+    /// the row is gone or the payload is undecodable.
+    let onLoadFullToolCallContent: (String) -> String?
     @Environment(\.theme) private var theme
     @State private var viewportHeight: CGFloat = 0
     @State private var tailFrame: CGRect = .zero
@@ -285,7 +290,11 @@ struct ACPMessageList: View {
         case .thought(_, let buf):
             ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
-            ACPToolCallCard(toolCall: tc)
+            ACPToolCallCard(
+                toolCall: tc,
+                loadFullContent: tc.isContentTruncated
+                    ? { [tcid = tc.toolCallId] in onLoadFullToolCallContent(tcid) }
+                    : nil)
                 .environment(\.acpTerminalHost, session.terminalHost)
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: { onOpenDiff(edit.path) })
