@@ -106,6 +106,7 @@ struct ACPComposerDraftBridgeTests {
         coordinator.submit(textView)
         textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.flushPendingRestyleNow()
         completion?(true)
 
         #expect(changedDrafts == [newerDraft])
@@ -143,6 +144,7 @@ struct ACPComposerDraftBridgeTests {
         coordinator.submit(textView)
         textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.flushPendingRestyleNow()
         completion?(false)
 
         #expect(changedDrafts == [newerDraft])
