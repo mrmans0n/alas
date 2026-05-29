@@ -190,4 +190,48 @@ struct ACPSessionManagerSubmitTests {
             Issue.record("reattach from .idle did not invoke attach(): setupState=\(session.setupState)")
         }
     }
+
+    @Test("submit with state/registry desync (.ready but no runner) self-heals")
+    func submitReadyButNoRunnerSelfHeals() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-submit-desync-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        // Use an agentId with no launch spec so the reattach-triggered
+        // attach lands on .failed via the spec-missing branch.
+        let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        // Pre-set the desync state directly. runners[session.id] is already
+        // nil for a freshly created session — that's the desync we're
+        // testing: state says .ready, registry says no runner.
+        session.agentState = .ready
+
+        let accepted = mgr.submit(
+            sessionId: session.id,
+            text: "wake up",
+            attachments: [],
+            intent: .auto
+        ) { _ in }
+
+        #expect(accepted == true)
+        #expect(session.queue.count == 1)
+        // Fix invariant: state must transition off .ready synchronously so
+        // reattach actually fires instead of no-opping.
+        #expect(session.agentState != .ready)
+
+        // Poll for the post-reattach state (spec-missing branch → .failed
+        // observable via setupState == .needsSetup, matching the .idle test
+        // above).
+        for _ in 0..<50 {
+            if mgr.runners[session.id] != nil { break }
+            if case .needsSetup = session.setupState { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        if case .needsSetup = session.setupState {
+            // success — desync was recovered: reattach drove attach() far
+            // enough to evaluate spec.
+        } else {
+            Issue.record("reattach from desync did not invoke attach(): setupState=\(session.setupState), agentState=\(session.agentState)")
+        }
+    }
 }

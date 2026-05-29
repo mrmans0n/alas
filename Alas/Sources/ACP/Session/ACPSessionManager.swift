@@ -501,12 +501,16 @@ extension ACPSessionManager {
         switch session.agentState {
         case .ready:
             guard let runner = runners[sessionId] else {
-                // State and registry disagree — treat as not-ready so the
-                // prompt isn't dropped. Enqueue and kick recovery. The
-                // prompt is already accepted at this point; fire
-                // `onCompleted` synchronously so the composer can clear
-                // its draft instead of waiting on the full reattach
-                // handshake (which can take seconds).
+                // State and registry disagree — somehow we lost the runner
+                // without the stream-end branch flipping agentState. Reflect
+                // reality (`.disconnected`, same surface as the runner's
+                // stream-end branch) so `reattach()` actually fires a fresh
+                // attach instead of no-opping on `.ready`. The prompt is
+                // already accepted at this point; fire `onCompleted`
+                // synchronously so the composer can clear its draft instead
+                // of waiting on the full reattach handshake (which can take
+                // seconds).
+                session.agentState = .disconnected
                 enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
                 onCompleted(true)
                 Task { @MainActor in await reattach(to: sessionId) }
