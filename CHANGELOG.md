@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-05-29
+
+### ✨ Features
+
+- Add the ACP terminal channel with live tail rendering (#352).
+- Render inline diffs in ACP file edit cards (#356).
+- Auto-close terminal panes when their shell exits (#357).
+- Nudge users when installed ACP adapters have updates (#359).
+- Add an inline ACP plan sidebar on wide panes (#360).
+- Add ACP agent recovery via an AgentState state machine (#361).
+- Generate and rename ACP session titles (#363).
+- Show ACP task progress chips in tabs (#364).
+
+### 🐛 Fixes
+
+- Stop keeping sent ACP chat messages as drafts (#353).
+- Align Working tree and Staged header heights with Commits (#355).
+- Hide the queued bubble while the head prompt is sending (#358).
+- Avoid autoscrolling ACP transcripts after the user scrolls up (#366).
+
+### 🏗️ Internal
+
+- Move ACP session hydration off the main thread and window transcript rendering (#354).
+- Add debug memory accounting and cap retained ACP transcript surfaces (#362).
+- Debounce ACP composer markdown restyling and draft extraction while typing (#365).
+
 ## [0.4.5] - 2026-05-29
 
 ### ✨ Features
