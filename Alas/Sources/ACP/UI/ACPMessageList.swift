@@ -54,9 +54,8 @@ struct ACPMessageList: View {
             case .fileEdit(_, let e):
                 hasher.combine(e.added)
                 hasher.combine(e.removed)
-            case .plan(_, let items):
-                hasher.combine(items.count)
-                for it in items { hasher.combine(it.status) }
+            case .plan:
+                break
             case .user(_, let t, _):
                 hasher.combine(t.count)
             }
@@ -64,12 +63,21 @@ struct ACPMessageList: View {
         return hasher.finalize()
     }
 
+    /// Messages excluding plan entries — the plan now lives in the
+    /// toolbar pill, not in the transcript scroll list.
+    private var displayedMessages: [ACPMessage] {
+        transcript.messages.filter {
+            if case .plan = $0 { return false }
+            return true
+        }
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             GeometryReader { viewport in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(transcript.messages, id: \.stableId) { message in
+                        ForEach(displayedMessages, id: \.stableId) { message in
                             row(for: message)
                         }
                         if transcript.pendingPermission != nil, let policy = policy {
@@ -222,8 +230,8 @@ struct ACPMessageList: View {
             ACPToolCallCard(toolCall: tc)
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: { onOpenDiff(edit.path) })
-        case .plan(_, let items):
-            ACPPlanCard(items: items)
+        case .plan:
+            EmptyView()
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }

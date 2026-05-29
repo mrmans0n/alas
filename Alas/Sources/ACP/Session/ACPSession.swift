@@ -117,10 +117,15 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         case .plan(let entries):
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
-            if let i = transcript.messages.lastIndex(where: { if case .plan = $0 { return true } else { return false } }) {
-                if case .plan(let existingId, _) = transcript.messages[i] {
-                    transcript.messages[i] = .plan(id: existingId, items)
-                }
+            // Overwrite the existing plan in place only if it belongs to
+            // the current turn (i.e. sits after the latest user prompt).
+            // Otherwise append a fresh plan so the previous turn's plan
+            // stays at its original position and the new one is current.
+            let lastUserIdx = transcript.messages.lastIndex { if case .user = $0 { return true } else { return false } } ?? -1
+            let currentTurnPlanIdx = transcript.messages.lastIndex { if case .plan = $0 { return true } else { return false } }
+                .flatMap { $0 > lastUserIdx ? $0 : nil }
+            if let i = currentTurnPlanIdx, case .plan(let existingId, _) = transcript.messages[i] {
+                transcript.messages[i] = .plan(id: existingId, items)
             } else {
                 transcript.messages.append(.plan(id: UUID(), items))
             }
