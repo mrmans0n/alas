@@ -20,8 +20,6 @@ struct ACPMessageList: View {
     /// the row is gone or the payload is undecodable.
     let onLoadFullToolCallContent: (String) -> String?
     @Environment(\.theme) private var theme
-    @State private var viewportHeight: CGFloat = 0
-    @State private var tailFrame: CGRect = .zero
     @State private var isRestoringTail = false
     @State private var userInterruptedTailRestore = false
     @State private var headFrame: CGRect = .zero
@@ -33,7 +31,6 @@ struct ACPMessageList: View {
     /// bottom we guarantee the streaming caret / last message sits
     /// above the composer instead of behind it.
     private let composerSpacerHeight: CGFloat = 220
-    private let tailTolerance: CGFloat = 36
     /// Step the visible head back when the "Earlier messages…" marker
     /// crosses this many points from the top edge during scroll.
     private let headStepScrollThreshold: CGFloat = 200
@@ -158,14 +155,6 @@ struct ACPMessageList: View {
                         Color.clear
                             .frame(height: composerSpacerHeight)
                             .id("__composer_spacer__")
-                            .background(
-                                GeometryReader { tail in
-                                    Color.clear.preference(
-                                        key: ACPTailFramePreferenceKey.self,
-                                        value: tail.frame(in: .named(scrollSpaceName))
-                                    )
-                                }
-                            )
                     }
                     .frame(maxWidth: 720, alignment: .leading)
                     .padding(.horizontal, 28)
@@ -174,20 +163,24 @@ struct ACPMessageList: View {
                 }
                 .coordinateSpace(name: scrollSpaceName)
                 .background(
-                    ACPScrollEventObserver { userDriven in
-                        updateTailFollowingFromCurrentFrame(userDriven: userDriven)
-                    }
+                    ACPScrollEventObserver(
+                        onPaused: {
+                            if isRestoringTail {
+                                userInterruptedTailRestore = true
+                            }
+                            setFollowsTranscriptTail(false)
+                        },
+                        onAtBottom: {
+                            setFollowsTranscriptTail(true)
+                        },
+                        isRestoring: { isRestoringTail }
+                    )
                 )
                 .onAppear {
-                    viewportHeight = viewport.size.height
                     restoreTailIfNeeded(proxy: proxy, animated: false)
                 }
-                .onChange(of: viewport.size.height) { _, height in
-                    viewportHeight = height
+                .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
-                }
-                .onPreferenceChange(ACPTailFramePreferenceKey.self) { frame in
-                    tailFrame = frame
                 }
                 .onPreferenceChange(ACPHeadFramePreferenceKey.self) { frame in
                     headFrame = frame
@@ -264,17 +257,6 @@ struct ACPMessageList: View {
         }
     }
 
-    private func updateTailFollowingFromCurrentFrame(userDriven: Bool) {
-        guard viewportHeight > 0 else { return }
-        if isRestoringTail {
-            guard userDriven else { return }
-            userInterruptedTailRestore = true
-            setFollowsTranscriptTail(false)
-            return
-        }
-        setFollowsTranscriptTail(tailFrame.maxY <= viewportHeight + tailTolerance)
-    }
-
     private func setFollowsTranscriptTail(_ follows: Bool) {
         guard session.followsTranscriptTail != follows else { return }
         session.followsTranscriptTail = follows
@@ -306,14 +288,6 @@ struct ACPMessageList: View {
     }
 }
 
-private struct ACPTailFramePreferenceKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
-    }
-}
-
 private struct ACPHeadFramePreferenceKey: PreferenceKey {
     static let defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
@@ -322,10 +296,12 @@ private struct ACPHeadFramePreferenceKey: PreferenceKey {
 }
 
 private struct ACPScrollEventObserver: NSViewRepresentable {
-    let onScroll: (Bool) -> Void
+    let onPaused: () -> Void
+    let onAtBottom: () -> Void
+    let isRestoring: () -> Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onScroll: onScroll)
+        Coordinator(onPaused: onPaused, onAtBottom: onAtBottom, isRestoring: isRestoring)
     }
 
     func makeNSView(context: Context) -> ResolverView {
@@ -337,18 +313,27 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: ResolverView, context: Context) {
-        context.coordinator.onScroll = onScroll
+        context.coordinator.onPaused = onPaused
+        context.coordinator.onAtBottom = onAtBottom
+        context.coordinator.isRestoring = isRestoring
         nsView.resolve()
     }
 
     @MainActor
     final class Coordinator {
-        var onScroll: (Bool) -> Void
+        var onPaused: () -> Void
+        var onAtBottom: () -> Void
+        var isRestoring: () -> Bool
         private weak var observedScrollView: NSScrollView?
         private var observer: NSObjectProtocol?
+        private var lastOffsetY: CGFloat?
 
-        init(onScroll: @escaping (Bool) -> Void) {
-            self.onScroll = onScroll
+        init(onPaused: @escaping () -> Void,
+             onAtBottom: @escaping () -> Void,
+             isRestoring: @escaping () -> Bool) {
+            self.onPaused = onPaused
+            self.onAtBottom = onAtBottom
+            self.isRestoring = isRestoring
         }
 
         deinit {
@@ -363,26 +348,40 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(observer)
             }
             observedScrollView = scrollView
+            lastOffsetY = nil
             scrollView.contentView.postsBoundsChangedNotifications = true
             observer = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: scrollView.contentView,
                 queue: .main
-            ) { [weak self] _ in
-                let userDriven = Self.isUserDrivenScrollEvent
-                Task { @MainActor in
-                    self?.onScroll(userDriven)
+            ) { [weak self, weak scrollView] _ in
+                // queue: .main delivers on the main thread; assume MainActor
+                // isolation rather than hopping through a Task so the decision
+                // lands before the next streaming chunk fires scrollToTail.
+                MainActor.assumeIsolated {
+                    guard let self, let scrollView else { return }
+                    self.handleBoundsChange(scrollView)
                 }
             }
         }
 
-        private static var isUserDrivenScrollEvent: Bool {
-            guard let event = NSApp.currentEvent else { return false }
-            switch event.type {
-            case .scrollWheel, .leftMouseDragged, .gesture, .magnify, .swipe:
-                return true
-            default:
-                return false
+        private func handleBoundsChange(_ scrollView: NSScrollView) {
+            let cv = scrollView.contentView
+            let newY = cv.bounds.origin.y
+            let viewportH = cv.bounds.height
+            let contentH = scrollView.documentView?.bounds.height ?? 0
+            let decision = ACPScrollDirectionClassifier.decide(
+                previousOffsetY: lastOffsetY,
+                newOffsetY: newY,
+                viewportHeight: viewportH,
+                contentHeight: contentH,
+                isRestoring: isRestoring()
+            )
+            lastOffsetY = newY
+            switch decision {
+            case .userScrolledUp: onPaused()
+            case .userAtBottom: onAtBottom()
+            case .noChange: break
             }
         }
     }
