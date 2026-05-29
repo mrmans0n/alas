@@ -141,4 +141,96 @@ struct ACPSessionTests {
             #expect(tc.content == "--- a.swift\n-let x = 1\n+let x = 2")
         } else { Issue.record("expected toolCall message") }
     }
+
+    @Test("terminal content records terminalIds and drops placeholder from content")
+    func toolCallUpdateTerminal() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-3", title: "run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-3", status: "in_progress",
+            content: [.terminal(terminalId: "term-42")],
+            rawOutput: nil)))
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds == ["term-42"])
+            #expect(tc.content == "")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("initial toolCall with terminal content records terminalIds")
+    func toolCallInitialTerminal() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-4", title: "run", kind: "execute", status: "in_progress",
+            content: [.terminal(terminalId: "term-99")],
+            locations: nil, rawInput: nil, rawOutput: nil)))
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds == ["term-99"])
+            #expect(tc.content == "")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate clears stale terminalIds when content has no terminals")
+    func toolCallUpdateClearsTerminalIds() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-clear", title: "run", kind: "execute", status: "in_progress",
+            content: [.terminal(terminalId: "term-x")],
+            locations: nil, rawInput: nil, rawOutput: nil)))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds == ["term-x"])
+        } else { Issue.record("expected toolCall message") }
+        // Final replacement update carries text only — terminalIds must clear.
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-clear", status: "completed",
+            content: [.content(.text("final output"))],
+            rawOutput: nil)))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds.isEmpty)
+            #expect(tc.content == "final output")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("completed toolCall strips wrapping markdown fences")
+    func toolCallStripsBothFences() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-5", title: "read", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-5", status: "completed",
+            content: [.content(.text("```swift\nlet x = 1\nlet y = 2\n```"))],
+            rawOutput: nil)))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "let x = 1\nlet y = 2")
+            #expect(tc.preview == "let x = 1")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("in-progress toolCall strips opening fence but keeps trailing line")
+    func toolCallKeepsTrailingMidStream() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-6", title: "read", kind: "read", status: "in_progress",
+            content: [.content(.text("```\npartial output"))],
+            locations: nil, rawInput: nil, rawOutput: nil)))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "partial output")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCall without wrapping fences is left untouched")
+    func toolCallNoFencePassthrough() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-7", title: "read", kind: "read", status: "completed",
+            content: [.content(.text("hello\n```\ninner\n```\nworld"))],
+            locations: nil, rawInput: nil, rawOutput: nil)))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "hello\n```\ninner\n```\nworld")
+        } else { Issue.record("expected toolCall message") }
+    }
 }

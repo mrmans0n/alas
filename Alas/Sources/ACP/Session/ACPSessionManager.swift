@@ -404,6 +404,7 @@ extension ACPSessionManager {
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
                                           worktreePath: worktreePath,
+                                          agentEnv: Self.mergeEnv(extra: spec.extraEnv),
                                           onDirtyCheck: onDirtyCheck,
                                           onLiveBufferRead: onLiveBufferRead)
             runner.start()

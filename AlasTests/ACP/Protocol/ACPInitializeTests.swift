@@ -13,6 +13,7 @@ struct ACPInitializeTests {
         #expect(env.params?.protocolVersion == 1)
         #expect(env.params?.clientCapabilities.fs.readTextFile == true)
         #expect(env.params?.clientCapabilities.fs.writeTextFile == true)
+        #expect(env.params?.clientCapabilities.terminal == true)
     }
 
     @Test("decodes an initialize response")

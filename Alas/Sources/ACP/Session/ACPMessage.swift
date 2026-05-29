@@ -54,10 +54,16 @@ enum ACPMessage: Equatable {
         /// scan the full content during rendering.
         var preview: String?
         var locations: [String]
+        /// Terminal IDs referenced by this call's structured content, in
+        /// declaration order. The expanded card renders one
+        /// `ACPTerminalTailView` per id, in addition to whatever text
+        /// content the agent emitted.
+        var terminalIds: [String]
 
         init(toolCallId: String, title: String, kind: String? = nil,
              status: String, content: String = "", preview: String? = nil,
-             locations: [String] = []) {
+             locations: [String] = [], terminalIds: [String] = [])
+        {
             self.toolCallId = toolCallId
             self.title = title
             self.kind = kind
@@ -65,6 +71,7 @@ enum ACPMessage: Equatable {
             self.content = content
             self.preview = preview
             self.locations = locations
+            self.terminalIds = terminalIds
         }
 
         // Backwards-compatible decoder: older messages persisted only a
@@ -72,7 +79,7 @@ enum ACPMessage: Equatable {
         // session history doesn't go blank after upgrade.
         enum CodingKeys: String, CodingKey {
             case toolCallId, title, kind, status, content, preview,
-                 contentSummary, locations
+                 contentSummary, locations, terminalIds
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -84,6 +91,7 @@ enum ACPMessage: Equatable {
             preview = (try? c.decode(String.self, forKey: .preview))
                 ?? (try? c.decode(String.self, forKey: .contentSummary))
             locations = (try? c.decode([String].self, forKey: .locations)) ?? []
+            terminalIds = (try? c.decode([String].self, forKey: .terminalIds)) ?? []
         }
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -94,6 +102,7 @@ enum ACPMessage: Equatable {
             try c.encode(content, forKey: .content)
             try c.encodeIfPresent(preview, forKey: .preview)
             try c.encode(locations, forKey: .locations)
+            try c.encode(terminalIds, forKey: .terminalIds)
         }
     }
 
