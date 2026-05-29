@@ -664,7 +664,7 @@ final class MarkdownRenderer {
     }
 
     private func monospaceFont(size: CGFloat) -> NSFont {
-        NSFont(name: monoFamily, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        CenterTypography.resolveCodeFont(family: monoFamily, size: size)
     }
 
     // MARK: - Append helpers
