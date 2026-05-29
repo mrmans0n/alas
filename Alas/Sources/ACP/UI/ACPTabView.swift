@@ -16,6 +16,13 @@ struct ACPTabView: View {
                 session: session,
                 transcript: session.transcript
             )
+            // Refcount this tab's hold on the cached `ACPSession`. When the
+            // tab is dismissed (worktree switch, tab close, window close)
+            // and no other UI surface still retains the same id, the manager
+            // evicts it from `sessions` so its transcript + markdown caches
+            // can be reclaimed. Reopening rehydrates from SQLite.
+            .onAppear { manager.retainSession(id: sessionId) }
+            .onDisappear { manager.releaseSession(id: sessionId) }
         } else {
             VStack {
                 Spacer()
@@ -179,6 +186,10 @@ private struct ACPSessionView: View {
                                 // user re-enqueues, the next idle drain still
                                 // needs to fire from this path.
                                 manager.runners[sessionId]?.flushQueueIfIdle()
+                            },
+                            onLoadFullToolCallContent: { toolCallId in
+                                manager.reloadFullToolCallContent(
+                                    sessionId: sessionId, toolCallId: toolCallId)
                             }
                         )
                     }

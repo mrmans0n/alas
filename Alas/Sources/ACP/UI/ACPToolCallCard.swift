@@ -6,13 +6,29 @@ import SwiftUI
 /// renders an animated spinner instead of a static glyph.
 struct ACPToolCallCard: View {
     let toolCall: ACPMessage.ToolCall
+    /// Closure that returns the full persisted `content` for the tool call
+    /// whose in-memory `content` was truncated when its row left the render
+    /// window. Invoked the first time the card expands; the result is cached
+    /// in `expandedContent` and rendered in place of the truncated copy.
+    /// Optional — when nil (or when the lookup returns nil) the card falls
+    /// back to the in-memory `toolCall.content`.
+    var loadFullContent: (() -> String?)? = nil
     @State private var expanded = false
+    @State private var expandedContent: String? = nil
     @Environment(\.theme) private var theme
     @Environment(\.acpTerminalHost) private var terminalHost
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button { expanded.toggle() } label: {
+            Button {
+                expanded.toggle()
+                if expanded, toolCall.isContentTruncated, expandedContent == nil {
+                    // First expand of an off-window truncated card: page the
+                    // full content back in from SQLite via the host-provided
+                    // loader. Subsequent toggles reuse the cached string.
+                    expandedContent = loadFullContent?()
+                }
+            } label: {
                 HStack(spacing: 8) {
                     glyph
                     Text(verb)
@@ -53,12 +69,29 @@ struct ACPToolCallCard: View {
         .background(theme.color("bg-1").opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(borderColor, lineWidth: 0.5))
+        // `expandedContent` is keyed to SwiftUI view identity, not to the
+        // tool call's id. If SwiftUI recycles this card for a different
+        // tool call at the same position (e.g. during prepend / reorder),
+        // we must drop the cached full content so we don't render a stale
+        // body from the previous tool call.
+        .onChange(of: toolCall.toolCallId) { _, _ in
+            expandedContent = nil
+        }
+    }
+
+    /// What to draw inside the expanded card. Prefers the just-fetched
+    /// full SQLite content (set on first expand for truncated rows) and
+    /// falls back to the in-memory `toolCall.content` otherwise. Live
+    /// rows (`in_progress`, `pending`) are never truncated, so they
+    /// always render straight from `toolCall.content`.
+    private var displayContent: String {
+        expandedContent ?? toolCall.content
     }
 
     @ViewBuilder
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if toolCall.content.isEmpty && toolCall.terminalIds.isEmpty {
+            if displayContent.isEmpty && toolCall.terminalIds.isEmpty {
                 HStack(spacing: 6) {
                     if toolCall.status == "in_progress" || toolCall.status == "pending" {
                         Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
@@ -74,9 +107,9 @@ struct ACPToolCallCard: View {
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(theme.color("bg-0").opacity(0.55))
             } else {
-                if !toolCall.content.isEmpty {
+                if !displayContent.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        Text(toolCall.content)
+                        Text(displayContent)
                             .font(.system(size: 11.5, design: .monospaced))
                             .foregroundStyle(theme.color("fg-muted"))
                             .lineSpacing(2)

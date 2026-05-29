@@ -48,6 +48,14 @@ final class ACPTranscript: ObservableObject {
         markdownCaches.removeValue(forKey: id)
     }
 
+    #if DEBUG
+    /// Sum of `byteEstimate` over every retained cache. Bounded by the number
+    /// of messages with at least one render pass.
+    var markdownCacheByteEstimate: UInt64 {
+        markdownCaches.values.reduce(0) { $0 + $1.byteEstimate }
+    }
+    #endif
+
     /// Clear all per-message caches; call when the transcript itself is
     /// discarded (e.g. session close).
     func resetMarkdownCaches() {
@@ -98,7 +106,7 @@ final class ACPTranscript: ObservableObject {
     /// after hydration applies a transcript. No-op for transcripts shorter
     /// than `tailWindow`.
     func resetWindowToTail() {
-        visibleHead = max(0, messages.count - Self.tailWindow)
+        setVisibleHead(max(0, messages.count - Self.tailWindow))
     }
 
     /// Reveal one more `tailWindow`-sized chunk of older messages.
@@ -106,4 +114,33 @@ final class ACPTranscript: ObservableObject {
     func stepHeadBack() {
         visibleHead = max(0, visibleHead - Self.tailWindow)
     }
+
+    /// Move the render window head, dropping markdown caches for any message
+    /// whose index is now below the new head. No-op if `newHead` is not greater
+    /// than the current `visibleHead`. Use this instead of writing
+    /// `visibleHead` directly when advancing the window.
+    func setVisibleHead(_ newHead: Int) {
+        let clamped = max(0, min(newHead, messages.count))
+        guard clamped > visibleHead else {
+            visibleHead = clamped
+            return
+        }
+        for i in visibleHead..<clamped {
+            markdownCaches.removeValue(forKey: messages[i].stableId)
+            if case .toolCall(var tc) = messages[i] {
+                if tc.status != "in_progress", tc.status != "pending" {
+                    tc.truncateForOffWindow()
+                    messages[i] = .toolCall(tc)
+                }
+            }
+        }
+        visibleHead = clamped
+    }
+
+    #if DEBUG
+    var markdownCacheCountForTests: Int { markdownCaches.count }
+    func hasMarkdownCacheForTests(messageId: String) -> Bool {
+        markdownCaches[messageId] != nil
+    }
+    #endif
 }
