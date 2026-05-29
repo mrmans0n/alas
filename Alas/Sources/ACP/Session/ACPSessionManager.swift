@@ -343,11 +343,20 @@ extension ACPSessionManager {
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
     func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
         guard let session = sessions[sessionId] else { return }
-        if runners[sessionId] != nil { return }
         switch session.agentState {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed: break
         }
+        // Drop any stale runner left over from a prior process (e.g. the
+        // runner's stream-end branch flipped agentState to .disconnected
+        // but did not unregister itself). The .ready/.spawning early-return
+        // above already covers the live-runner case — a runner is only
+        // registered AFTER state flips to .ready — so anything still here
+        // is a zombie whose update task already exited.
+        if let stale = runners[sessionId] {
+            stale.stop()
+        }
+        runners[sessionId] = nil
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
