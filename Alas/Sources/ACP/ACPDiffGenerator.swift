@@ -47,6 +47,9 @@ enum ACPDiffGenerator {
             ["diff", "--no-color", "--no-index", "--", oldPath.path, newPath.path],
             cwd: tmpDir
         )
-        return DiffParser.parse(result.stdout)
+        let stdout = result.stdout
+        return await Task.detached(priority: .userInitiated) {
+            DiffParser.parse(stdout)
+        }.value
     }
 }
