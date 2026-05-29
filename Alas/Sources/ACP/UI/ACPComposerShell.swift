@@ -17,6 +17,7 @@ struct ACPComposer: View {
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
     @StateObject private var actions = ACPComposerActions()
+    @State private var hasText: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,16 +55,21 @@ struct ACPComposer: View {
                 worktreeRoot: worktreeRoot,
                 actions: actions,
                 sendOnEnter: sendOnEnter,
-                onDraftChange: { draft in manager.persistComposerDraft(draft, for: session) },
+                onDraftChange: { draft in
+                    manager.persistComposerDraft(draft, for: session)
+                    hasText = !draft.isEmpty
+                },
                 onDraftClear: { manager.clearComposerDraft(for: session) },
                 onSubmit: onSubmit
             )
             .frame(minHeight: 44, maxHeight: 140)
+            .onAppear {
+                hasText = !session.composerDraft.isEmpty
+            }
 
             HStack(spacing: 8) {
                 hint
                 Spacer()
-                stopPill
                 autoRunToggle
                 if let thinking = session.chipState.thinking {
                     thinkingChip(thinking)
@@ -74,7 +80,12 @@ struct ACPComposer: View {
                 if let models = session.chipState.models {
                     modelChip(models)
                 }
-                sendButton
+                ACPComposerActionButton(
+                    action: currentAction,
+                    onPrimary: handlePrimary,
+                    onMenu: handleMenu,
+                    queueBadgeCount: session.queue.count
+                )
             }
             .padding(.horizontal, 2)
         }
@@ -309,35 +320,6 @@ struct ACPComposer: View {
         }
     }
 
-    // MARK: - Stop pill (separate from send; visible only while busy)
-
-    @ViewBuilder
-    private var stopPill: some View {
-        if isBusy {
-            Button {
-                stopTapped()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 10, weight: .bold))
-                    Text("Stop")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundStyle(theme.color("del"))
-                .padding(.horizontal, 8)
-                .frame(height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 6).fill(theme.color("del").opacity(0.15))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("del").opacity(0.45), lineWidth: 0.75)
-                )
-            }
-            .buttonStyle(.plain)
-            .help("Stop the running turn (Esc)")
-        }
-    }
-
     private var isBusy: Bool {
         switch session.transcript.streamingState {
         case .streaming, .sending, .awaitingPermission: return true
@@ -356,90 +338,34 @@ struct ACPComposer: View {
         }
     }
 
-    // MARK: - Send button
+    // MARK: - Unified action button wiring
 
-    private var sendButton: some View {
-        Button {
-            sendButtonTapped()
-        } label: {
-            ZStack(alignment: .topTrailing) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7).fill(buttonBg)
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(buttonFg)
-                }
-                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(buttonBorder, lineWidth: 0.5))
-                .frame(width: 28, height: 28)
-                if session.queue.count > 0 {
-                    queueBadge
-                        .offset(x: 6, y: -6)
-                }
-            }
-            .contentShape(Rectangle())
+    private var currentAction: ComposerAction {
+        composerAction(
+            streamingState: session.transcript.streamingState,
+            hasText: hasText,
+            attached: session.attached,
+            disconnected: session.disconnected
+        )
+    }
+
+    private func handlePrimary() {
+        switch currentAction {
+        case .send, .queue:
+            actions.submitWithIntent?(.auto)
+        case .stop:
+            stopTapped()
+        case .hidden:
+            break
         }
-        .buttonStyle(.plain)
-        .disabled(sendDisabled)
-        .opacity(sendDisabled ? 0.7 : 1.0)
-        .help(sendHelpText)
     }
 
-    // TODO(harness): SwiftUI rendering test for `sendDisabled` requires
-    // snapshot infrastructure we don't have; the invariant we care about
-    // (button enabled whenever `manager.submit` would accept the prompt
-    // — i.e. for all agent states, including .disconnected / .failed /
-    // .idle so mouse-only users can drive recovery) is inspection-
-    // verifiable here and exercised by the `submit` tests above.
-    private var sendDisabled: Bool {
-        // Intentionally NOT gated on `agentState`: `manager.submit(...)`
-        // accepts prompts in every state (queueing + kicking reattach
-        // when not `.ready`). The send button must mirror Enter-to-submit
-        // so mouse-only users can recover a disconnected session.
-        false
-    }
-
-    private var sendHelpText: String {
-        if session.agentState == .disconnected { return "Agent disconnected" }
-        if session.agentState != .ready        { return "Agent connecting…" }
-        if session.transcript.streamingState == .idle, session.queue.isEmpty {
-            return "Send (⏎). Hold ⌥ to steer."
+    private func handleMenu(_ item: ComposerMenuItem) {
+        switch item {
+        case .steer:
+            actions.submitWithIntent?(.steer)
+        case .stop:
+            stopTapped()
         }
-        return "Queue (⏎). Hold ⌥ to steer."
-    }
-
-    /// Always submit; the runner's routing decides queue vs send vs steer.
-    private func sendButtonTapped() {
-        guard !sendDisabled else { return }
-        let option = NSApp.currentEvent?.modifierFlags.contains(.option) == true
-        actions.submitWithIntent?(option ? .steer : .auto)
-    }
-
-    private var buttonBg: Color {
-        sendDisabled
-            ? theme.color("bg-3").opacity(0.7)
-            : theme.color("accent")
-    }
-    private var buttonFg: Color {
-        sendDisabled ? theme.color("fg-dim") : theme.color("bg-0")
-    }
-    private var buttonBorder: Color {
-        sendDisabled
-            ? theme.color("line")
-            : theme.color("accent").opacity(0.7)
-    }
-
-    /// Small badge with the queue count, sitting at the top-right of
-    /// the send button.
-    private var queueBadge: some View {
-        Text("\(session.queue.count)")
-            .font(.system(size: 9, weight: .bold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(theme.color("bg-0"))
-            .padding(.horizontal, 4)
-            .frame(minWidth: 16, minHeight: 14)
-            .background(
-                Capsule().fill(theme.color("warn"))
-            )
-            .overlay(Capsule().strokeBorder(theme.color("bg-0"), lineWidth: 1))
     }
 }
