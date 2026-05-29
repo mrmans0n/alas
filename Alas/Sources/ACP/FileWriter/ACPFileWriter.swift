@@ -10,7 +10,7 @@ struct ACPFileWriter {
         let removed: Int
         let path: String
         let oldText: String?
-        let newText: String?
+        let newText: String
     }
 
     func write(path: String, content: String) throws -> Result {
