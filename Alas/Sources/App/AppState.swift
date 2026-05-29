@@ -1577,6 +1577,52 @@ final class AppState {
         _ = tabs.renameACPSession(worktreeId: worktreeId, tabId: tabId, title: newTitle)
     }
 
+    /// Copy the active ACP session's conversation (user + agent, Markdown)
+    /// to the pasteboard. Silent on success, matching `onCopyPath`.
+    func copyACPSessionMarkdown(worktreeId: String, tabId: TabID) {
+        guard let session = acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
+        let markdown = ACPTranscriptMarkdown.document(
+            title: session.title,
+            agentName: agent(id: session.agentId)?.displayName,
+            messages: session.transcript.messages
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(markdown, forType: .string)
+    }
+
+    /// Save the active ACP session's conversation to a `.md` file via a
+    /// save panel. Cancel is a no-op; write failures surface through the
+    /// shared file-action error handler.
+    func exportACPSessionMarkdown(worktreeId: String, tabId: TabID) {
+        guard let session = acpSession(worktreeId: worktreeId, tabId: tabId) else { return }
+        let markdown = ACPTranscriptMarkdown.document(
+            title: session.title,
+            agentName: agent(id: session.agentId)?.displayName,
+            messages: session.transcript.messages
+        )
+        let panel = NSSavePanel()
+        panel.title = "Save Session as Markdown"
+        panel.message = "Choose where to save this conversation."
+        panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            showFileActionError(title: "Export Failed", message: error.localizedDescription)
+        }
+    }
+
+    /// Resolve the in-memory `ACPSession` backing an ACP session tab.
+    /// Returns nil for non-ACP tabs or when the session has been evicted.
+    private func acpSession(worktreeId: String, tabId: TabID) -> ACPSession? {
+        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+              case .acpSession(let tabState) = tab,
+              let worktree = worktree(withId: worktreeId),
+              let mgr = acpManager(for: worktree) else { return nil }
+        return mgr.sessions[tabState.sessionId]
+    }
+
     func closeTab(worktreeId: String, tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let projectPath = projectPath(forWorktreeId: worktreeId)
