@@ -44,7 +44,7 @@ enum ACPDiffGenerator {
         try newText.write(to: newPath, atomically: true, encoding: .utf8)
 
         let result = try await Process.git(
-            ["diff", "--no-index", "--", oldPath.path, newPath.path],
+            ["diff", "--no-color", "--no-index", "--", oldPath.path, newPath.path],
             cwd: tmpDir
         )
         return DiffParser.parse(result.stdout)
