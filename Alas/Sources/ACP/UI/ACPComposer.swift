@@ -267,14 +267,29 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         static func draft(from attributed: NSAttributedString) -> ACPComposerDraft {
+            let full = NSRange(location: 0, length: attributed.length)
+            guard attributed.length > 0 else { return ACPComposerDraft(segments: []) }
+
+            // Fast path: no chip mentions in the storage. The whole
+            // string is plain text, so skip the enumerateAttribute walk
+            // entirely. This is the common case while typing.
+            var hasChip = false
+            attributed.enumerateAttribute(.attachmentURI, in: full) { value, _, stop in
+                if value != nil {
+                    hasChip = true
+                    stop.pointee = true
+                }
+            }
+            if !hasChip {
+                let text = attributed.string
+                return ACPComposerDraft(segments: text.isEmpty ? [] : [.text(text)])
+            }
+
             var segments: [ACPComposerDraft.Segment] = []
-            attributed.enumerateAttribute(
-                .attachmentURI,
-                in: NSRange(location: 0, length: attributed.length)
-            ) { value, range, _ in
+            attributed.enumerateAttribute(.attachmentURI, in: full) { value, range, _ in
                 if let uri = value as? String,
                    let chip = attributed.attribute(.attachment, at: range.location, effectiveRange: nil)
-                            as? ACPMentionChipAttachment {
+                   as? ACPMentionChipAttachment {
                     segments.append(.mention(displayName: chip.displayName, uri: uri))
                 } else if let uri = value as? String {
                     let segment = attributed.attributedSubstring(from: range).string
