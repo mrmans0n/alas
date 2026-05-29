@@ -267,8 +267,6 @@ final class TabsManager {
         }
     }
 
-    typealias RemoveFocusedLeafOutcome = RemoveLeafOutcome
-
     /// Remove the leaf identified by `leafId` from `tabId` in `worktreeId`. If the
     /// leaf is part of a split, the sibling collapses up; focus only moves when
     /// the removed leaf was itself focused (then to the first leaf in the

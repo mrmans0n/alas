@@ -85,6 +85,8 @@ extension AlasGhostty {
         /// `processAlive == true` only arrives from `close_surface_cb` when Ghostty
         /// is tearing down a surface whose shell is still running because we asked
         /// it to (manual-close path); receivers should no-op in that case.
+        /// May fire more than once for a single shell exit (e.g. `SHOW_CHILD_EXITED`
+        /// followed by `close_surface_cb`); receivers must be idempotent.
         var processExitHandler: ((_ processAlive: Bool) -> Void)?
 
         // Current working directory, derived from Ghostty's GHOSTTY_ACTION_PWD events

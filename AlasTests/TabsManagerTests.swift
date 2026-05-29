@@ -740,6 +740,28 @@ struct TabsManagerPaneTests {
         #expect(outcome == nil)
     }
 
+    @Test func removeLeafTwiceIsNoOp() throws {
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
+        _ = mgr.splitFocusedLeaf(
+            worktreeId: "wt", tabId: tab.id, axis: .vertical,
+            newLeafId: "new", newSessionId: "s2"
+        )
+        // First removal succeeds.
+        let first = try #require(mgr.removeLeaf(
+            worktreeId: "wt", tabId: tab.id, leafId: "new"
+        ))
+        guard case .leafRemoved = first else {
+            Issue.record("expected .leafRemoved"); return
+        }
+        // Second removal of the same leaf must be a quiet no-op — the
+        // process-exit handler relies on this to race manual close.
+        let second = mgr.removeLeaf(
+            worktreeId: "wt", tabId: tab.id, leafId: "new"
+        )
+        #expect(second == nil)
+    }
+
     @Test func setSplitFractionClampsBetween0_1And0_9() {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
