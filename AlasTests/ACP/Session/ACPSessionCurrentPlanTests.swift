@@ -42,4 +42,81 @@ struct ACPSessionCurrentPlanTests {
         session.transcript.messages = [.plan(id: UUID(), [])]
         #expect(session.currentPlan == [])
     }
+
+    @Test("returns nil after a new user prompt follows the previous plan")
+    func nilAfterNewUserPromptFollowsPlan() {
+        let session = makeSession()
+        let previousTurnItems = [
+            ACPMessage.PlanItem(content: "old step", status: "completed")
+        ]
+        session.transcript.messages = [
+            .user(id: UUID(), text: "first prompt", attachments: []),
+            .plan(id: UUID(), previousTurnItems),
+            .agent(id: UUID(), StreamingText("done with turn 1")),
+            .user(id: UUID(), text: "second prompt", attachments: [])
+        ]
+        // The previous turn's plan must not leak into the new turn.
+        #expect(session.currentPlan == nil)
+    }
+
+    @Test("returns the current turn's plan when it sits after the latest user prompt")
+    func returnsCurrentTurnPlan() {
+        let session = makeSession()
+        let previousTurnItems = [ACPMessage.PlanItem(content: "old", status: "completed")]
+        let currentTurnItems = [ACPMessage.PlanItem(content: "new", status: "in_progress")]
+        session.transcript.messages = [
+            .user(id: UUID(), text: "first", attachments: []),
+            .plan(id: UUID(), previousTurnItems),
+            .user(id: UUID(), text: "second", attachments: []),
+            .plan(id: UUID(), currentTurnItems)
+        ]
+        #expect(session.currentPlan == currentTurnItems)
+    }
+
+    @Test("apply(.plan) appends a fresh plan when the previous one belongs to an earlier turn")
+    func applyAppendsAfterNewUserPrompt() {
+        let session = makeSession()
+        let previousTurnItems = [ACPMessage.PlanItem(content: "old", status: "completed")]
+        session.transcript.messages = [
+            .user(id: UUID(), text: "first", attachments: []),
+            .plan(id: UUID(), previousTurnItems),
+            .user(id: UUID(), text: "second", attachments: [])
+        ]
+        let newEntries = [ACPPlanEntry(content: "new", priority: nil, status: "in_progress")]
+        session.apply(.plan(newEntries))
+        // Previous turn's plan stays at index 1; the new one is appended.
+        #expect(session.transcript.messages.count == 4)
+        if case .plan(_, let firstItems) = session.transcript.messages[1] {
+            #expect(firstItems == previousTurnItems)
+        } else {
+            Issue.record("expected previous turn's plan at index 1")
+        }
+        if case .plan(_, let latestItems) = session.transcript.messages.last {
+            #expect(latestItems == [ACPMessage.PlanItem(content: "new", status: "in_progress")])
+        } else {
+            Issue.record("expected new plan appended at end")
+        }
+        #expect(session.currentPlan == [ACPMessage.PlanItem(content: "new", status: "in_progress")])
+    }
+
+    @Test("apply(.plan) overwrites in place while the current turn's plan progresses")
+    func applyOverwritesWithinSameTurn() {
+        let session = makeSession()
+        let planId = UUID()
+        session.transcript.messages = [
+            .user(id: UUID(), text: "go", attachments: []),
+            .plan(id: planId, [ACPMessage.PlanItem(content: "step", status: "pending")])
+        ]
+        let progress = [ACPPlanEntry(content: "step", priority: nil, status: "in_progress")]
+        session.apply(.plan(progress))
+        // No new user prompt → same plan slot updates in place, id preserved.
+        #expect(session.transcript.messages.count == 2)
+        if case .plan(let id, let items) = session.transcript.messages[1] {
+            #expect(id == planId)
+            #expect(items == [ACPMessage.PlanItem(content: "step", status: "in_progress")])
+        } else {
+            Issue.record("expected plan message at index 1")
+        }
+        #expect(session.currentPlan == [ACPMessage.PlanItem(content: "step", status: "in_progress")])
+    }
 }

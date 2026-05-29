@@ -117,10 +117,15 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         case .plan(let entries):
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
-            if let i = transcript.messages.lastIndex(where: { if case .plan = $0 { return true } else { return false } }) {
-                if case .plan(let existingId, _) = transcript.messages[i] {
-                    transcript.messages[i] = .plan(id: existingId, items)
-                }
+            // Overwrite the existing plan in place only if it belongs to
+            // the current turn (i.e. sits after the latest user prompt).
+            // Otherwise append a fresh plan so the previous turn's plan
+            // stays at its original position and the new one is current.
+            let lastUserIdx = transcript.messages.lastIndex { if case .user = $0 { return true } else { return false } } ?? -1
+            let currentTurnPlanIdx = transcript.messages.lastIndex { if case .plan = $0 { return true } else { return false } }
+                .flatMap { $0 > lastUserIdx ? $0 : nil }
+            if let i = currentTurnPlanIdx, case .plan(let existingId, _) = transcript.messages[i] {
+                transcript.messages[i] = .plan(id: existingId, items)
             } else {
                 transcript.messages.append(.plan(id: UUID(), items))
             }
@@ -381,13 +386,14 @@ final class ACPSession: ObservableObject, Identifiable {
 }
 
 extension ACPSession {
-    /// Items of the latest `.plan` message in the transcript, or nil if
-    /// no plan message has arrived yet. The plan is stored in-line in
-    /// `transcript.messages` and overwritten in place by the protocol;
-    /// this property is just a convenience for view code that wants to
-    /// read it without scanning the message list itself.
+    /// Items of the plan emitted for the current turn — the latest `.plan`
+    /// message that comes after the latest `.user` prompt. Returns nil
+    /// when no plan has arrived for this turn yet, even if an older turn
+    /// left a plan behind. The pill renders the *current* turn's work, not
+    /// stale progress from a previous prompt.
     var currentPlan: [ACPMessage.PlanItem]? {
         for m in transcript.messages.reversed() {
+            if case .user = m { return nil }
             if case .plan(_, let items) = m { return items }
         }
         return nil
