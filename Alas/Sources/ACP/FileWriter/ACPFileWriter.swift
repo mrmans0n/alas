@@ -5,19 +5,24 @@ struct ACPFileWriter {
 
     enum Error: Swift.Error, Equatable { case outsideWorktree(path: String) }
 
-    struct Result: Equatable { let added: Int
-    let removed: Int
-    let path: String }
+    struct Result: Equatable {
+        let added: Int
+        let removed: Int
+        let path: String
+        let oldText: String?
+        let newText: String?
+    }
 
     func write(path: String, content: String) throws -> Result {
         let target = try resolveInsideWorktree(path: path)
 
-        let pre = (try? String(contentsOf: target, encoding: .utf8)) ?? ""
+        let pre = try? String(contentsOf: target, encoding: .utf8)
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         try content.write(to: target, atomically: true, encoding: .utf8)
-        let (added, removed) = Self.diffLineCount(pre: pre, post: content)
-        return Result(added: added, removed: removed, path: target.path)
+        let (added, removed) = Self.diffLineCount(pre: pre ?? "", post: content)
+        return Result(added: added, removed: removed, path: target.path,
+                      oldText: pre, newText: content)
     }
 
     /// Throws `outsideWorktree` if `path` resolves outside the
