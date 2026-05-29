@@ -1,5 +1,3 @@
-import Foundation
-
 /// Mutually-exclusive states the composer's single action button can be in.
 /// Derived from `(streamingState, hasText, attached, disconnected)` via
 /// `composerAction(...)`. The view layer renders one capsule per case.
@@ -17,7 +15,7 @@ enum ComposerAction: Equatable {
 
 /// Items that appear in the chevron menu when `ComposerAction == .queue`.
 /// Ordered as they appear top-to-bottom in the menu.
-enum ComposerMenuItem: Equatable {
+enum ComposerMenuItem: Hashable {
     case steer
     case stop
 }
