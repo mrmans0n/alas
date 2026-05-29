@@ -4,6 +4,13 @@ enum EnvBuilder {
     private static let strippedKeys: Set<String> = [
         "TERM", "TERMINFO", "TERMINFO_DIRS",
         "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM",
+        // zmx injects ZMX_SESSION into the shell it spawns. If Alas inherits
+        // that env (because Alas itself was launched from a zmx-attached
+        // terminal, or because we're building env for a sibling pane), passing
+        // it through means a subsequent `zmx attach <other>` from anywhere in
+        // the new shell falls into zmx's switchSesh path and re-attaches the
+        // pane to a different session. See zmx#151.
+        "ZMX_SESSION", "ZMX_SESSION_PREFIX",
     ]
 
     static func build(
