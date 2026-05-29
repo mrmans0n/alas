@@ -108,12 +108,15 @@ struct ACPScrollDirectionClassifierTests {
     }
 
     // MARK: - Boundary tests pinning upwardEpsilon and bottomTolerance
+    //
+    // Derive values from the classifier's constants so the tests track
+    // any retune of the thresholds instead of silently passing.
 
     @Test func upwardMoveAtEpsilonBoundaryIsNoChange() {
-        // newY == prev - upwardEpsilon (0.5) → condition is strict `<`, so noChange.
+        // newY == prev - upwardEpsilon → strict `<` means noChange.
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 1000,
-            newOffsetY: 999.5,
+            newOffsetY: 1000 - ACPScrollDirectionClassifier.upwardEpsilon,
             viewportHeight: 600,
             contentHeight: 5000,
             isRestoring: false
@@ -122,10 +125,10 @@ struct ACPScrollDirectionClassifierTests {
     }
 
     @Test func upwardMoveJustPastEpsilonPauses() {
-        // newY < prev - upwardEpsilon by a hair → userScrolledUp.
+        // newY just past prev - upwardEpsilon → userScrolledUp.
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 1000,
-            newOffsetY: 999.49,
+            newOffsetY: 1000 - ACPScrollDirectionClassifier.upwardEpsilon - 0.01,
             viewportHeight: 600,
             contentHeight: 5000,
             isRestoring: false
@@ -134,25 +137,30 @@ struct ACPScrollDirectionClassifierTests {
     }
 
     @Test func atExactBottomToleranceBoundaryResumes() {
-        // contentH - viewportH - newY = 5000 - 600 - 4364 = 36 (== bottomTolerance)
-        // condition is `<=`, so userAtBottom.
+        // distanceFromBottom == bottomTolerance → `<=` means userAtBottom.
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - ACPScrollDirectionClassifier.bottomTolerance
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 4300,
-            newOffsetY: 4364,
-            viewportHeight: 600,
-            contentHeight: 5000,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
             isRestoring: false
         )
         #expect(decision == .userAtBottom)
     }
 
     @Test func justOutsideBottomToleranceIsNoChange() {
-        // contentH - viewportH - newY = 5000 - 600 - 4363 = 37 (> bottomTolerance) → noChange.
+        // distanceFromBottom == bottomTolerance + 1 → outside → noChange.
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - ACPScrollDirectionClassifier.bottomTolerance - 1
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 4300,
-            newOffsetY: 4363,
-            viewportHeight: 600,
-            contentHeight: 5000,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
             isRestoring: false
         )
         #expect(decision == .noChange)
