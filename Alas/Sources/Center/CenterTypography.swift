@@ -43,9 +43,15 @@ enum CenterTypography {
                 return font
             }
         }
-        if let font = NSFont(name: family, size: size) { return font }
+        if let font = NSFont(name: family, size: size),
+           font.familyName == family || font.fontName == family {
+            return font
+        }
         let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
-        if let font = NSFont(descriptor: descriptor, size: size) { return font }
+        if let font = NSFont(descriptor: descriptor, size: size),
+           font.familyName == family {
+            return font
+        }
         return .monospacedSystemFont(ofSize: size, weight: .regular)
     }
 

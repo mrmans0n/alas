@@ -26,7 +26,7 @@ final class MarkdownRenderer {
     private var anchorRanges: [String: NSRange] = [:]
     private var remoteImages: [RemoteImageReference] = []
     private var theme: Theme!
-    private var monoFamily: String = "SF Mono"
+    private var monoFamily: String = "JetBrainsMono Nerd Font"
     private var monoSize: CGFloat = 13
     private var baseDirectory: URL = URL(fileURLWithPath: "/")
     /// Optional worktree root, used to resolve markdown-style root-relative
