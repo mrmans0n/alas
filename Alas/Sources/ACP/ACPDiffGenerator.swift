@@ -3,15 +3,14 @@ import Foundation
 enum ACPDiffGenerator {
     static func generate(oldText: String?, newText: String) async throws -> ParsedDiff {
         let old = oldText ?? ""
-        let new = newText
 
-        if oldText == nil && new.isEmpty {
+        if oldText == nil && newText.isEmpty {
             return ParsedDiff(hunks: [])
         }
 
         if oldText == nil {
-            let hasTrailingNewline = new.hasSuffix("\n")
-            var lines = new.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            let hasTrailingNewline = newText.hasSuffix("\n")
+            var lines = newText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             if let last = lines.last, last.isEmpty { _ = lines.popLast() }
             let hunkLines = lines.enumerated().map { (i, text) in
                 ParsedDiff.Hunk.Line(
@@ -31,7 +30,7 @@ enum ACPDiffGenerator {
             return ParsedDiff(hunks: [hunk])
         }
 
-        if old == new {
+        if old == newText {
             return ParsedDiff(hunks: [])
         }
 
@@ -42,7 +41,7 @@ enum ACPDiffGenerator {
         let oldPath = tmpDir.appendingPathComponent("a")
         let newPath = tmpDir.appendingPathComponent("b")
         try old.write(to: oldPath, atomically: true, encoding: .utf8)
-        try new.write(to: newPath, atomically: true, encoding: .utf8)
+        try newText.write(to: newPath, atomically: true, encoding: .utf8)
 
         let result = try await Process.git(
             ["diff", "--no-index", "--", oldPath.path, newPath.path],
