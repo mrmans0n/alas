@@ -21,6 +21,7 @@ struct ACPToolbar: View {
                 .layoutPriority(1)
         }
         .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 38)
         .background(
             LinearGradient(
