@@ -103,6 +103,34 @@ struct ZmxClientTests {
         #expect(call.env["ZMX_DIR"] == "/tmp/alas-zmx-test")
     }
 
+    /// If Alas itself was launched from a zmx-attached terminal,
+    /// `ProcessInfo.environment` carries `ZMX_SESSION`. Letting it leak
+    /// into `zmx attach` (which the kill/ls calls don't issue, but the
+    /// daemon's leader client does) trips zmx's switchSesh path. Mirror
+    /// `EnvBuilder`'s strip on the CLI-invocation env so both sides agree.
+    /// `ZMX_SESSION_PREFIX` is intentionally kept — it's a user-configured
+    /// knob that has to flow through identically to both shell-side and
+    /// CLI-side paths for name resolution to stay consistent.
+    @Test
+    func killSessionStripsZmxSessionButKeepsPrefix() {
+        setenv("ZMX_SESSION", "alas-leaked-name", 1)
+        setenv("ZMX_SESSION_PREFIX", "team-", 1)
+        defer {
+            unsetenv("ZMX_SESSION")
+            unsetenv("ZMX_SESSION_PREFIX")
+        }
+        let recorder = RecordingRunner()
+        let client = ZmxClient(env: env(available: true), runner: recorder.runner())
+        client.killSession(name: "alas-XYZ")
+
+        #expect(recorder.calls.count == 1)
+        let call = recorder.calls[0]
+        #expect(call.env["ZMX_SESSION"] == nil)
+        #expect(call.env["ZMX_SESSION_PREFIX"] == "team-")
+        // ZMX_DIR pinning is preserved.
+        #expect(call.env["ZMX_DIR"] == "/tmp/alas-zmx-test")
+    }
+
     @Test
     func killSessionIsNoOpWhenZmxUnavailable() {
         let recorder = RecordingRunner()
