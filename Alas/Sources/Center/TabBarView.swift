@@ -14,6 +14,7 @@ struct TabBarView: View {
     let onCopyPath: (TabID) -> Void
     let onCopyRelativePath: (TabID) -> Void
     let onRenameTerminal: (TabID) -> Void
+    let onRenameACPSession: (TabID) -> Void
     let onNewTerminal: () -> Void
     let enabledAgents: [AgentDefinition]
     let onLaunchAgent: (String) -> Void
@@ -62,6 +63,10 @@ struct TabBarView: View {
                 .contextMenu {
                     if case .terminal = tab {
                         Button("Rename…") { onRenameTerminal(tab.id) }
+                        Divider()
+                    }
+                    if case .acpSession = tab {
+                        Button("Rename…") { onRenameACPSession(tab.id) }
                         Divider()
                     }
                     Button("Close") { onClose(tab.id) }

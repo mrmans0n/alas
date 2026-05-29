@@ -155,6 +155,21 @@ final class TabsManager {
     }
 
     @discardableResult
+    func renameACPSession(worktreeId: String, tabId: TabID, title: String) -> Tab? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .acpSession(var state) = file.tabs[idx] else { return nil }
+        state.title = trimmed
+        let tab = Tab.acpSession(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func replaceTerminalSession(worktreeId: String, tabId: TabID, sessionId: String) -> Tab? {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),

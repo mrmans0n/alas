@@ -17,6 +17,7 @@ struct ACPSessionStoreCRUDTests {
         let store = try tmp()
         let row = ACPSessionRow(
             id: "s1", agentId: "claude", title: "hello",
+            titleSource: .manual,
             currentModel: "sonnet", currentMode: "agent",
             autoRun: true,
             createdAt: 100, updatedAt: 100, lastOpenedAt: 100, archived: false)
@@ -29,12 +30,15 @@ struct ACPSessionStoreCRUDTests {
     func recent() throws {
         let store = try tmp()
         try store.upsertSession(.init(id: "a", agentId: "claude", title: "A",
+            titleSource: .manual,
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 1, updatedAt: 1, lastOpenedAt: 10, archived: false))
         try store.upsertSession(.init(id: "b", agentId: "claude", title: "B",
+            titleSource: .manual,
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 2, updatedAt: 2, lastOpenedAt: 20, archived: false))
         try store.upsertSession(.init(id: "c", agentId: "claude", title: "C",
+            titleSource: .manual,
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 3, updatedAt: 3, lastOpenedAt: 30, archived: true))
         let recent = try store.recentSessions(limit: 10)
@@ -45,6 +49,7 @@ struct ACPSessionStoreCRUDTests {
     func messages() throws {
         let store = try tmp()
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            titleSource: .placeholder,
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let m1 = Data(#"{"k":"user","v":"hi"}"#.utf8)
@@ -61,6 +66,7 @@ struct ACPSessionStoreCRUDTests {
         let url = tmpURL()
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            titleSource: .placeholder,
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
@@ -82,6 +88,7 @@ struct ACPSessionStoreCRUDTests {
     func composerDraftCascadesWithSession() throws {
         let store = try tmp()
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            titleSource: .placeholder,
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         try store.upsertComposerDraft(

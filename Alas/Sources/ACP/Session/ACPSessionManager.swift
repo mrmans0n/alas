@@ -56,12 +56,13 @@ final class ACPSessionManager: ObservableObject {
         let now = Int64(Date().timeIntervalSince1970)
         let row = ACPSessionRow(
             id: id, agentId: agentId, title: "New session",
+            titleSource: .placeholder,
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
         try? store.upsertSession(row)
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
-            title: row.title, hydrationState: .ready)
+            title: row.title, titleSource: .placeholder, hydrationState: .ready)
         sessions[id] = session
         refreshRecent()
         return session
@@ -79,7 +80,7 @@ final class ACPSessionManager: ObservableObject {
         guard let row = try? store.loadSession(id: id) else { return nil }
         let session = ACPSession(
             id: row.id, agentId: row.agentId, worktreeId: worktreeId,
-            title: row.title, hydrationState: .loading)
+            title: row.title, titleSource: row.titleSource, hydrationState: .loading)
         sessions[id] = session
         return session
     }
@@ -161,6 +162,7 @@ final class ACPSessionManager: ObservableObject {
         try? store.touchLastOpenedAt(id: id, at: now)
         let touched = ACPSessionRow(
             id: row.id, agentId: row.agentId, title: row.title,
+            titleSource: row.titleSource,
             currentModel: row.currentModel, currentMode: row.currentMode,
             autoRun: row.autoRun,
             createdAt: row.createdAt, updatedAt: row.updatedAt,
@@ -288,11 +290,23 @@ final class ACPSessionManager: ObservableObject {
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
             id: row.id, agentId: row.agentId, title: s.title,
+            titleSource: s.titleSource,
             currentModel: s.currentModel, currentMode: s.currentMode,
             autoRun: s.autoRunEnabled,
             createdAt: row.createdAt, updatedAt: now,
             lastOpenedAt: row.lastOpenedAt, archived: row.archived))
         refreshRecent()
+    }
+
+    /// Rename a session with the given title and source. Updates both
+    /// the in-memory session and SQLite in one call.
+    func renameSession(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) {
+        guard let session = sessions[id] else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        session.title = trimmed
+        session.titleSource = source
+        persist(session)
     }
 
     func persistComposerDraft(_ draft: ACPComposerDraft, for session: ACPSession) {

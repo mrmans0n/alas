@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 3
+    static let targetSchemaVersion = 4
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -28,6 +28,7 @@ final class ACPSessionStore {
         if current < 1 { try migrate_to_v1() }
         if current < 2 { try migrate_to_v2() }
         if current < 3 { try migrate_to_v3() }
+        if current < 4 { try migrate_to_v4() }
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -99,12 +100,27 @@ final class ACPSessionStore {
         )
         """)
     }
+
+    private func migrate_to_v4() throws {
+        // Add title_source so manual renames are protected from auto-title
+        // overwrites. Existing rows with a non-placeholder title are treated
+        // as manual to avoid clobbering user-provided names; rows still at
+        // "New session" (or empty) are placeholder.
+        try db.exec("""
+        ALTER TABLE sessions ADD COLUMN title_source TEXT NOT NULL DEFAULT 'manual'
+        """)
+        try db.exec("""
+        UPDATE sessions SET title_source = 'placeholder'
+        WHERE title = '' OR title = 'New session'
+        """)
+    }
 }
 
 struct ACPSessionRow: Equatable {
     let id: String
     let agentId: String
     var title: String
+    var titleSource: ACPSessionTitleSource = .placeholder
     var currentModel: String?
     var currentMode: String?
     var autoRun: Bool
@@ -126,11 +142,12 @@ struct ACPStoredMessage: Equatable {
 extension ACPSessionStore {
     func upsertSession(_ s: ACPSessionRow) throws {
         try db.exec("""
-        INSERT INTO sessions (id, agent_id, title, current_model, current_mode, auto_run,
+        INSERT INTO sessions (id, agent_id, title, title_source, current_model, current_mode, auto_run,
                               created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
+            title_source = excluded.title_source,
             current_model = excluded.current_model,
             current_mode = excluded.current_mode,
             auto_run = excluded.auto_run,
@@ -138,7 +155,7 @@ extension ACPSessionStore {
             last_opened_at = excluded.last_opened_at,
             archived = excluded.archived
         """, bindings: [
-            s.id, s.agentId, s.title, s.currentModel, s.currentMode,
+            s.id, s.agentId, s.title, s.titleSource.rawValue, s.currentModel, s.currentMode,
             s.autoRun ? 1 : 0,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0
         ])
@@ -226,10 +243,12 @@ extension ACPSessionStore {
     }
 
     private static func rowToSession(_ r: [String: Any?]) -> ACPSessionRow {
+        let rawSource = r["title_source"] as? String ?? "placeholder"
         ACPSessionRow(
             id: r["id"] as? String ?? "",
             agentId: r["agent_id"] as? String ?? "",
             title: r["title"] as? String ?? "",
+            titleSource: ACPSessionTitleSource(rawValue: rawSource) ?? .placeholder,
             currentModel: r["current_model"] as? String,
             currentMode: r["current_mode"] as? String,
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,

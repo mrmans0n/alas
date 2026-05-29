@@ -53,6 +53,9 @@ struct CenterPaneView: View {
                 onRenameTerminal: { id in
                     state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
                 },
+                onRenameACPSession: { id in
+                    state.renameACPSessionTab(worktreeId: worktree.id, tabId: id)
+                },
                 onNewTerminal: openTerminal,
                 enabledAgents: state.agentRegistry.enabled(),
                 onLaunchAgent: { agentId in
@@ -84,6 +87,12 @@ struct CenterPaneView: View {
                 },
                 titleLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }) else { return nil }
+                    if case .acpSession(let s) = tab,
+                       let mgr = state.acpManager(forWorktreeId: worktree.id),
+                       let session = mgr.sessions[s.sessionId] {
+                        let t = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return t.isEmpty ? nil : t
+                    }
                     return state.tabs.displayTerminalTitle(for: tab)
                 }
             )

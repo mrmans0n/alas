@@ -323,6 +323,7 @@ final class ACPSessionRunner {
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
             id: row.id, agentId: row.agentId, title: session.title,
+            titleSource: session.titleSource,
             currentModel: session.currentModel, currentMode: session.currentMode,
             autoRun: session.autoRunEnabled,
             createdAt: row.createdAt, updatedAt: now,
