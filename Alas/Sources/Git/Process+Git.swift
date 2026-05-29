@@ -168,6 +168,12 @@ extension Process {
     static func gitEnv() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["GIT_OPTIONAL_LOCKS"] = "0"
+        // Force git to emit messages in English. We parse stderr in several
+        // places (e.g. WorktreeService submodule/dirty/LFS matchers) and those
+        // matchers are English-only; a user with `LANG=es_ES.UTF-8` would
+        // otherwise hit translated errors that no matcher recognizes. POSIX:
+        // LC_ALL overrides LC_MESSAGES and LANG, so this is sufficient.
+        env["LC_ALL"] = "C"
         if let shellPath = ShellEnvResolver.shared.resolvedPath {
             env["PATH"] = shellPath
         }

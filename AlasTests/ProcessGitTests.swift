@@ -79,6 +79,37 @@ struct ProcessGitTests {
         #expect(env["GIT_OPTIONAL_LOCKS"] == "0")
     }
 
+    @Test func gitEnvForcesCLocale() {
+        // Stderr matchers in WorktreeService etc. only recognize English git
+        // messages. Without LC_ALL=C, a user with a non-English shell locale
+        // (e.g. es_ES.UTF-8) hits localized errors like "árboles de trabajo
+        // conteniendo submódulos…" and the auto-force-remove path never fires.
+        let env = Process.gitEnv()
+        #expect(env["LC_ALL"] == "C")
+    }
+
+    @Test func gitEmitsEnglishMessagesUnderForeignLocale() async throws {
+        // End-to-end check: gitEnv() must override an inherited foreign LANG
+        // so git still emits English. We can't mutate ProcessInfo, but we can
+        // run /usr/bin/env git directly with the env gitEnv() produces and
+        // confirm the message is English even if LANG would request Spanish.
+        var env = Process.gitEnv()
+        env["LANG"] = "es_ES.UTF-8"
+        // Trigger any error: `git` with no args in a non-repo cwd emits the
+        // usage hint, which is locale-sensitive. Easier: ask for a config key
+        // that doesn't exist and check stderr/stdout aren't Spanish.
+        let result = try await Process.run(
+            "/usr/bin/env",
+            args: ["git", "help", "-a"],
+            env: env
+        )
+        // "The common Git" / "available" appears verbatim in English `git help -a`
+        // output; Spanish translation would not contain these tokens.
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.lowercased().contains("available")
+            || result.stdout.lowercased().contains("commands"))
+    }
+
     @Test func gitEnvInheritsPath() {
         // The parent process always has PATH set (xcodebuild guarantees this).
         // If we accidentally clear inherited env when adding overrides, git
@@ -99,12 +130,13 @@ struct ProcessGitTests {
         // Stronger than the keyed tests above: a broken implementation that
         // returned a hardcoded minimal dict (PATH/HOME only) would pass the
         // single-key checks. Verify the whole parent env round-trips, with
-        // the deliberate exceptions of GIT_OPTIONAL_LOCKS (always overridden)
-        // and PATH (overridden when ShellEnvResolver discovered a login-shell
-        // PATH, which happens in integration test environments).
+        // the deliberate exceptions of GIT_OPTIONAL_LOCKS (always overridden),
+        // PATH (overridden when ShellEnvResolver discovered a login-shell
+        // PATH, which happens in integration test environments), and LC_ALL
+        // (always pinned to "C" so git emits English-parseable messages).
         let parent = ProcessInfo.processInfo.environment
         let env = Process.gitEnv()
-        for (key, value) in parent where key != "GIT_OPTIONAL_LOCKS" && key != "PATH" {
+        for (key, value) in parent where !["GIT_OPTIONAL_LOCKS", "PATH", "LC_ALL"].contains(key) {
             #expect(env[key] == value, "key \(key) was dropped or changed")
         }
     }
