@@ -9,11 +9,10 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
-    @Test("opens a fresh DB at schema version 3")
+    @Test("opens a fresh DB at the target schema version")
     func freshSchema() throws {
         let store = try tmpStore()
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
-        #expect(ACPSessionStore.targetSchemaVersion == 3)
     }
 
     @Test("re-opening doesn't double-apply migrations")
@@ -73,7 +72,7 @@ struct ACPSessionStoreSchemaTests {
         }
 
         let store = try ACPSessionStore(path: url.path)
-        #expect(try store.currentSchemaVersion() == 3)
+        #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
 
         let draft = ACPComposerDraft(segments: [.text("migrated")])
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",

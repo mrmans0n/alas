@@ -65,10 +65,11 @@ struct ACPToolCallContentTests {
     }
 
     private func decode(_ name: String) throws -> [ACPToolCallContent] {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/\(name).json")
+        let bundle = Bundle(for: ACPToolCallContentFixtureMarker.self)
+        let url = try #require(bundle.url(forResource: name, withExtension: "json"))
         return try JSONDecoder().decode([ACPToolCallContent].self,
                                         from: try Data(contentsOf: url))
     }
 }
+
+private final class ACPToolCallContentFixtureMarker {}

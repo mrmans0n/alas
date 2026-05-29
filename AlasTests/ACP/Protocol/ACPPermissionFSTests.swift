@@ -24,9 +24,10 @@ struct ACPPermissionFSTests {
     }
 
     private func fixture(_ name: String) throws -> Data {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/\(name).json")
+        let bundle = Bundle(for: ACPPermissionFixtureMarker.self)
+        let url = try #require(bundle.url(forResource: name, withExtension: "json"))
         return try Data(contentsOf: url)
     }
 }
+
+private final class ACPPermissionFixtureMarker {}

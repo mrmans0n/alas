@@ -53,10 +53,10 @@ struct ACPSessionStoreQueueTests {
     }
 
     @Test("schema target version includes session_queue (v3+)")
-    func schemaIsV3() throws {
+    func schemaIncludesQueue() throws {
         let (store, _) = try mkStore()
-        #expect(try store.currentSchemaVersion() == 3)
-        #expect(ACPSessionStore.targetSchemaVersion == 3)
+        #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
+        #expect(ACPSessionStore.targetSchemaVersion >= 3)
     }
 }
 

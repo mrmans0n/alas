@@ -73,10 +73,11 @@ struct ACPSessionUpdateTests {
     }
 
     private func decode(_ name: String) throws -> JSONRPCEnvelope<ACPSessionUpdateParams> {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/\(name).json")
+        let bundle = Bundle(for: ACPSessionUpdateFixtureMarker.self)
+        let url = try #require(bundle.url(forResource: name, withExtension: "json"))
         return try JSONDecoder().decode(JSONRPCEnvelope<ACPSessionUpdateParams>.self,
                                         from: try Data(contentsOf: url))
     }
 }
+
+private final class ACPSessionUpdateFixtureMarker {}
