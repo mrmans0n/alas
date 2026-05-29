@@ -343,16 +343,38 @@ extension ACPSessionManager {
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
     func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
         guard let session = sessions[sessionId] else { return }
-        if runners[sessionId] != nil { return }
+        switch session.agentState {
+        case .spawning, .ready: return
+        case .idle, .disconnected, .failed: break
+        }
+        // Drop any stale runner left over from a prior process (e.g. the
+        // runner's stream-end branch flipped agentState to .disconnected
+        // but did not unregister itself). The .ready/.spawning early-return
+        // above already covers the live-runner case — a runner is only
+        // registered AFTER state flips to .ready — so anything still here
+        // is a zombie whose update task already exited.
+        if let stale = runners[sessionId] {
+            stale.stop()
+        }
+        runners[sessionId] = nil
+        // Clear any error from the prior attempt so the UI doesn't keep
+        // showing a stale failure banner while we spawn fresh. If this
+        // attempt also fails, the catch branches below will repopulate
+        // `lastError` with the new reason.
+        session.lastError = nil
+        session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
-            session.setupState = .needsSetup(reason: "No ACP launch spec for \(session.agentId)")
+            let reason = "No ACP launch spec for \(session.agentId)"
+            session.setupState = .needsSetup(reason: reason)
+            session.agentState = .failed(reason)
             return
         }
         let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
         let setup = await checker.evaluate(spec.setupCheck)
         guard case .ready = setup else {
             session.setupState = .needsSetup(reason: setup.reasonText)
+            session.agentState = .failed(setup.reasonText)
             return
         }
         session.setupState = .ready
@@ -372,7 +394,9 @@ extension ACPSessionManager {
             }
             try client.start()
         } catch {
-            session.lastError = "Failed to launch agent: \(error.localizedDescription)"
+            let msg = "Failed to launch agent: \(error.localizedDescription)"
+            session.lastError = msg
+            session.agentState = .failed(msg)
             return
         }
         let connection = ACPConnection(client: client)
@@ -409,7 +433,7 @@ extension ACPSessionManager {
                                           onLiveBufferRead: onLiveBufferRead)
             runner.start()
             runners[sessionId] = runner
-            session.attached = true
+            session.agentState = .ready
             runner.flushQueueIfIdle()
             stderrTask.cancel()
         } catch {
@@ -418,20 +442,120 @@ extension ACPSessionManager {
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
             let base = "ACP initialize/new failed: \(error.localizedDescription)"
-            session.lastError = tail.isEmpty ? base : base + "\nstderr: " + tail
+            let full = tail.isEmpty ? base : base + "\nstderr: " + tail
+            session.lastError = full
+            session.agentState = .failed(full)
             await connection.shutdown()
+        }
+    }
+
+    /// Idempotent recovery entry point. Called by the composer when the
+    /// user submits into a pane whose agent isn't `.ready`. A no-op for
+    /// states that already represent in-flight or live agents.
+    func reattach(to sessionId: ACPSession.ID) async {
+        guard let session = sessions[sessionId] else { return }
+        switch session.agentState {
+        case .spawning, .ready: return
+        case .idle, .disconnected, .failed:
+            await attach(to: sessionId, freshlyCreated: false)
+        }
+    }
+
+    /// Enqueue a prompt into a session whose agent isn't `.ready` yet.
+    /// Mirrors `ACPSessionRunner`'s `.enqueue` intent so the persisted
+    /// queue looks identical regardless of which side wrote it. The
+    /// existing `flushQueueIfIdle()` call inside `attach()` will drain
+    /// these items once the agent becomes `.ready`.
+    func enqueueWhileRecovering(
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        into sessionId: ACPSession.ID
+    ) {
+        guard let session = sessions[sessionId] else { return }
+        let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
+        session.enqueue(blocks: blocks)
+        do {
+            try store.upsertQueue(sessionId: sessionId, items: session.queue)
+        } catch {
+            session.lastError = "Failed to persist queued prompt: \(error.localizedDescription)"
+        }
+    }
+
+    /// Composer submit. Returns `true` if the prompt was accepted (either
+    /// sent immediately or queued for delivery once the agent is ready).
+    /// `onCompleted` fires once the underlying send/enqueue resolves; the
+    /// composer uses it to decide whether to clear or re-persist the draft.
+    ///
+    /// Branches on `session.agentState`:
+    /// - `.ready`: dispatch via the runner as before.
+    /// - `.spawning`: enqueue only — an `attach` is already in flight and
+    ///   the post-attach `flushQueueIfIdle()` will drain the head.
+    /// - `.idle` / `.disconnected` / `.failed`: enqueue AND kick `reattach`
+    ///   so the user's prompt is what brings the agent back online.
+    ///
+    @discardableResult
+    func submit(
+        sessionId: ACPSession.ID,
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        intent: ACPSubmitIntent,
+        onCompleted: @escaping @MainActor (Bool) -> Void
+    ) -> Bool {
+        guard let session = sessions[sessionId] else { return false }
+
+        switch session.agentState {
+        case .ready:
+            guard let runner = runners[sessionId] else {
+                // State and registry disagree — somehow we lost the runner
+                // without the stream-end branch flipping agentState. Reflect
+                // reality (`.disconnected`, same surface as the runner's
+                // stream-end branch) so `reattach()` actually fires a fresh
+                // attach instead of no-opping on `.ready`. Defer `onCompleted`
+                // to the next tick so it runs after the composer's submit
+                // closure returns and registers its pending id (without the
+                // hop the completion fires too early and gets ignored).
+                session.agentState = .disconnected
+                enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
+                Task { @MainActor in onCompleted(true) }
+                Task { @MainActor in await reattach(to: sessionId) }
+                return true
+            }
+            runner.send(text: text, attachments: attachments, intent: intent) { succeeded in
+                onCompleted(succeeded)
+            }
+            return true
+
+        case .spawning:
+            // An attach is in flight; the post-attach `flushQueueIfIdle()`
+            // will pick up the freshly enqueued head.
+            enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
+            Task { @MainActor in onCompleted(true) }
+            return true
+
+        case .idle, .disconnected, .failed:
+            // Prompt is accepted the moment it lands in the queue. Defer
+            // `onCompleted` to the next tick so it runs after the composer's
+            // submit closure returns and registers its pending id — firing
+            // synchronously here would race the composer's bookkeeping and
+            // get ignored, leaving the persisted draft uncleared.
+            enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
+            Task { @MainActor in onCompleted(true) }
+            Task { @MainActor in await reattach(to: sessionId) }
+            return true
         }
     }
 
     func detach(sessionId: ACPSession.ID) async {
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
-        // `connection.shutdown()` await below — if `session.attached`
-        // is still true at that point, its post-`userCancel` liveness
+        // `connection.shutdown()` await below — if `agentState` is still
+        // `.ready` at that point, its post-`userCancel` liveness
         // check passes and it dispatches `sendNow` against a connection
-        // being torn down. Flipping the flag here closes that window.
+        // being torn down. Flipping the state here closes that window.
         if let session = sessions[sessionId] {
-            session.attached = false
+            // .idle (user-initiated teardown), not .disconnected — the latter
+            // is reserved for the runner's unexpected stream-end branch.
+            session.agentState = .idle
             session.transcript.streamingState = .idle
             // Normalize any in-flight queue head: the sendNow task that
             // owned it is gone with the runner, so the next attach must

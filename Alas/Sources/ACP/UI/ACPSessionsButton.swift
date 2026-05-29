@@ -31,7 +31,7 @@ struct ACPSessionsButton: View {
                     .background(theme.color("bg-3").opacity(0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                     .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
-                if session.disconnected {
+                if session.agentState == .disconnected {
                     Circle()
                         .fill(theme.color("del"))
                         .frame(width: 6, height: 6)
@@ -67,7 +67,7 @@ private struct SessionsPopover: View {
     var body: some View {
         VStack(spacing: 0) {
             currentSessionHeader
-            if session.disconnected {
+            if session.agentState == .disconnected {
                 disconnectedBanner
             }
             Divider().background(theme.color("line"))
@@ -190,7 +190,6 @@ private struct SessionsPopover: View {
         Task {
             await manager.detach(sessionId: session.id)
             await manager.attach(to: session.id, freshlyCreated: false)
-            await MainActor.run { session.disconnected = false }
         }
     }
 }

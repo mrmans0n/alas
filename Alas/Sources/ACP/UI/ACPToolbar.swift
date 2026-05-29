@@ -17,6 +17,7 @@ struct ACPToolbar: View {
                 worktree: worktree,
                 agentLookup: agentLookup
             )
+            ACPRecoveryPill(session: session)
             ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
         }

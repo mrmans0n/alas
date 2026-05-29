@@ -119,7 +119,7 @@ private struct ACPSessionView: View {
         guard manager.runners[sessionId] == nil else { return false }
         if case .needsSetup = session.setupState { return false }
         if session.lastError != nil { return false }
-        if session.disconnected { return false }
+        if session.agentState == .disconnected { return false }
         return session.transcript.messages.isEmpty
     }
 
@@ -190,14 +190,17 @@ private struct ACPSessionView: View {
                         agentLookup: { state.agent(id: $0) },
                         sendOnEnter: state.config.harness.acpSendOnEnter
                     ) { text, attachments, intent, draft, onPromptFinished -> Bool in
-                        guard session.attached, !session.disconnected,
-                              let runner = manager.runners[sessionId] else { return false }
                         // `intent` is already resolved by the composer for keyboard
                         // submits; the toolbar send button bypasses the keyboard
                         // inversion and supplies its own intent directly. No
                         // further resolution here.
                         let draftRevision = session.composerDraftRevision
-                        runner.send(text: text, attachments: attachments, intent: intent) { succeeded in
+                        return manager.submit(
+                            sessionId: sessionId,
+                            text: text,
+                            attachments: attachments,
+                            intent: intent
+                        ) { succeeded in
                             if succeeded {
                                 manager.clearComposerDraft(
                                     for: session,
@@ -214,7 +217,6 @@ private struct ACPSessionView: View {
                             }
                             onPromptFinished(succeeded)
                         }
-                        return true
                     }
 
                     if let undo = session.steerUndo, !undo.snapshot.isEmpty {

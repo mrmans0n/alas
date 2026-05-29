@@ -118,7 +118,7 @@ struct ACPComposer: View {
             // Pulse + agent identity (icon + ACP label). Pulse moved here
             // from the toolbar so the "live agent" cue sits next to the
             // composer where focus is.
-            ACPPulseDot(color: session.disconnected ? theme.color("del") : theme.color("add"))
+            ACPPulseDot(color: session.agentState == .disconnected ? theme.color("del") : theme.color("add"))
             if let agent = agentLookup(session.agentId) {
                 AgentLogoView(agent: agent).frame(width: 14, height: 14)
             }
@@ -177,7 +177,7 @@ struct ACPComposer: View {
         if session.chipState.autoRun == .ignored { return true }
         switch session.transcript.streamingState {
         case .streaming, .sending: return true
-        default: return !session.attached || session.disconnected
+        default: return session.agentState != .ready
         }
     }
 
@@ -187,8 +187,9 @@ struct ACPComposer: View {
         }
         if case .streaming = session.transcript.streamingState { return "Auto-run cannot be changed while streaming" }
         if case .sending = session.transcript.streamingState { return "Auto-run cannot be changed while sending" }
-        if !session.attached { return "Agent connecting…" }
-        if session.disconnected { return "Agent disconnected" }
+        // .disconnected wins over "connecting" — it's a terminal state.
+        if session.agentState == .disconnected { return "Agent disconnected" }
+        if session.agentState != .ready { return "Agent connecting…" }
         return session.autoRunEnabled
             ? "Auto-run is ON — agent runs tools without asking"
             : "Click to skip permission prompts"
@@ -383,15 +384,23 @@ struct ACPComposer: View {
         .help(sendHelpText)
     }
 
-    /// Disabled only when the agent isn't reachable. State.streaming /
-    /// .sending no longer disable — they queue.
+    // TODO(harness): SwiftUI rendering test for `sendDisabled` requires
+    // snapshot infrastructure we don't have; the invariant we care about
+    // (button enabled whenever `manager.submit` would accept the prompt
+    // — i.e. for all agent states, including .disconnected / .failed /
+    // .idle so mouse-only users can drive recovery) is inspection-
+    // verifiable here and exercised by the `submit` tests above.
     private var sendDisabled: Bool {
-        !session.attached || session.disconnected
+        // Intentionally NOT gated on `agentState`: `manager.submit(...)`
+        // accepts prompts in every state (queueing + kicking reattach
+        // when not `.ready`). The send button must mirror Enter-to-submit
+        // so mouse-only users can recover a disconnected session.
+        false
     }
 
     private var sendHelpText: String {
-        if session.disconnected { return "Agent disconnected" }
-        if !session.attached    { return "Agent connecting…" }
+        if session.agentState == .disconnected { return "Agent disconnected" }
+        if session.agentState != .ready        { return "Agent connecting…" }
         if session.transcript.streamingState == .idle, session.queue.isEmpty {
             return "Send (⏎). Hold ⌥ to steer."
         }

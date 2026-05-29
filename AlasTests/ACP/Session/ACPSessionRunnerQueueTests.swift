@@ -144,7 +144,7 @@ struct ACPSessionRunnerQueueTests {
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
         // Pre-seed queue + put session in streaming.
-        session.attached = true
+        session.agentState = .ready
         session.transcript.streamingState = .streaming
         session.enqueue(blocks: [.text("stale-a")])
         session.enqueue(blocks: [.text("stale-b")])
@@ -172,18 +172,18 @@ struct ACPSessionRunnerQueueTests {
         // Regression: the unstructured steer Task survives the runner +
         // connection it was spawned in. If the user closes the tab while
         // we're awaiting `userCancel`, `ACPSessionManager.detach` flips
-        // `session.attached = false` and shuts down the connection but
-        // doesn't cancel this task. Without a liveness check, the trailing
-        // `sendNow` would append the redirect prompt and persist a
-        // `lastError` on the detached session.
+        // `session.agentState` away from `.ready` and shuts down the
+        // connection but doesn't cancel this task. Without a liveness
+        // check, the trailing `sendNow` would append the redirect prompt
+        // and persist a `lastError` on the detached session.
         let (runner, mock, session, _) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
-        session.attached = true
+        session.agentState = .ready
         session.transcript.streamingState = .streaming
 
         runner.send(blocks: [.text("redirect")], intent: .steer)
         // Simulate the detach landing while userCancel is still in flight.
-        session.attached = false
+        session.agentState = .idle
 
         try await Task.sleep(nanoseconds: 250_000_000)
 
@@ -198,7 +198,7 @@ struct ACPSessionRunnerQueueTests {
     func steerUndoRestores() async throws {
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
-        session.attached = true
+        session.agentState = .ready
         session.transcript.streamingState = .streaming
         session.enqueue(blocks: [.text("a")])
         runner.send(blocks: [.text("redirect")], intent: .steer)
@@ -295,7 +295,7 @@ struct ACPSessionRunnerQueueTests {
         // behind the steer.
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
-        session.attached = true
+        session.agentState = .ready
         // Simulate: flusher already promoted the head to .sending; a
         // pending tail is sitting behind it.
         session.enqueue(blocks: [.text("in-flight")])
