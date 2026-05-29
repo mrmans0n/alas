@@ -49,6 +49,7 @@ actor ACPSessionHydrator {
         try? store.touchLastOpenedAt(id: sessionId, at: now)
         let touched = ACPSessionRow(
             id: row.id, agentId: row.agentId, title: row.title,
+            titleSource: row.titleSource,
             currentModel: row.currentModel, currentMode: row.currentMode,
             autoRun: row.autoRun,
             createdAt: row.createdAt, updatedAt: row.updatedAt,

@@ -249,8 +249,7 @@ private struct EditableSessionTitle: View {
     private func commit() {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            session.title = trimmed
-            manager.persist(session)
+            manager.renameSession(id: session.id, title: trimmed, source: .manual)
         }
         editing = false
     }

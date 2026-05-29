@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 
+enum ACPSessionTitleSource: String, Codable {
+    case placeholder
+    case generated
+    case manual
+}
+
 @MainActor
 final class ACPSession: ObservableObject, Identifiable {
     typealias ID = String
@@ -13,6 +19,7 @@ final class ACPSession: ObservableObject, Identifiable {
     let terminalHost: ACPTerminalHost = ACPTerminalHost(sessionCwd: "/", sessionEnv: [:])
 
     @Published var title: String
+    @Published var titleSource: ACPSessionTitleSource
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = []
@@ -89,12 +96,14 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     init(id: ID, agentId: String, worktreeId: String, title: String,
+         titleSource: ACPSessionTitleSource = .placeholder,
          createdAt: Date = Date(),
          hydrationState: HydrationState = .ready) {
         self.id = id
         self.agentId = agentId
         self.worktreeId = worktreeId
         self.title = title
+        self.titleSource = titleSource
         self.createdAt = createdAt
         self.hydrationState = hydrationState
     }
@@ -107,8 +116,17 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
         transcript.messages.append(.user(id: UUID(), text: text, attachments: attachments))
-        if title == "" || title == "New session" {
-            title = String(text.prefix(40))
+        if titleSource == .placeholder {
+            let candidate = text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: .newlines)
+                .joined(separator: " ")
+            let trimmed = String(candidate.prefix(60))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                title = trimmed
+                titleSource = .generated
+            }
         }
     }
 

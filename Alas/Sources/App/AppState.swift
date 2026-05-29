@@ -1552,6 +1552,31 @@ final class AppState {
         tabs.clearTerminalRuntimeTitles(forLeavesInTabId: tabId)
     }
 
+    func renameACPSessionTab(worktreeId: String, tabId: TabID) {
+        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+              case .acpSession(let state) = tab,
+              let worktree = worktree(withId: worktreeId),
+              let mgr = acpManager(for: worktree) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Session"
+        alert.informativeText = "Choose a name for this ACP session."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = state.title
+        field.lineBreakMode = .byTruncatingTail
+        alert.accessoryView = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let newTitle = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newTitle.isEmpty else { return }
+        mgr.renameSession(id: state.sessionId, title: newTitle, source: .manual)
+        _ = tabs.renameACPSession(worktreeId: worktreeId, tabId: tabId, title: newTitle)
+    }
+
     func closeTab(worktreeId: String, tabId: TabID) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let projectPath = projectPath(forWorktreeId: worktreeId)
@@ -2368,6 +2393,13 @@ final class AppState {
         let target = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
         guard target.hasPrefix(prefix) else { return nil }
         return String(target.dropFirst(prefix.count))
+    }
+
+    /// Returns the cached ACP session manager for a worktree id, if one exists.
+    /// Does not create a new manager — use `acpManager(for:)` when lazy
+    /// creation is acceptable.
+    func acpManager(forWorktreeId id: String) -> ACPSessionManager? {
+        acpManagers[id]
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.

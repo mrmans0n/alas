@@ -65,6 +65,7 @@ struct TabActivityIconTintTests {
             onCopyPath: { _ in },
             onCopyRelativePath: { _ in },
             onRenameTerminal: { _ in },
+            onRenameACPSession: { _ in },
             onNewTerminal: { },
             enabledAgents: [],
             onLaunchAgent: { _ in },
