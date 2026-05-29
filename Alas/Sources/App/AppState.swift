@@ -1575,8 +1575,13 @@ final class AppState {
     /// tears down the whole worktree's manager — this leaves the
     /// manager (and any sibling sessions) running.
     private func cleanupACPSession(worktreeId: String, sessionId: String) {
-        guard let manager = acpManagers[worktreeId],
-              let runner = manager.runners[sessionId] else { return }
+        guard let manager = acpManagers[worktreeId] else { return }
+        // Flush any in-flight debounced draft write for this session
+        // before the tab goes away. The manager itself stays alive
+        // (other tabs may share it), so the global flush from
+        // disposeACPManager wouldn't fire here.
+        manager.flushPendingDraftWrite(forSession: sessionId)
+        guard let runner = manager.runners[sessionId] else { return }
         runner.stop()
         Task { @MainActor in
             await manager.detach(sessionId: sessionId)
@@ -2282,6 +2287,16 @@ final class AppState {
     @ObservationIgnored
     private var acpManagers: [String: ACPSessionManager] = [:]
 
+    /// Force-flush every per-session debounced composer-draft write across
+    /// all live managers. Called from app-will-terminate so an in-flight
+    /// typing burst doesn't lose its last ~300ms of input to the
+    /// debounce window.
+    func flushAllACPComposerDrafts() {
+        for manager in acpManagers.values {
+            manager.flushPendingDraftWrites()
+        }
+    }
+
     /// Mirrors `ACPSession.streamingState` into `HarnessService.activityBySession`
     /// so the sidebar work badge surfaces ACP activity. Attached for every
     /// manager created via `acpManager(for:)`; detached from `disposeACPManager(for:)`.
@@ -2347,6 +2362,10 @@ final class AppState {
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
         guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
+        // Flush any pending debounced draft writes before tearing the
+        // manager down — otherwise the last ~300ms of typing in any
+        // composer for this worktree never reaches SQLite.
+        manager.flushPendingDraftWrites()
         acpHarnessBridge.detach(worktreeId: worktreeId)
         let sessionIds = Array(manager.runners.keys)
         // Synchronously cancel the runner's async loops so they stop

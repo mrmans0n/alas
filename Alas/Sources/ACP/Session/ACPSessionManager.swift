@@ -16,6 +16,13 @@ final class ACPSessionManager: ObservableObject {
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
+    /// Per-session debounced write tasks for `composer_drafts`. The
+    /// in-memory `session.composerDraft` updates on every keystroke;
+    /// the SQLite write only fires after a brief idle (or a forced
+    /// flush on submit / delete). Cancelled and re-scheduled on each
+    /// further keystroke so a typing burst produces one write.
+    private var pendingDraftWrites: [ACPSession.ID: Task<Void, Never>] = [:]
+    private static let draftDebounceNanos: UInt64 = 300_000_000
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
          onDirtyCheck: ((String) -> Bool)? = nil,
@@ -72,10 +79,15 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func closeSession(id: ACPSession.ID) {
+        // Flush any pending draft write before dropping the in-memory
+        // session reference — otherwise a tab-switch-while-typing
+        // window can lose the last ~300ms of input.
+        flushPendingDraftWrite(for: id)
         sessions[id] = nil
     }
 
     func deleteSession(id: ACPSession.ID) {
+        cancelPendingDraftWrite(for: id)
         sessions[id] = nil
         try? store.deleteSession(id: id)
         refreshRecent()
@@ -118,18 +130,62 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func persistComposerDraft(_ draft: ACPComposerDraft, for session: ACPSession) {
+        // In-memory state updates instantly so cross-tab restore is live.
+        // The SQLite write is debounced so a typing burst produces at
+        // most one upsert per ~300ms instead of one per keystroke.
         session.replaceComposerDraft(draft)
-        if draft.isEmpty {
-            try? store.deleteComposerDraft(sessionId: session.id)
-        } else {
-            let now = Int64(Date().timeIntervalSince1970)
-            try? store.upsertComposerDraft(sessionId: session.id, draft: draft, updatedAt: now)
-        }
+        scheduleDraftPersistence(for: session.id)
     }
 
     func clearComposerDraft(for session: ACPSession) {
         session.replaceComposerDraft(.empty)
+        cancelPendingDraftWrite(for: session.id)
         try? store.deleteComposerDraft(sessionId: session.id)
+    }
+
+    private func scheduleDraftPersistence(for sessionId: ACPSession.ID) {
+        pendingDraftWrites[sessionId]?.cancel()
+        pendingDraftWrites[sessionId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.draftDebounceNanos)
+            guard !Task.isCancelled else { return }
+            await self?.flushPendingDraftWrite(for: sessionId)
+        }
+    }
+
+    private func flushPendingDraftWrite(for sessionId: ACPSession.ID) {
+        pendingDraftWrites[sessionId] = nil
+        // Write the LATEST in-memory state, not whatever was captured at
+        // schedule time — additional keystrokes may have come in during
+        // the debounce window.
+        guard let session = sessions[sessionId] else { return }
+        let draft = session.composerDraft
+        if draft.isEmpty {
+            try? store.deleteComposerDraft(sessionId: sessionId)
+        } else {
+            let now = Int64(Date().timeIntervalSince1970)
+            try? store.upsertComposerDraft(sessionId: sessionId, draft: draft, updatedAt: now)
+        }
+    }
+
+    private func cancelPendingDraftWrite(for sessionId: ACPSession.ID) {
+        pendingDraftWrites[sessionId]?.cancel()
+        pendingDraftWrites[sessionId] = nil
+    }
+
+    /// Flush every pending debounced draft write synchronously. Hook for
+    /// app-termination, scene resign, or tests that need a deterministic
+    /// post-write read.
+    func flushPendingDraftWrites() {
+        for sessionId in Array(pendingDraftWrites.keys) {
+            flushPendingDraftWrite(for: sessionId)
+        }
+    }
+
+    /// Flush the debounced draft write for one session. Hook for the
+    /// tab-close path (single session goes away while the worktree's
+    /// manager stays alive).
+    func flushPendingDraftWrite(forSession sessionId: ACPSession.ID) {
+        flushPendingDraftWrite(for: sessionId)
     }
 
     /// Persist the in-memory queue to SQLite. The runner has the same

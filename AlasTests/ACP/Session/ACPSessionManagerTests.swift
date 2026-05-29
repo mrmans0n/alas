@@ -43,11 +43,13 @@ struct ACPSessionManagerTests {
         mgr.persistComposerDraft(draft, for: session)
         #expect(session.composerDraft == draft)
         #expect(session.composerDraftRevision == 1)
+        mgr.flushPendingDraftWrites()
         #expect(try store.loadComposerDraft(sessionId: session.id) == draft)
 
         mgr.persistComposerDraft(.empty, for: session)
         #expect(session.composerDraft == .empty)
         #expect(session.composerDraftRevision == 2)
+        mgr.flushPendingDraftWrites()
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
     }
 
@@ -83,6 +85,7 @@ struct ACPSessionManagerTests {
         mgr.persistComposerDraft(newer, for: session)
         mgr.clearComposerDraft(for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
         #expect(session.composerDraft == newer)
+        mgr.flushPendingDraftWrites()
         #expect(try store.loadComposerDraft(sessionId: session.id) == newer)
     }
 
@@ -98,11 +101,13 @@ struct ACPSessionManagerTests {
         let submittedRevision = session.composerDraftRevision
         mgr.persistComposerDraft(submitted, for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
         #expect(session.composerDraft == submitted)
+        mgr.flushPendingDraftWrites()
         #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
 
         mgr.persistComposerDraft(submitted, for: session)
         mgr.persistComposerDraft(.empty, for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
         #expect(session.composerDraft == submitted)
+        mgr.flushPendingDraftWrites()
         #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
     }
 
