@@ -23,8 +23,11 @@ final class ACPSessionManager: ObservableObject {
     /// further keystroke so a typing burst produces one write.
     private var pendingDraftWrites: [ACPSession.ID: Task<Void, Never>] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
+    private let hydrator: ACPSessionHydrator?
+    private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
+         hydratorPath: String? = nil,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil)
     {
@@ -33,6 +36,7 @@ final class ACPSessionManager: ObservableObject {
         self.store = store
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
+        self.hydrator = hydratorPath.flatMap { try? ACPSessionHydrator(path: $0) }
         self.recent = (try? store.recentSessions()) ?? []
     }
 
@@ -44,38 +48,142 @@ final class ACPSessionManager: ObservableObject {
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
         try? store.upsertSession(row)
-        let session = ACPSession(id: id, agentId: agentId, worktreeId: worktreeId, title: row.title)
+        let session = ACPSession(
+            id: id, agentId: agentId, worktreeId: worktreeId,
+            title: row.title, hydrationState: .ready)
         sessions[id] = session
         refreshRecent()
         return session
     }
 
-    func openSession(id: ACPSession.ID) -> ACPSession? {
+    /// Returns a cached session or a `.loading` placeholder. Cache hits
+    /// are O(1); cache misses do a single indexed `loadSession` query
+    /// against SQLite so we don't insert orphan loading entries for
+    /// typo'd ids. The heavy work (loading every message, decoding,
+    /// reading the queue + draft) is deferred to `hydrateIfNeeded`.
+    func placeholderSession(id: ACPSession.ID) -> ACPSession? {
         if let s = sessions[id] { return s }
+        // Verify the session exists before allocating a placeholder so we
+        // don't insert orphan loading entries for typo'd ids.
         guard let row = try? store.loadSession(id: id) else { return nil }
-        let session = ACPSession(id: row.id, agentId: row.agentId, worktreeId: worktreeId, title: row.title)
-        // Restore transcript
-        if let stored = try? store.loadMessages(sessionId: id) {
-            for m in stored {
-                if let decoded = try? ACPMessageCodec.decode(kind: m.kind, payload: m.payload) {
-                    session.transcript.messages.append(decoded)
-                }
+        let session = ACPSession(
+            id: row.id, agentId: row.agentId, worktreeId: worktreeId,
+            title: row.title, hydrationState: .loading)
+        sessions[id] = session
+        return session
+    }
+
+    /// Drives a session from `.loading` to `.ready` (or `.failed`). Safe to
+    /// call multiple times concurrently — duplicate callers await the same
+    /// in-flight task. No-op when the session is already `.ready` or
+    /// `.failed`.
+    func hydrateIfNeeded(id: ACPSession.ID) async {
+        guard let session = sessions[id] else { return }
+        guard session.hydrationState == .loading else { return }
+        if let existing = inFlightHydrations[id] {
+            await existing.value
+            // The in-flight task captured an earlier session instance; if
+            // it was closed + reopened while we awaited, the new placeholder
+            // (still `.loading`) needs its own hydration pass. Recurse once
+            // so the visible session reaches `.ready`. The guards at the
+            // top prevent runaway recursion — they'll see the just-applied
+            // `.ready` from a happy-path completion and exit. The task body
+            // clears `inFlightHydrations[id]` before returning, so the
+            // recursive call won't re-await the completed task.
+            await hydrateIfNeeded(id: id)
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runHydration(id: id, session: session)
+            // Clear the map from inside the task body so any waiter that
+            // resumes from `await existing.value` observes a clean slate
+            // and can spawn a fresh hydration for a reopened placeholder
+            // rather than re-awaiting this completed task.
+            self.inFlightHydrations[id] = nil
+        }
+        inFlightHydrations[id] = task
+        await task.value
+    }
+
+    private func runHydration(id: ACPSession.ID, session: ACPSession) async {
+        do {
+            let result: HydrationResult
+            if let hydrator {
+                result = try await hydrator.hydrate(sessionId: id)
+            } else {
+                // No off-main hydrator (test fallback): perform the same
+                // work synchronously via the manager's store.
+                result = try synchronousHydrate(id: id)
+            }
+            // Drop the result if the captured session was closed (or closed
+            // and reopened — the cached entry now points to a different
+            // ACPSession instance) while we awaited. The fresh placeholder
+            // will be hydrated by the recursive call in `hydrateIfNeeded`.
+            guard sessions[id] === session else { return }
+            applyHydration(result, to: session)
+        } catch {
+            guard sessions[id] === session else { return }
+            session.hydrationState = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Synchronous hydration fallback used when no hydrator was wired in
+    /// (tests that construct the manager without a path). Same data, same
+    /// shape — just on the main thread.
+    private func synchronousHydrate(id: ACPSession.ID) throws -> HydrationResult {
+        guard let row = try store.loadSession(id: id) else {
+            throw ACPSessionHydrator.Error.sessionNotFound(id)
+        }
+        let stored = (try? store.loadMessages(sessionId: id)) ?? []
+        var wire: [ACPMessageWire] = []
+        wire.reserveCapacity(stored.count)
+        let decoder = JSONDecoder()
+        for m in stored {
+            if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
+                wire.append(w)
             }
         }
-        // Restore queue
-        if let queue = try? store.loadQueue(sessionId: id) {
-            session.restoreQueue(queue)
+        let queue = (try? store.loadQueue(sessionId: id)) ?? []
+        let draft = try? store.loadComposerDraft(sessionId: id)
+        let now = Int64(Date().timeIntervalSince1970)
+        try? store.touchLastOpenedAt(id: id, at: now)
+        let touched = ACPSessionRow(
+            id: row.id, agentId: row.agentId, title: row.title,
+            currentModel: row.currentModel, currentMode: row.currentMode,
+            autoRun: row.autoRun,
+            createdAt: row.createdAt, updatedAt: row.updatedAt,
+            lastOpenedAt: now,
+            archived: row.archived)
+        let recent = (try? store.recentSessions()) ?? []
+        return HydrationResult(row: touched, wireMessages: wire,
+                               queue: queue, draft: draft, recent: recent)
+    }
+
+    private func applyHydration(_ result: HydrationResult, to session: ACPSession) {
+        // Convert wire variants into full ACPMessages (allocates StreamingText
+        // for agent/thought) in one main-actor pass.
+        session.transcript.messages = result.wireMessages.map { $0.toMessage() }
+        session.transcript.resetWindowToTail()
+        session.restoreQueue(result.queue)
+        // The composer is rendered (and focused) the moment the placeholder
+        // appears, so the user can start typing before hydration finishes.
+        // Only restore the persisted draft when the live composer is still
+        // pristine (revision == 0); an intentional clear still bumps the
+        // revision, so it's distinguishable from "never edited" even though
+        // both leave `composerDraft.isEmpty == true`.
+        if let draft = result.draft, session.composerDraftRevision == 0 {
+            session.replaceComposerDraft(draft)
         }
-        session.currentModel = row.currentModel
-        session.currentMode = row.currentMode
-        session.autoRunEnabled = row.autoRun
-        if let loadedDraft = try? store.loadComposerDraft(sessionId: id) {
-            session.replaceComposerDraft(loadedDraft)
-        }
-        sessions[id] = session
-        try? store.upsertSession(touch(row))
-        refreshRecent()
-        return session
+        session.currentModel = result.row.currentModel
+        session.currentMode = result.row.currentMode
+        session.autoRunEnabled = result.row.autoRun
+        // Title intentionally NOT overwritten: `placeholderSession` already
+        // seeded it from the same row, and a rename made through the
+        // toolbar during the hydration window should win against the value
+        // we captured before the user typed it.
+        session.hydrationState = .ready
+        self.recent = result.recent
     }
 
     func closeSession(id: ACPSession.ID) {
@@ -224,12 +332,6 @@ final class ACPSessionManager: ObservableObject {
     func refreshRecent() {
         recent = (try? store.recentSessions()) ?? []
     }
-
-    private func touch(_ row: ACPSessionRow) -> ACPSessionRow {
-        var r = row
-        r.lastOpenedAt = Int64(Date().timeIntervalSince1970)
-        return r
-    }
 }
 
 // MARK: - Process lifecycle
@@ -289,8 +391,8 @@ extension ACPSessionManager {
             // server doesn't know about our local UUID, and `remoteSessionId`
             // (the id `session/new` previously returned) isn't persisted.
             // Most ACP agents also don't implement `session/load`. The user-
-            // visible history comes from the local SQLite store, loaded in
-            // `openSession`; the server just gets a fresh conversation.
+            // visible history comes from the local SQLite store, loaded via
+            // `hydrateIfNeeded`; the server just gets a fresh conversation.
             let result = try await connection.newSession(cwd: worktreePath)
             session.remoteSessionId = result.sessionId
             session.availableModels = result.availableModels
@@ -334,10 +436,10 @@ extension ACPSessionManager {
             // owned it is gone with the runner, so the next attach must
             // see a `.pending` head to be able to flush it. Without this,
             // closing a tab mid-flush leaves the cached session's head
-            // as `.sending`; the next openSession returns the cached
-            // object (skipping `restoreQueue`), the post-attach flush
-            // sees `.sending`, and the queue stays stuck until a full
-            // app restart reloads from SQLite.
+            // as `.sending`; the next `placeholderSession` returns the
+            // cached object (skipping `restoreQueue`), the post-attach
+            // flush sees `.sending`, and the queue stays stuck until a
+            // full app restart reloads from SQLite.
             session.restoreQueue(session.queue)
         }
         if let runner = runners.removeValue(forKey: sessionId) {

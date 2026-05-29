@@ -27,7 +27,7 @@ struct ACPHistorySidebar: View {
 
     private func rowView(_ row: ACPSessionRow) -> some View {
         Button {
-            _ = manager.openSession(id: row.id)
+            _ = manager.placeholderSession(id: row.id)
         } label: {
             HStack(spacing: 8) {
                 if let agent = agentLookup(row.agentId) {

@@ -7,7 +7,7 @@ struct ACPTabView: View {
 
     var body: some View {
         if let manager = state.acpManager(for: worktree),
-           let session = manager.openSession(id: sessionId) {
+           let session = manager.placeholderSession(id: sessionId) {
             ACPSessionView(
                 sessionId: sessionId,
                 state: state,
@@ -70,11 +70,13 @@ private struct ACPSessionView: View {
             if let err = session.lastError {
                 errorBanner(err)
             }
+            if case .failed(let msg) = session.hydrationState {
+                hydrationFailureBanner(message: msg)
+            }
             transcriptAndComposer
         }
         .task(id: sessionId) {
-            let freshlyCreated = manager.runners[sessionId] == nil && session.transcript.messages.isEmpty
-            await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
+            await hydrateAndAttach()
         }
         .focusable()
         .onKeyPress(.escape) {
@@ -100,6 +102,7 @@ private struct ACPSessionView: View {
     /// fresh open. Don't show the empty transcript or "agent not yet
     /// attached" warning during this — render a skeleton instead.
     private var isConnecting: Bool {
+        if session.hydrationState == .loading { return true }
         guard manager.runners[sessionId] == nil else { return false }
         if case .needsSetup = session.setupState { return false }
         if session.lastError != nil { return false }
@@ -251,6 +254,47 @@ private struct ACPSessionView: View {
         .background(theme.color("bg-1").opacity(0.6))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("line")).frame(height: 0.5)
+        }
+    }
+
+    /// Drive a session from `.loading` through `.ready` (or `.failed`)
+    /// and, on success, attach the runner. Used by both the initial
+    /// `.task(id:)` and the failure banner's Retry button so a successful
+    /// retry doesn't leave the session unattached with a disabled composer.
+    private func hydrateAndAttach() async {
+        await manager.hydrateIfNeeded(id: sessionId)
+        if case .failed = session.hydrationState { return }
+        let freshlyCreated = manager.runners[sessionId] == nil
+            && session.transcript.messages.isEmpty
+        await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
+    }
+
+    private func hydrationFailureBanner(message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(theme.color("del"))
+            Text("Failed to load session history: \(message)")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg"))
+                .textSelection(.enabled)
+            Spacer()
+            Button("Retry") {
+                session.hydrationState = .loading
+                // Mirror the initial `.task(id:)` so a successful retry
+                // continues into `attach`. Without this, the runner stays
+                // nil and the composer can't send.
+                Task { await hydrateAndAttach() }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .medium))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(theme.color("del").opacity(0.18))
+            .clipShape(Capsule())
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(theme.color("del").opacity(0.10))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.color("del").opacity(0.3)).frame(height: 0.5)
         }
     }
 

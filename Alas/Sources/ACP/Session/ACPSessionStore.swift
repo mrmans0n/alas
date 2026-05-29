@@ -149,6 +149,17 @@ extension ACPSessionStore {
         return rows.first.map(Self.rowToSession)
     }
 
+    /// Bump `last_opened_at` for an existing row without touching any
+    /// other field. No-op if the row is gone (the user deleted the
+    /// session) — unlike `upsertSession`, this never resurrects a
+    /// deleted row or flips `archived` back to false.
+    func touchLastOpenedAt(id: String, at timestamp: Int64) throws {
+        try db.exec(
+            "UPDATE sessions SET last_opened_at = ? WHERE id = ?",
+            bindings: [timestamp, id]
+        )
+    }
+
     func recentSessions(limit: Int = 50) throws -> [ACPSessionRow] {
         let rows = try db.query("""
         SELECT * FROM sessions WHERE archived = 0 ORDER BY last_opened_at DESC LIMIT ?

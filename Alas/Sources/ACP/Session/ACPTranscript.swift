@@ -21,6 +21,18 @@ final class ACPTranscript: ObservableObject {
     /// tree stable across ticks.
     @Published var streamingTick: UInt32 = 0
 
+    /// Render window: `ACPMessageList` draws `messages[visibleHead...]`.
+    /// Reset to `max(0, messages.count - tailWindow)` after hydration so
+    /// long transcripts paint quickly; user can scroll up or click the
+    /// "Earlier messages…" affordance to reveal older rows in chunks of
+    /// `tailWindow`.
+    @Published var visibleHead: Int = 0
+
+    /// Number of rows revealed per backfill step. Tuned for chat-style
+    /// content where a screenful is a few rows; bigger steps feel like
+    /// loading state, smaller steps require too many clicks.
+    static let tailWindow: Int = 30
+
     // MARK: - Per-message markdown caches
 
     private var markdownCaches: [String: ACPMarkdownBlockCache] = [:]
@@ -53,5 +65,20 @@ final class ACPTranscript: ObservableObject {
             if case .plan(_, let items) = m { return items }
         }
         return nil
+    }
+
+    // MARK: - Render window helpers
+
+    /// Reset `visibleHead` to show the last `tailWindow` messages. Call
+    /// after hydration applies a transcript. No-op for transcripts shorter
+    /// than `tailWindow`.
+    func resetWindowToTail() {
+        visibleHead = max(0, messages.count - Self.tailWindow)
+    }
+
+    /// Reveal one more `tailWindow`-sized chunk of older messages.
+    /// Clamps at zero. Idempotent at the head.
+    func stepHeadBack() {
+        visibleHead = max(0, visibleHead - Self.tailWindow)
     }
 }

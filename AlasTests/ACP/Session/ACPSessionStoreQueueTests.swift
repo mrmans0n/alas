@@ -64,7 +64,7 @@ struct ACPSessionStoreQueueTests {
 @Suite("ACPSessionManager queue restore")
 struct ACPSessionManagerQueueRestoreTests {
     @Test("openSession restores persisted queue, flipping .sending to .pending")
-    func restoreNormalizes() throws {
+    func restoreNormalizes() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(
@@ -77,7 +77,8 @@ struct ACPSessionManagerQueueRestoreTests {
         ])
 
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
-        let session = mgr.openSession(id: "sm")
+        let session = mgr.placeholderSession(id: "sm")
+        await mgr.hydrateIfNeeded(id: "sm")
         #expect(session != nil)
         #expect(session?.queue.count == 2)
         #expect(session?.queue[0].status == .pending)   // was .sending
