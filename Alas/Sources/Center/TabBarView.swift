@@ -25,7 +25,7 @@ struct TabBarView: View {
     let sidebarHidden: Bool
     let onMove: (TabID, TabID) -> Void
     let titleLookup: (TabID) -> String?
-    let planProgressLookup: (TabID) -> (done: Int, total: Int)?
+    let transcriptLookup: (TabID) -> ACPTranscript?
     @Environment(\.theme) var theme
 
     private var isTerminalActive: Bool {
@@ -51,7 +51,7 @@ struct TabBarView: View {
                     showClose: true,
                     harnessInfo: harnessLookup(tab.id),
                     dirty: dirtyLookup(tab.id),
-                    planProgress: planProgressLookup(tab.id),
+                    transcript: transcriptLookup(tab.id),
                     onActivate: { onActivate(tab.id) },
                     onClose: { onClose(tab.id) }
                 )
@@ -125,7 +125,7 @@ private struct TabButton: View {
     let showClose: Bool
     let harnessInfo: (agent: AgentKind, state: ActivityState)?
     let dirty: Bool
-    let planProgress: (done: Int, total: Int)?
+    let transcript: ACPTranscript?
     let onActivate: () -> Void
     let onClose: () -> Void
     @Environment(\.theme) var theme
@@ -146,14 +146,8 @@ private struct TabButton: View {
                     .font(.system(size: 9))
                     .foregroundStyle(theme.color("fg-faint"))
             }
-            if let progress = planProgress {
-                Text("\(progress.done) / \(progress.total)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme.color("accent"))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(theme.color("accent").opacity(0.12))
-                    .clipShape(Capsule())
+            if let transcript {
+                TabPlanProgressChip(transcript: transcript)
             }
             if showClose {
                 Button(action: onClose) {
@@ -282,5 +276,25 @@ private struct AgentSparkleMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help((agents.isEmpty && acpAgents.isEmpty) ? "No enabled agents" : "Launch agent")
+    }
+}
+
+/// Observes `ACPTranscript` directly so SwiftUI invalidates when plan
+/// items change — `ACPSession` does not forward `transcript.objectWillChange`.
+private struct TabPlanProgressChip: View {
+    @ObservedObject var transcript: ACPTranscript
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        if let items = transcript.currentPlan, !items.isEmpty {
+            let done = items.filter { $0.status == "completed" }.count
+            Text("\(done) / \(items.count)")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.color("accent"))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(theme.color("accent").opacity(0.12))
+                .clipShape(Capsule())
+        }
     }
 }

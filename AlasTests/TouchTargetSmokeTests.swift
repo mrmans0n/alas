@@ -67,7 +67,7 @@ struct TouchTargetSmokeTests {
             sidebarHidden: false,
             onMove: { _, _ in },
             titleLookup: { _ in nil },
-            planProgressLookup: { _ in nil }
+            transcriptLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
@@ -102,7 +102,7 @@ struct TouchTargetSmokeTests {
             sidebarHidden: false,
             onMove: { _, _ in },
             titleLookup: { _ in nil },
-            planProgressLookup: { _ in nil }
+            transcriptLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
@@ -147,7 +147,7 @@ struct TouchTargetSmokeTests {
             sidebarHidden: false,
             onMove: { _, _ in },
             titleLookup: { _ in nil },
-            planProgressLookup: { _ in nil }
+            transcriptLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
@@ -192,7 +192,7 @@ struct TouchTargetSmokeTests {
             sidebarHidden: true,
             onMove: { _, _ in },
             titleLookup: { _ in nil },
-            planProgressLookup: { _ in nil }
+            transcriptLookup: { _ in nil }
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
