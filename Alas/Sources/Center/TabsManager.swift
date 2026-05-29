@@ -254,10 +254,10 @@ final class TabsManager {
         return tab
     }
 
-    enum RemoveFocusedLeafOutcome {
-        /// A non-focused-leaf sibling collapsed up; the tab persists.
+    enum RemoveLeafOutcome {
+        /// A sibling collapsed up; the tab persists.
         case leafRemoved(tab: Tab, closedLeafId: String)
-        /// The focused leaf was the last leaf; caller must run the regular close-tab path.
+        /// The removed leaf was the last leaf; caller must run the regular close-tab path.
         case tabRemoved(closedLeafId: String)
 
         var closedLeafId: String {
@@ -267,20 +267,27 @@ final class TabsManager {
         }
     }
 
-    /// Remove the focused leaf. If it was the last leaf, the tab is removed via
-    /// the regular close-tab path and `tabRemoved` is true. Otherwise the sibling
-    /// collapses up and a sensible focus replacement is picked (first leaf in the
-    /// remaining tree).
+    typealias RemoveFocusedLeafOutcome = RemoveLeafOutcome
+
+    /// Remove the leaf identified by `leafId` from `tabId` in `worktreeId`. If the
+    /// leaf is part of a split, the sibling collapses up; focus only moves when
+    /// the removed leaf was itself focused (then to the first leaf in the
+    /// remaining tree). Returns `.tabRemoved` when the leaf was the last in the
+    /// tab — the tab stays in the list so callers can run the regular close-tab
+    /// path. Returns `nil` when the worktree, tab, or leaf is missing, so the
+    /// process-exit handler can race manual close as a quiet no-op.
     @discardableResult
-    func removeFocusedLeaf(worktreeId: String, tabId: TabID) -> RemoveFocusedLeafOutcome? {
+    func removeLeaf(worktreeId: String, tabId: TabID, leafId: String) -> RemoveLeafOutcome? {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .terminal(var state) = file.tabs[idx],
-              let focused = state.root.find(leafId: state.focusedLeafId)?.leaf else { return nil }
-        let closedLeafId = focused.id
-        if let newRoot = state.root.removingLeaf(id: state.focusedLeafId) {
+              state.root.find(leafId: leafId) != nil else { return nil }
+        let closedLeafId = leafId
+        if let newRoot = state.root.removingLeaf(id: leafId) {
             state.root = newRoot
-            state.focusedLeafId = newRoot.firstLeaf().id
+            if state.root.find(leafId: state.focusedLeafId) == nil {
+                state.focusedLeafId = newRoot.firstLeaf().id
+            }
             let tab = Tab.terminal(state)
             file.tabs[idx] = tab
             byWorktree[worktreeId] = file
@@ -289,6 +296,15 @@ final class TabsManager {
         } else {
             return .tabRemoved(closedLeafId: closedLeafId)
         }
+    }
+
+    /// Remove the focused leaf. Thin wrapper around `removeLeaf(worktreeId:tabId:leafId:)`.
+    @discardableResult
+    func removeFocusedLeaf(worktreeId: String, tabId: TabID) -> RemoveLeafOutcome? {
+        guard let file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .terminal(let state) = file.tabs[idx] else { return nil }
+        return removeLeaf(worktreeId: worktreeId, tabId: tabId, leafId: state.focusedLeafId)
     }
 
     @discardableResult
