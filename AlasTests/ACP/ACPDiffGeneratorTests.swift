@@ -4,7 +4,6 @@ import Testing
 
 @Suite("ACPDiffGenerator")
 struct ACPDiffGeneratorTests {
-
     @Test("new file produces all-additions hunk")
     func newFile() async throws {
         let diff = try await ACPDiffGenerator.generate(
