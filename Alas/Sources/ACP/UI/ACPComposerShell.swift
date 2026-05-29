@@ -57,14 +57,14 @@ struct ACPComposer: View {
                 sendOnEnter: sendOnEnter,
                 onDraftChange: { draft in
                     manager.persistComposerDraft(draft, for: session)
-                    hasText = !draft.isEmpty
+                    hasText = draft.hasContent
                 },
                 onDraftClear: { manager.clearComposerDraft(for: session) },
                 onSubmit: onSubmit
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
-                hasText = !session.composerDraft.isEmpty
+                hasText = session.composerDraft.hasContent
             }
 
             HStack(spacing: 8) {
