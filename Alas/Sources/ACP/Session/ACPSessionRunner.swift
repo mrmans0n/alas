@@ -161,7 +161,7 @@ final class ACPSessionRunner {
                         // path). Storing the absolute path silently
                         // produced empty diffs.
                         let storedPath = self.relativeToWorktree(params.path) ?? params.path
-                        self.appendAndPersistFileEdit(.init(path: storedPath, added: res.added, removed: res.removed))
+                        self.appendAndPersistFileEdit(.init(path: storedPath, added: res.added, removed: res.removed, oldText: res.oldText, newText: res.newText))
                         // ACP `fs/write_text_file` is defined as
                         // returning `result: null`. Encoding an empty
                         // Swift struct produced `{}`, which spec-strict

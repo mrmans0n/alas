@@ -41,7 +41,10 @@ struct ACPMessageTests {
     }
     @Test("file edit round-trips")
     func editRoundtrip() throws {
-        let m = ACPMessage.fileEdit(id: UUID(), .init(path: "x.swift", added: 4, removed: 1))
+        let m = ACPMessage.fileEdit(id: UUID(), .init(
+            path: "x.swift", added: 4, removed: 1,
+            oldText: "abc\ndef\n", newText: "abc\nGHI\ndef\n"
+        ))
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
         guard case .fileEdit(_, let edit) = back else {
@@ -51,5 +54,26 @@ struct ACPMessageTests {
         #expect(edit.path == "x.swift")
         #expect(edit.added == 4)
         #expect(edit.removed == 1)
+        #expect(edit.oldText == "abc\ndef\n")
+        #expect(edit.newText == "abc\nGHI\ndef\n")
+    }
+
+    @Test("file edit decodes with nil oldText for backward compat")
+    func editRoundtripBackwardCompat() throws {
+        let payload = try JSONEncoder().encode(OldFormat(path: "y.swift", added: 1, removed: 0))
+        let back = try ACPMessageCodec.decode(kind: "file_edit", payload: payload)
+        guard case .fileEdit(_, let edit) = back else {
+            Issue.record("expected file edit")
+            return
+        }
+        #expect(edit.path == "y.swift")
+        #expect(edit.oldText == nil)
+        #expect(edit.newText == "")
+    }
+
+    private struct OldFormat: Codable {
+        let path: String
+        let added: Int
+        let removed: Int
     }
 }
