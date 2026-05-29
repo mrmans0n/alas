@@ -244,7 +244,7 @@ extension ACPSessionStore {
 
     private static func rowToSession(_ r: [String: Any?]) -> ACPSessionRow {
         let rawSource = r["title_source"] as? String ?? "placeholder"
-        ACPSessionRow(
+        return ACPSessionRow(
             id: r["id"] as? String ?? "",
             agentId: r["agent_id"] as? String ?? "",
             title: r["title"] as? String ?? "",
