@@ -71,7 +71,7 @@ struct WorkingTreeSectionView: View {
                 stats: (add: totalAdd, del: totalDel)
             ) {
                 if staged.isEmpty, !unstaged.isEmpty {
-                    AlasButton(title: "Stage all", style: .subtle, action: { onStageAll?(unstaged) })
+                    SectionHeaderActionLink(title: "Stage all", action: { onStageAll?(unstaged) })
                 }
             }
             .contextMenu {
@@ -112,7 +112,7 @@ struct WorkingTreeSectionView: View {
             stats: (add, del),
             trailing: actionLabel.map { label in
                 AnyView(
-                    AlasButton(title: label, style: .subtle, action: { onAction?() })
+                    SectionHeaderActionLink(title: label, action: { onAction?() })
                 )
             }
         )
@@ -245,5 +245,28 @@ struct WorkingTreeSectionView: View {
         } else {
             return AnyView(EmptyView())
         }
+    }
+}
+
+/// Compact link-style action used in the trailing slot of section/sub
+/// headers. Avoids AlasButton's 28pt fixed height so headers stay the
+/// same vertical size as the COMMITS header and Draft commit nudge.
+private struct SectionHeaderActionLink: View {
+    let title: String
+    let action: () -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(0.3)
+                .foregroundColor(hovering ? theme.color("accent") : theme.color("fg-muted"))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .onHover { hovering = $0 }
     }
 }
