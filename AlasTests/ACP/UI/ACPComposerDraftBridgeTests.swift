@@ -512,17 +512,17 @@ struct ACPComposerDraftBridgeTests {
             == ACPComposerDraft(segments: [.text("just words")]))
     }
 
-    @Test("queued prompt with a mention round-trips through serialization without duplicating")
+    @Test("queued prompt with a trailing mention round-trips exactly")
     func mentionRoundTrip() {
         // The exact path a queued item travels: composer draft →
         // extract (text + attachments) → ACPSessionRunner.blocks →
-        // ACPComposerDraft(blocks:). Editing must reproduce the ORIGINAL
-        // draft, not a draft with the mention doubled. (Regression for
-        // the codex P2 finding.)
+        // ACPComposerDraft(blocks:). With the mention at the tail — where
+        // `insertMention` always appends chips — editing must reproduce the
+        // ORIGINAL draft exactly: no doubled mention, no dropped one.
+        // (Regression for the codex P2 findings.)
         let original = ACPComposerDraft(segments: [
             .text("please review "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
-            .text("now"),
         ])
 
         let attributed = ACPInputField.Coordinator.attributedString(from: original)
@@ -530,17 +530,7 @@ struct ACPComposerDraftBridgeTests {
         let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
         let restored = ACPComposerDraft(blocks: blocks)
 
-        // The key invariant: exactly ONE mention chip, and no leftover
-        // "@File.swift" literal in the text (which is what duplicated the
-        // mention before the fix).
-        let mentionCount = restored.segments.filter {
-            if case .mention = $0 { return true } else { return false }
-        }.count
-        #expect(mentionCount == 1)
-        let joinedText = restored.segments.compactMap {
-            if case .text(let t) = $0 { return t } else { return nil }
-        }.joined()
-        #expect(!joinedText.contains("@File.swift"))
+        #expect(restored == original)
     }
 
     @Test("resource link without a name falls back to its last path component")
