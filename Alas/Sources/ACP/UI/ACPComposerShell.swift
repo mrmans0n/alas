@@ -158,7 +158,7 @@ struct ACPComposer: View {
     }
 
     private var borderColor: Color {
-        inputFocused ? theme.color("accent").opacity(0.7) : theme.color("line")
+        inputFocused ? theme.color("add").opacity(0.7) : theme.color("line")
     }
 
     // MARK: - Auto-run pill (was in the toolbar)
