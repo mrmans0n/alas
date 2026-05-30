@@ -23,6 +23,7 @@ struct ACPMessageList: View {
     @State private var isRestoringTail = false
     @State private var headFrame: CGRect = .zero
     @State private var lastHeadStepAt: Date = .distantPast
+    @State private var scrollViewRef = ACPWeakScrollViewRef()
 
     /// Height of an invisible spacer at the tail of the VStack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -92,27 +93,18 @@ struct ACPMessageList: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         if transcript.visibleHead > 0 {
-                            Button {
-                                transcript.stepHeadBack()
-                            } label: {
-                                Text("Earlier messages\u{2026}")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(theme.color("fg-muted"))
-                                    .padding(.horizontal, 10).padding(.vertical, 4)
-                                    .background(theme.color("bg-1").opacity(0.6))
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.bottom, 4)
-                            .background(
-                                GeometryReader { headGeom in
-                                    Color.clear.preference(
-                                        key: ACPHeadFramePreferenceKey.self,
-                                        value: headGeom.frame(in: .named(scrollSpaceName))
-                                    )
-                                }
-                            )
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.bottom, 4)
+                                .background(
+                                    GeometryReader { headGeom in
+                                        Color.clear.preference(
+                                            key: ACPHeadFramePreferenceKey.self,
+                                            value: headGeom.frame(in: .named(scrollSpaceName))
+                                        )
+                                    }
+                                )
                         }
                         ForEach(visibleMessages, id: \.stableId) { message in
                             row(for: message)
@@ -169,7 +161,8 @@ struct ACPMessageList: View {
                         onAtBottom: {
                             setFollowsTranscriptTail(true)
                         },
-                        isRestoring: { isRestoringTail }
+                        isRestoring: { isRestoringTail },
+                        onScrollViewResolved: { scrollViewRef.scrollView = $0 }
                     )
                 )
                 .onAppear {
@@ -180,13 +173,13 @@ struct ACPMessageList: View {
                 }
                 .onPreferenceChange(ACPHeadFramePreferenceKey.self) { frame in
                     headFrame = frame
-                    // Step back when the head marker enters the threshold
-                    // band at the top of the viewport; debounce so a single
-                    // scroll doesn't decrement multiple times before SwiftUI
-                    // lays out the newly-revealed rows.
-                    // `frame.maxY > 0` ensures the marker is actually
+                    // Auto-paginate: step back when the sentinel enters the
+                    // threshold band at the top of the viewport; debounce so
+                    // a single scroll doesn't decrement multiple times before
+                    // SwiftUI lays out the newly-revealed rows.
+                    // `frame.maxY > 0` ensures the sentinel is actually
                     // visible — without it, restoring to the tail of a
-                    // long transcript puts the marker far above the
+                    // long transcript puts the sentinel far above the
                     // viewport (negative minY *and* negative maxY) and the
                     // initial preference fire would still satisfy
                     // `minY < threshold`, defeating the window before the
@@ -196,7 +189,7 @@ struct ACPMessageList: View {
                     let now = Date()
                     guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
                     lastHeadStepAt = now
-                    transcript.stepHeadBack()
+                    stepHeadBackPreservingScroll()
                 }
                 .onChange(of: scrollSignature) { _, _ in
                     if session.followsTranscriptTail {
@@ -254,6 +247,37 @@ struct ACPMessageList: View {
         session.followsTranscriptTail = follows
     }
 
+    /// Reveal older messages while keeping the viewport anchored to the
+    /// same content. Captures the content height before `stepHeadBack()`
+    /// prepends rows, then adjusts the clip-view origin by the delta so
+    /// the user's reading position doesn't jump.
+    private func stepHeadBackPreservingScroll() {
+        guard let scrollView = scrollViewRef.scrollView else {
+            transcript.stepHeadBack()
+            return
+        }
+        let clipView = scrollView.contentView
+        let oldOffset = clipView.bounds.origin.y
+        let oldContentHeight = scrollView.documentView?.bounds.height ?? 0
+
+        isRestoringTail = true
+        transcript.stepHeadBack()
+
+        // After SwiftUI lays out the prepended rows, compute the content
+        // height delta and shift the clip-view origin so the viewport
+        // stays anchored to the same messages.
+        DispatchQueue.main.async {
+            let newContentHeight = scrollView.documentView?.bounds.height ?? 0
+            let delta = newContentHeight - oldContentHeight
+            if delta > 0 {
+                clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: oldOffset + delta))
+            }
+            DispatchQueue.main.async {
+                isRestoringTail = false
+            }
+        }
+    }
+
     @ViewBuilder
     private func row(for m: ACPMessage) -> some View {
         switch m {
@@ -280,6 +304,10 @@ struct ACPMessageList: View {
     }
 }
 
+private final class ACPWeakScrollViewRef {
+    weak var scrollView: NSScrollView?
+}
+
 private struct ACPHeadFramePreferenceKey: PreferenceKey {
     static let defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
@@ -291,6 +319,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
     let onPaused: () -> Void
     let onAtBottom: () -> Void
     let isRestoring: () -> Bool
+    var onScrollViewResolved: ((NSScrollView) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onPaused: onPaused, onAtBottom: onAtBottom, isRestoring: isRestoring)
@@ -308,6 +337,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         context.coordinator.onPaused = onPaused
         context.coordinator.onAtBottom = onAtBottom
         context.coordinator.isRestoring = isRestoring
+        context.coordinator.onScrollViewResolved = onScrollViewResolved
         nsView.resolve()
     }
 
@@ -316,6 +346,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         var onPaused: () -> Void
         var onAtBottom: () -> Void
         var isRestoring: () -> Bool
+        var onScrollViewResolved: ((NSScrollView) -> Void)?
         private weak var observedScrollView: NSScrollView?
         private var observer: NSObjectProtocol?
         private var lastOffsetY: CGFloat?
@@ -335,11 +366,15 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         }
 
         func observe(scrollView: NSScrollView) {
-            guard observedScrollView !== scrollView else { return }
+            guard observedScrollView !== scrollView else {
+                onScrollViewResolved?(scrollView)
+                return
+            }
             if let observer {
                 NotificationCenter.default.removeObserver(observer)
             }
             observedScrollView = scrollView
+            onScrollViewResolved?(scrollView)
             lastOffsetY = scrollView.contentView.bounds.origin.y
             scrollView.contentView.postsBoundsChangedNotifications = true
             observer = NotificationCenter.default.addObserver(
