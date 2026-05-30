@@ -388,7 +388,7 @@
 		7A0D3E122F34EF1A2A04984F /* EnvBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159FE807399835B0821E1CAB /* EnvBuilder.swift */; };
 		7A2C912B677A34391361B720 /* AdvancedSettingsVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B123596E047E4CE0FAFE3E /* AdvancedSettingsVisibility.swift */; };
 		7A816022DD913BC76F5EBA7F /* InstallNudgeResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 134EE8D2BC31085A504D27D8 /* InstallNudgeResolverTests.swift */; };
-		7ACFA19EA43966431D906F55 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
+		7ACFA19EA43966431D906F55 /* TreeSitterPHP in Frameworks */ = {isa = PBXBuildFile; productRef = 78020033FC689A2BCDF51DED /* TreeSitterPHP */; };
 		7B25B1405BFDE5570B267213 /* NumstatParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CA79B71B4AA72697392702 /* NumstatParser.swift */; };
 		7B309C87C042B3A18AB31D0F /* SearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49B5B544A3432F8D8105268 /* SearchModel.swift */; };
 		7B85B033B476943E77867BA3 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69024633944E9FFF6DA76FAE /* RootView.swift */; };
@@ -721,6 +721,7 @@
 		DC394B7740FAEBD2F8ACB61F /* LSPMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C6A07D7C67D02C8638D8C1 /* LSPMessages.swift */; };
 		DCACB5B624BFFE7C50DA6C61 /* RightPaneStateSyncStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D3505FB870FA22C9C0FDB26 /* RightPaneStateSyncStatusTests.swift */; };
 		DD18C5FF006D18BC66964D94 /* TerminalTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14087D57E96448EEF0B80BD9 /* TerminalTabView.swift */; };
+		DDAA1FF54466B7F5424D315E /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
 		DE41CB04CDC89D09346494A5 /* LineEndingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB52B59655B85764D85CFB7F /* LineEndingTests.swift */; };
 		DEBA25FCF25D26395BD04F73 /* EditorConflictBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD267BE3F08611B376F3CC7 /* EditorConflictBanner.swift */; };
 		DEBB0627BD0426369D18CAD4 /* FileSearchDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F97EB3FA3E3C1206D76A9668 /* FileSearchDialog.swift */; };
@@ -1641,7 +1642,8 @@
 				2AC164837BF88D1BD0F20E97 /* TreeSitterCPP in Frameworks */,
 				A8D21135BA6C2542E3820E19 /* TreeSitterHTML in Frameworks */,
 				B40B75555598C42713157C5C /* TreeSitterCSS in Frameworks */,
-				7ACFA19EA43966431D906F55 /* Markdown in Frameworks */,
+				7ACFA19EA43966431D906F55 /* TreeSitterPHP in Frameworks */,
+				DDAA1FF54466B7F5424D315E /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3137,6 +3139,7 @@
 				5F82D581FFC7034146EAE020 /* TreeSitterCPP */,
 				E1F30BF52DCE8CD60F19C921 /* TreeSitterHTML */,
 				3F76DFBA5D1CB707989C86AB /* TreeSitterCSS */,
+				78020033FC689A2BCDF51DED /* TreeSitterPHP */,
 				B69450B224F0C82A52D00662 /* Markdown */,
 			);
 			productName = Alas;
@@ -3177,6 +3180,7 @@
 				FC44B93BBD7A9BE00A7FADD2 /* XCRemoteSwiftPackageReference "tree-sitter-json" */,
 				2992358E07485A0415211A65 /* XCRemoteSwiftPackageReference "tree-sitter-java" */,
 				4E94AA7939DF6912D1986513 /* XCRemoteSwiftPackageReference "tree-sitter-kotlin" */,
+				0B00D64EA4D5693DBBC1A225 /* XCRemoteSwiftPackageReference "tree-sitter-php" */,
 				FAF805B9CC533A5991566C9A /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */,
 				AFDA8006DAB856320603269E /* XCRemoteSwiftPackageReference "tree-sitter-rust" */,
 				7019D0C134F78A3B7F4CF4BB /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
@@ -4343,6 +4347,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		0B00D64EA4D5693DBBC1A225 /* XCRemoteSwiftPackageReference "tree-sitter-php" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-php";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.24.2;
+			};
+		};
 		20325EC3398F89427ABAA6D2 /* XCRemoteSwiftPackageReference "tree-sitter-c" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/tree-sitter/tree-sitter-c";
@@ -4522,6 +4534,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7019D0C134F78A3B7F4CF4BB /* XCRemoteSwiftPackageReference "tree-sitter-swift" */;
 			productName = TreeSitterSwift;
+		};
+		78020033FC689A2BCDF51DED /* TreeSitterPHP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0B00D64EA4D5693DBBC1A225 /* XCRemoteSwiftPackageReference "tree-sitter-php" */;
+			productName = TreeSitterPHP;
 		};
 		7D55FFC5D9F65DAD0178FB0E /* TreeSitterPython */ = {
 			isa = XCSwiftPackageProductDependency;
