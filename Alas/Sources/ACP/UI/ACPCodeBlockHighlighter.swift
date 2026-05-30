@@ -44,13 +44,17 @@ enum ACPCodeLanguage {
         case "cc": return "cc"
         case "cxx": return "cxx"
         case "hpp": return "hpp"
-        case "diff", "patch": return "diff"
+        case "hh": return "hh"
+        case "hxx": return "hxx"
+        case "diff": return "diff"
+        case "patch": return "patch"
         case "html": return "html"
         case "xml": return "xml"
         case "css": return "css"
         case "scss": return "scss"
         case "sass": return "sass"
-        case "sql": return "sql"
+        case "sql", "rb", "ruby", "php", "pl", "perl", "lua", "ex", "exs", "elixir", "dockerfile", "ini":
+            return nil
         default: return nil
         }
     }
