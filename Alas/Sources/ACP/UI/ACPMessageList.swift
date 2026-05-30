@@ -414,13 +414,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         }
 
         private static var isUserDrivenScrollEvent: Bool {
-            guard let event = NSApp.currentEvent else { return false }
-            switch event.type {
-            case .scrollWheel, .leftMouseDragged, .gesture, .magnify, .swipe:
-                return true
-            default:
-                return false
-            }
+            ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
         }
     }
 
@@ -444,6 +438,33 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
                     ancestor = view.superview
                 }
             }
+        }
+    }
+}
+
+/// Maps an `NSEvent.EventType` to whether it represents a live user scroll
+/// gesture, used by `ACPScrollEventObserver` to decide if an upward bounds
+/// change is deliberate. Extracted as a pure function so the mapping is unit
+/// testable without a running event loop.
+///
+/// `.keyDown` is deliberately excluded: the transcript `ScrollView` is never
+/// the first responder here (the composer owns focus), so keyboard paging
+/// can't scroll it — and because `NSApp.currentEvent` reports the most recent
+/// app-wide event, accepting `.keyDown` would misread composer typing during
+/// streaming as a scroll and falsely pause tail-following.
+enum ACPUserScrollEvent {
+    static func isUserDriven(_ type: NSEvent.EventType?) -> Bool {
+        guard let type else { return false }
+        switch type {
+        case .scrollWheel, .leftMouseDragged, .leftMouseDown, .gesture, .magnify, .swipe:
+            // scrollWheel/gesture/magnify/swipe: trackpad. leftMouseDragged:
+            // dragging the scroller knob. leftMouseDown: clicking the scrollbar
+            // track to page — held while the scroll happens, so its staleness
+            // window is bounded (unlike leftMouseUp/keyDown, which linger after
+            // any click or keystroke).
+            return true
+        default:
+            return false
         }
     }
 }
