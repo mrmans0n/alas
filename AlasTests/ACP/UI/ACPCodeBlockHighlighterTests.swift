@@ -56,8 +56,8 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "not-a-language") == nil)
     }
 
-    @Test("maps regex-backed ACP fence labels to fallback extensions")
-    func mapsRegexBackedFenceLabels() {
+    @Test("maps additional ACP fence labels to highlighter extensions")
+    func mapsAdditionalFenceLabels() {
         #expect(ACPCodeLanguage.highlighterExtension(for: "diff") == "diff")
         #expect(ACPCodeLanguage.highlighterExtension(for: "patch") == "patch")
         #expect(ACPCodeLanguage.highlighterExtension(for: "html") == "html")
@@ -65,23 +65,26 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "css") == "css")
         #expect(ACPCodeLanguage.highlighterExtension(for: "scss") == "scss")
         #expect(ACPCodeLanguage.highlighterExtension(for: "sass") == "sass")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ruby") == "rb")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "rb") == "rb")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "lua") == "lua")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "php") == "php")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "hcl") == "hcl")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "terraform") == "tf")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "tfvars") == "tfvars")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "dockerfile") == "dockerfile")
     }
 
     @Test("future-known unsupported ACP fence labels remain plain")
     func futureKnownUnsupportedFenceLabelsRemainPlain() {
         #expect(ACPCodeLanguage.highlighterExtension(for: "sql") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "ruby") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "rb") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "php") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "perl") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "lua") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "elixir") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "dockerfile") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == nil)
     }
 
-    @Test("regex fallback labels apply non-default ACP syntax colors")
-    func regexFallbackLabelsApplySyntaxColors() throws {
+    @Test("supported labels apply non-default ACP syntax colors")
+    func supportedLabelsApplySyntaxColors() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let editorTheme = EditorTheme(theme: theme)
 
@@ -102,8 +105,9 @@ struct ACPCodeBlockHighlighterTests {
         )
 
         #expect(try foregroundColor(for: "@@", in: diff) != editorTheme.defaultFG)
-        #expect(try foregroundColor(for: "<button", in: html) != editorTheme.defaultFG)
-        #expect(try foregroundColor(for: "display", in: css) != editorTheme.defaultFG)
+        #expect(try foregroundColor(for: "button", in: html) != editorTheme.defaultFG)
+        #expect(try foregroundColor(for: "primary", in: html) != editorTheme.defaultFG)
+        #expect(try foregroundColor(for: "fff", in: css) != editorTheme.defaultFG)
     }
 
     @Test("future-known unsupported ACP labels keep attributed output plain")

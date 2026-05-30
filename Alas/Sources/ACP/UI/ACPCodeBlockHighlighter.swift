@@ -53,7 +53,14 @@ enum ACPCodeLanguage {
         case "css": return "css"
         case "scss": return "scss"
         case "sass": return "sass"
-        case "sql", "rb", "ruby", "php", "pl", "perl", "lua", "ex", "exs", "elixir", "dockerfile", "ini":
+        case "rb", "ruby": return "rb"
+        case "lua": return "lua"
+        case "php": return "php"
+        case "hcl": return "hcl"
+        case "tf", "terraform": return "tf"
+        case "tfvars": return "tfvars"
+        case "dockerfile": return "dockerfile"
+        case "sql", "pl", "perl", "ex", "exs", "elixir", "ini":
             return nil
         default: return nil
         }
