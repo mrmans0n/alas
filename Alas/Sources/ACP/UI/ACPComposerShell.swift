@@ -345,14 +345,21 @@ struct ACPComposer: View {
     }
 
     private func handlePrimary() {
+        if let intent = primarySubmitIntent(for: currentAction, optionPressed: optionPressed) {
+            actions.submitWithIntent?(intent)
+            return
+        }
+
         switch currentAction {
-        case .send, .queue:
-            actions.submitWithIntent?(.auto)
         case .stop:
             stopTapped()
-        case .hidden:
+        case .send, .queue, .hidden:
             break
         }
+    }
+
+    private var optionPressed: Bool {
+        NSApp.currentEvent?.modifierFlags.contains(.option) == true
     }
 
     private func handleMenu(_ item: ComposerMenuItem) {

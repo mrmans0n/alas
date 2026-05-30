@@ -78,6 +78,20 @@ struct ComposerActionTests {
         }
     }
 
+    @Test("primary submit intent preserves Option-click steer shortcut")
+    func primarySubmitIntentPreservesOptionClickSteer() {
+        #expect(primarySubmitIntent(for: .send, optionPressed: false) == .auto)
+        #expect(primarySubmitIntent(for: .send, optionPressed: true) == .steer)
+        #expect(primarySubmitIntent(for: .queue(menu: [.steer, .stop]), optionPressed: false) == .auto)
+        #expect(primarySubmitIntent(for: .queue(menu: [.steer, .stop]), optionPressed: true) == .steer)
+    }
+
+    @Test("primary submit intent is absent for non-submit actions")
+    func primarySubmitIntentAbsentForNonSubmitActions() {
+        #expect(primarySubmitIntent(for: .stop, optionPressed: true) == nil)
+        #expect(primarySubmitIntent(for: .hidden, optionPressed: true) == nil)
+    }
+
     private var busyStates: [ACPSession.StreamingState] {
         [.sending, .streaming, .awaitingPermission]
     }

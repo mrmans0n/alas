@@ -43,3 +43,12 @@ func composerAction(
         return hasText ? .queue(menu: [.steer, .stop]) : .stop
     }
 }
+
+func primarySubmitIntent(for action: ComposerAction, optionPressed: Bool) -> ACPSubmitIntent? {
+    switch action {
+    case .send, .queue:
+        optionPressed ? .steer : .auto
+    case .stop, .hidden:
+        nil
+    }
+}
