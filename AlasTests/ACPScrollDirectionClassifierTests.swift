@@ -79,7 +79,8 @@ struct ACPScrollDirectionClassifierTests {
             newOffsetY: 900,
             viewportHeight: 600,
             contentHeight: 5000,
-            isRestoring: false
+            isRestoring: false,
+            isUserDriven: true
         )
         #expect(decision == .userScrolledUp)
     }
@@ -167,9 +168,29 @@ struct ACPScrollDirectionClassifierTests {
             newOffsetY: newY,
             viewportHeight: viewportH,
             contentHeight: contentH,
-            isRestoring: false
+            isRestoring: false,
+            isUserDriven: true
         )
         #expect(decision == .userScrolledUp)
+    }
+
+    @Test func layoutInducedUpwardMoveAwayFromTailDoesNotPause() {
+        // The classic "jumps up a few lines on its own" failure: a tool card
+        // above the fold finishing async layout (or restore lag) shifts the
+        // viewport past pauseTolerance with NO live scroll gesture. Without a
+        // user event this must not latch auto-scroll off.
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - 180
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: newY + 20,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
+            isRestoring: false,
+            isUserDriven: false
+        )
+        #expect(decision == .noChange)
     }
 
     @Test func restoringUserInputNearTailDoesNotPause() {
@@ -235,7 +256,8 @@ struct ACPScrollDirectionClassifierTests {
             newOffsetY: 1000 - ACPScrollDirectionClassifier.upwardEpsilon - 0.01,
             viewportHeight: 600,
             contentHeight: 5000,
-            isRestoring: false
+            isRestoring: false,
+            isUserDriven: true
         )
         #expect(decision == .userScrolledUp)
     }
@@ -295,7 +317,8 @@ struct ACPScrollDirectionClassifierTests {
             newOffsetY: newY,
             viewportHeight: viewportH,
             contentHeight: contentH,
-            isRestoring: false
+            isRestoring: false,
+            isUserDriven: true
         )
         #expect(decision == .userScrolledUp)
     }

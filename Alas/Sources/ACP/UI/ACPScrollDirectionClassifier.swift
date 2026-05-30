@@ -36,7 +36,14 @@ enum ACPScrollDirectionClassifier {
         if distanceFromBottom <= bottomTolerance { return .userAtBottom }
         guard let prev = previousOffsetY else { return .noChange }
         let movedUp = newOffsetY < prev - upwardEpsilon
-        guard distanceFromBottom > pauseTolerance, movedUp else { return .noChange }
+        // Only a live scroll gesture pauses tail-following. Bounds changes
+        // with no current input event are layout, not intent: a tool card
+        // above the fold finishing async layout, streaming content reflow, or
+        // animated-restore lag can shift the viewport upward past
+        // `pauseTolerance` on their own. Treating those as "user scrolled up"
+        // is what made the transcript jump up a few lines and stop following
+        // while agents were still streaming.
+        guard isUserDriven, movedUp, distanceFromBottom > pauseTolerance else { return .noChange }
         return .userScrolledUp
     }
 }
