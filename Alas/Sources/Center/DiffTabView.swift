@@ -103,7 +103,7 @@ struct DiffTabView: View {
                             let actions = stagedHunkActions(hunk: hunk)
                             HunkView(
                                 hunk: hunk,
-                                fileExtension: (relativePath as NSString).pathExtension,
+                                fileExtension: LanguageRegistry.highlighterExtension(forPath: relativePath),
                                 codeFontFamily: codeFontFamily,
                                 codeFontSize: codeFontSize,
                                 onStage: actions.stage,

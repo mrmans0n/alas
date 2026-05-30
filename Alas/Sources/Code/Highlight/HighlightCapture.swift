@@ -11,8 +11,20 @@ enum HighlightCapture: String, Sendable {
         // Tree-sitter highlight names use dotted forms ("keyword.control",
         // "function.method"). Take the first dot-separated segment and map.
         let head = name.split(separator: ".").first.map(String.init) ?? name
-        if head == "tag" { return .keyword }
-        if head == "text" { return .string }
+        switch head {
+        case "tag", "conditional", "repeat", "preproc":
+            return .keyword
+        case "text":
+            return .string
+        case "method", "constructor":
+            return .function
+        case "boolean":
+            return .constant
+        case "field":
+            return .property
+        default:
+            break
+        }
         return HighlightCapture(rawValue: head) ?? .plain
     }
 }

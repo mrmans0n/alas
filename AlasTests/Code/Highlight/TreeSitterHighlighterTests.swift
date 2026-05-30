@@ -159,6 +159,22 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.string))
     }
 
+    @Test("Lua control flow, booleans, and method syntax are captured")
+    func luaControlFlowAndMethods() throws {
+        let src = """
+        function greeter:greet()
+          if true then
+            return self:name()
+          end
+        end
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "lua")
+
+        #expect(capture(for: "if", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "true", in: src, spans: spans) == .constant)
+        #expect(capture(for: "name", in: src, spans: spans) == .function)
+    }
+
     @Test("TOML keys, strings, and numbers are captured")
     func tomlBasics() throws {
         let src = """
@@ -366,7 +382,9 @@ struct TreeSitterHighlighterTests {
     @Test("HTML uses tree-sitter grammar and query")
     func htmlTreeSitterBasics() throws {
         #expect(LanguageRegistry.language(forFileExtension: "html") != nil)
+        #expect(LanguageRegistry.language(forFileExtension: "htm") != nil)
         #expect(LanguageRegistry.highlightQuery(forExtension: "html") != nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "htm") != nil)
 
         let spans = TreeSitterHighlighter.highlight(
             source: #"<button disabled class="primary">Save</button>"#,
@@ -375,6 +393,35 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .keyword }))
         #expect(spans.contains(where: { $0.capture == .attribute }))
         #expect(spans.contains(where: { $0.capture == .string }))
+    }
+
+    @Test("PHP tagless snippets use the PHP-only grammar")
+    func phpTaglessSnippets() throws {
+        let src = #"function hello($name) { return "hi"; }"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "php")
+
+        #expect(capture(for: "function", in: src, spans: spans) == .keyword)
+        #expect(capture(for: "hello", in: src, spans: spans) == .function)
+        #expect(capture(for: #""hi""#, in: src, spans: spans) == .string)
+    }
+
+    @Test("PHP tagless snippets ignore tag-like text inside strings")
+    func phpTaglessSnippetsIgnoreTagLikeStrings() throws {
+        let src = #"echo "<?xml version=\"1.0\"";"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "php")
+
+        #expect(capture(for: "echo", in: src, spans: spans) == .keyword)
+        #expect(spans.contains(where: { $0.capture == .string }))
+    }
+
+    @Test("PHP-only query removes compact tag captures")
+    func phpOnlyQueryRemovesCompactTagCaptures() throws {
+        let compact = #"[ (php_tag) (php_end_tag) ] @tag\n(function_definition name: (name) @function)"#
+        let filtered = LanguageRegistry.phpOnlyQueryText(from: compact)
+
+        #expect(!filtered.contains("php_tag"))
+        #expect(!filtered.contains("php_end_tag"))
+        #expect(filtered.contains("function_definition"))
     }
 
     @Test("CSS uses tree-sitter grammar and query")
@@ -417,6 +464,16 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .string }))
     }
 
+    @Test("Markdown inline syntax is captured")
+    func markdownInlineSyntax() throws {
+        let src = #"A **bold** word and `code` with [link](https://example.com)"#
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "md")
+
+        #expect(capture(for: "`", in: src, spans: spans) == .punctuation)
+        #expect(capture(for: "`code`", in: src, spans: spans) == .string)
+        #expect(capture(for: "https://example.com", in: src, spans: spans) == .string)
+    }
+
     @Test("HCL uses tree-sitter grammar and query")
     func hclTreeSitterBasics() throws {
         #expect(LanguageRegistry.language(forFileExtension: "tf") != nil)
@@ -435,6 +492,8 @@ struct TreeSitterHighlighterTests {
     func dockerfileTreeSitterBasics() throws {
         #expect(LanguageRegistry.language(forFileExtension: "dockerfile") != nil)
         #expect(LanguageRegistry.highlightQuery(forExtension: "dockerfile") != nil)
+        #expect(LanguageRegistry.highlighterExtension(forPath: "Dockerfile") == "dockerfile")
+        #expect(LanguageRegistry.highlighterExtension(forPath: "dockerfile") == "dockerfile")
 
         let spans = TreeSitterHighlighter.highlight(
             source: """

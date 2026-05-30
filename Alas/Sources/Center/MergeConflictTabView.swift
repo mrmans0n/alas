@@ -205,7 +205,7 @@ struct MergeConflictTabView: View {
     }
 
     private var fileExtension: String {
-        (tabState.relativePath as NSString).pathExtension
+        LanguageRegistry.highlighterExtension(forPath: tabState.relativePath)
     }
 
     /// Resolves the agent to use for merge-conflict assistance. Prefers the

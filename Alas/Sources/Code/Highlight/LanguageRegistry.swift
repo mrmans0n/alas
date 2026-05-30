@@ -14,6 +14,7 @@ import TreeSitterKotlin
 import TreeSitterJSON
 import TreeSitterLua
 import TreeSitterMarkdown
+import TreeSitterMarkdownInline
 import TreeSitterPHP
 import TreeSitterPython
 import TreeSitterRuby
@@ -34,6 +35,12 @@ enum LanguageRegistry {
     nonisolated(unsafe) private static var languageCache: [String: Language] = [:]
     nonisolated(unsafe) private static var queryCache: [String: Query] = [:]
     nonisolated(unsafe) private static var queryMissCache: Set<String> = []
+
+    static func highlighterExtension(forPath path: String) -> String {
+        let filename = (path as NSString).lastPathComponent.lowercased()
+        if filename == "dockerfile" { return "dockerfile" }
+        return (path as NSString).pathExtension.lowercased()
+    }
 
     static func language(forFileExtension ext: String) -> Language? {
         let key = ext.lowercased()
@@ -62,11 +69,14 @@ enum LanguageRegistry {
         case "c", "h":        lang = Language(language: tree_sitter_c())
         case "cpp", "cc", "cxx", "hpp", "hh", "hxx":
                               lang = Language(language: tree_sitter_cpp())
-        case "html":          lang = Language(language: tree_sitter_html())
+        case "html", "htm":   lang = Language(language: tree_sitter_html())
         case "css":           lang = Language(language: tree_sitter_css())
         case "php":           lang = Language(language: tree_sitter_php())
+        case "php-only":      lang = Language(language: tree_sitter_php_only())
         case "md", "markdown":
                               lang = Language(language: tree_sitter_markdown())
+        case "markdown-inline":
+                              lang = Language(language: tree_sitter_markdown_inline())
         case "hcl", "tf", "tfvars":
                               lang = Language(language: tree_sitter_hcl())
         case "dockerfile":    lang = Language(language: tree_sitter_dockerfile())
@@ -186,7 +196,7 @@ enum LanguageRegistry {
                 ],
                 language: lang
             )
-        case "html":
+        case "html", "htm":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterHTML",
                               language: lang)
@@ -198,9 +208,15 @@ enum LanguageRegistry {
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterPHP",
                               language: lang)
+        case "php-only":
+            query = loadPHPOnlyQuery(language: lang)
         case "md", "markdown":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterMarkdown_TreeSitterMarkdown",
+                              language: lang)
+        case "markdown-inline":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterMarkdown_TreeSitterMarkdownInline",
                               language: lang)
         case "hcl", "tf", "tfvars":
             query = loadQuery(named: "highlights",
@@ -269,6 +285,33 @@ enum LanguageRegistry {
         return try? Query(language: language, data: combined)
     }
 
+    private static func loadPHPOnlyQuery(language: Language) -> Query? {
+        guard let data = queryData(bundleNeedle: "TreeSitterPHP", queryName: "highlights"),
+              let queryText = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return try? Query(language: language, data: Data(phpOnlyQueryText(from: queryText).utf8))
+    }
+
+    static func phpOnlyQueryText(from queryText: String) -> String {
+        let pattern = #"\[\s*\(php_tag\)\s*\(php_end_tag\)\s*\]\s*@tag\s*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return queryText
+        }
+        let range = NSRange(location: 0, length: (queryText as NSString).length)
+        return regex.stringByReplacingMatches(in: queryText, range: range, withTemplate: "")
+    }
+
+    private static func queryData(bundleNeedle: String, queryName: String) -> Data? {
+        guard let bundle = grammarBundle(named: bundleNeedle) else { return nil }
+        let url = bundle.url(forResource: "queries/\(queryName)", withExtension: "scm")
+            ?? bundle.url(forResource: queryName, withExtension: "scm",
+                          subdirectory: "queries")
+            ?? bundle.url(forResource: queryName, withExtension: "scm")
+        guard let url else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
     private static func grammarBundle(named needle: String) -> Bundle? {
         // Resource-only bundles produced by SPM (e.g.
         // `TreeSitterSwift_TreeSitterSwift.bundle`) live next to the host
@@ -282,10 +325,14 @@ enum LanguageRegistry {
             if let entries = try? FileManager.default.contentsOfDirectory(
                 at: resourcesURL, includingPropertiesForKeys: nil
             ) {
-                if let match = entries.first(where: {
+                let matches = entries.filter {
                     $0.lastPathComponent.contains(needle)
                         && $0.pathExtension == "bundle"
-                }), let b = Bundle(url: match) {
+                }
+                let exactName = "\(needle).bundle"
+                let match = matches.first(where: { $0.lastPathComponent == exactName })
+                    ?? matches.first
+                if let match, let b = Bundle(url: match) {
                     return b
                 }
             }

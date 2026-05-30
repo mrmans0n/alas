@@ -719,7 +719,7 @@ final class CodeEditorCoordinator {
         let text = storage.string
         let textLength = storage.length
         let editGeneration = buffer.editGeneration
-        let ext = (buffer.relativePath as NSString).pathExtension
+        let ext = LanguageRegistry.highlighterExtension(forPath: buffer.relativePath)
         let editorTheme = EditorTheme(theme: theme)
         let stableTabId = currentTabId
         let cachedDiagnostics = diagnosticsFeature.current

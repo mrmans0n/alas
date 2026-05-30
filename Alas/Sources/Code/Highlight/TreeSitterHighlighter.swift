@@ -24,18 +24,19 @@ struct TreeSitterHighlighter {
         }
 
         func highlight(source: String, fileExtension ext: String, edits: [EditorTextEdit]) -> [HighlightSpan] {
+            let effectiveExt = TreeSitterHighlighter.effectiveExtension(for: source, fileExtension: ext)
             guard
-                let language = LanguageRegistry.language(forFileExtension: ext),
-                let query = LanguageRegistry.highlightQuery(forExtension: ext)
+                let language = LanguageRegistry.language(forFileExtension: effectiveExt),
+                let query = LanguageRegistry.highlightQuery(forExtension: effectiveExt)
             else {
                 reset()
                 return RegexFallbackHighlighter.highlight(source: source, fileExtension: ext)
             }
 
-            let parser = parser(for: language, fileExtension: ext)
+            let parser = parser(for: language, fileExtension: effectiveExt)
             let nextTree: MutableTree?
             if let oldText = previousText,
-               fileExtension == ext,
+               fileExtension == effectiveExt,
                let editedTree = tree,
                let incrementallyEditedTree = apply(edits: edits, oldText: oldText, newText: source, to: editedTree) {
                 nextTree = parser.parse(tree: incrementallyEditedTree, string: source)
@@ -50,8 +51,14 @@ struct TreeSitterHighlighter {
 
             tree = nextTree
             previousText = source
-            fileExtension = ext
-            return TreeSitterHighlighter.spans(query: query, root: root, tree: nextTree)
+            fileExtension = effectiveExt
+            return TreeSitterHighlighter.enrichedSpans(
+                source: source,
+                fileExtension: effectiveExt,
+                query: query,
+                root: root,
+                tree: nextTree
+            )
         }
 
         private func parser(for language: Language, fileExtension ext: String) -> Parser {
@@ -86,9 +93,10 @@ struct TreeSitterHighlighter {
 
     /// Tokenize a full file. Returns highlight spans against `source`.
     static func highlight(source: String, fileExtension ext: String) -> [HighlightSpan] {
+        let effectiveExt = effectiveExtension(for: source, fileExtension: ext)
         guard
-            let language = LanguageRegistry.language(forFileExtension: ext),
-            let query = LanguageRegistry.highlightQuery(forExtension: ext)
+            let language = LanguageRegistry.language(forFileExtension: effectiveExt),
+            let query = LanguageRegistry.highlightQuery(forExtension: effectiveExt)
         else {
             return RegexFallbackHighlighter.highlight(source: source, fileExtension: ext)
         }
@@ -100,13 +108,140 @@ struct TreeSitterHighlighter {
         }
         guard let tree = parser.parse(source) else { return [] }
         guard let root = tree.rootNode else { return [] }
-        return spans(query: query, root: root, tree: tree)
+        return enrichedSpans(source: source, fileExtension: effectiveExt, query: query, root: root, tree: tree)
     }
 
     /// Per-line API used by the diff pane. Tokenizes a single line in
     /// isolation. Returns spans with offsets local to `line`.
     static func tokenize(line: String, fileExtension ext: String) -> [HighlightSpan] {
         highlight(source: line, fileExtension: ext)
+    }
+
+    private static func effectiveExtension(for source: String, fileExtension ext: String) -> String {
+        let key = ext.lowercased()
+        if key == "php", !containsPHPStartTag(source) {
+            return "php-only"
+        }
+        return key
+    }
+
+    private static func containsPHPStartTag(_ source: String) -> Bool {
+        enum State {
+            case normal, singleQuotedString, doubleQuotedString, lineComment, blockComment
+        }
+
+        let scalars = Array(source.unicodeScalars)
+        var state = State.normal
+        var index = scalars.startIndex
+        var escaped = false
+
+        while index < scalars.endIndex {
+            let current = scalars[index]
+            let nextIndex = scalars.index(after: index)
+            let next = nextIndex < scalars.endIndex ? scalars[nextIndex] : nil
+
+            switch state {
+            case .normal:
+                if current == "<", next == "?" {
+                    return true
+                }
+                if current == "'" {
+                    state = .singleQuotedString
+                    escaped = false
+                } else if current == "\"" {
+                    state = .doubleQuotedString
+                    escaped = false
+                } else if current == "/", next == "/" {
+                    state = .lineComment
+                    index = nextIndex
+                } else if current == "/", next == "*" {
+                    state = .blockComment
+                    index = nextIndex
+                } else if current == "#" {
+                    state = .lineComment
+                }
+            case .singleQuotedString:
+                if escaped {
+                    escaped = false
+                } else if current == "\\" {
+                    escaped = true
+                } else if current == "'" {
+                    state = .normal
+                }
+            case .doubleQuotedString:
+                if escaped {
+                    escaped = false
+                } else if current == "\\" {
+                    escaped = true
+                } else if current == "\"" {
+                    state = .normal
+                }
+            case .lineComment:
+                if current == "\n" || current == "\r" {
+                    state = .normal
+                }
+            case .blockComment:
+                if current == "*", next == "/" {
+                    state = .normal
+                    index = nextIndex
+                }
+            }
+
+            index = scalars.index(after: index)
+        }
+        return false
+    }
+
+    private static func enrichedSpans(
+        source: String,
+        fileExtension ext: String,
+        query: Query,
+        root: Node,
+        tree: MutableTree
+    ) -> [HighlightSpan] {
+        var result = spans(query: query, root: root, tree: tree)
+        if ext == "md" || ext == "markdown" {
+            result.append(contentsOf: markdownInlineSpans(source: source, root: root))
+        }
+        return result
+    }
+
+    private static func markdownInlineSpans(source: String, root: Node) -> [HighlightSpan] {
+        guard
+            let language = LanguageRegistry.language(forFileExtension: "markdown-inline"),
+            let query = LanguageRegistry.highlightQuery(forExtension: "markdown-inline")
+        else {
+            return []
+        }
+        let parser = Parser()
+        do {
+            try parser.setLanguage(language)
+        } catch {
+            return []
+        }
+
+        var result: [HighlightSpan] = []
+        let nsSource = source as NSString
+        root.treeCursor.enumerateCurrentAndDescendents { node in
+            guard node.nodeType == "inline",
+                  node.range.location != NSNotFound,
+                  NSMaxRange(node.range) <= nsSource.length else {
+                return
+            }
+            let inlineSource = nsSource.substring(with: node.range)
+            guard let tree = parser.parse(inlineSource),
+                  let inlineRoot = tree.rootNode else {
+                return
+            }
+            let offset = node.range.location
+            result.append(contentsOf: spans(query: query, root: inlineRoot, tree: tree).map {
+                HighlightSpan(
+                    range: NSRange(location: $0.range.location + offset, length: $0.range.length),
+                    capture: $0.capture
+                )
+            })
+        }
+        return result
     }
 
     private static func spans(query: Query, root: Node, tree: MutableTree) -> [HighlightSpan] {
