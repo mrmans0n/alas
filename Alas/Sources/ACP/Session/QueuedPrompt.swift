@@ -14,12 +14,20 @@ struct QueuedPrompt: Identifiable, Equatable, Codable {
     /// user bubble per retry. Persisted so a relaunch-mid-attempt
     /// doesn't double-record either.
     var transcriptRecorded: Bool
+    /// Structured composer state captured at enqueue time, so editing a
+    /// queued prompt restores the EXACT original draft instead of inverting
+    /// the lossy `blocks` serialization. `nil` for block-only origins
+    /// (items persisted before this field existed, recovery-path enqueues,
+    /// rolled-back direct sends) — those fall back to the heuristic via
+    /// `restorableDraft`. Not sent to the agent; `blocks` remains the wire form.
+    var draft: ACPComposerDraft?
 
     init(id: UUID = UUID(),
          blocks: [ACPContentBlock],
          enqueuedAt: Date = Date(),
          status: Status = .pending,
          lastError: String? = nil,
+         draft: ACPComposerDraft? = nil,
          transcriptRecorded: Bool = false)
     {
         self.id = id
@@ -27,11 +35,12 @@ struct QueuedPrompt: Identifiable, Equatable, Codable {
         self.enqueuedAt = enqueuedAt
         self.status = status
         self.lastError = lastError
+        self.draft = draft
         self.transcriptRecorded = transcriptRecorded
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, blocks, enqueuedAt, status, lastError, transcriptRecorded
+        case id, blocks, enqueuedAt, status, lastError, draft, transcriptRecorded
     }
 
     init(from decoder: Decoder) throws {
@@ -41,6 +50,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable {
         enqueuedAt = try c.decode(Date.self, forKey: .enqueuedAt)
         status = try c.decode(Status.self, forKey: .status)
         lastError = try? c.decode(String.self, forKey: .lastError)
+        draft = try? c.decode(ACPComposerDraft.self, forKey: .draft)
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
     }
 
@@ -53,5 +63,12 @@ struct QueuedPrompt: Identifiable, Equatable, Codable {
         var copy = self
         copy.status = .pending
         return copy
+    }
+
+    /// The draft to load back into the composer when this item is edited:
+    /// the structured `draft` when captured, otherwise the heuristic inverse
+    /// of `blocks`. See the `draft` field for why the fallback is lossy.
+    var restorableDraft: ACPComposerDraft {
+        draft ?? ACPComposerDraft(blocks: blocks)
     }
 }
