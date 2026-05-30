@@ -14,6 +14,7 @@ struct ACPInputField: NSViewRepresentable {
     @ObservedObject var session: ACPSession
     let worktreeRoot: URL
     let actions: ACPComposerActions
+    @Binding var isFocused: Bool
     /// True when ⏎ should submit with `.auto` intent (the default mapping
     /// — queue while busy). False when the user inverted the setting so
     /// ⏎ steers; the placeholder reverses accordingly while busy.
@@ -66,6 +67,7 @@ struct ACPInputField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.isFocused = $isFocused
         context.coordinator.promptSuggestions = session.promptSuggestions
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
@@ -77,6 +79,7 @@ struct ACPInputField: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.isFocused.wrappedValue = false
         coordinator.flushPendingRestyleNow()
     }
 
@@ -99,6 +102,7 @@ struct ACPInputField: NSViewRepresentable {
         Coordinator(
             worktreeRoot: worktreeRoot,
             initialDraft: session.composerDraft,
+            isFocused: $isFocused,
             sendOnEnter: sendOnEnter,
             onDraftChange: onDraftChange,
             onDraftClear: onDraftClear,
@@ -109,6 +113,7 @@ struct ACPInputField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         let worktreeRoot: URL
         let initialDraft: ACPComposerDraft
+        var isFocused: Binding<Bool>
         /// Keyboard-only inversion flag. The coordinator resolves the
         /// raw modifier-derived intent (`.auto` for ⏎, `.steer` for ⌥⏎)
         /// against this and emits a FINAL intent to `onSubmit`. The
@@ -145,6 +150,7 @@ struct ACPInputField: NSViewRepresentable {
         init(
             worktreeRoot: URL,
             initialDraft: ACPComposerDraft,
+            isFocused: Binding<Bool> = .constant(false),
             sendOnEnter: Bool,
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
@@ -152,11 +158,20 @@ struct ACPInputField: NSViewRepresentable {
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
+            self.isFocused = isFocused
             self.sendOnEnter = sendOnEnter
             self.lastSyncedDraft = initialDraft
             self.onDraftChange = onDraftChange
             self.onDraftClear = onDraftClear
             self.onSubmit = onSubmit
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            isFocused.wrappedValue = true
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            isFocused.wrappedValue = false
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {

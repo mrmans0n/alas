@@ -103,11 +103,8 @@ private struct ACPSessionView: View {
         .task(id: sessionId) {
             await hydrateAndAttach()
         }
-        .focusable()
-        .focusEffectDisabled()
-        .onKeyPress(.escape) {
+        .onExitCommand {
             handleEscape()
-            return .handled
         }
     }
 
