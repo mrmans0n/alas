@@ -23,7 +23,7 @@ struct ACPMessageList: View {
     @State private var isRestoringTail = false
     @State private var headFrame: CGRect = .zero
     @State private var lastHeadStepAt: Date = .distantPast
-    @State private var nsScrollView: NSScrollView?
+    @State private var scrollViewRef = ACPWeakScrollViewRef()
 
     /// Height of an invisible spacer at the tail of the VStack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -162,7 +162,7 @@ struct ACPMessageList: View {
                             setFollowsTranscriptTail(true)
                         },
                         isRestoring: { isRestoringTail },
-                        onScrollViewResolved: { nsScrollView = $0 }
+                        onScrollViewResolved: { scrollViewRef.scrollView = $0 }
                     )
                 )
                 .onAppear {
@@ -252,7 +252,7 @@ struct ACPMessageList: View {
     /// prepends rows, then adjusts the clip-view origin by the delta so
     /// the user's reading position doesn't jump.
     private func stepHeadBackPreservingScroll() {
-        guard let scrollView = nsScrollView else {
+        guard let scrollView = scrollViewRef.scrollView else {
             transcript.stepHeadBack()
             return
         }
@@ -302,6 +302,10 @@ struct ACPMessageList: View {
             ACPSystemNoticeView(text: text)
         }
     }
+}
+
+private final class ACPWeakScrollViewRef {
+    weak var scrollView: NSScrollView?
 }
 
 private struct ACPHeadFramePreferenceKey: PreferenceKey {
