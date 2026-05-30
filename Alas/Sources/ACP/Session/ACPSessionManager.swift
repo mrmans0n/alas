@@ -2,6 +2,9 @@ import Foundation
 
 @MainActor
 final class ACPSessionManager: ObservableObject {
+    typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
+    typealias ACPConnectionFactory = @MainActor (_ spec: ACPLaunchSpec) throws -> ACPConnection
+
     let worktreeId: String
     let worktreePath: String
     let store: ACPSessionStore
@@ -29,6 +32,8 @@ final class ACPSessionManager: ObservableObject {
     private var pendingDraftWrites: [ACPSession.ID: Task<Void, Never>] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
     private let hydrator: ACPSessionHydrator?
+    private let setupEvaluator: ACPSetupEvaluator
+    private let connectionFactory: ACPConnectionFactory
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
 
     /// Per-session UI refcount. When this drops to zero AND the session is
@@ -40,7 +45,9 @@ final class ACPSessionManager: ObservableObject {
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
          hydratorPath: String? = nil,
          onDirtyCheck: ((String) -> Bool)? = nil,
-         onLiveBufferRead: ((String) -> String?)? = nil)
+         onLiveBufferRead: ((String) -> String?)? = nil,
+         setupEvaluator: ACPSetupEvaluator? = nil,
+         connectionFactory: ACPConnectionFactory? = nil)
     {
         self.worktreeId = worktreeId
         self.worktreePath = worktreePath
@@ -48,6 +55,26 @@ final class ACPSessionManager: ObservableObject {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.hydrator = hydratorPath.flatMap { try? ACPSessionHydrator(path: $0) }
+        self.setupEvaluator = setupEvaluator ?? { spec in
+            let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
+            return await checker.evaluate(spec.setupCheck)
+        }
+        self.connectionFactory = connectionFactory ?? { spec in
+            let client: ACPStdioClient
+            if spec.command.hasPrefix("/") {
+                client = try ACPStdioClient(
+                    executable: URL(fileURLWithPath: spec.command),
+                    arguments: spec.arguments,
+                    environment: Self.mergeEnv(extra: spec.extraEnv))
+            } else {
+                client = try ACPStdioClient(
+                    executable: URL(fileURLWithPath: "/usr/bin/env"),
+                    arguments: [spec.command] + spec.arguments,
+                    environment: Self.mergeEnv(extra: spec.extraEnv))
+            }
+            try client.start()
+            return ACPConnection(client: client)
+        }
         self.recent = (try? store.recentSessions()) ?? []
     }
 
@@ -80,7 +107,9 @@ final class ACPSessionManager: ObservableObject {
         guard let row = try? store.loadSession(id: id) else { return nil }
         let session = ACPSession(
             id: row.id, agentId: row.agentId, worktreeId: worktreeId,
-            title: row.title, titleSource: row.titleSource, hydrationState: .loading)
+            title: row.title, titleSource: row.titleSource, hydrationState: .loading,
+            restoredFromPersistence: true)
+        session.remoteSessionId = row.remoteSessionId
         sessions[id] = session
         return session
     }
@@ -163,6 +192,8 @@ final class ACPSessionManager: ObservableObject {
         let touched = ACPSessionRow(
             id: row.id, agentId: row.agentId, title: row.title,
             titleSource: row.titleSource,
+            remoteSessionId: row.remoteSessionId,
+            contextRecoveryPending: row.contextRecoveryPending,
             currentModel: row.currentModel, currentMode: row.currentMode,
             autoRun: row.autoRun,
             createdAt: row.createdAt, updatedAt: row.updatedAt,
@@ -190,6 +221,15 @@ final class ACPSessionManager: ObservableObject {
         }
         session.currentModel = result.row.currentModel
         session.currentMode = result.row.currentMode
+        if session.remoteSessionId == nil || session.remoteSessionId == result.row.remoteSessionId {
+            session.remoteSessionId = result.row.remoteSessionId
+        }
+        if result.row.contextRecoveryPending {
+            session.contextRestoreWarning = .init(
+                message: "Agent context could not be restored.",
+                canSendTranscript: session.hasConversationTranscript
+            )
+        }
         session.autoRunEnabled = result.row.autoRun
         // Title intentionally NOT overwritten: `placeholderSession` already
         // seeded it from the same row, and a rename made through the
@@ -296,6 +336,29 @@ final class ACPSessionManager: ObservableObject {
             createdAt: row.createdAt, updatedAt: now,
             lastOpenedAt: row.lastOpenedAt, archived: row.archived))
         refreshRecent()
+    }
+
+    private func persistSessionRemoteId(_ s: ACPSession) {
+        guard let row = try? store.loadSession(id: s.id) else { return }
+        try? store.upsertSession(.init(
+            id: row.id,
+            agentId: row.agentId,
+            title: row.title,
+            titleSource: row.titleSource,
+            remoteSessionId: s.remoteSessionId,
+            contextRecoveryPending: row.contextRecoveryPending,
+            currentModel: row.currentModel,
+            currentMode: row.currentMode,
+            autoRun: row.autoRun,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            lastOpenedAt: row.lastOpenedAt,
+            archived: row.archived
+        ))
+    }
+
+    private func persistContextRecoveryPending(sessionId: ACPSession.ID, pending: Bool) {
+        try? store.setContextRecoveryPending(sessionId: sessionId, pending: pending)
     }
 
     /// Rename a session with the given title and source. Updates both
@@ -481,11 +544,11 @@ extension ACPSessionManager {
             stale.stop()
         }
         runners[sessionId] = nil
-        // Clear any error from the prior attempt so the UI doesn't keep
-        // showing a stale failure banner while we spawn fresh. If this
-        // attempt also fails, the catch branches below will repopulate
+        // Clear stale failure UI from the prior attempt while we spawn fresh.
+        // If this attempt also fails, the catch branches below will repopulate
         // `lastError` with the new reason.
         session.lastError = nil
+        session.contextRestoreWarning = nil
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
@@ -494,8 +557,7 @@ extension ACPSessionManager {
             session.agentState = .failed(reason)
             return
         }
-        let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
-        let setup = await checker.evaluate(spec.setupCheck)
+        let setup = await setupEvaluator(spec)
         guard case .ready = setup else {
             session.setupState = .needsSetup(reason: setup.reasonText)
             session.agentState = .failed(setup.reasonText)
@@ -503,31 +565,19 @@ extension ACPSessionManager {
         }
         session.setupState = .ready
 
-        let client: ACPStdioClient
+        let connection: ACPConnection
         do {
-            if spec.command.hasPrefix("/") {
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: spec.command),
-                    arguments: spec.arguments,
-                    environment: Self.mergeEnv(extra: spec.extraEnv))
-            } else {
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: "/usr/bin/env"),
-                    arguments: [spec.command] + spec.arguments,
-                    environment: Self.mergeEnv(extra: spec.extraEnv))
-            }
-            try client.start()
+            connection = try connectionFactory(spec)
         } catch {
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg
             session.agentState = .failed(msg)
             return
         }
-        let connection = ACPConnection(client: client)
         // Collect a short tail of stderr so we can surface it when the
         // agent rejects initialize / new for protocol or auth reasons.
         let stderrBuffer = StderrBuffer()
-        let stderrTask = Task { [weak client] in
+        let stderrTask = Task { [weak client = connection.client] in
             guard let stream = (client as? ACPStdioClient)?.incomingStderr else { return }
             for await data in stream {
                 stderrBuffer.append(data)
@@ -535,13 +585,43 @@ extension ACPSessionManager {
         }
         do {
             try await connection.initialize()
-            // Always call `session/new` — even when reopening, because the
-            // server doesn't know about our local UUID, and `remoteSessionId`
-            // (the id `session/new` previously returned) isn't persisted.
-            // Most ACP agents also don't implement `session/load`. The user-
-            // visible history comes from the local SQLite store, loaded via
-            // `hydrateIfNeeded`; the server just gets a fresh conversation.
-            let result = try await connection.newSession(cwd: worktreePath)
+            let pendingRecovery = (try? store.loadSession(id: sessionId)?.contextRecoveryPending) == true
+            let result: ACPSessionNewResult
+            var restoreWarning: ACPSession.ContextRestoreWarning?
+            var shouldHoldQueueForRecovery = pendingRecovery && session.hasConversationTranscript
+            if freshlyCreated {
+                result = try await connection.newSession(cwd: worktreePath)
+            } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
+                do {
+                    result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                } catch {
+                    result = try await connection.newSession(cwd: worktreePath)
+                    if session.hasConversationTranscript {
+                        shouldHoldQueueForRecovery = true
+                        persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                    }
+                    restoreWarning = .init(
+                        message: "Agent context could not be restored.",
+                        canSendTranscript: session.hasConversationTranscript
+                    )
+                }
+            } else {
+                result = try await connection.newSession(cwd: worktreePath)
+                if session.hasConversationTranscript {
+                    shouldHoldQueueForRecovery = true
+                    persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                }
+                restoreWarning = .init(
+                    message: "Agent context could not be restored.",
+                    canSendTranscript: session.hasConversationTranscript
+                )
+            }
+            if restoreWarning == nil, pendingRecovery {
+                restoreWarning = .init(
+                    message: "Agent context could not be restored.",
+                    canSendTranscript: session.hasConversationTranscript
+                )
+            }
             session.remoteSessionId = result.sessionId
             session.availableModels = result.availableModels
             session.availableModes = result.availableModes
@@ -549,6 +629,8 @@ extension ACPSessionManager {
             session.currentMode = result.currentMode
             session.promptSuggestions = result.promptSuggestions
             session.availableConfigOptions = result.configOptions
+            session.contextRestoreWarning = restoreWarning
+            persistSessionRemoteId(session)
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
                                           worktreePath: worktreePath,
@@ -558,7 +640,9 @@ extension ACPSessionManager {
             runner.start()
             runners[sessionId] = runner
             session.agentState = .ready
-            runner.flushQueueIfIdle()
+            if !shouldHoldQueueForRecovery {
+                runner.flushQueueIfIdle()
+            }
             stderrTask.cancel()
         } catch {
             // Give stderr a moment to drain so the message is the real cause.
@@ -583,6 +667,40 @@ extension ACPSessionManager {
         case .idle, .disconnected, .failed:
             await attach(to: sessionId, freshlyCreated: false)
         }
+    }
+
+    func transcriptContextPrompt(for session: ACPSession, agentName: String?) -> String? {
+        guard session.hasConversationTranscript else { return nil }
+        let markdown = ACPTranscriptMarkdown.document(
+            title: session.title,
+            agentName: agentName,
+            messages: session.transcript.messages
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !markdown.isEmpty else { return nil }
+        return """
+        The previous agent context for this pane could not be restored. Use the transcript below as background context for future turns. Do not summarize or repeat it back unless I ask.
+
+        \(markdown)
+        """
+    }
+
+    @discardableResult
+    func sendTranscriptAsContext(sessionId: ACPSession.ID, agentName: String?) -> Bool {
+        guard let session = sessions[sessionId],
+              let runner = runners[sessionId],
+              session.contextRestoreWarning?.canSendTranscript == true,
+              session.agentState == .ready,
+              session.transcript.streamingState == .idle,
+              let prompt = transcriptContextPrompt(for: session, agentName: agentName)
+        else { return false }
+
+        runner.sendRecoveryContext(prompt) { delivered in
+            if delivered {
+                self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
+                session.contextRestoreWarning = nil
+            }
+        }
+        return true
     }
 
     /// Enqueue a prompt into a session whose agent isn't `.ready` yet.

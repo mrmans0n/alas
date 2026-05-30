@@ -15,6 +15,7 @@ final class ACPSession: ObservableObject, Identifiable {
     let agentId: String
     let worktreeId: String
     let createdAt: Date
+    let restoredFromPersistence: Bool
     let transcript = ACPTranscript()
     let terminalHost: ACPTerminalHost = ACPTerminalHost(sessionCwd: "/", sessionEnv: [:])
 
@@ -31,6 +32,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published private(set) var composerDraftRevision: Int = 0
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
+    @Published var contextRestoreWarning: ContextRestoreWarning?
     /// Runtime-only transcript scroll intent. When true, the ACP message
     /// list follows new content and restores to the latest bottom after
     /// returning to this session. Set false when the user scrolls upward.
@@ -65,7 +67,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// protocol call (`session/prompt`, `session/cancel`, etc).
     /// Distinct from `id`, which is our locally-generated UUID used
     /// as the persistence key in `ACPSessionStore`.
-    /// Not persisted — recreated on each `attach()` if missing.
+    /// Persisted in `ACPSessionStore` and refreshed on each successful
+    /// `session/new` or `session/load`.
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = []
     @Published var steerUndo: SteerUndoState?
@@ -76,6 +79,24 @@ final class ACPSession: ObservableObject, Identifiable {
         /// the previous toast has expired.
         let id: UUID
         let snapshot: [QueuedPrompt]
+    }
+
+    struct ContextRestoreWarning: Equatable {
+        var message: String
+        var canSendTranscript: Bool
+    }
+
+    var hasConversationTranscript: Bool {
+        transcript.messages.contains { message in
+            switch message {
+            case .user(_, let text, _):
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .agent(_, let buffer):
+                return !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            default:
+                return false
+            }
+        }
     }
 
     func replaceComposerDraft(_ draft: ACPComposerDraft) {
@@ -102,7 +123,8 @@ final class ACPSession: ObservableObject, Identifiable {
     init(id: ID, agentId: String, worktreeId: String, title: String,
          titleSource: ACPSessionTitleSource = .placeholder,
          createdAt: Date = Date(),
-         hydrationState: HydrationState = .ready) {
+         hydrationState: HydrationState = .ready,
+         restoredFromPersistence: Bool = false) {
         self.id = id
         self.agentId = agentId
         self.worktreeId = worktreeId
@@ -110,6 +132,7 @@ final class ACPSession: ObservableObject, Identifiable {
         self.titleSource = titleSource
         self.createdAt = createdAt
         self.hydrationState = hydrationState
+        self.restoredFromPersistence = restoredFromPersistence
     }
 
     deinit {

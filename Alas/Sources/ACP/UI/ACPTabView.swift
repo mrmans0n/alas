@@ -1,5 +1,11 @@
 import SwiftUI
 
+enum ACPSessionAttachFreshness {
+    static func isFresh(restoredFromPersistence: Bool, remoteSessionId: String?) -> Bool {
+        !restoredFromPersistence && (remoteSessionId?.isEmpty ?? true)
+    }
+}
+
 struct ACPTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
@@ -91,6 +97,7 @@ private struct ACPSessionView: View {
                 }
             )
             adapterBanner()
+            contextRestoreBanner()
             if let err = session.lastError {
                 errorBanner(err)
             }
@@ -332,6 +339,40 @@ private struct ACPSessionView: View {
         }
     }
 
+    @ViewBuilder
+    private func contextRestoreBanner() -> some View {
+        if let warning = session.contextRestoreWarning {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                    .foregroundStyle(theme.color("warn"))
+                Text(warning.message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.color("fg"))
+                Spacer()
+                if warning.canSendTranscript {
+                    Button("Send transcript as context") {
+                        _ = manager.sendTranscriptAsContext(
+                            sessionId: sessionId,
+                            agentName: state.agent(id: session.agentId)?.displayName
+                        )
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(
+                        session.agentState != .ready
+                            || session.transcript.streamingState != .idle
+                            || manager.runners[sessionId] == nil
+                    )
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(theme.color("bg-1").opacity(0.7))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(theme.color("line")).frame(height: 0.5)
+            }
+        }
+    }
+
     private func scopeKey(for pending: ACPSession.PendingPermission?) -> String {
         guard let p = pending else { return "" }
         return "tool:\(p.params.toolCall.title ?? p.params.toolCall.toolCallId)"
@@ -339,12 +380,14 @@ private struct ACPSessionView: View {
 
     private func reattach() async {
         // Drop any half-attached connection state, clear the prior error,
-        // then re-run attach with `freshlyCreated:` matching whether we have
-        // any messages yet (mirrors initial-mount logic).
+        // then re-run attach with the session's persisted-origin state.
         await manager.detach(sessionId: sessionId)
         session.lastError = nil
         session.setupState = .checking
-        let freshlyCreated = session.transcript.messages.isEmpty
+        let freshlyCreated = ACPSessionAttachFreshness.isFresh(
+            restoredFromPersistence: session.restoredFromPersistence,
+            remoteSessionId: session.remoteSessionId
+        )
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
     }
 
@@ -395,7 +438,10 @@ private struct ACPSessionView: View {
         await manager.hydrateIfNeeded(id: sessionId)
         if case .failed = session.hydrationState { return }
         let freshlyCreated = manager.runners[sessionId] == nil
-            && session.transcript.messages.isEmpty
+            && ACPSessionAttachFreshness.isFresh(
+                restoredFromPersistence: session.restoredFromPersistence,
+                remoteSessionId: session.remoteSessionId
+            )
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
         await refreshAdapterUpdateState()
     }

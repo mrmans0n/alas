@@ -768,6 +768,64 @@ extension ACPSessionRunner {
         }
     }
 
+    func sendRecoveryContext(
+        _ prompt: String,
+        onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
+    ) {
+        let promptID = nextPromptID
+        nextPromptID += 1
+        activePromptID = promptID
+        Task { [weak self, onCompleted] in
+            guard let self else {
+                await MainActor.run { onCompleted?(false) }
+                return
+            }
+            let proceeded = await MainActor.run { () -> Bool in
+                if self.activePromptID != promptID {
+                    self.cancelledPromptIDs.remove(promptID)
+                    return false
+                }
+                self.session.transcript.streamingState = .sending
+                return true
+            }
+            guard proceeded else {
+                await MainActor.run { onCompleted?(false) }
+                return
+            }
+            do {
+                let remoteId = self.session.remoteSessionId ?? self.sessionId
+                try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
+                await MainActor.run {
+                    let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
+                    let isActivePrompt = self.activePromptID == promptID
+                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    if isActivePrompt {
+                        self.activePromptID = nil
+                        self.session.transcript.streamingState = .idle
+                        self.flushQueueIfIdle()
+                    }
+                    if !hasNewerActivePrompt {
+                        onCompleted?(isActivePrompt && !wasCancelled)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    _ = self.cancelledPromptIDs.remove(promptID)
+                    let isActivePrompt = self.activePromptID == promptID
+                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    if isActivePrompt {
+                        self.activePromptID = nil
+                        self.session.transcript.streamingState = .idle
+                        self.flushQueueIfIdle()
+                    }
+                    if !hasNewerActivePrompt {
+                        onCompleted?(false)
+                    }
+                }
+            }
+        }
+    }
+
     /// First text block as the user-facing preview. Used when recording
     /// the queued item's bubble in the transcript on flush. Concatenating
     /// every text block matches the wire shape we already send.

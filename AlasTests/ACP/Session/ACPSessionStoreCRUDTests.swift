@@ -26,6 +26,111 @@ struct ACPSessionStoreCRUDTests {
         #expect(got == row)
     }
 
+    @Test("session row persists remote ACP session id")
+    func sessionRowPersistsRemoteSessionId() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Restored",
+            titleSource: .manual,
+            remoteSessionId: "remote-1",
+            currentModel: "sonnet",
+            currentMode: "agent",
+            autoRun: true,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.remoteSessionId == "remote-1")
+        #expect(row.currentModel == "sonnet")
+        #expect(row.currentMode == "agent")
+        #expect(row.autoRun == true)
+    }
+
+    @Test("session metadata updates preserve stored remote ACP session id")
+    func sessionMetadataUpdatesPreserveRemoteSessionId() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Restored",
+            titleSource: .manual,
+            remoteSessionId: "remote-1",
+            currentModel: "sonnet",
+            currentMode: "agent",
+            autoRun: true,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Updated",
+            titleSource: .manual,
+            currentModel: "opus",
+            currentMode: "agent",
+            autoRun: true,
+            createdAt: 1,
+            updatedAt: 4,
+            lastOpenedAt: 5,
+            archived: false
+        ))
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.remoteSessionId == "remote-1")
+        #expect(row.title == "Updated")
+        #expect(row.currentModel == "opus")
+    }
+
+    @Test("context recovery pending is stored separately from metadata upserts")
+    func contextRecoveryPendingRoundTrip() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Restored",
+            titleSource: .manual,
+            remoteSessionId: "remote-1",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        try store.setContextRecoveryPending(sessionId: "local-1", pending: true)
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Updated",
+            titleSource: .manual,
+            currentModel: "opus",
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 4,
+            lastOpenedAt: 5,
+            archived: false
+        ))
+
+        var row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.contextRecoveryPending)
+        #expect(row.title == "Updated")
+
+        try store.setContextRecoveryPending(sessionId: "local-1", pending: false)
+        row = try #require(try store.loadSession(id: "local-1"))
+        #expect(!row.contextRecoveryPending)
+    }
+
     @Test("recent list orders by last_opened_at desc and skips archived")
     func recent() throws {
         let store = try tmp()
