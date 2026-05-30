@@ -417,6 +417,20 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .string }))
     }
 
+    @Test("HCL uses tree-sitter grammar and query")
+    func hclTreeSitterBasics() throws {
+        #expect(LanguageRegistry.language(forFileExtension: "tf") != nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "tf") != nil)
+
+        let spans = TreeSitterHighlighter.highlight(
+            source: #"resource "aws_s3_bucket" "logs" { bucket = "alas-logs" }"#,
+            fileExtension: "tf"
+        )
+        #expect(spans.contains(where: { $0.capture == .type }))
+        #expect(spans.contains(where: { $0.capture == .property }))
+        #expect(spans.contains(where: { $0.capture == .string }))
+    }
+
     @Test("CSS fallback does not treat hashes as line comments")
     func cssFallbackDoesNotTreatHashesAsLineComments() throws {
         let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#
