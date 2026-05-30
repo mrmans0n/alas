@@ -574,11 +574,9 @@ struct ACPComposerDraftBridgeTests {
         // position with text on both sides — no doubled mention, no dropped
         // one (the codex P2 findings).
         //
-        // `extract` always emits `@name ` with a trailing space, so the
-        // chip's separator ends up as a leading space on the following text
-        // (`"now"` → `" now"`). That one-space shift is inherent to the
-        // lossy serialization; the user's content and the mention position
-        // survive intact, which is what matters here.
+        // `extract` emits `@name ` with a trailing space, and the inverse
+        // consumes that marker separator when replacing it with the mention
+        // chip. The user's following text remains unchanged.
         let original = ACPComposerDraft(segments: [
             .text("please review "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
@@ -593,7 +591,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(restored == ACPComposerDraft(segments: [
             .text("please review "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
-            .text(" now"),
+            .text("now"),
         ]))
     }
 

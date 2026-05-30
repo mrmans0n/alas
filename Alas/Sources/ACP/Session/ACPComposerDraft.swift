@@ -16,6 +16,20 @@ struct ACPComposerDraft: Codable, Equatable {
         }
     }
 
+    /// True when the draft has any non-whitespace text or any mention.
+    /// Distinct from `isEmpty` (which is strictly structural) — use this
+    /// when deciding whether the user has typed something meaningful.
+    var hasContent: Bool {
+        segments.contains { segment in
+            switch segment {
+            case .text(let value):
+                return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .mention:
+                return true
+            }
+        }
+    }
+
     enum Segment: Codable, Equatable {
         case text(String)
         case mention(displayName: String, uri: String)
