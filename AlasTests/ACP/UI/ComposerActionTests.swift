@@ -3,7 +3,6 @@ import Testing
 
 @Suite("ComposerAction derive function")
 struct ComposerActionTests {
-
     // MARK: - Agent lifecycle
 
     @Test("idle streaming + text shows Send for every agent lifecycle state")
