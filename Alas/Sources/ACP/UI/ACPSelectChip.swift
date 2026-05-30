@@ -36,7 +36,7 @@ struct ACPSelectChip: View {
                     .shadow(color: accent.opacity(0.7), radius: 3)
                 Text(label.isEmpty ? placeholder : label)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.blend(accent, .white, t: 0.55))
+                    .foregroundStyle(Self.labelForeground(accent: accent, theme: theme))
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
@@ -67,6 +67,10 @@ struct ACPSelectChip: View {
             )
             .environment(\.theme, theme)
         }
+    }
+
+    static func labelForeground(accent: Color, theme: Theme) -> Color {
+        Color.blend(accent, theme.darkMode ? .white : .black, t: theme.darkMode ? 0.55 : 0.30)
     }
 }
 
