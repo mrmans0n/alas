@@ -4,6 +4,7 @@ import TreeSitterBash
 import TreeSitterC
 import TreeSitterCPP
 import TreeSitterCSS
+import TreeSitterDockerfile
 import TreeSitterGo
 import TreeSitterHCL
 import TreeSitterHTML
@@ -68,6 +69,7 @@ enum LanguageRegistry {
                               lang = Language(language: tree_sitter_markdown())
         case "hcl", "tf", "tfvars":
                               lang = Language(language: tree_sitter_hcl())
+        case "dockerfile":    lang = Language(language: tree_sitter_dockerfile())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -203,6 +205,10 @@ enum LanguageRegistry {
         case "hcl", "tf", "tfvars":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterHCL",
+                              language: lang)
+        case "dockerfile":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterDockerfile",
                               language: lang)
         default:
             query = nil

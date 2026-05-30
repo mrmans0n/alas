@@ -431,6 +431,23 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .string }))
     }
 
+    @Test("Dockerfile uses tree-sitter grammar and query")
+    func dockerfileTreeSitterBasics() throws {
+        #expect(LanguageRegistry.language(forFileExtension: "dockerfile") != nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "dockerfile") != nil)
+
+        let spans = TreeSitterHighlighter.highlight(
+            source: """
+            FROM swift:latest
+            ENV APP_HOME="/app"
+            """,
+            fileExtension: "dockerfile"
+        )
+        #expect(spans.contains(where: { $0.capture == .keyword }))
+        #expect(spans.contains(where: { $0.capture == .operator }))
+        #expect(spans.contains(where: { $0.capture == .string }))
+    }
+
     @Test("CSS fallback does not treat hashes as line comments")
     func cssFallbackDoesNotTreatHashesAsLineComments() throws {
         let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#
