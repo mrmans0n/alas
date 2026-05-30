@@ -447,21 +447,23 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
 /// change is deliberate. Extracted as a pure function so the mapping is unit
 /// testable without a running event loop.
 ///
-/// `.keyDown` is deliberately excluded: the transcript `ScrollView` is never
-/// the first responder here (the composer owns focus), so keyboard paging
-/// can't scroll it — and because `NSApp.currentEvent` reports the most recent
-/// app-wide event, accepting `.keyDown` would misread composer typing during
-/// streaming as a scroll and falsely pause tail-following.
+/// The set is deliberately narrow. `NSApp.currentEvent` reports the most
+/// recent app-wide event, not the cause of the bounds change, so any event
+/// type that also occurs away from scrolling would misattribute layout reflow
+/// during streaming and re-latch the false pause this guards against:
+///   - `.keyDown`: the transcript `ScrollView` never holds key focus here (the
+///     composer owns it), so keyboard paging can't scroll it; accepting it
+///     would catch composer typing during streaming.
+///   - `.leftMouseDown` / `.leftMouseUp`: a bare click can't be told apart from
+///     clicking a transcript control (expanding a card, the copy button) by
+///     type alone, so it would catch reflow that coincides with such a click.
+/// The covered cases (trackpad and dragging the scroller knob) only fire while
+/// actually scrolling, so they can't be confused with idle layout reflow.
 enum ACPUserScrollEvent {
     static func isUserDriven(_ type: NSEvent.EventType?) -> Bool {
         guard let type else { return false }
         switch type {
-        case .scrollWheel, .leftMouseDragged, .leftMouseDown, .gesture, .magnify, .swipe:
-            // scrollWheel/gesture/magnify/swipe: trackpad. leftMouseDragged:
-            // dragging the scroller knob. leftMouseDown: clicking the scrollbar
-            // track to page — held while the scroll happens, so its staleness
-            // window is bounded (unlike leftMouseUp/keyDown, which linger after
-            // any click or keystroke).
+        case .scrollWheel, .leftMouseDragged, .gesture, .magnify, .swipe:
             return true
         default:
             return false

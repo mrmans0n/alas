@@ -15,11 +15,15 @@ struct ACPUserScrollEventTests {
         #expect(ACPUserScrollEvent.isUserDriven(.leftMouseDragged))
     }
 
-    @Test func scrollbarTrackClickIsUserDriven() {
-        // Clicking the scrollbar track to page arrives as a button-held
-        // leftMouseDown rather than a scrollWheel; it is still a deliberate
-        // user scroll and must be allowed to pause tail-following.
-        #expect(ACPUserScrollEvent.isUserDriven(.leftMouseDown))
+    @Test func plainMouseDownIsNotScrollIntent() {
+        // A bare leftMouseDown is "any left click" — it can't be distinguished
+        // from clicking a transcript control (expanding/collapsing a card, the
+        // copy button) by event type alone. If such a click coincides with a
+        // streaming/layout reflow that shifts the clip view upward, treating it
+        // as a scroll would re-latch the false pause this change prevents. Only
+        // the knob drag (leftMouseDragged) counts; track-click paging is a rare
+        // interaction not worth that regression.
+        #expect(!ACPUserScrollEvent.isUserDriven(.leftMouseDown))
     }
 
     @Test func keyboardIsNotTreatedAsScroll() {
