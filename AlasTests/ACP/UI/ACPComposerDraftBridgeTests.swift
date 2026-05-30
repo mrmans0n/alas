@@ -1,11 +1,35 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("editing lifecycle updates composer focus binding")
+    func editingLifecycleUpdatesFocusBinding() {
+        var focused = false
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            isFocused: Binding(
+                get: { focused },
+                set: { focused = $0 }
+            ),
+            sendOnEnter: true,
+            onDraftChange: { _ in },
+            onDraftClear: {},
+            onSubmit: { _, _, _, _, _ in true }
+        )
+
+        coordinator.textDidBeginEditing(Notification(name: NSText.didBeginEditingNotification))
+        #expect(focused)
+
+        coordinator.textDidEndEditing(Notification(name: NSText.didEndEditingNotification))
+        #expect(!focused)
+    }
+
     @Test("accepted submit restores structured draft when async completion fails")
     func acceptedSubmitRestoresDraftWhenCompletionFails() {
         let draft = ACPComposerDraft(segments: [

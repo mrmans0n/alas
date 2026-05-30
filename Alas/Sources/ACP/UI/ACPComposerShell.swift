@@ -15,7 +15,7 @@ struct ACPComposer: View {
     let onSubmit: ACPComposerSubmitHandler
 
     @Environment(\.theme) private var theme
-    @FocusState private var inputFocused: Bool
+    @State private var inputFocused = false
     @StateObject private var actions = ACPComposerActions()
     @State private var hasText: Bool = false
 
@@ -54,6 +54,7 @@ struct ACPComposer: View {
                 session: session,
                 worktreeRoot: worktreeRoot,
                 actions: actions,
+                isFocused: $inputFocused,
                 sendOnEnter: sendOnEnter,
                 onDraftChange: { draft in
                     manager.persistComposerDraft(draft, for: session)
@@ -158,7 +159,7 @@ struct ACPComposer: View {
     }
 
     private var borderColor: Color {
-        inputFocused ? theme.color("accent").opacity(0.7) : theme.color("line")
+        inputFocused ? theme.color("add").opacity(0.7) : theme.color("line")
     }
 
     // MARK: - Auto-run pill (was in the toolbar)
