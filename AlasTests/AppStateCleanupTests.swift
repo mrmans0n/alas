@@ -341,6 +341,147 @@ struct AppStateCleanupTests {
         #expect(AppState.resolveDeleteBranchIfMerged(globalDeleteOnRemove: false, keepBranch: true) == false)
     }
 
+    @Test func deleteConfirmationForCleanPreflightUsesDeleteAndBranchDeletionCopy() {
+        let confirmation = AppState.deleteConfirmation(
+            branch: "feature/clean",
+            keepBranch: false,
+            preflight: WorktreeDeletePreflight(reasons: [], submoduleLocalState: .none)
+        )
+
+        #expect(confirmation == AppState.WorktreeDeleteConfirmation(
+            title: "Delete worktree 'feature/clean'?",
+            message: "This removes its files from disk. The local branch will be deleted if merged.",
+            buttonTitle: "Delete",
+            force: false
+        ))
+    }
+
+    @Test func deleteConfirmationForDirtyPreflightUsesForceAndKeepBranchCopy() {
+        let confirmation = AppState.deleteConfirmation(
+            branch: "feature/dirty",
+            keepBranch: true,
+            preflight: WorktreeDeletePreflight(reasons: [.dirty], submoduleLocalState: .none)
+        )
+
+        #expect(confirmation.title == "Delete worktree 'feature/dirty'?")
+        #expect(confirmation.buttonTitle == "Force Delete")
+        #expect(confirmation.force == true)
+        #expect(confirmation.message.contains("This removes its files from disk."))
+        #expect(confirmation.message.contains("The local branch will be kept."))
+        #expect(confirmation.message.contains("This worktree has modified or untracked files. Force delete will permanently remove them from disk."))
+    }
+
+    @Test func deleteConfirmationForSubmoduleLocalStateIncludesSubmoduleWarnings() {
+        let confirmation = AppState.deleteConfirmation(
+            branch: "feature/submodule",
+            keepBranch: false,
+            preflight: WorktreeDeletePreflight(
+                reasons: [.containsInitializedSubmodules],
+                submoduleLocalState: .present
+            )
+        )
+
+        #expect(confirmation.buttonTitle == "Force Delete")
+        #expect(confirmation.force == true)
+        #expect(confirmation.message.contains("This worktree contains initialized submodules. Git requires force delete to remove it."))
+        #expect(confirmation.message.contains("Preflight found local-only submodule state that may only exist inside this worktree."))
+    }
+
+    @Test func deleteConfirmationForUnknownWithoutSubmoduleReasonUsesNormalCopy() {
+        let confirmation = AppState.deleteConfirmation(
+            branch: "feature/unknown",
+            keepBranch: false,
+            preflight: WorktreeDeletePreflight(reasons: [], submoduleLocalState: .unknown)
+        )
+
+        #expect(confirmation.buttonTitle == "Delete")
+        #expect(confirmation.force == false)
+        #expect(!confirmation.message.contains("initialized submodules"))
+        #expect(!confirmation.message.contains("could not verify"))
+    }
+
+    @Test func deleteConfirmationForDirtyAndSubmodulePreflightIncludesBothWarnings() {
+        let confirmation = AppState.deleteConfirmation(
+            branch: "feature/combined",
+            keepBranch: false,
+            preflight: WorktreeDeletePreflight(
+                reasons: [.dirty, .containsInitializedSubmodules],
+                submoduleLocalState: .none
+            )
+        )
+
+        #expect(confirmation.buttonTitle == "Force Delete")
+        #expect(confirmation.force == true)
+        #expect(confirmation.message.contains("This worktree has modified or untracked files. Force delete will permanently remove them from disk."))
+        #expect(confirmation.message.contains("This worktree contains initialized submodules. Git requires force delete to remove it."))
+    }
+
+    @Test func resolveDeleteDecisionReturnsForceDecisionWhenConfirmed() {
+        let preflight = WorktreeDeletePreflight(
+            reasons: [.containsInitializedSubmodules],
+            submoduleLocalState: .none
+        )
+
+        let decision = AppState.resolveDeleteDecision(
+            branch: "feature/submodule",
+            keepBranch: false,
+            preflight: preflight,
+            userConfirmed: true
+        )
+
+        #expect(decision == AppState.WorktreeDeleteDecision(
+            confirmation: AppState.deleteConfirmation(
+                branch: "feature/submodule",
+                keepBranch: false,
+                preflight: preflight
+            ),
+            force: true
+        ))
+        #expect(decision?.confirmation.buttonTitle == "Force Delete")
+    }
+
+    @Test func resolveDeleteDecisionReturnsNilWhenCancelled() {
+        let decision = AppState.resolveDeleteDecision(
+            branch: "feature/cancel",
+            keepBranch: false,
+            preflight: WorktreeDeletePreflight(reasons: [.dirty], submoduleLocalState: .none),
+            userConfirmed: false
+        )
+
+        #expect(decision == nil)
+    }
+
+    @Test func submoduleRemoveErrorBuildsPendingForceDeleteFallback() {
+        let repoPath = URL(fileURLWithPath: "/tmp/repo")
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo-worktree")
+        let worktree = Worktree(
+            id: "wt-submodule",
+            projectId: "project",
+            name: "feature/submodule",
+            branch: "feature/submodule",
+            path: worktreePath,
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+
+        let pending = AppState.pendingForceDelete(
+            for: worktree,
+            repoPath: repoPath,
+            deleteBranchIfMerged: true,
+            removedIndex: 2,
+            stderr: "fatal: working trees containing submodules cannot be moved or removed"
+        )
+
+        #expect(pending?.id == worktree.id)
+        #expect(pending?.branch == worktree.branch)
+        #expect(pending?.projectId == worktree.projectId)
+        #expect(pending?.repoPath == repoPath)
+        #expect(pending?.worktreePath == worktreePath)
+        #expect(pending?.deleteBranchIfMerged == true)
+        #expect(pending?.removedIndex == 2)
+        #expect(pending?.reason == .containsSubmodules)
+    }
+
     @Test func cancelForceDeleteClearsPendingState() async throws {
         let repo = try await makeRepo(name: "cancel-force")
         defer { try? FileManager.default.removeItem(at: repo) }

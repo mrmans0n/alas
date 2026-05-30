@@ -1,6 +1,23 @@
 import CryptoKit
 import Foundation
 
+struct WorktreeDeletePreflight: Equatable {
+    var requiresForce: Bool { reasons.isEmpty == false }
+    var reasons: Set<WorktreeDeletePreflightReason>
+    var submoduleLocalState: SubmoduleLocalState
+}
+
+enum WorktreeDeletePreflightReason: Equatable, Hashable {
+    case dirty
+    case containsInitializedSubmodules
+}
+
+enum SubmoduleLocalState: Equatable {
+    case none
+    case present
+    case unknown
+}
+
 struct WorktreeService {
     enum WorktreeError: Error, LocalizedError {
         case gitFailed(String)
@@ -152,41 +169,57 @@ struct WorktreeService {
             }
         }
         if result.exitCode != 0 {
-            // Treat any thrown helper error (timeout, malformed submodule,
-            // etc.) as "couldn't verify clean" so we propagate the original
-            // stderr from `git worktree remove` instead of surfacing the
-            // helper's internal failure to the user. Sequential bindings
-            // because `&&` autoclosures don't propagate `async`.
-            let okToForce: Bool
-            do {
-                let workClean = try await isWorktreeClean(worktree.path)
-                let subsClean = workClean
-                    ? try await areInitializedSubmodulesClean(worktree.path)
-                    : false
-                let subsNoLocal = subsClean
-                    ? try await initializedSubmodulesHaveNoLocalState(worktree.path)
-                    : false
-                okToForce = subsNoLocal
-            } catch {
-                okToForce = false
-            }
-            guard !force,
-                  Self.looksLikeSubmoduleWorktreeRemoveError(result.stderr),
-                  okToForce
-            else {
-                throw WorktreeError.gitFailed(result.stderr)
-            }
-
-            let forceResult = try await Process.git(
-                ["worktree", "remove", worktree.path.path, "--force"],
-                cwd: repoPath
-            )
-            guard forceResult.exitCode == 0 else { throw WorktreeError.gitFailed(forceResult.stderr) }
+            throw WorktreeError.gitFailed(result.stderr)
         }
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             // Best-effort delete. -d only succeeds if merged; ignore failures.
             _ = try? await Process.git(["branch", "-d", worktree.branch], cwd: repoPath)
         }
+    }
+
+    func deletePreflight(worktreePath: URL) async throws -> WorktreeDeletePreflight {
+        var reasons: Set<WorktreeDeletePreflightReason> = []
+
+        let hasInitializedSubmodules = try await containsInitializedSubmodules(worktreePath)
+        if hasInitializedSubmodules {
+            reasons.insert(.containsInitializedSubmodules)
+        }
+
+        let worktreeClean: Bool?
+        do {
+            worktreeClean = try await isWorktreeClean(worktreePath)
+        } catch {
+            guard hasInitializedSubmodules else { throw error }
+            worktreeClean = nil
+        }
+
+        if worktreeClean == false {
+            reasons.insert(.dirty)
+        }
+
+        let submoduleLocalState: SubmoduleLocalState
+        if hasInitializedSubmodules {
+            do {
+                if worktreeClean == nil {
+                    submoduleLocalState = .unknown
+                } else if try await areInitializedSubmodulesClean(worktreePath) {
+                    submoduleLocalState = try await initializedSubmodulesHaveNoLocalState(
+                        worktreePath,
+                        timeout: 10
+                    )
+                        ? .none
+                        : .present
+                } else {
+                    submoduleLocalState = .present
+                }
+            } catch {
+                submoduleLocalState = .unknown
+            }
+        } else {
+            submoduleLocalState = .none
+        }
+
+        return WorktreeDeletePreflight(reasons: reasons, submoduleLocalState: submoduleLocalState)
     }
 
     func prune(repoPath: URL) async throws {
@@ -218,10 +251,35 @@ struct WorktreeService {
             || lower.contains("dirty worktree")
     }
 
-    private static func looksLikeSubmoduleWorktreeRemoveError(_ stderr: String) -> Bool {
-        let lower = stderr.lowercased()
-        return lower.contains("working trees containing submodules")
-            && lower.contains("cannot be moved or removed")
+    private func containsInitializedSubmodules(_ path: URL) async throws -> Bool {
+        let result = try await Process.git(["submodule", "status", "--recursive"], cwd: path)
+        guard result.exitCode == 0 else {
+            let paths = try await submodulePathsFromGitmodules(path)
+            return paths.contains { relativePath in
+                FileManager.default.fileExists(
+                    atPath: path.appendingPathComponent(relativePath).appendingPathComponent(".git").path
+                )
+            }
+        }
+        return result.stdout.split(separator: "\n").contains { line in
+            guard let first = line.first else { return false }
+            return first != "-"
+        }
+    }
+
+    private func submodulePathsFromGitmodules(_ path: URL) async throws -> [String] {
+        let result = try await Process.git(
+            ["config", "--file", ".gitmodules", "--get-regexp", "path"],
+            cwd: path
+        )
+        if result.exitCode != 0 {
+            return []
+        }
+        return result.stdout
+            .split(separator: "\n")
+            .compactMap { line in
+                line.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init)
+            }
     }
 
     private func isWorktreeClean(_ path: URL) async throws -> Bool {
@@ -245,7 +303,10 @@ struct WorktreeService {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private func initializedSubmodulesHaveNoLocalState(_ path: URL) async throws -> Bool {
+    private func initializedSubmodulesHaveNoLocalState(
+        _ path: URL,
+        timeout: TimeInterval = 120
+    ) async throws -> Bool {
         // Reachability set arithmetic for reflog and notes/stash (the
         // perf-critical fix — replaces an O(reflog × remotes) shell loop
         // that timed out on submodules with non-trivial reflogs).
@@ -301,7 +362,7 @@ struct WorktreeService {
         let result = try await Process.git(
             ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
             cwd: path,
-            timeout: 120
+            timeout: timeout
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
