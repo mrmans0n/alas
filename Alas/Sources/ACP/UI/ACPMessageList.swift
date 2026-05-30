@@ -414,13 +414,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         }
 
         private static var isUserDrivenScrollEvent: Bool {
-            guard let event = NSApp.currentEvent else { return false }
-            switch event.type {
-            case .scrollWheel, .leftMouseDragged, .gesture, .magnify, .swipe:
-                return true
-            default:
-                return false
-            }
+            ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
         }
     }
 
@@ -444,6 +438,35 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
                     ancestor = view.superview
                 }
             }
+        }
+    }
+}
+
+/// Maps an `NSEvent.EventType` to whether it represents a live user scroll
+/// gesture, used by `ACPScrollEventObserver` to decide if an upward bounds
+/// change is deliberate. Extracted as a pure function so the mapping is unit
+/// testable without a running event loop.
+///
+/// The set is deliberately narrow. `NSApp.currentEvent` reports the most
+/// recent app-wide event, not the cause of the bounds change, so any event
+/// type that also occurs away from scrolling would misattribute layout reflow
+/// during streaming and re-latch the false pause this guards against:
+///   - `.keyDown`: the transcript `ScrollView` never holds key focus here (the
+///     composer owns it), so keyboard paging can't scroll it; accepting it
+///     would catch composer typing during streaming.
+///   - `.leftMouseDown` / `.leftMouseUp`: a bare click can't be told apart from
+///     clicking a transcript control (expanding a card, the copy button) by
+///     type alone, so it would catch reflow that coincides with such a click.
+/// The covered cases (trackpad and dragging the scroller knob) only fire while
+/// actually scrolling, so they can't be confused with idle layout reflow.
+enum ACPUserScrollEvent {
+    static func isUserDriven(_ type: NSEvent.EventType?) -> Bool {
+        guard let type else { return false }
+        switch type {
+        case .scrollWheel, .leftMouseDragged, .gesture, .magnify, .swipe:
+            return true
+        default:
+            return false
         }
     }
 }
