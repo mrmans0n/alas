@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Styled chip + custom popover dropdown used for the composer's model and
@@ -70,7 +71,73 @@ struct ACPSelectChip: View {
     }
 
     static func labelForeground(accent: Color, theme: Theme) -> Color {
-        Color.blend(accent, theme.darkMode ? .white : .black, t: theme.darkMode ? 0.55 : 0.30)
+        if theme.darkMode {
+            return Color.blend(accent, .white, t: 0.55)
+        }
+
+        let chipBackground = composited(foreground: accent, alpha: 0.18, over: theme.color("bg-1"))
+        let minimumContrast = 4.5
+        let preferredBlend = Color.blend(accent, .black, t: 0.30)
+        if contrastRatio(preferredBlend, chipBackground) >= minimumContrast {
+            return preferredBlend
+        }
+
+        var lower = 0.30
+        var upper = 1.0
+        for _ in 0..<12 {
+            let midpoint = (lower + upper) / 2
+            let candidate = Color.blend(accent, .black, t: midpoint)
+            if contrastRatio(candidate, chipBackground) >= minimumContrast {
+                upper = midpoint
+            } else {
+                lower = midpoint
+            }
+        }
+        return Color.blend(accent, .black, t: upper)
+    }
+
+    private struct ColorComponents {
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+    }
+
+    private static func colorComponents(_ color: Color) -> ColorComponents {
+        let nsColor = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+        return ColorComponents(
+            red: Double(nsColor.redComponent),
+            green: Double(nsColor.greenComponent),
+            blue: Double(nsColor.blueComponent),
+            alpha: Double(nsColor.alphaComponent)
+        )
+    }
+
+    private static func composited(foreground: Color, alpha: Double, over background: Color) -> Color {
+        let fg = colorComponents(foreground)
+        let bg = colorComponents(background)
+        let a = max(0, min(1, alpha))
+        return Color(
+            .sRGB,
+            red: fg.red * a + bg.red * (1 - a),
+            green: fg.green * a + bg.green * (1 - a),
+            blue: fg.blue * a + bg.blue * (1 - a),
+            opacity: fg.alpha * a + bg.alpha * (1 - a)
+        )
+    }
+
+    private static func contrastRatio(_ lhs: Color, _ rhs: Color) -> Double {
+        let l1 = relativeLuminance(lhs)
+        let l2 = relativeLuminance(rhs)
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
+
+    private static func relativeLuminance(_ color: Color) -> Double {
+        let c = colorComponents(color)
+        func channel(_ value: Double) -> Double {
+            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
     }
 }
 

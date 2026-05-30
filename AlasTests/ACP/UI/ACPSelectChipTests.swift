@@ -14,6 +14,20 @@ struct ACPSelectChipTests {
         #expect(Self.colorComponents(foreground).isClose(to: Self.colorComponents(existing)))
     }
 
+    @Test func labelForegroundPreservesDarkModeTreatmentForAccentOverrides() throws {
+        let baseTheme = try Theme.loadBundled(id: "cool-slate")
+
+        for hex in Theme.accentHexById.values {
+            var theme = baseTheme
+            theme.accentOverrideHex = hex
+            let accent = theme.color("accent")
+            let foreground = ACPSelectChip.labelForeground(accent: accent, theme: theme)
+            let existing = Color.blend(accent, .white, t: 0.55)
+
+            #expect(Self.colorComponents(foreground).isClose(to: Self.colorComponents(existing)))
+        }
+    }
+
     @Test func labelForegroundImprovesLightModeContrast() throws {
         let theme = try Theme.loadBundled(id: "light")
         let accent = theme.color("accent")
@@ -23,6 +37,22 @@ struct ACPSelectChipTests {
 
         #expect(Self.contrastRatio(foreground, chipBackground) > Self.contrastRatio(previousForeground, chipBackground))
         #expect(Self.contrastRatio(foreground, chipBackground) >= 4.5)
+    }
+
+    @Test func labelForegroundMeetsLightModeContrastForAccentOverrides() throws {
+        let baseTheme = try Theme.loadBundled(id: "light")
+
+        for (id, hex) in Theme.accentHexById {
+            var theme = baseTheme
+            theme.accentOverrideHex = hex
+            let accent = theme.color("accent")
+            let chipBackground = Self.composited(foreground: accent, alpha: 0.18, over: theme.color("bg-1"))
+            let previousForeground = Color.blend(accent, .white, t: 0.55)
+            let foreground = ACPSelectChip.labelForeground(accent: accent, theme: theme)
+
+            #expect(Self.contrastRatio(foreground, chipBackground) > Self.contrastRatio(previousForeground, chipBackground), "\(id) should improve contrast over the previous dark-mode treatment")
+            #expect(Self.contrastRatio(foreground, chipBackground) >= 4.5, "\(id) should meet AA contrast")
+        }
     }
 
     private struct Components {
