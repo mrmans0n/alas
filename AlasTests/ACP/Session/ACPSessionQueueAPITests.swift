@@ -159,4 +159,92 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].blocks == [.text("restored")])
         #expect(s.queue[1].blocks == [.text("existing-pending")])
     }
+
+    @Test("enqueue(blocks:draft:) stores the structured draft on the item")
+    func enqueueWithDraft() {
+        let s = mkSession()
+        let draft = ACPComposerDraft(segments: [.text("hi")])
+        s.enqueue(blocks: [.text("hi")], draft: draft)
+        #expect(s.queue[0].draft == draft)
+    }
+
+    @Test("takeForEditing removes a pending item and returns its restorable draft")
+    func takeForEditingPending() {
+        let s = mkSession()
+        let draft = ACPComposerDraft(segments: [.text("edit me")])
+        s.enqueue(blocks: [.text("edit me")], draft: draft)
+        let id = s.queue[0].id
+        let restored = s.takeForEditing(id: id)
+        #expect(restored == draft)
+        #expect(s.queue.isEmpty)
+    }
+
+    @Test("takeForEditing refuses a .sending item and leaves the queue intact")
+    func takeForEditingSendingNoop() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+        s.markQueueHeadSending()
+        let id = s.queue[0].id
+        #expect(s.takeForEditing(id: id) == nil)
+        #expect(s.queue.count == 1)
+        #expect(s.queue[0].status == .sending)
+    }
+
+    @Test("takeForEditing returns nil for an unknown id")
+    func takeForEditingUnknown() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+        #expect(s.takeForEditing(id: UUID()) == nil)
+        #expect(s.queue.count == 1)
+    }
+
+    @Test("takeForEditing is lossless where the blocks heuristic would misclaim a literal @name")
+    func takeForEditingLossless() {
+        let s = mkSession()
+        // Draft: a literal "@here" the user typed, then a real chip for a file named "here".
+        let draft = ACPComposerDraft(segments: [
+            .text("ping @here and "),
+            .mention(displayName: "here", uri: "file:///here")
+        ])
+        // The lossy wire form `extract`+`blocks` would produce for that draft.
+        let blocks: [ACPContentBlock] = [
+            .text("ping @here and @here "),
+            .resourceLink(uri: "file:///here", name: "here")
+        ]
+        // Heuristic inverse misclaims the FIRST "@here " (the literal) — the bug.
+        #expect(ACPComposerDraft(blocks: blocks) != draft)
+        // With the stored draft, restore is exact — the fix.
+        s.enqueue(blocks: blocks, draft: draft)
+        #expect(s.takeForEditing(id: s.queue[0].id) == draft)
+    }
+
+    @Test("editQueueItem clears the stored draft so a later edit reflects the new blocks")
+    func editQueueItemClearsDraft() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("old")],
+                  draft: ACPComposerDraft(segments: [.text("old")]))
+        let id = s.queue[0].id
+        s.editQueueItem(id: id, blocks: [.text("new")])
+        #expect(s.queue[0].draft == nil)
+        // With the draft cleared, restorableDraft is the heuristic over the new
+        // blocks. Assert the concrete expected segments (not the same
+        // initializer) so this proves the structure rather than Equatable reflexivity.
+        #expect(s.queue[0].restorableDraft == ACPComposerDraft(segments: [.text("new")]))
+    }
+
+    @Test("takeForEditing on a draft-less pending item returns the blocks heuristic")
+    func takeForEditingFallsBackWhenNoDraft() {
+        let s = mkSession()
+        // Enqueued without a draft (legacy/recovery path): restore must fall
+        // back to the heuristic inverse of the blocks.
+        let blocks: [ACPContentBlock] = [.text("see @File.swift "),
+                                         .resourceLink(uri: "file:///File.swift", name: "File.swift")]
+        s.enqueue(blocks: blocks)
+        let restored = s.takeForEditing(id: s.queue[0].id)
+        #expect(restored == ACPComposerDraft(segments: [
+            .text("see "),
+            .mention(displayName: "File.swift", uri: "file:///File.swift"),
+        ]))
+        #expect(s.queue.isEmpty)
+    }
 }

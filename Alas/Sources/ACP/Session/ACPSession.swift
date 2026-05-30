@@ -231,8 +231,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Append a new pending item to the tail of the queue. Used by the
     /// runner when the user submits while the agent is busy (or while
     /// the queue is already non-empty — see ACPSubmitRoute).
-    func enqueue(blocks: [ACPContentBlock]) {
-        queue.append(QueuedPrompt(blocks: blocks))
+    func enqueue(blocks: [ACPContentBlock], draft: ACPComposerDraft? = nil) {
+        queue.append(QueuedPrompt(blocks: blocks, draft: draft))
     }
 
     /// Remove a specific item by id. The drag-handle X on the bubble
@@ -242,6 +242,20 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
         if queue[idx].status == .sending { return }
         queue.remove(at: idx)
+    }
+
+    /// Pull a queued item back into the composer for editing: remove it and
+    /// return its restorable draft — but ONLY if it's still `.pending`.
+    /// Returns `nil` if the item is gone or already `.sending` (mid-RPC), so
+    /// the caller never restores a prompt that's still in flight. This is the
+    /// atomic replacement for "check status, then removeFromQueue, then
+    /// restore" — collapsing the time-of-check/time-of-use window that let a
+    /// flusher-promoted item be duplicated into the composer.
+    func takeForEditing(id: UUID) -> ACPComposerDraft? {
+        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return nil }
+        guard queue[idx].status == .pending else { return nil }
+        let item = queue.remove(at: idx)
+        return item.restorableDraft
     }
 
     /// Reorder within the queue. Refuses to move a `.sending` head — the
@@ -257,10 +271,18 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Edit the prompt blocks of a `.pending` item. No-op for `.sending`.
+    /// Clears any captured draft — the old segments no longer describe the
+    /// new blocks, so a later edit falls back to the heuristic on the
+    /// current blocks rather than restoring stale structure.
+    ///
+    /// This is the only correct path to mutate a queued item's `blocks` —
+    /// call it rather than writing `queue[idx].blocks` directly, otherwise a
+    /// now-stale `draft` survives and mis-restores on the next edit.
     func editQueueItem(id: UUID, blocks: [ACPContentBlock]) {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
         if queue[idx].status == .sending { return }
         queue[idx].blocks = blocks
+        queue[idx].draft = nil
     }
 
     /// Remove all `.pending` items; return the snapshot in original order so

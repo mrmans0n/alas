@@ -153,12 +153,15 @@ private struct ACPSessionView: View {
                             onQueueEdit: { item in
                                 // Pull the queued prompt back into the composer
                                 // for editing — appended after any text the user
-                                // has already typed so nothing is clobbered — then
-                                // drop it from the queue.
-                                let restored = session.composerDraft.appending(
-                                    ACPComposerDraft(blocks: item.blocks))
-                                manager.persistComposerDraft(restored, for: session)
-                                session.removeFromQueue(id: item.id)
+                                // has already typed so nothing is clobbered.
+                                // `takeForEditing` removes the item and returns
+                                // its draft ONLY if it's still `.pending`; a
+                                // `.sending` item (promoted by the flusher
+                                // between render and click) returns nil and is
+                                // left in flight, so it can't be duplicated.
+                                guard let restored = session.takeForEditing(id: item.id) else { return }
+                                manager.persistComposerDraft(
+                                    session.composerDraft.appending(restored), for: session)
                                 manager.persistQueue(for: session)
                                 // Discarding the head can unblock a successor
                                 // that was waiting behind a `lastError` head.
@@ -223,7 +226,8 @@ private struct ACPSessionView: View {
                             sessionId: sessionId,
                             text: text,
                             attachments: attachments,
-                            intent: intent
+                            intent: intent,
+                            draft: draft
                         ) { succeeded in
                             if suspendedRevision >= 0 {
                                 if succeeded {

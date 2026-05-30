@@ -36,4 +36,57 @@ struct QueuedPromptTests {
         let json = String(data: try JSONEncoder().encode(q), encoding: .utf8)!
         #expect(json.contains("\"status\":\"sending\""))
     }
+
+    @Test("draft round-trips through JSON when present")
+    func draftRoundTrip() throws {
+        let draft = ACPComposerDraft(segments: [
+            .text("review "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" please")
+        ])
+        let original = QueuedPrompt(
+            id: UUID(),
+            // `extract` emits "review " + "@File.swift " (the marker adds its own
+            // trailing space) and the following text keeps its leading space in
+            // " please" — hence the double space before "please".
+            blocks: [.text("review @File.swift  please"),
+                     .resourceLink(uri: "file:///tmp/File.swift", name: "File.swift")],
+            enqueuedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            draft: draft
+        )
+        let decoded = try JSONDecoder().decode(
+            QueuedPrompt.self, from: try JSONEncoder().encode(original))
+        #expect(decoded == original)
+        #expect(decoded.draft == draft)
+    }
+
+    @Test("legacy JSON without a draft key decodes to nil")
+    func legacyNoDraftKey() throws {
+        let legacy = QueuedPrompt(
+            id: UUID(), blocks: [.text("hi")],
+            enqueuedAt: Date(timeIntervalSince1970: 1), status: .pending)
+        let json = String(data: try JSONEncoder().encode(legacy), encoding: .utf8)!
+        #expect(!json.contains("\"draft\""))   // nil optional is omitted on encode
+        let decoded = try JSONDecoder().decode(
+            QueuedPrompt.self, from: Data(json.utf8))
+        #expect(decoded.draft == nil)
+    }
+
+    @Test("restorableDraft prefers the stored draft, else falls back to the blocks heuristic")
+    func restorableDraftFallback() {
+        let draft = ACPComposerDraft(segments: [.text("kept")])
+        let withDraft = QueuedPrompt(id: UUID(), blocks: [.text("ignored")],
+                                     enqueuedAt: .init(), draft: draft)
+        #expect(withDraft.restorableDraft == draft)
+
+        let blocks: [ACPContentBlock] = [.text("hello @File.swift "),
+                                         .resourceLink(uri: "file:///File.swift", name: "File.swift")]
+        let noDraft = QueuedPrompt(id: UUID(), blocks: blocks, enqueuedAt: .init())
+        // Spell out the heuristic's expected output so this asserts a concrete
+        // value, not a tautology against the same initializer.
+        #expect(noDraft.restorableDraft == ACPComposerDraft(segments: [
+            .text("hello "),
+            .mention(displayName: "File.swift", uri: "file:///File.swift"),
+        ]))
+    }
 }
