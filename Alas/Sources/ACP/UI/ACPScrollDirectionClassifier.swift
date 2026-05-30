@@ -32,11 +32,11 @@ enum ACPScrollDirectionClassifier {
         isUserDriven: Bool = false
     ) -> ACPScrollDecision {
         let distanceFromBottom = max(0, contentHeight - viewportHeight - newOffsetY)
+        if isRestoring && !isUserDriven { return .noChange }
         if distanceFromBottom <= bottomTolerance { return .userAtBottom }
         guard let prev = previousOffsetY else { return .noChange }
         let movedUp = newOffsetY < prev - upwardEpsilon
         guard distanceFromBottom > pauseTolerance, movedUp else { return .noChange }
-        if isRestoring && !isUserDriven { return .noChange }
         return .userScrolledUp
     }
 }
