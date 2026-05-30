@@ -11,6 +11,7 @@ import TreeSitterJavaScript
 import TreeSitterKotlin
 import TreeSitterJSON
 import TreeSitterLua
+import TreeSitterMarkdown
 import TreeSitterPHP
 import TreeSitterPython
 import TreeSitterRuby
@@ -62,6 +63,8 @@ enum LanguageRegistry {
         case "html":          lang = Language(language: tree_sitter_html())
         case "css":           lang = Language(language: tree_sitter_css())
         case "php":           lang = Language(language: tree_sitter_php())
+        case "md", "markdown":
+                              lang = Language(language: tree_sitter_markdown())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -189,6 +192,10 @@ enum LanguageRegistry {
         case "php":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterPHP",
+                              language: lang)
+        case "md", "markdown":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterMarkdown_TreeSitterMarkdown",
                               language: lang)
         default:
             query = nil

@@ -404,6 +404,19 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .string }))
     }
 
+    @Test("Markdown uses tree-sitter grammar and query")
+    func markdownTreeSitterBasics() throws {
+        #expect(LanguageRegistry.language(forFileExtension: "md") != nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "md") != nil)
+
+        let spans = TreeSitterHighlighter.highlight(
+            source: "# Title\n\n```swift\nlet value = 1\n```",
+            fileExtension: "md"
+        )
+        #expect(spans.contains(where: { $0.capture == .punctuation }))
+        #expect(spans.contains(where: { $0.capture == .string }))
+    }
+
     @Test("CSS fallback does not treat hashes as line comments")
     func cssFallbackDoesNotTreatHashesAsLineComments() throws {
         let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#

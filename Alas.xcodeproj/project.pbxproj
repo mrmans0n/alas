@@ -19,6 +19,7 @@
 		027A326E7DAB6C6E133E5FD3 /* ACPSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0E1BF90CB3BE5BFDFA2EC7C /* ACPSessionStore.swift */; };
 		02B055E21896C1C14D2D980D /* SectionHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 934BCC470703CF2DF2303357 /* SectionHeader.swift */; };
 		02D2512D2B9128E93C7DF6D5 /* NewProjectDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6599EB47850D1E13ACF0EB /* NewProjectDialog.swift */; };
+		03F3504B261E9E6C79C80DD5 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
 		0407824F9DA8EEFC5B5EEA8A /* InstallerHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C506EF972D34E2F937D4FEEC /* InstallerHost.swift */; };
 		043D6A4860C1336134311DD3 /* tool-call-content-terminal.json in Resources */ = {isa = PBXBuildFile; fileRef = D60051A6C7BEE35773F3FBB9 /* tool-call-content-terminal.json */; };
 		04C778DB96502CD36E4C031B /* MergeConflictTabModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5825E49F6DC54DC35132D2F /* MergeConflictTabModelTests.swift */; };
@@ -721,7 +722,7 @@
 		DC394B7740FAEBD2F8ACB61F /* LSPMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C6A07D7C67D02C8638D8C1 /* LSPMessages.swift */; };
 		DCACB5B624BFFE7C50DA6C61 /* RightPaneStateSyncStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D3505FB870FA22C9C0FDB26 /* RightPaneStateSyncStatusTests.swift */; };
 		DD18C5FF006D18BC66964D94 /* TerminalTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14087D57E96448EEF0B80BD9 /* TerminalTabView.swift */; };
-		DDAA1FF54466B7F5424D315E /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
+		DDAA1FF54466B7F5424D315E /* TreeSitterMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = 49F7F27A9183521F9997AF49 /* TreeSitterMarkdown */; };
 		DE41CB04CDC89D09346494A5 /* LineEndingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB52B59655B85764D85CFB7F /* LineEndingTests.swift */; };
 		DEBA25FCF25D26395BD04F73 /* EditorConflictBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD267BE3F08611B376F3CC7 /* EditorConflictBanner.swift */; };
 		DEBB0627BD0426369D18CAD4 /* FileSearchDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F97EB3FA3E3C1206D76A9668 /* FileSearchDialog.swift */; };
@@ -1643,7 +1644,8 @@
 				A8D21135BA6C2542E3820E19 /* TreeSitterHTML in Frameworks */,
 				B40B75555598C42713157C5C /* TreeSitterCSS in Frameworks */,
 				7ACFA19EA43966431D906F55 /* TreeSitterPHP in Frameworks */,
-				DDAA1FF54466B7F5424D315E /* Markdown in Frameworks */,
+				DDAA1FF54466B7F5424D315E /* TreeSitterMarkdown in Frameworks */,
+				03F3504B261E9E6C79C80DD5 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3140,6 +3142,7 @@
 				E1F30BF52DCE8CD60F19C921 /* TreeSitterHTML */,
 				3F76DFBA5D1CB707989C86AB /* TreeSitterCSS */,
 				78020033FC689A2BCDF51DED /* TreeSitterPHP */,
+				49F7F27A9183521F9997AF49 /* TreeSitterMarkdown */,
 				B69450B224F0C82A52D00662 /* Markdown */,
 			);
 			productName = Alas;
@@ -3180,6 +3183,7 @@
 				FC44B93BBD7A9BE00A7FADD2 /* XCRemoteSwiftPackageReference "tree-sitter-json" */,
 				2992358E07485A0415211A65 /* XCRemoteSwiftPackageReference "tree-sitter-java" */,
 				4E94AA7939DF6912D1986513 /* XCRemoteSwiftPackageReference "tree-sitter-kotlin" */,
+				FE7187E47F2A4026A1C50196 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */,
 				0B00D64EA4D5693DBBC1A225 /* XCRemoteSwiftPackageReference "tree-sitter-php" */,
 				FAF805B9CC533A5991566C9A /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */,
 				AFDA8006DAB856320603269E /* XCRemoteSwiftPackageReference "tree-sitter-rust" */,
@@ -4475,6 +4479,14 @@
 				minimumVersion = 0.24.8;
 			};
 		};
+		FE7187E47F2A4026A1C50196 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter-grammars/tree-sitter-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.5.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -4509,6 +4521,11 @@
 		46C4CD399F2A124F7A038D7C /* TreeSitterLua */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TreeSitterLua;
+		};
+		49F7F27A9183521F9997AF49 /* TreeSitterMarkdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FE7187E47F2A4026A1C50196 /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */;
+			productName = TreeSitterMarkdown;
 		};
 		5130D28B6980AF12D2256A6D /* TreeSitterJSON */ = {
 			isa = XCSwiftPackageProductDependency;
