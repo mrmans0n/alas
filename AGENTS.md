@@ -54,3 +54,36 @@ older than `ALAS_GHOSTTY_LOCK_STALE_SECS`) are reclaimed automatically.
 (`.build/ghostty/fingerprint` match) wins before the shared cache is even
 consulted, and CI uses `actions/cache` keyed off `.ghostty-pin` to restore
 `.build/ghostty` directly.
+
+## Xcode build-state remediation
+
+Alas worktree-heavy development can leave many stale Xcode DerivedData entries
+behind, especially for `Alas.xcodeproj` and the vendored Ghostty project. These
+entries are large because each Xcode project path gets its own SwiftPM checkout,
+build products, and index state.
+
+**Inspect stale Alas/Ghostty DerivedData entries:**
+
+```bash
+scripts/prune-xcode-state.sh
+```
+
+**Delete only stale Alas/Ghostty DerivedData entries:**
+
+```bash
+scripts/prune-xcode-state.sh --delete
+```
+
+The pruner only considers `Alas-*` and `Ghostty-*` directories under
+`~/Library/Developer/Xcode/DerivedData`. It keeps entries whose recorded
+`WorkspacePath` still exists and ignores unrelated projects.
+
+**Capture a memory/build snapshot during a bad episode:**
+
+```bash
+scripts/build-memory-snapshot.sh > /tmp/alas-build-memory.txt
+```
+
+The snapshot records VM pressure, top resident processes, Xcode/Swift/Zig build
+processes, Alas/Ghostty DerivedData sizes, local build caches, and active git
+worktrees.
