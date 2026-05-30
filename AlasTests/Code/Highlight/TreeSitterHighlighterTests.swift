@@ -73,10 +73,13 @@ struct TreeSitterHighlighterTests {
         """
         let sh = TreeSitterHighlighter.highlight(source: src, fileExtension: "sh")
         let bash = TreeSitterHighlighter.highlight(source: src, fileExtension: "bash")
+        let zsh = TreeSitterHighlighter.highlight(source: src, fileExtension: "zsh")
         #expect(!sh.isEmpty)
         #expect(!bash.isEmpty)
+        #expect(!zsh.isEmpty)
         #expect(sh.contains(where: { $0.capture == .keyword }))
         #expect(sh.contains(where: { $0.capture == .comment }))
+        #expect(zsh.contains(where: { $0.capture == .keyword }))
     }
 
     @Test("Go `func main()` is captured as keyword + function")
