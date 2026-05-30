@@ -45,6 +45,11 @@ packages:
   TreeSitterRuby:
     url: https://github.com/tree-sitter/tree-sitter-ruby
     from: 0.23.1
+  TreeSitterLua:
+    # Vendored at ThirdParty/TreeSitterLua — upstream's Package.swift
+    # has the same broken `FileManager.fileExists` scanner conditional
+    # as tree-sitter-yaml.
+    path: ThirdParty/TreeSitterLua
   TreeSitterRust:
     url: https://github.com/tree-sitter/tree-sitter-rust
     from: 0.24.2
@@ -129,6 +134,8 @@ targets:
         product: TreeSitterPython
       - package: TreeSitterRuby
         product: TreeSitterRuby
+      - package: TreeSitterLua
+        product: TreeSitterLua
       - package: TreeSitterRust
         product: TreeSitterRust
       - package: TreeSitterGo
