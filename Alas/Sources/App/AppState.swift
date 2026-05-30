@@ -494,6 +494,7 @@ final class AppState {
         )
         projectsManager.insertOptimisticWorktree(optimistic)
         projectsManager.setOperationState(id: optimistic.id, state: .creating)
+        selectedWorktreeId = optimistic.id
 
         let repoPath = URL(fileURLWithPath: project.path)
         let startupScript = StartupScriptResolver.worktreeCreateScript(
