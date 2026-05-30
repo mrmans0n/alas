@@ -8,6 +8,7 @@ import TreeSitterJava
 import TreeSitterJavaScript
 import TreeSitterKotlin
 import TreeSitterJSON
+import TreeSitterLua
 import TreeSitterPython
 import TreeSitterRuby
 import TreeSitterRust
@@ -41,6 +42,7 @@ enum LanguageRegistry {
         case "toml":          lang = Language(language: tree_sitter_toml())
         case "py":            lang = Language(language: tree_sitter_python())
         case "rb":            lang = Language(language: tree_sitter_ruby())
+        case "lua":           lang = Language(language: tree_sitter_lua())
         case "rs":            lang = Language(language: tree_sitter_rust())
         case "go":            lang = Language(language: tree_sitter_go())
         case "sh", "bash", "zsh":
@@ -96,6 +98,10 @@ enum LanguageRegistry {
         case "rb":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterRuby",
+                              language: lang)
+        case "lua":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterLua",
                               language: lang)
         case "rs":
             query = loadQuery(named: "highlights",

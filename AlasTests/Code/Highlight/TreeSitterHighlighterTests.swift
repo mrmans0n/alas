@@ -145,6 +145,20 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.string))
     }
 
+    @Test("Lua function and local are captured")
+    func luaBasics() throws {
+        let src = """
+        local function greet(name)
+          return "hello, " .. name
+        end
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "lua")
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.keyword))
+        #expect(captures.contains(.function))
+        #expect(captures.contains(.string))
+    }
+
     @Test("TOML keys, strings, and numbers are captured")
     func tomlBasics() throws {
         let src = """
