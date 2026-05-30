@@ -362,7 +362,10 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         }
 
         func observe(scrollView: NSScrollView) {
-            guard observedScrollView !== scrollView else { return }
+            guard observedScrollView !== scrollView else {
+                onScrollViewResolved?(scrollView)
+                return
+            }
             if let observer {
                 NotificationCenter.default.removeObserver(observer)
             }
