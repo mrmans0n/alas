@@ -205,29 +205,44 @@ private struct ACPSessionView: View {
                         // submits; the toolbar send button bypasses the keyboard
                         // inversion and supplies its own intent directly. No
                         // further resolution here.
-                        let draftRevision = session.composerDraftRevision
-                        return manager.submit(
+                        //
+                        // The eager in-memory clear happens AFTER `manager.submit`
+                        // returns but BEFORE the completion closure can run (the
+                        // submit's completion is always dispatched via a Task,
+                        // so it runs on a later main-actor tick). The
+                        // suspendedRevision captured below identifies the post-
+                        // clear state — if the user has typed a new draft by the
+                        // time the completion fires, the conditional checks in
+                        // purge/reinstate skip and the new draft survives.
+                        var suspendedRevision: Int = -1
+                        let accepted = manager.submit(
                             sessionId: sessionId,
                             text: text,
                             attachments: attachments,
                             intent: intent
                         ) { succeeded in
-                            if succeeded {
-                                manager.clearComposerDraft(
-                                    for: session,
-                                    ifCurrentDraftEquals: draft,
-                                    revision: draftRevision
-                                )
-                            } else {
-                                manager.persistComposerDraft(
-                                    draft,
-                                    for: session,
-                                    ifCurrentDraftEquals: draft,
-                                    revision: draftRevision
-                                )
+                            if suspendedRevision >= 0 {
+                                if succeeded {
+                                    manager.purgeSuspendedComposerDraft(
+                                        for: session,
+                                        suspendedRevision: suspendedRevision
+                                    )
+                                } else {
+                                    manager.reinstateSuspendedComposerDraft(
+                                        draft,
+                                        for: session,
+                                        suspendedRevision: suspendedRevision
+                                    )
+                                }
                             }
                             onPromptFinished(succeeded)
                         }
+                        if accepted {
+                            suspendedRevision = manager.suspendComposerDraftForSubmission(
+                                draft, for: session
+                            )
+                        }
+                        return accepted
                     }
 
                     if let undo = session.steerUndo, !undo.snapshot.isEmpty {

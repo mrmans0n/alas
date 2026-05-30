@@ -67,47 +67,99 @@ struct ACPSessionManagerTests {
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
     }
 
-    @Test("conditional composer draft clear only clears the submitted draft")
-    func conditionalComposerDraftClear() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-conditional-clear-\(UUID()).sqlite")
+    @Test("suspendComposerDraftForSubmission empties memory and durably saves SQLite")
+    func suspendComposerDraftForSubmissionFlushesAndClears() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-suspend-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = mgr.createSession(agentId: "claude")
         let submitted = ACPComposerDraft(segments: [.text("sent")])
-        let newer = ACPComposerDraft(segments: [.text("newer")])
+
+        // Schedule a debounced write but DO NOT flush — simulates the
+        // common path where the user types and immediately submits before
+        // the 300ms timer fires.
+        mgr.persistComposerDraft(submitted, for: session)
+
+        let suspendedRevision = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        #expect(session.composerDraft == .empty)
+        #expect(session.composerDraftRevision == suspendedRevision)
+        // SQLite was written synchronously by suspend, no flush needed.
+        #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
+    }
+
+    @Test("purgeSuspendedComposerDraft deletes SQLite only when revision matches")
+    func purgeSuspendedComposerDraftRespectsRevision() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-purge-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let submitted = ACPComposerDraft(segments: [.text("sent")])
 
         mgr.persistComposerDraft(submitted, for: session)
-        let submittedRevision = session.composerDraftRevision
-        mgr.clearComposerDraft(for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
-        #expect(session.composerDraft == .empty)
+        let suspendedRevision = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+
+        // Success path with no intervening typing: SQLite row is purged.
+        mgr.purgeSuspendedComposerDraft(for: session, suspendedRevision: suspendedRevision)
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
 
+        // Re-suspend, then simulate the user typing while the prompt is
+        // in flight: the new draft must survive a late completion's purge.
+        mgr.persistComposerDraft(submitted, for: session)
+        let suspendedAgain = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        let newer = ACPComposerDraft(segments: [.text("newer")])
         mgr.persistComposerDraft(newer, for: session)
-        mgr.clearComposerDraft(for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
+        mgr.purgeSuspendedComposerDraft(for: session, suspendedRevision: suspendedAgain)
         #expect(session.composerDraft == newer)
         mgr.flushPendingDraftWrites()
         #expect(try store.loadComposerDraft(sessionId: session.id) == newer)
     }
 
-    @Test("conditional composer draft persist does not overwrite a newer draft revision")
-    func conditionalComposerDraftPersistByRevision() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-conditional-persist-\(UUID()).sqlite")
+    @Test("reinstateSuspendedComposerDraft restores memory only when revision matches")
+    func reinstateSuspendedComposerDraftRespectsRevision() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-reinstate-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = mgr.createSession(agentId: "claude")
         let submitted = ACPComposerDraft(segments: [.text("sent")])
 
+        // Failure with no intervening typing: in-memory draft is restored
+        // so a still-mounted composer (or next re-mount) shows the text.
         mgr.persistComposerDraft(submitted, for: session)
-        let submittedRevision = session.composerDraftRevision
-        mgr.persistComposerDraft(submitted, for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
+        let suspendedRevision = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        mgr.reinstateSuspendedComposerDraft(submitted, for: session, suspendedRevision: suspendedRevision)
         #expect(session.composerDraft == submitted)
-        mgr.flushPendingDraftWrites()
-        #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
+
+        // Re-suspend, then simulate the user typing a new draft while the
+        // prompt is in flight — a late failure must not stomp it.
+        let suspendedAgain = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        let newer = ACPComposerDraft(segments: [.text("newer")])
+        mgr.persistComposerDraft(newer, for: session)
+        mgr.reinstateSuspendedComposerDraft(submitted, for: session, suspendedRevision: suspendedAgain)
+        #expect(session.composerDraft == newer)
+    }
+
+    @Test("re-mounting the composer after submit reads an empty initial draft")
+    func remountAfterSubmitSeesEmptyDraft() async throws {
+        // Regression for #353 follow-up: the second commit of #353 deferred
+        // the in-memory draft clear to onPromptFinished. While the agent's
+        // prompt RPC is in flight, a worktree switch dismantles the ACP
+        // composer; re-mounting reads `session.composerDraft`, which was
+        // never cleared, and the sent text reappears in the input. The new
+        // suspend hook clears in-memory eagerly so a fresh coordinator
+        // sees an empty initial draft.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-remount-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let submitted = ACPComposerDraft(segments: [.text("hello")])
 
         mgr.persistComposerDraft(submitted, for: session)
-        mgr.persistComposerDraft(.empty, for: session, ifCurrentDraftEquals: submitted, revision: submittedRevision)
-        #expect(session.composerDraft == submitted)
-        mgr.flushPendingDraftWrites()
+        _ = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+
+        // What `ACPInputField.makeCoordinator()` reads as `initialDraft`.
+        #expect(session.composerDraft.isEmpty)
+        // …while the persisted row is still durable for crash recovery
+        // until the prompt is recorded and the completion fires.
         #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
     }
 

@@ -378,27 +378,64 @@ final class ACPSessionManager: ObservableObject {
         try? store.upsertQueue(sessionId: session.id, items: session.queue)
     }
 
-    func clearComposerDraft(
-        for session: ACPSession,
-        ifCurrentDraftEquals expected: ACPComposerDraft,
-        revision expectedRevision: Int
-    ) {
-        guard session.composerDraft == expected,
-              session.composerDraftRevision == expectedRevision
-        else { return }
-        clearComposerDraft(for: session)
+    /// Eager-clear hook for an accepted composer submission. Synchronously
+    /// flushes the submitted draft to SQLite (so a crash or detach before
+    /// the prompt is recorded can still recover the user's text on next
+    /// hydration), cancels the debounced timer so a delayed wake-up can't
+    /// overwrite the suspended row, then clears the in-memory draft.
+    ///
+    /// Eager in-memory clearing prevents the ACP composer from re-showing
+    /// the sent text when its NSView is dismantled and re-mounted while
+    /// the agent's RPC is still in flight (e.g. user switches worktrees
+    /// and comes back). Pair with `purgeSuspendedComposerDraft` on success
+    /// or `reinstateSuspendedComposerDraft` on failure.
+    ///
+    /// Returns the post-clear revision; the completion handler uses it as
+    /// the conditional token so a draft the user has typed since the
+    /// suspension survives untouched.
+    @discardableResult
+    func suspendComposerDraftForSubmission(
+        _ submitted: ACPComposerDraft, for session: ACPSession
+    ) -> Int {
+        let sid = session.id
+        pendingDraftWrites[sid]?.cancel()
+        pendingDraftWrites[sid] = nil
+        if !submitted.isEmpty {
+            let now = Int64(Date().timeIntervalSince1970)
+            try? store.upsertComposerDraft(sessionId: sid, draft: submitted, updatedAt: now)
+        }
+        session.replaceComposerDraft(.empty)
+        return session.composerDraftRevision
     }
 
-    func persistComposerDraft(
-        _ draft: ACPComposerDraft,
-        for session: ACPSession,
-        ifCurrentDraftEquals expected: ACPComposerDraft,
-        revision expectedRevision: Int
+    /// Delete the SQLite row left by `suspendComposerDraftForSubmission`
+    /// once the prompt has been durably recorded. Guarded on the post-
+    /// suspend revision so a draft the user has typed since the suspension
+    /// (which is now what `composerDraft` holds) survives untouched.
+    func purgeSuspendedComposerDraft(
+        for session: ACPSession, suspendedRevision: Int
     ) {
-        guard session.composerDraft == expected,
-              session.composerDraftRevision == expectedRevision
+        guard session.composerDraftRevision == suspendedRevision,
+              session.composerDraft.isEmpty
         else { return }
-        persistComposerDraft(draft, for: session)
+        try? store.deleteComposerDraft(sessionId: session.id)
+    }
+
+    /// Restore the suspended draft back into memory when the prompt
+    /// failed to record. SQLite already holds the suspended row, so this
+    /// only needs to bring the in-memory state back into agreement so the
+    /// composer (if still mounted, or on next mount) shows the text.
+    /// Guarded on the post-suspend revision so a draft the user has typed
+    /// since the suspension wins.
+    func reinstateSuspendedComposerDraft(
+        _ submitted: ACPComposerDraft,
+        for session: ACPSession,
+        suspendedRevision: Int
+    ) {
+        guard session.composerDraftRevision == suspendedRevision,
+              session.composerDraft.isEmpty
+        else { return }
+        session.replaceComposerDraft(submitted)
     }
 
     func refreshRecent() {
