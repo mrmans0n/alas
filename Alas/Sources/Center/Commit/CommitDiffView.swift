@@ -156,7 +156,7 @@ struct CommitDiffView: View {
                     ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
                         HunkView(
                             hunk: hunk,
-                            fileExtension: (path as NSString).pathExtension,
+                            fileExtension: LanguageRegistry.highlighterExtension(forPath: path),
                             codeFontFamily: codeFontFamily,
                             codeFontSize: codeFontSize,
                             onDropFromCommit: dropHunkEnabled(file, hunk) ? { onDropHunk?(hunk) } : nil
