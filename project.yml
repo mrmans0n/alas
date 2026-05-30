@@ -95,6 +95,10 @@ packages:
   TreeSitterMarkdown:
     url: https://github.com/tree-sitter-grammars/tree-sitter-markdown
     from: 0.5.3
+  TreeSitterHCL:
+    # Vendored at ThirdParty/TreeSitterHCL — upstream's Package.swift
+    # does not include query resources.
+    path: ThirdParty/TreeSitterHCL
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -176,6 +180,8 @@ targets:
         product: TreeSitterPHP
       - package: TreeSitterMarkdown
         product: TreeSitterMarkdown
+      - package: TreeSitterHCL
+        product: TreeSitterHCL
       - package: Markdown
         product: Markdown
     settings:
