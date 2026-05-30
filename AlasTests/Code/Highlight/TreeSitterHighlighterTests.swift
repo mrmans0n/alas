@@ -129,6 +129,22 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.string))
     }
 
+    @Test("Ruby class and method are captured")
+    func rubyBasics() throws {
+        let src = """
+        class Greeter
+          def greet(name)
+            "hello, #{name}"
+          end
+        end
+        """
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "rb")
+        let captures = Set(spans.map { $0.capture })
+        #expect(captures.contains(.keyword))
+        #expect(captures.contains(.function))
+        #expect(captures.contains(.string))
+    }
+
     @Test("TOML keys, strings, and numbers are captured")
     func tomlBasics() throws {
         let src = """
