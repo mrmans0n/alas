@@ -12,6 +12,7 @@ enum HighlightCapture: String, Sendable {
         // "function.method"). Take the first dot-separated segment and map.
         let head = name.split(separator: ".").first.map(String.init) ?? name
         if head == "tag" { return .keyword }
+        if head == "text" { return .string }
         return HighlightCapture(rawValue: head) ?? .plain
     }
 }
