@@ -37,7 +37,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .userScrolledUp)
     }
 
-    @Test func isRestoringUserInputPausesEvenWhenOffsetMovesDownward() {
+    @Test func isRestoringUserInputMovingDownwardDoesNotPause() {
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 4300,
             newOffsetY: 4400,
@@ -46,7 +46,7 @@ struct ACPScrollDirectionClassifierTests {
             isRestoring: true,
             isUserDriven: true
         )
-        #expect(decision == .userScrolledUp)
+        #expect(decision == .userAtBottom)
     }
 
     @Test func isRestoringIgnoresProgrammaticUpwardRestores() {
@@ -143,6 +143,50 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .userAtBottom)
     }
 
+    @Test func upwardMoveNearTailDoesNotPause() {
+        // A small upward hop near the tail should not latch auto-scroll off.
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - 80
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: newY + 20,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
+            isRestoring: false
+        )
+        #expect(decision == .noChange)
+    }
+
+    @Test func upwardMoveMeaningfullyAwayFromTailPauses() {
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - 180
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: newY + 20,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
+            isRestoring: false
+        )
+        #expect(decision == .userScrolledUp)
+    }
+
+    @Test func restoringUserInputNearTailDoesNotPause() {
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - 80
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: newY + 20,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
+            isRestoring: true,
+            isUserDriven: true
+        )
+        #expect(decision == .noChange)
+    }
+
     @Test func contentShorterThanViewportIsAtBottom() {
         // contentH < viewportH (short transcript): distanceFromBottom clamps to 0.
         let decision = ACPScrollDirectionClassifier.decide(
@@ -167,7 +211,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .noChange)
     }
 
-    // MARK: - Boundary tests pinning upwardEpsilon and bottomTolerance
+    // MARK: - Boundary tests pinning upwardEpsilon, bottomTolerance, and pauseTolerance
     //
     // Derive values from the classifier's constants so the tests track
     // any retune of the thresholds instead of silently passing.
@@ -224,5 +268,35 @@ struct ACPScrollDirectionClassifierTests {
             isRestoring: false
         )
         #expect(decision == .noChange)
+    }
+
+    @Test func atExactPauseToleranceBoundaryDoesNotPause() {
+        // distanceFromBottom == pauseTolerance → strict `>` means noChange.
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - ACPScrollDirectionClassifier.pauseTolerance
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: newY + 10,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
+            isRestoring: false
+        )
+        #expect(decision == .noChange)
+    }
+
+    @Test func justOutsidePauseTolerancePausesOnUpwardMove() {
+        // distanceFromBottom == pauseTolerance + 1 and moving up → userScrolledUp.
+        let viewportH: CGFloat = 600
+        let contentH: CGFloat = 5000
+        let newY = contentH - viewportH - ACPScrollDirectionClassifier.pauseTolerance - 1
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: newY + 10,
+            newOffsetY: newY,
+            viewportHeight: viewportH,
+            contentHeight: contentH,
+            isRestoring: false
+        )
+        #expect(decision == .userScrolledUp)
     }
 }
