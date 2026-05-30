@@ -1,51 +1,40 @@
-import Foundation
 import Testing
 @testable import Alas
 
 @Suite("ComposerAction derive function")
 struct ComposerActionTests {
 
-    // MARK: - .hidden cases
+    // MARK: - Agent lifecycle
 
-    @Test("disconnected hides the button regardless of any other state")
-    func disconnectedAlwaysHidden() {
-        let states: [ACPSession.StreamingState] = [.idle, .sending, .streaming, .awaitingPermission]
-        for state in states {
-            for hasText in [false, true] {
-                for attached in [false, true] {
-                    let action = composerAction(
-                        streamingState: state,
-                        hasText: hasText,
-                        attached: attached,
-                        disconnected: true
-                    )
-                    #expect(action == .hidden,
-                            "expected .hidden for state=\(state), hasText=\(hasText), attached=\(attached), disconnected=true")
-                }
-            }
+    @Test("idle streaming + text shows Send for every agent lifecycle state")
+    func idleWithTextSendsForEveryAgentState() {
+        for agentState in agentStates {
+            let action = composerAction(
+                streamingState: .idle,
+                hasText: true,
+                agentState: agentState
+            )
+            #expect(action == .send, "expected .send for agentState=\(agentState)")
         }
     }
 
-    @Test("connecting (attached==false) hides the button regardless of any other state")
-    func connectingAlwaysHidden() {
-        let states: [ACPSession.StreamingState] = [.idle, .sending, .streaming, .awaitingPermission]
-        for state in states {
-            for hasText in [false, true] {
-                let action = composerAction(
-                    streamingState: state,
-                    hasText: hasText,
-                    attached: false,
-                    disconnected: false
-                )
-                #expect(action == .hidden,
-                        "expected .hidden for state=\(state), hasText=\(hasText), attached=false")
-            }
+    @Test("idle streaming + empty composer hides the action for every agent lifecycle state")
+    func idleEmptyHiddenForEveryAgentState() {
+        for agentState in agentStates {
+            let action = composerAction(
+                streamingState: .idle,
+                hasText: false,
+                agentState: agentState
+            )
+            #expect(action == .hidden, "expected .hidden for agentState=\(agentState)")
         }
     }
+
+    // MARK: - .hidden
 
     @Test("idle + empty composer shows nothing")
     func idleEmptyHidden() {
-        let action = composerAction(streamingState: .idle, hasText: false, attached: true, disconnected: false)
+        let action = composerAction(streamingState: .idle, hasText: false, agentState: .ready)
         #expect(action == .hidden)
     }
 
@@ -53,7 +42,7 @@ struct ComposerActionTests {
 
     @Test("idle + has text shows Send")
     func idleWithTextSends() {
-        let action = composerAction(streamingState: .idle, hasText: true, attached: true, disconnected: false)
+        let action = composerAction(streamingState: .idle, hasText: true, agentState: .ready)
         #expect(action == .send)
     }
 
@@ -61,9 +50,15 @@ struct ComposerActionTests {
 
     @Test("busy + empty composer shows Stop, for every busy state")
     func busyEmptyStops() {
-        for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission] {
-            let action = composerAction(streamingState: state, hasText: false, attached: true, disconnected: false)
-            #expect(action == .stop, "expected .stop for state=\(state)")
+        for state in busyStates {
+            for agentState in agentStates {
+                let action = composerAction(
+                    streamingState: state,
+                    hasText: false,
+                    agentState: agentState
+                )
+                #expect(action == .stop, "expected .stop for state=\(state), agentState=\(agentState)")
+            }
         }
     }
 
@@ -71,10 +66,24 @@ struct ComposerActionTests {
 
     @Test("busy + has text shows Queue with Steer and Stop menu items, for every busy state")
     func busyWithTextQueuesWithSteerAndStopMenu() {
-        for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission] {
-            let action = composerAction(streamingState: state, hasText: true, attached: true, disconnected: false)
-            #expect(action == .queue(menu: [.steer, .stop]),
-                    "expected .queue([.steer, .stop]) for state=\(state)")
+        for state in busyStates {
+            for agentState in agentStates {
+                let action = composerAction(
+                    streamingState: state,
+                    hasText: true,
+                    agentState: agentState
+                )
+                #expect(action == .queue(menu: [.steer, .stop]),
+                        "expected .queue([.steer, .stop]) for state=\(state), agentState=\(agentState)")
+            }
         }
+    }
+
+    private var busyStates: [ACPSession.StreamingState] {
+        [.sending, .streaming, .awaitingPermission]
+    }
+
+    private var agentStates: [ACPSession.AgentState] {
+        [.idle, .spawning, .ready, .disconnected, .failed("boom")]
     }
 }

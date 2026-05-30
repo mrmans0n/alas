@@ -1,5 +1,5 @@
 /// Mutually-exclusive states the composer's single action button can be in.
-/// Derived from `(streamingState, hasText, attached, disconnected)` via
+/// Derived from `(streamingState, hasText, agentState)` via
 /// `composerAction(...)`. The view layer renders one capsule per case.
 enum ComposerAction: Equatable {
     /// Nothing to do — render nothing. Composer toolbar reflows naturally.
@@ -23,18 +23,18 @@ enum ComposerMenuItem: Hashable {
 /// Pure derive — no SwiftUI imports, no session/runner references.
 /// Exhaustively unit-tested in `ComposerActionTests`.
 ///
-/// Priority:
-/// 1. `disconnected` dominates everything → `.hidden`.
-/// 2. `attached == false` (connecting) → `.hidden`.
-/// 3. Otherwise dispatch on `(streamingState, hasText)`.
+/// The agent lifecycle intentionally does not disable or hide a non-empty
+/// composer: `ACPSessionManager.submit` accepts prompts while disconnected,
+/// failed, idle, or spawning so the user's prompt can kick recovery.
 func composerAction(
     streamingState: ACPSession.StreamingState,
     hasText: Bool,
-    attached: Bool,
-    disconnected: Bool
+    agentState: ACPSession.AgentState
 ) -> ComposerAction {
-    if disconnected { return .hidden }
-    if !attached    { return .hidden }
+    switch agentState {
+    case .idle, .spawning, .ready, .disconnected, .failed(_):
+        break
+    }
 
     switch streamingState {
     case .idle:

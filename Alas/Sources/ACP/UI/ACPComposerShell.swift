@@ -340,8 +340,7 @@ struct ACPComposer: View {
         composerAction(
             streamingState: session.transcript.streamingState,
             hasText: hasText,
-            attached: session.attached,
-            disconnected: session.disconnected
+            agentState: session.agentState
         )
     }
 
