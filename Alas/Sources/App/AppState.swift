@@ -234,6 +234,18 @@ final class AppState {
     }
     var pendingForceDeleteWorktree: PendingForceDeleteWorktree?
 
+    struct WorktreeDeleteConfirmation: Equatable {
+        let title: String
+        let message: String
+        let buttonTitle: String
+        let force: Bool
+    }
+
+    struct WorktreeDeleteDecision: Equatable {
+        let confirmation: WorktreeDeleteConfirmation
+        let force: Bool
+    }
+
     @ObservationIgnored
     lazy var search: SearchModel = SearchModel(environment: makeSearchEnvironment())
     @ObservationIgnored
@@ -2117,7 +2129,6 @@ final class AppState {
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         let saveBuffersFirst: Bool
         if dirty.isEmpty {
-            guard confirmDeleteWorktree(branch: worktree.branch, keepBranch: keepBranch) else { return }
             saveBuffersFirst = false
         } else {
             switch promptForDirtyBuffers(
@@ -2148,15 +2159,26 @@ final class AppState {
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
 
-        // Mark deleting immediately so the UI dims the row.
-        projectsManager.setOperationState(id: worktree.id, state: .deleting)
-
         Task { @MainActor in
+            let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
+            let confirmation = Self.deleteConfirmation(
+                branch: worktree.branch,
+                keepBranch: keepBranch,
+                preflight: preflight
+            )
+            guard let decision = Self.resolveDeleteDecision(
+                branch: worktree.branch,
+                keepBranch: keepBranch,
+                preflight: preflight,
+                userConfirmed: confirmDeleteWorktree(confirmation)
+            ) else { return }
+
+            projectsManager.setOperationState(id: worktree.id, state: .deleting)
             await performDeleteWorktree(
                 worktree: worktree,
                 repoPath: repoPath,
                 deleteBranchIfMerged: deleteBranch,
-                force: false,
+                force: decision.force,
                 removedIndex: removedIndex
             )
         }
@@ -2180,19 +2202,17 @@ final class AppState {
                 force: force
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
-            if !force, let reason = Self.forceDeleteReason(for: stderr) {
-                // Clear deleting so the user can see the row again while deciding.
-                projectsManager.setOperationState(id: worktree.id, state: nil)
-                pendingForceDeleteWorktree = PendingForceDeleteWorktree(
-                    id: worktree.id,
-                    branch: worktree.branch,
-                    projectId: worktree.projectId,
+            if !force,
+               let pending = Self.pendingForceDelete(
+                    for: worktree,
                     repoPath: repoPath,
-                    worktreePath: worktree.path,
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     removedIndex: removedIndex,
-                    reason: reason
-                )
+                    stderr: stderr
+               ) {
+                // Clear deleting so the user can see the row again while deciding.
+                projectsManager.setOperationState(id: worktree.id, state: nil)
+                pendingForceDeleteWorktree = pending
                 return
             } else {
                 projectsManager.setOperationState(
@@ -2277,6 +2297,16 @@ final class AppState {
         }.value
     }
 
+    nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
+        do {
+            return try await Task.detached {
+                try await WorktreeService().deletePreflight(worktreePath: worktreePath)
+            }.value
+        } catch {
+            return WorktreeDeletePreflight(reasons: [], submoduleLocalState: .unknown)
+        }
+    }
+
     /// Resolve whether `git branch -d` should run after `git worktree remove`.
     /// `keepBranch == true` (a per-operation override) always wins — the local
     /// branch is preserved regardless of the global setting.
@@ -2285,6 +2315,82 @@ final class AppState {
         keepBranch: Bool
     ) -> Bool {
         globalDeleteOnRemove && !keepBranch
+    }
+
+    nonisolated static func deleteConfirmation(
+        branch: String,
+        keepBranch: Bool,
+        preflight: WorktreeDeletePreflight
+    ) -> WorktreeDeleteConfirmation {
+        var messageParts = [
+            keepBranch
+                ? "This removes its files from disk. The local branch will be kept."
+                : "This removes its files from disk. The local branch will be deleted if merged."
+        ]
+
+        if preflight.reasons.contains(.dirty) {
+            messageParts.append("This worktree has modified or untracked files. Force delete will permanently remove them from disk.")
+        }
+        let containsInitializedSubmodules = preflight.reasons.contains(.containsInitializedSubmodules)
+        if containsInitializedSubmodules {
+            messageParts.append("This worktree contains initialized submodules. Git requires force delete to remove it.")
+        }
+
+        if containsInitializedSubmodules {
+            switch preflight.submoduleLocalState {
+            case .none:
+                break
+            case .present:
+                messageParts.append("Preflight found local-only submodule state that may only exist inside this worktree.")
+            case .unknown:
+                messageParts.append("Alas could not verify whether the initialized submodules contain local-only state.")
+            }
+        }
+
+        return WorktreeDeleteConfirmation(
+            title: "Delete worktree '\(branch)'?",
+            message: messageParts.joined(separator: " "),
+            buttonTitle: preflight.requiresForce ? "Force Delete" : "Delete",
+            force: preflight.requiresForce
+        )
+    }
+
+    nonisolated static func resolveDeleteDecision(
+        branch: String,
+        keepBranch: Bool,
+        preflight: WorktreeDeletePreflight,
+        userConfirmed: Bool
+    ) -> WorktreeDeleteDecision? {
+        guard userConfirmed else { return nil }
+        let confirmation = deleteConfirmation(
+            branch: branch,
+            keepBranch: keepBranch,
+            preflight: preflight
+        )
+        return WorktreeDeleteDecision(
+            confirmation: confirmation,
+            force: confirmation.force
+        )
+    }
+
+    nonisolated static func pendingForceDelete(
+        for worktree: Worktree,
+        repoPath: URL,
+        deleteBranchIfMerged: Bool,
+        removedIndex: Int,
+        stderr: String
+    ) -> PendingForceDeleteWorktree? {
+        guard let reason = forceDeleteReason(for: stderr) else { return nil }
+        return PendingForceDeleteWorktree(
+            id: worktree.id,
+            branch: worktree.branch,
+            projectId: worktree.projectId,
+            repoPath: repoPath,
+            worktreePath: worktree.path,
+            deleteBranchIfMerged: deleteBranchIfMerged,
+            removedIndex: removedIndex,
+            reason: reason
+        )
     }
 
     /// Permissive substring check: git's exact wording around dirty/submodule
@@ -2307,14 +2413,12 @@ final class AppState {
         return nil
     }
 
-    private func confirmDeleteWorktree(branch: String, keepBranch: Bool) -> Bool {
+    private func confirmDeleteWorktree(_ confirmation: WorktreeDeleteConfirmation) -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Delete worktree '\(branch)'?"
-        alert.informativeText = keepBranch
-            ? "This removes its files from disk. The local branch will be kept."
-            : "This removes its files from disk. The local branch will be deleted if merged."
+        alert.messageText = confirmation.title
+        alert.informativeText = confirmation.message
         alert.alertStyle = .warning
-        let deleteButton = alert.addButton(withTitle: "Delete")
+        let deleteButton = alert.addButton(withTitle: confirmation.buttonTitle)
         alert.addButton(withTitle: "Cancel")
         deleteButton.hasDestructiveAction = true
         return alert.runModal() == .alertFirstButtonReturn
