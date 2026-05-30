@@ -35,7 +35,6 @@ struct RepoSelectorDialog: View {
                     appState.repoSelector.setSelectedIndex(0, in: rows)
                 }
                 .frame(width: 720)
-                .frame(maxHeight: 520)
                 .background(theme.color("bg-1").opacity(0.92))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
