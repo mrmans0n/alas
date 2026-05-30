@@ -353,4 +353,164 @@ struct ACPComposerDraftBridgeTests {
 
         #expect(serialized == draft)
     }
+
+    // MARK: - Keyboard intent resolution (doCommandBy)
+
+    private func makeCoordinator(
+        sendOnEnter: Bool,
+        onSubmit: @escaping ACPComposerSubmitHandler
+    ) -> ACPInputField.Coordinator {
+        ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            sendOnEnter: sendOnEnter,
+            onDraftChange: { _ in },
+            onDraftClear: {},
+            onSubmit: onSubmit
+        )
+    }
+
+    @Test("⌥⏎ (insertNewlineIgnoringFieldEditor:) submits with .steer")
+    func optionReturnSteers() {
+        // AppKit routes ⌥⏎ to `insertNewlineIgnoringFieldEditor:`, NOT
+        // `insertNewline:` — so the handler must catch it explicitly or
+        // the keystroke falls through to a literal newline (the bug).
+        let textView = NSTextView()
+        textView.string = "redirect the agent"
+        var received: ACPSubmitIntent?
+        var submittedText: String?
+        let coordinator = makeCoordinator(sendOnEnter: true) { text, _, intent, _, _ in
+            submittedText = text
+            received = intent
+            return true
+        }
+        coordinator.textView = textView
+
+        let handled = coordinator.textView(
+            textView,
+            doCommandBy: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
+        )
+
+        #expect(handled)                              // event swallowed (no literal newline)
+        #expect(received == .steer)
+        // The exact composer contents are submitted — no stray "\n" appended.
+        #expect(submittedText == "redirect the agent")
+    }
+
+    @Test("⌥⏎ inverts to .auto when sendOnEnter is off")
+    func optionReturnInvertsWhenSendOnEnterOff() {
+        let textView = NSTextView()
+        textView.string = "redirect the agent"
+        var received: ACPSubmitIntent?
+        let coordinator = makeCoordinator(sendOnEnter: false) { _, _, intent, _, _ in
+            received = intent
+            return true
+        }
+        coordinator.textView = textView
+
+        _ = coordinator.textView(
+            textView,
+            doCommandBy: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
+        )
+
+        #expect(received == .auto)
+    }
+
+    @Test("plain ⏎ (insertNewline:) submits with .auto")
+    func plainReturnAuto() {
+        let textView = NSTextView()
+        textView.string = "send this"
+        var received: ACPSubmitIntent?
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, intent, _, _ in
+            received = intent
+            return true
+        }
+        coordinator.textView = textView
+
+        let handled = coordinator.textView(
+            textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+
+        #expect(handled)
+        #expect(received == .auto)
+    }
+
+    @Test("plain ⏎ inverts to .steer when sendOnEnter is off")
+    func plainReturnInvertsWhenSendOnEnterOff() {
+        let textView = NSTextView()
+        textView.string = "send this"
+        var received: ACPSubmitIntent?
+        let coordinator = makeCoordinator(sendOnEnter: false) { _, _, intent, _, _ in
+            received = intent
+            return true
+        }
+        coordinator.textView = textView
+
+        _ = coordinator.textView(
+            textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+
+        #expect(received == .steer)
+    }
+
+    // MARK: - Restoring a queued item into the composer (blocks → draft)
+
+    @Test("draft from content blocks maps text and resource links")
+    func draftFromBlocks() {
+        let blocks: [ACPContentBlock] = [
+            .text("look at "),
+            .resourceLink(uri: "file:///tmp/File.swift", name: "File.swift"),
+            .text(" please"),
+        ]
+
+        #expect(ACPComposerDraft(blocks: blocks) == ACPComposerDraft(segments: [
+            .text("look at "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" please"),
+        ]))
+    }
+
+    @Test("resource link without a name falls back to its last path component")
+    func resourceLinkWithoutName() {
+        #expect(ACPComposerDraft(blocks: [
+            .resourceLink(uri: "file:///tmp/File.swift", name: nil),
+        ]) == ACPComposerDraft(segments: [
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+        ]))
+    }
+
+    @Test("image block becomes a mention chip carrying its uri")
+    func imageBlockBecomesMention() {
+        #expect(ACPComposerDraft(blocks: [
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+        ]) == ACPComposerDraft(segments: [
+            .mention(displayName: "shot.png", uri: "file:///tmp/shot.png"),
+        ]))
+    }
+
+    @Test("appending onto an empty draft yields the other draft")
+    func appendingOntoEmpty() {
+        let queued = ACPComposerDraft(segments: [.text("queued message")])
+        #expect(ACPComposerDraft.empty.appending(queued) == queued)
+    }
+
+    @Test("appending an empty draft is a no-op")
+    func appendingEmpty() {
+        let typed = ACPComposerDraft(segments: [.text("typed")])
+        #expect(typed.appending(.empty) == typed)
+    }
+
+    @Test("appending two non-empty drafts joins them with a newline")
+    func appendingTwoNonEmpty() {
+        let typed = ACPComposerDraft(segments: [.text("typed")])
+        let queued = ACPComposerDraft(segments: [.text("queued")])
+
+        #expect(typed.appending(queued) == ACPComposerDraft(segments: [
+            .text("typed"),
+            .text("\n"),
+            .text("queued"),
+        ]))
+    }
 }

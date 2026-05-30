@@ -171,28 +171,37 @@ struct ACPInputField: NSViewRepresentable {
                 tv.dismissSlashPanel()
                 return true
             }
+            // ⌥⏎ steers. AppKit's standard key binding routes Option-Return
+            // to `insertNewlineIgnoringFieldEditor:`, NOT `insertNewline:`,
+            // so it MUST be caught explicitly — otherwise it falls through
+            // to AppKit's default and just inserts a literal newline (the
+            // bug this handler exists to prevent). We resolve the keyboard
+            // mapping HERE so the upstream handler receives a final intent;
+            // the toolbar send button bypasses this via
+            // `actions.submitWithIntent` and submits the intent it
+            // advertises verbatim.
+            if selector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+                submit(textView, intent: resolvedIntent(raw: .steer))
+                return true
+            }
             if selector == #selector(NSResponder.insertNewline(_:)) {
-                let event = NSApp.currentEvent
-                let shift = event?.modifierFlags.contains(.shift) == true
-                let option = event?.modifierFlags.contains(.option) == true
-                if shift {
+                // ⇧⏎ inserts a literal newline. (⌥⏎ never reaches here — it
+                // routes to `insertNewlineIgnoringFieldEditor:` above.)
+                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
                     textView.insertText("\n", replacementRange: textView.selectedRange())
                     return true
                 }
-                // Resolve the keyboard mapping HERE so the upstream
-                // handler receives a final intent. The toolbar send
-                // button goes through `actions.submitWithIntent` (which
-                // calls `submit(_:intent:)` directly) and bypasses this
-                // resolution — clicking ↑ always submits with the
-                // intent the button advertises.
-                let raw: ACPSubmitIntent = option ? .steer : .auto
-                let final: ACPSubmitIntent = sendOnEnter
-                    ? raw
-                    : (raw == .auto ? .steer : .auto)
-                submit(textView, intent: final)
+                submit(textView, intent: resolvedIntent(raw: .auto))
                 return true
             }
             return false
+        }
+
+        /// Apply the keyboard-only `sendOnEnter` inversion to a raw
+        /// modifier-derived intent. When the user inverted the setting,
+        /// ⏎ and ⌥⏎ swap roles, so `.auto` ↔ `.steer`.
+        private func resolvedIntent(raw: ACPSubmitIntent) -> ACPSubmitIntent {
+            sendOnEnter ? raw : (raw == .auto ? .steer : .auto)
         }
 
         /// Re-apply markdown styling to the whole storage on every edit.
