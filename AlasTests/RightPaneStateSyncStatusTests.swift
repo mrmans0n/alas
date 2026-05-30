@@ -167,6 +167,7 @@ struct RightPaneStateSyncStatusTests {
         _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
         _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: publisher)
         _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: publisher)
+        _ = try await Process.git(["--git-dir", remote.path, "symbolic-ref", "HEAD", "refs/heads/main"], cwd: nil)
 
         let consumer = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-sync-cons-\(UUID().uuidString)")
@@ -245,6 +246,7 @@ struct RightPaneStateSyncStatusTests {
         _ = try await Process.git(["checkout", "-q", "-b", "main"], cwd: cloneA)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "seed"], cwd: cloneA)
         _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: cloneA)
+        _ = try await Process.git(["--git-dir", remote.path, "symbolic-ref", "HEAD", "refs/heads/main"], cwd: nil)
         // cloneB clones at the same SHA.
         _ = try await Process.git(["clone", "-q", remote.path, cloneB.path], cwd: nil)
         _ = try await Process.git(["config", "user.email", "b@e"], cwd: cloneB)
@@ -281,6 +283,7 @@ struct RightPaneStateSyncStatusTests {
         _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
         _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
         _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: repo)
+        _ = try await Process.git(["--git-dir", remote.path, "symbolic-ref", "HEAD", "refs/heads/main"], cwd: nil)
 
         // Create feature behind origin/main by one commit.
         _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)

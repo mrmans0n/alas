@@ -17,6 +17,7 @@ struct GitServiceBehindStatusTests {
         _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
         _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
         _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: repo)
+        _ = try await Process.git(["--git-dir", remote.path, "symbolic-ref", "HEAD", "refs/heads/main"], cwd: nil)
         return (repo, remote)
     }
 

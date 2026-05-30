@@ -187,6 +187,32 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
     }
 
+    @Test func createWorktreeSelectsOptimisticRowImmediately() async throws {
+        let repo = try await makeRepo(name: "create-select-opt")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "create-select-opt", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let existing = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        state.selectedWorktreeId = existing.id
+
+        let dest = repo.appendingPathComponent("wt-select-opt")
+        let id = state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "select-opt-b",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .none
+        )
+
+        #expect(!id.isEmpty)
+        #expect(state.projectsManager.operationState(for: id) == .creating)
+        #expect(state.selectedWorktreeId == id)
+
+        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+    }
+
     @Test func createWorktreeRejectsExistingDestination() async throws {
         let repo = try await makeRepo(name: "create-existing-destination")
         defer { try? FileManager.default.removeItem(at: repo) }
