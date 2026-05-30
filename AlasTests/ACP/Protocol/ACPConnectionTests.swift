@@ -28,6 +28,32 @@ struct ACPConnectionTests {
         #expect(new.availableModes.first?.id == "agent")
     }
 
+    @Test("loadSession sends session/load with cwd and remote session id")
+    func loadSessionRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-restored",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+
+        let conn = ACPConnection(client: mock)
+        let result = try await conn.loadSession(cwd: "/tmp/wt", sessionId: "remote-old")
+
+        #expect(result.sessionId == "remote-restored")
+        let req = try #require(mock.sent.last)
+        #expect(req.method == "session/load")
+        let params = try #require(req.params as? ACPSessionLoadParams)
+        #expect(params.cwd == "/tmp/wt")
+        #expect(params.sessionId == "remote-old")
+        #expect(params.mcpServers.isEmpty)
+    }
+
     @Test("setConfigOption sends session/set_config_option with sessionId, configId, value")
     func setConfigOptionRPC() async throws {
         let mock = ACPMockClient()

@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 4
+    static let targetSchemaVersion = 6
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -29,6 +29,8 @@ final class ACPSessionStore {
         if current < 2 { try migrate_to_v2() }
         if current < 3 { try migrate_to_v3() }
         if current < 4 { try migrate_to_v4() }
+        if current < 5 { try migrate_to_v5() }
+        if current < 6 { try migrate_to_v6() }
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -114,6 +116,14 @@ final class ACPSessionStore {
         WHERE title = '' OR title = 'New session'
         """)
     }
+
+    private func migrate_to_v5() throws {
+        try db.exec("ALTER TABLE sessions ADD COLUMN remote_session_id TEXT")
+    }
+
+    private func migrate_to_v6() throws {
+        try db.exec("ALTER TABLE sessions ADD COLUMN context_recovery_pending INTEGER NOT NULL DEFAULT 0")
+    }
 }
 
 struct ACPSessionRow: Equatable {
@@ -121,6 +131,8 @@ struct ACPSessionRow: Equatable {
     let agentId: String
     var title: String
     var titleSource: ACPSessionTitleSource = .placeholder
+    var remoteSessionId: String? = nil
+    var contextRecoveryPending: Bool = false
     var currentModel: String?
     var currentMode: String?
     var autoRun: Bool
@@ -142,12 +154,14 @@ struct ACPStoredMessage: Equatable {
 extension ACPSessionStore {
     func upsertSession(_ s: ACPSessionRow) throws {
         try db.exec("""
-        INSERT INTO sessions (id, agent_id, title, title_source, current_model, current_mode, auto_run,
-                              created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, context_recovery_pending,
+                              current_model, current_mode, auto_run, created_at, updated_at, last_opened_at, archived)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             title_source = excluded.title_source,
+            remote_session_id = COALESCE(excluded.remote_session_id, sessions.remote_session_id),
+            context_recovery_pending = sessions.context_recovery_pending,
             current_model = excluded.current_model,
             current_mode = excluded.current_mode,
             auto_run = excluded.auto_run,
@@ -155,8 +169,8 @@ extension ACPSessionStore {
             last_opened_at = excluded.last_opened_at,
             archived = excluded.archived
         """, bindings: [
-            s.id, s.agentId, s.title, s.titleSource.rawValue, s.currentModel, s.currentMode,
-            s.autoRun ? 1 : 0,
+            s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.contextRecoveryPending ? 1 : 0,
+            s.currentModel, s.currentMode, s.autoRun ? 1 : 0,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0
         ])
     }
@@ -174,6 +188,13 @@ extension ACPSessionStore {
         try db.exec(
             "UPDATE sessions SET last_opened_at = ? WHERE id = ?",
             bindings: [timestamp, id]
+        )
+    }
+
+    func setContextRecoveryPending(sessionId: String, pending: Bool) throws {
+        try db.exec(
+            "UPDATE sessions SET context_recovery_pending = ? WHERE id = ?",
+            bindings: [pending ? 1 : 0, sessionId]
         )
     }
 
@@ -249,6 +270,8 @@ extension ACPSessionStore {
             agentId: r["agent_id"] as? String ?? "",
             title: r["title"] as? String ?? "",
             titleSource: ACPSessionTitleSource(rawValue: rawSource) ?? .placeholder,
+            remoteSessionId: r["remote_session_id"] as? String,
+            contextRecoveryPending: ((r["context_recovery_pending"] as? Int64) ?? 0) != 0,
             currentModel: r["current_model"] as? String,
             currentMode: r["current_mode"] as? String,
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,

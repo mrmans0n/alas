@@ -57,6 +57,30 @@ struct ACPSessionHydratorTests {
         #expect(result.recent.contains(where: { $0.id == "s" }))
     }
 
+    @Test("hydrate preserves remote ACP session id in touched row")
+    func hydratePreservesRemoteSessionIdInTouchedRow() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "t",
+            remoteSessionId: "remote-1",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+
+        let hydrator = try ACPSessionHydrator(path: path)
+        let result = try await hydrator.hydrate(sessionId: "s")
+
+        #expect(result.row.remoteSessionId == "remote-1")
+    }
+
     @Test("missing session throws")
     func missingSession() async throws {
         let path = tmpStorePath()

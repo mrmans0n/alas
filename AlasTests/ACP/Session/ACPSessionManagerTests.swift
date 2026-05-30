@@ -12,8 +12,55 @@ struct ACPSessionManagerTests {
         let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
         let s = mgr.createSession(agentId: "claude")
         #expect(mgr.sessions[s.id] != nil)
+        #expect(!s.restoredFromPersistence)
         let row = try store.loadSession(id: s.id)
         #expect(row?.agentId == "claude")
+    }
+
+    @Test("placeholderSession marks store-backed sessions as restored from persistence")
+    func placeholderSessionMarksRestoredFromPersistence() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-restored-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "stored",
+            agentId: "claude",
+            title: "Stored",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+
+        let session = try #require(mgr.placeholderSession(id: "stored"))
+        let cached = try #require(mgr.placeholderSession(id: "stored"))
+
+        #expect(session.restoredFromPersistence)
+        #expect(cached === session)
+        #expect(cached.restoredFromPersistence)
+    }
+
+    @Test("attach freshness uses persisted origin and remote id")
+    func attachFreshnessUsesPersistedOriginAndRemoteId() {
+        #expect(ACPSessionAttachFreshness.isFresh(
+            restoredFromPersistence: false,
+            remoteSessionId: nil
+        ))
+        #expect(!ACPSessionAttachFreshness.isFresh(
+            restoredFromPersistence: false,
+            remoteSessionId: "remote"
+        ))
+        #expect(!ACPSessionAttachFreshness.isFresh(
+            restoredFromPersistence: true,
+            remoteSessionId: nil
+        ))
+        #expect(!ACPSessionAttachFreshness.isFresh(
+            restoredFromPersistence: true,
+            remoteSessionId: "remote"
+        ))
     }
 
     @Test("openSession restores persisted composer draft")

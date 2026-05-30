@@ -73,6 +73,63 @@ struct ACPSessionManagerHydrationTests {
         }
     }
 
+    @Test("hydrateIfNeeded restores persisted remote ACP session id")
+    func hydrateRestoresRemoteSessionId() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "t",
+            remoteSessionId: "remote-1",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+        #expect(s.remoteSessionId == "remote-1")
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.remoteSessionId == "remote-1")
+    }
+
+    @Test("hydrateIfNeeded does not overwrite a newer in-memory remote ACP session id")
+    func hydratePreservesNewerRemoteSessionId() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "t",
+            remoteSessionId: "remote-old",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+        #expect(s.remoteSessionId == "remote-old")
+        s.remoteSessionId = "remote-new"
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.remoteSessionId == "remote-new")
+    }
+
     @Test("hydrateIfNeeded short-circuits when already ready")
     func hydrateShortCircuit() async throws {
         let path = tmpStorePath()

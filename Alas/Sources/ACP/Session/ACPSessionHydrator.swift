@@ -50,6 +50,8 @@ actor ACPSessionHydrator {
         let touched = ACPSessionRow(
             id: row.id, agentId: row.agentId, title: row.title,
             titleSource: row.titleSource,
+            remoteSessionId: row.remoteSessionId,
+            contextRecoveryPending: row.contextRecoveryPending,
             currentModel: row.currentModel, currentMode: row.currentMode,
             autoRun: row.autoRun,
             createdAt: row.createdAt, updatedAt: row.updatedAt,

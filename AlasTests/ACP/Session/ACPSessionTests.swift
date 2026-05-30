@@ -35,6 +35,62 @@ struct ACPSessionTests {
         #expect(!session.followsTranscriptTail)
     }
 
+    @Test("empty transcript has no conversation transcript")
+    func emptyTranscriptHasNoConversationTranscript() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        #expect(!session.hasConversationTranscript)
+    }
+
+    @Test("system notice alone has no conversation transcript")
+    func systemNoticeHasNoConversationTranscript() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.appendSystemNotice("Agent disconnected")
+
+        #expect(!session.hasConversationTranscript)
+    }
+
+    @Test("non-empty user message has conversation transcript")
+    func userMessageHasConversationTranscript() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.recordUserPrompt(text: "hello", attachments: [])
+
+        #expect(session.hasConversationTranscript)
+    }
+
+    @Test("whitespace-only user message has no conversation transcript")
+    func whitespaceUserMessageHasNoConversationTranscript() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.recordUserPrompt(text: " \n\t ", attachments: [])
+
+        #expect(!session.hasConversationTranscript)
+    }
+
+    @Test("non-empty agent message has conversation transcript")
+    func agentMessageHasConversationTranscript() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("hello from agent")))
+
+        #expect(session.hasConversationTranscript)
+    }
+
+    @Test("context restore warning can be set and compared")
+    func contextRestoreWarningState() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let warning = ACPSession.ContextRestoreWarning(
+            message: "Context restore failed",
+            canSendTranscript: true
+        )
+
+        session.contextRestoreWarning = warning
+
+        #expect(session.contextRestoreWarning == warning)
+        #expect(warning == ACPSession.ContextRestoreWarning(
+            message: "Context restore failed",
+            canSendTranscript: true
+        ))
+    }
+
     @Test("plan update creates / replaces the plan message")
     func plan() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
