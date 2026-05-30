@@ -388,6 +388,7 @@
 		7A0D3E122F34EF1A2A04984F /* EnvBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 159FE807399835B0821E1CAB /* EnvBuilder.swift */; };
 		7A2C912B677A34391361B720 /* AdvancedSettingsVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B123596E047E4CE0FAFE3E /* AdvancedSettingsVisibility.swift */; };
 		7A816022DD913BC76F5EBA7F /* InstallNudgeResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 134EE8D2BC31085A504D27D8 /* InstallNudgeResolverTests.swift */; };
+		7ACFA19EA43966431D906F55 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
 		7B25B1405BFDE5570B267213 /* NumstatParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CA79B71B4AA72697392702 /* NumstatParser.swift */; };
 		7B309C87C042B3A18AB31D0F /* SearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49B5B544A3432F8D8105268 /* SearchModel.swift */; };
 		7B85B033B476943E77867BA3 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69024633944E9FFF6DA76FAE /* RootView.swift */; };
@@ -576,7 +577,7 @@
 		B35BD3304D3A9EC5BABBC56E /* CommitRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D46BDE72E52818061452ECB /* CommitRowTests.swift */; };
 		B3BA844FBD11333E74A05655 /* MarkdownImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE20A3822FC26672DFD552C /* MarkdownImageLoader.swift */; };
 		B40925F2FDA34DC0444D8632 /* EditorBufferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D921D1C8A44F1937769CDB60 /* EditorBufferStore.swift */; };
-		B40B75555598C42713157C5C /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B69450B224F0C82A52D00662 /* Markdown */; };
+		B40B75555598C42713157C5C /* TreeSitterCSS in Frameworks */ = {isa = PBXBuildFile; productRef = 3F76DFBA5D1CB707989C86AB /* TreeSitterCSS */; };
 		B472D692A8D8D1C664EAC467 /* ACPSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1281A3235F08DC8A95D015A9 /* ACPSessionTests.swift */; };
 		B4C4E13CFE986FC20DC12808 /* ACPFileWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CA51D49B1AE4C4E10D450C6 /* ACPFileWriterTests.swift */; };
 		B54B0BFA87B2566DB59C3D59 /* ConflictMarkerParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */; };
@@ -1391,6 +1392,7 @@
 		BBBEFD27FD7013D458435779 /* ACPSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSession.swift; sourceTree = "<group>"; };
 		BC3CA543A17D1C3DFA70A80C /* DraftCommitTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabView.swift; sourceTree = "<group>"; };
 		BCA505FF2E6CFA8278C95C6E /* GhosttyConfigBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyConfigBuilder.swift; sourceTree = "<group>"; };
+		BCA9015C063CDD90D021D928 /* TreeSitterCSS */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TreeSitterCSS; path = ThirdParty/TreeSitterCSS; sourceTree = SOURCE_ROOT; };
 		BD4A3B9B1103346242438940 /* FilesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabView.swift; sourceTree = "<group>"; };
 		BD708EEB35D93A7E7150981D /* ProjectsManagerHeadUpdatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsManagerHeadUpdatesTests.swift; sourceTree = "<group>"; };
 		BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfig.swift; sourceTree = "<group>"; };
@@ -1638,7 +1640,8 @@
 				647E2B3A14A7722D514B113E /* TreeSitterC in Frameworks */,
 				2AC164837BF88D1BD0F20E97 /* TreeSitterCPP in Frameworks */,
 				A8D21135BA6C2542E3820E19 /* TreeSitterHTML in Frameworks */,
-				B40B75555598C42713157C5C /* Markdown in Frameworks */,
+				B40B75555598C42713157C5C /* TreeSitterCSS in Frameworks */,
+				7ACFA19EA43966431D906F55 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2473,6 +2476,7 @@
 		80D88E924CA1336215F8EB27 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
+				BCA9015C063CDD90D021D928 /* TreeSitterCSS */,
 				56BF141F589820AA91674BD0 /* TreeSitterJavaScript */,
 				58B78EE378B0A076C904E2E4 /* TreeSitterLua */,
 				00B894D92F014C2ADB3CCC9B /* TreeSitterPython */,
@@ -3132,6 +3136,7 @@
 				FF43B3EA560936C516C215A1 /* TreeSitterC */,
 				5F82D581FFC7034146EAE020 /* TreeSitterCPP */,
 				E1F30BF52DCE8CD60F19C921 /* TreeSitterHTML */,
+				3F76DFBA5D1CB707989C86AB /* TreeSitterCSS */,
 				B69450B224F0C82A52D00662 /* Markdown */,
 			);
 			productName = Alas;
@@ -3177,6 +3182,7 @@
 				7019D0C134F78A3B7F4CF4BB /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
 				A38DA0B05C2E29601ED4C8A9 /* XCRemoteSwiftPackageReference "tree-sitter-toml" */,
 				E32CC6F3745BD894D495E254 /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */,
+				503F42153BDDB65CB9EC8A18 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterCSS" */,
 				85BE587B3304F8D1B3C2A9E0 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterJavaScript" */,
 				BF2BE955FBC2F9CE5DA291C5 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterLua" */,
 				5844843C71BA73C8F5B45D8A /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterPython" */,
@@ -4314,6 +4320,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		503F42153BDDB65CB9EC8A18 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterCSS" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ThirdParty/TreeSitterCSS;
+		};
 		5844843C71BA73C8F5B45D8A /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterPython" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ThirdParty/TreeSitterPython;
@@ -4479,6 +4489,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FAF805B9CC533A5991566C9A /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */;
 			productName = TreeSitterRuby;
+		};
+		3F76DFBA5D1CB707989C86AB /* TreeSitterCSS */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TreeSitterCSS;
 		};
 		46C4CD399F2A124F7A038D7C /* TreeSitterLua */ = {
 			isa = XCSwiftPackageProductDependency;
