@@ -512,6 +512,31 @@ struct ACPComposerDraftBridgeTests {
             == ACPComposerDraft(segments: [.text("just words")]))
     }
 
+    @Test("the user space before a mention is preserved (only the synthetic trailing space is stripped)")
+    func spaceBeforeMentionPreserved() {
+        // Codex flagged a (self-described uncertain) worry that stripping
+        // the `@name ` run also eats the user's separator space, so
+        // "see @File.swift" would resubmit as "see@File.swift". It does
+        // not: extract emits the chip's space AFTER the marker, while the
+        // space the user typed before `@` lives in the preceding text and
+        // ends up in the prefix. Round-trip preserves it exactly.
+        let original = ACPComposerDraft(segments: [
+            .text("see "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+        ])
+        let attributed = ACPInputField.Coordinator.attributedString(from: original)
+        let (text, attachments) = ACPInputField.Coordinator.extract(attributed)
+        let restored = ACPComposerDraft(
+            blocks: ACPSessionRunner.blocks(text: text, attachments: attachments))
+
+        #expect(restored == original)                       // space intact
+        if case .text(let t)? = restored.segments.first {
+            #expect(t == "see ")                            // not "see"
+        } else {
+            Issue.record("expected a leading text segment")
+        }
+    }
+
     @Test("queued prompt with a trailing mention round-trips exactly")
     func mentionRoundTrip() {
         // The exact path a queued item travels: composer draft →
