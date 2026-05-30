@@ -151,9 +151,13 @@ private struct ACPSessionView: View {
                             policy: manager.runners[sessionId]?.policy,
                             scopeKey: scopeKey(for: session.transcript.pendingPermission),
                             onQueueEdit: { item in
-                                // Inline editor is a future enhancement (see plan §4.4).
-                                // For v1, clicking the pencil removes the item from
-                                // the queue so the user can re-type in the composer.
+                                // Pull the queued prompt back into the composer
+                                // for editing — appended after any text the user
+                                // has already typed so nothing is clobbered — then
+                                // drop it from the queue.
+                                let restored = session.composerDraft.appending(
+                                    ACPComposerDraft(blocks: item.blocks))
+                                manager.persistComposerDraft(restored, for: session)
                                 session.removeFromQueue(id: item.id)
                                 manager.persistQueue(for: session)
                                 // Discarding the head can unblock a successor
