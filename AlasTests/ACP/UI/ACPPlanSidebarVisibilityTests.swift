@@ -64,6 +64,39 @@ struct ACPPlanSidebarVisibilityTests {
         #expect(ACPPlanSidebarVisibility.next(paneWidth: 1500, hasPlan: false, current: true) == false)
     }
 
+    @Test("user-minimized override hides even when wide")
+    func userMinimizedOverrideHides() {
+        #expect(ACPPlanSidebarVisibility.next(
+            paneWidth: 1500,
+            hasPlan: true,
+            current: true,
+            userMinimized: true
+        ) == false)
+    }
+
+    @Test("clearing user-minimized override restores normal width rules")
+    func clearingUserMinimizedOverrideRestoresWidthRules() {
+        #expect(ACPPlanSidebarVisibility.next(
+            paneWidth: 1500,
+            hasPlan: true,
+            current: false,
+            userMinimized: false
+        ) == true)
+        #expect(ACPPlanSidebarVisibility.next(
+            paneWidth: 500,
+            hasPlan: true,
+            current: false,
+            userMinimized: false
+        ) == false)
+    }
+
+    @Test("restore pill only appears while user-minimized with a plan")
+    func restorePillVisibility() {
+        #expect(ACPPlanSidebarVisibility.restorePillVisible(hasPlan: true, userMinimized: true) == true)
+        #expect(ACPPlanSidebarVisibility.restorePillVisible(hasPlan: false, userMinimized: true) == false)
+        #expect(ACPPlanSidebarVisibility.restorePillVisible(hasPlan: true, userMinimized: false) == false)
+    }
+
     @Test("thresholds are 900 show / 820 hide")
     func thresholdConstants() {
         #expect(ACPPlanSidebarVisibility.showThreshold == 900)

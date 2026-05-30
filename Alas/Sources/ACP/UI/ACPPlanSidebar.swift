@@ -13,6 +13,7 @@ import SwiftUI
 /// Spec: `docs/superpowers/specs/2026-05-29-acp-plan-sidebar-design.md` (§3)
 struct ACPPlanSidebar: View {
     @ObservedObject var transcript: ACPTranscript
+    let onMinimize: () -> Void
     @Environment(\.theme) private var theme
 
     private let cornerRadius: CGFloat = 12
@@ -22,7 +23,7 @@ struct ACPPlanSidebar: View {
         let animating = items.contains { $0.status == "in_progress" }
         ScrollView(.vertical, showsIndicators: false) {
             if !items.isEmpty {
-                ACPPlanChecklist(items: items)
+                ACPPlanChecklist(items: items, onMinimize: onMinimize)
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                     .overlay(laserBorder(animating: animating))
                     .shadow(color: .black.opacity(0.28), radius: 8, y: 2)

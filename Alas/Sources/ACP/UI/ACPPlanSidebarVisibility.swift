@@ -16,14 +16,26 @@ enum ACPPlanSidebarVisibility {
     /// Returns the next visibility given the current pane width, whether
     /// a plan is available, and whether the sidebar is currently shown.
     ///
+    /// - If user-minimized: always hidden until the restore action clears
+    ///   the override.
     /// - If no plan: always hidden (the sidebar has no empty state).
     /// - If width ≥ `showThreshold`: shown.
     /// - If width < `hideThreshold`: hidden.
     /// - Otherwise (dead band): keep `current`.
-    static func next(paneWidth: CGFloat, hasPlan: Bool, current: Bool) -> Bool {
+    static func next(
+        paneWidth: CGFloat,
+        hasPlan: Bool,
+        current: Bool,
+        userMinimized: Bool = false
+    ) -> Bool {
+        guard !userMinimized else { return false }
         guard hasPlan else { return false }
         if paneWidth >= showThreshold { return true }
         if paneWidth < hideThreshold { return false }
         return current
+    }
+
+    static func restorePillVisible(hasPlan: Bool, userMinimized: Bool) -> Bool {
+        hasPlan && userMinimized
     }
 }
