@@ -4,6 +4,7 @@ import TreeSitterBash
 import TreeSitterC
 import TreeSitterCPP
 import TreeSitterGo
+import TreeSitterHTML
 import TreeSitterJava
 import TreeSitterJavaScript
 import TreeSitterKotlin
@@ -56,6 +57,7 @@ enum LanguageRegistry {
         case "c", "h":        lang = Language(language: tree_sitter_c())
         case "cpp", "cc", "cxx", "hpp", "hh", "hxx":
                               lang = Language(language: tree_sitter_cpp())
+        case "html":          lang = Language(language: tree_sitter_html())
         default:              lang = nil
         }
         if let lang { languageCache[key] = lang }
@@ -172,6 +174,10 @@ enum LanguageRegistry {
                 ],
                 language: lang
             )
+        case "html":
+            query = loadQuery(named: "highlights",
+                              bundleNameContains: "TreeSitterHTML",
+                              language: lang)
         default:
             query = nil
         }

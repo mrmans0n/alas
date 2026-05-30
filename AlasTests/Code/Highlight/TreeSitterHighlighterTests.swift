@@ -352,7 +352,7 @@ struct TreeSitterHighlighterTests {
 
     @Test("markup, CSS, and SQL fallback emit useful spans")
     func chatFallbackBasics() throws {
-        let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "html")
+        let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "xml")
         let css = TreeSitterHighlighter.highlight(source: #".primary { display: flex; color: #fff; }"#, fileExtension: "css")
         let sql = TreeSitterHighlighter.highlight(source: #"SELECT id FROM users WHERE active = true;"#, fileExtension: "sql")
 
@@ -361,6 +361,20 @@ struct TreeSitterHighlighterTests {
         #expect(html.contains(where: { $0.capture == .string }))
         #expect(css.contains(where: { $0.capture == .keyword }))
         #expect(sql.contains(where: { $0.capture == .keyword }))
+    }
+
+    @Test("HTML uses tree-sitter grammar and query")
+    func htmlTreeSitterBasics() throws {
+        #expect(LanguageRegistry.language(forFileExtension: "html") != nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "html") != nil)
+
+        let spans = TreeSitterHighlighter.highlight(
+            source: #"<button disabled class="primary">Save</button>"#,
+            fileExtension: "html"
+        )
+        #expect(spans.contains(where: { $0.capture == .keyword }))
+        #expect(spans.contains(where: { $0.capture == .attribute }))
+        #expect(spans.contains(where: { $0.capture == .string }))
     }
 
     @Test("CSS fallback does not treat hashes as line comments")
@@ -377,7 +391,7 @@ struct TreeSitterHighlighterTests {
     @Test("markup fallback captures spaced and boolean attributes exactly")
     func markupFallbackExactAttributes() throws {
         let src = #"<button class = "primary" disabled>Save</button>"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "xml")
 
         #expect(capture(for: "class", in: src, spans: spans) == .attribute)
         #expect(capture(for: "disabled", in: src, spans: spans) == .attribute)
@@ -387,7 +401,7 @@ struct TreeSitterHighlighterTests {
     @Test("markup fallback does not classify assigned text outside tags as attributes")
     func markupFallbackDoesNotClassifyAssignedTextOutsideTagsAsAttributes() throws {
         let src = #"x = 1 <button class="primary">Save</button>"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "xml")
 
         #expect(capture(for: "x", in: src, spans: spans) != .attribute)
         #expect(capture(for: "class", in: src, spans: spans) == .attribute)
@@ -397,7 +411,7 @@ struct TreeSitterHighlighterTests {
     @Test("markup fallback does not recover boolean attributes inside comments or strings")
     func markupFallbackSkipsBooleanAttributesInsideCommentsAndStrings() throws {
         let src = #"<!-- <button disabled> --> <input disabled value="<tag disabled>">"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "html")
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "xml")
 
         #expect(capture(for: "disabled", occurrence: 0, in: src, spans: spans) != .attribute)
         #expect(capture(for: "disabled", occurrence: 1, in: src, spans: spans) == .attribute)
