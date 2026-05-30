@@ -5,6 +5,35 @@ import Testing
 @MainActor
 @Suite("ACP code block highlighter")
 struct ACPCodeBlockHighlighterTests {
+    private func foregroundColor(
+        for needle: String,
+        in attributed: NSAttributedString
+    ) throws -> NSColor {
+        let range = (attributed.string as NSString).range(of: needle)
+        try #require(range.location != NSNotFound)
+        let color = attributed.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+        return try #require(color)
+    }
+
+    private func allForegroundColors(
+        in attributed: NSAttributedString,
+        equal expected: NSColor
+    ) -> Bool {
+        guard attributed.length > 0 else { return true }
+        var matches = true
+        attributed.enumerateAttribute(
+            .foregroundColor,
+            in: NSRange(location: 0, length: attributed.length)
+        ) { value, _, stop in
+            guard let color = value as? NSColor, color == expected else {
+                matches = false
+                stop.pointee = true
+                return
+            }
+        }
+        return matches
+    }
+
     @Test("maps common ACP fence labels to highlighter extensions")
     func mapsFenceLabels() {
         #expect(ACPCodeLanguage.highlighterExtension(for: "swift") == "swift")
@@ -49,6 +78,46 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "elixir") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "dockerfile") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == nil)
+    }
+
+    @Test("regex fallback labels apply non-default ACP syntax colors")
+    func regexFallbackLabelsApplySyntaxColors() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+
+        let diff = ACPCodeBlockHighlighter.attributedString(
+            code: "@@ -1 +1 @@\n-old\n+new",
+            language: "diff",
+            theme: theme
+        )
+        let html = ACPCodeBlockHighlighter.attributedString(
+            code: #"<button disabled class="primary">Save</button>"#,
+            language: "html",
+            theme: theme
+        )
+        let css = ACPCodeBlockHighlighter.attributedString(
+            code: #".primary { display: flex; color: #fff; }"#,
+            language: "css",
+            theme: theme
+        )
+
+        #expect(try foregroundColor(for: "@@", in: diff) != editorTheme.defaultFG)
+        #expect(try foregroundColor(for: "<button", in: html) != editorTheme.defaultFG)
+        #expect(try foregroundColor(for: "display", in: css) != editorTheme.defaultFG)
+    }
+
+    @Test("future-known unsupported ACP labels keep attributed output plain")
+    func futureKnownUnsupportedAttributedOutputRemainsPlain() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+        let attributed = ACPCodeBlockHighlighter.attributedString(
+            code: "SELECT id FROM users WHERE active = true;",
+            language: "sql",
+            theme: theme
+        )
+
+        #expect(attributed.string == "SELECT id FROM users WHERE active = true;")
+        #expect(allForegroundColors(in: attributed, equal: editorTheme.defaultFG))
     }
 
     @Test("Swift code applies syntax color while preserving monospaced font")
