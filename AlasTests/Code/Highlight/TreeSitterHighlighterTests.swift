@@ -353,7 +353,7 @@ struct TreeSitterHighlighterTests {
     @Test("markup, CSS, and SQL fallback emit useful spans")
     func chatFallbackBasics() throws {
         let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "xml")
-        let css = TreeSitterHighlighter.highlight(source: #".primary { display: flex; color: #fff; }"#, fileExtension: "css")
+        let css = TreeSitterHighlighter.highlight(source: #".primary { display: flex; color: #fff; }"#, fileExtension: "scss")
         let sql = TreeSitterHighlighter.highlight(source: #"SELECT id FROM users WHERE active = true;"#, fileExtension: "sql")
 
         #expect(html.contains(where: { $0.capture == .keyword }))
@@ -377,10 +377,23 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .string }))
     }
 
+    @Test("CSS uses tree-sitter grammar and query")
+    func cssTreeSitterBasics() throws {
+        #expect(LanguageRegistry.language(forFileExtension: "css") != nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "css") != nil)
+
+        let spans = TreeSitterHighlighter.highlight(
+            source: #".primary { display: flex; color: #fff; }"#,
+            fileExtension: "css"
+        )
+        #expect(spans.contains(where: { $0.capture == .property }))
+        #expect(spans.contains(where: { $0.capture == .string }))
+    }
+
     @Test("CSS fallback does not treat hashes as line comments")
     func cssFallbackDoesNotTreatHashesAsLineComments() throws {
         let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "css")
+        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "scss")
         let swallowedRange = NSRange(src.range(of: "#fff; background")!, in: src)
 
         #expect(capture(for: "background", in: src, spans: spans) == .keyword)

@@ -84,6 +84,11 @@ packages:
   TreeSitterHTML:
     url: https://github.com/tree-sitter/tree-sitter-html
     from: 0.23.2
+  TreeSitterCSS:
+    # Vendored at ThirdParty/TreeSitterCSS — upstream's Package.swift
+    # has the same broken `FileManager.fileExists` scanner conditional
+    # as tree-sitter-yaml.
+    path: ThirdParty/TreeSitterCSS
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -159,6 +164,8 @@ targets:
         product: TreeSitterCPP
       - package: TreeSitterHTML
         product: TreeSitterHTML
+      - package: TreeSitterCSS
+        product: TreeSitterCSS
       - package: Markdown
         product: Markdown
     settings:
