@@ -41,7 +41,8 @@ enum LanguageRegistry {
         case "py":            lang = Language(language: tree_sitter_python())
         case "rs":            lang = Language(language: tree_sitter_rust())
         case "go":            lang = Language(language: tree_sitter_go())
-        case "sh", "bash":    lang = Language(language: tree_sitter_bash())
+        case "sh", "bash", "zsh":
+                              lang = Language(language: tree_sitter_bash())
         case "js", "mjs", "cjs", "jsx":
                               lang = Language(language: tree_sitter_javascript())
         case "ts":            lang = Language(language: tree_sitter_typescript())
@@ -98,7 +99,7 @@ enum LanguageRegistry {
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterGo",
                               language: lang)
-        case "sh", "bash":
+        case "sh", "bash", "zsh":
             query = loadQuery(named: "highlights",
                               bundleNameContains: "TreeSitterBash",
                               language: lang)
