@@ -466,10 +466,11 @@ extension ACPSessionRunner {
         text: String,
         attachments: [ACPMessage.Attachment],
         intent: ACPSubmitIntent,
+        draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         let blocks = Self.blocks(text: text, attachments: attachments)
-        send(blocks: blocks, intent: intent, onPromptFinished: onPromptFinished)
+        send(blocks: blocks, intent: intent, draft: draft, onPromptFinished: onPromptFinished)
     }
 
     /// Build the canonical `[ACPContentBlock]` array from a composer-shaped
@@ -493,9 +494,13 @@ extension ACPSessionRunner {
     ///   - enqueue  → appends to queue + persists
     ///   - steer    → cancels in-flight + clears queue + sends (Task 8)
     ///   - noOp     → empty composer, ignore
+    /// `draft` is the structured composer state for lossless edit-restore;
+    /// it's consumed only on the `enqueue` route and ignored on the others
+    /// (sendNow/steer have no queued item to annotate).
     func send(
         blocks: [ACPContentBlock],
         intent: ACPSubmitIntent,
+        draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         let route = ACPSubmitRoute.resolve(
@@ -513,7 +518,7 @@ extension ACPSessionRunner {
         case .sendNow:
             sendNow(blocks: blocks, queuedItemId: nil, onPromptFinished: onPromptFinished)
         case .enqueue:
-            session.enqueue(blocks: blocks)
+            session.enqueue(blocks: blocks, draft: draft)
             persistQueue()
             // The user's prompt was accepted into the queue — from the
             // composer's perspective this is a successful submission so

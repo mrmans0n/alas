@@ -593,11 +593,12 @@ extension ACPSessionManager {
     func enqueueWhileRecovering(
         text: String,
         attachments: [ACPMessage.Attachment],
+        draft: ACPComposerDraft? = nil,
         into sessionId: ACPSession.ID
     ) {
         guard let session = sessions[sessionId] else { return }
         let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
-        session.enqueue(blocks: blocks)
+        session.enqueue(blocks: blocks, draft: draft)
         do {
             try store.upsertQueue(sessionId: sessionId, items: session.queue)
         } catch {
@@ -623,6 +624,7 @@ extension ACPSessionManager {
         text: String,
         attachments: [ACPMessage.Attachment],
         intent: ACPSubmitIntent,
+        draft: ACPComposerDraft? = nil,
         onCompleted: @escaping @MainActor (Bool) -> Void
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
@@ -639,12 +641,12 @@ extension ACPSessionManager {
                 // closure returns and registers its pending id (without the
                 // hop the completion fires too early and gets ignored).
                 session.agentState = .disconnected
-                enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
+                enqueueWhileRecovering(text: text, attachments: attachments, draft: draft, into: sessionId)
                 Task { @MainActor in onCompleted(true) }
                 Task { @MainActor in await reattach(to: sessionId) }
                 return true
             }
-            runner.send(text: text, attachments: attachments, intent: intent) { succeeded in
+            runner.send(text: text, attachments: attachments, intent: intent, draft: draft) { succeeded in
                 onCompleted(succeeded)
             }
             return true
@@ -652,7 +654,7 @@ extension ACPSessionManager {
         case .spawning:
             // An attach is in flight; the post-attach `flushQueueIfIdle()`
             // will pick up the freshly enqueued head.
-            enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
+            enqueueWhileRecovering(text: text, attachments: attachments, draft: draft, into: sessionId)
             Task { @MainActor in onCompleted(true) }
             return true
 
@@ -662,7 +664,7 @@ extension ACPSessionManager {
             // submit closure returns and registers its pending id — firing
             // synchronously here would race the composer's bookkeeping and
             // get ignored, leaving the persisted draft uncleared.
-            enqueueWhileRecovering(text: text, attachments: attachments, into: sessionId)
+            enqueueWhileRecovering(text: text, attachments: attachments, draft: draft, into: sessionId)
             Task { @MainActor in onCompleted(true) }
             Task { @MainActor in await reattach(to: sessionId) }
             return true
