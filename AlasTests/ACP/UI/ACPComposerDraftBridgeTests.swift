@@ -457,19 +457,59 @@ struct ACPComposerDraftBridgeTests {
 
     // MARK: - Restoring a queued item into the composer (blocks → draft)
 
-    @Test("draft from content blocks maps text and resource links")
+    @Test("draft from content blocks weaves resource links into their @markers")
     func draftFromBlocks() {
+        // Mirror the real serializer: one text block carrying the inline
+        // `@File.swift ` marker, plus a separate resource link for the same
+        // attachment. The marker must be REPLACED by the chip — not kept
+        // alongside it — or the mention duplicates on resubmit.
         let blocks: [ACPContentBlock] = [
-            .text("look at "),
+            .text("look at @File.swift please"),
             .resourceLink(uri: "file:///tmp/File.swift", name: "File.swift"),
-            .text(" please"),
         ]
 
         #expect(ACPComposerDraft(blocks: blocks) == ACPComposerDraft(segments: [
             .text("look at "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
-            .text(" please"),
+            .text("please"),
         ]))
+    }
+
+    @Test("plain text blocks with no links pass through unchanged")
+    func draftFromPlainText() {
+        #expect(ACPComposerDraft(blocks: [.text("just words")])
+            == ACPComposerDraft(segments: [.text("just words")]))
+    }
+
+    @Test("queued prompt with a mention round-trips through serialization without duplicating")
+    func mentionRoundTrip() {
+        // The exact path a queued item travels: composer draft →
+        // extract (text + attachments) → ACPSessionRunner.blocks →
+        // ACPComposerDraft(blocks:). Editing must reproduce the ORIGINAL
+        // draft, not a draft with the mention doubled. (Regression for
+        // the codex P2 finding.)
+        let original = ACPComposerDraft(segments: [
+            .text("please review "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text("now"),
+        ])
+
+        let attributed = ACPInputField.Coordinator.attributedString(from: original)
+        let (text, attachments) = ACPInputField.Coordinator.extract(attributed)
+        let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
+        let restored = ACPComposerDraft(blocks: blocks)
+
+        // The key invariant: exactly ONE mention chip, and no leftover
+        // "@File.swift" literal in the text (which is what duplicated the
+        // mention before the fix).
+        let mentionCount = restored.segments.filter {
+            if case .mention = $0 { return true } else { return false }
+        }.count
+        #expect(mentionCount == 1)
+        let joinedText = restored.segments.compactMap {
+            if case .text(let t) = $0 { return t } else { return nil }
+        }.joined()
+        #expect(!joinedText.contains("@File.swift"))
     }
 
     @Test("resource link without a name falls back to its last path component")

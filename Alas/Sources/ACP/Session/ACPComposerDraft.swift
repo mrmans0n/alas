@@ -65,28 +65,68 @@ extension ACPComposerDraft {
     /// Rebuild an editable draft from a queued prompt's content blocks —
     /// the inverse of the submit path's draft→blocks serialization. Used
     /// when the user clicks "edit" on a queued item to pull it back into
-    /// the composer. Resource links (and images) become mention chips so
-    /// nothing is silently dropped on restore; a link without a name falls
-    /// back to its uri's last path component, then the raw uri.
+    /// the composer.
+    ///
+    /// The submit path is asymmetric: `ACPInputField.Coordinator.extract`
+    /// emits each mention as an inline `@displayName ` marker in the text
+    /// AND a matching attachment, then `ACPSessionRunner.blocks` lays that
+    /// out as a single `.text` block followed by one `.resourceLink` per
+    /// attachment. So a naive map that keeps the text marker *and* adds a
+    /// chip would double every mention on resubmit. Instead, weave each
+    /// resource link back into its `@displayName ` marker — replacing the
+    /// marker with the chip — so the original draft round-trips exactly.
+    /// Links with no matching marker (e.g. agent-sourced items, images)
+    /// are appended as chips so nothing is silently dropped.
     ///
     /// Declared in an extension so the compiler keeps synthesizing the
     /// memberwise `init(segments:)` that the rest of the codebase relies on.
     init(blocks: [ACPContentBlock]) {
-        self.segments = blocks.map { block in
+        var text = ""
+        var links: [(name: String, uri: String)] = []
+        for block in blocks {
             switch block {
             case .text(let value):
-                return .text(value)
+                text += value
             case .resourceLink(let uri, let name):
-                return .mention(displayName: name ?? Self.displayName(forURI: uri), uri: uri)
+                links.append((name ?? Self.displayName(forURI: uri), uri))
             case .image(let uri, _):
-                return .mention(displayName: Self.displayName(forURI: uri), uri: uri)
+                links.append((Self.displayName(forURI: uri), uri))
             }
         }
+        self.segments = Self.weave(text: text, links: links)
     }
 
     private static func displayName(forURI uri: String) -> String {
         let last = URL(string: uri)?.lastPathComponent
         return (last?.isEmpty == false ? last : nil) ?? uri
+    }
+
+    /// Split `text` at each link's `@name ` marker (the exact form
+    /// `extract` produces), emitting a mention segment in the marker's
+    /// place. Links are consumed left-to-right; a link whose marker isn't
+    /// found is appended as a trailing chip rather than dropped.
+    private static func weave(text: String, links: [(name: String, uri: String)]) -> [Segment] {
+        guard !links.isEmpty else {
+            return text.isEmpty ? [] : [.text(text)]
+        }
+        var segments: [Segment] = []
+        var remaining = Substring(text)
+        var unmatched: [(name: String, uri: String)] = []
+        for link in links {
+            if let range = remaining.range(of: "@\(link.name) ") {
+                let before = remaining[remaining.startIndex..<range.lowerBound]
+                if !before.isEmpty { segments.append(.text(String(before))) }
+                segments.append(.mention(displayName: link.name, uri: link.uri))
+                remaining = remaining[range.upperBound...]
+            } else {
+                unmatched.append(link)
+            }
+        }
+        if !remaining.isEmpty { segments.append(.text(String(remaining))) }
+        for link in unmatched {
+            segments.append(.mention(displayName: link.name, uri: link.uri))
+        }
+        return segments
     }
 
     /// Concatenate `other` onto this draft, separated by a newline when
