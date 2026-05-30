@@ -71,12 +71,19 @@ extension ACPComposerDraft {
     /// emits each mention as an inline `@displayName ` marker in the text
     /// AND a matching attachment, then `ACPSessionRunner.blocks` lays that
     /// out as a single `.text` block followed by one `.resourceLink` per
-    /// attachment. So a naive map that keeps the text marker *and* adds a
-    /// chip would double every mention on resubmit. Instead, weave each
-    /// resource link back into its `@displayName ` marker — replacing the
-    /// marker with the chip — so the original draft round-trips exactly.
-    /// Links with no matching marker (e.g. agent-sourced items, images)
-    /// are appended as chips so nothing is silently dropped.
+    /// attachment. A naive map that keeps the text marker *and* adds a chip
+    /// would double every mention on resubmit, so the markers must be
+    /// stripped — but only the ones `extract` actually produced.
+    ///
+    /// `insertMention` always *appends* the chip to the end of the
+    /// composer, so `extract` emits the markers as a contiguous trailing
+    /// run in attachment order: `…userText@a @b `. We therefore strip that
+    /// exact trailing run positionally, never by first textual occurrence —
+    /// the latter would mis-claim a literal `@name` the user typed earlier
+    /// (e.g. "ping @here and @File.swift" with an attachment named here).
+    /// Blocks that don't end in the canonical run (agent-sourced items,
+    /// images, or hand-edited text) keep their text verbatim and append the
+    /// links as chips so nothing is dropped.
     ///
     /// Declared in an extension so the compiler keeps synthesizing the
     /// memberwise `init(segments:)` that the rest of the codebase relies on.
@@ -93,7 +100,7 @@ extension ACPComposerDraft {
                 links.append((Self.displayName(forURI: uri), uri))
             }
         }
-        self.segments = Self.weave(text: text, links: links)
+        self.segments = Self.rebuild(text: text, links: links)
     }
 
     private static func displayName(forURI uri: String) -> String {
@@ -101,32 +108,22 @@ extension ACPComposerDraft {
         return (last?.isEmpty == false ? last : nil) ?? uri
     }
 
-    /// Split `text` at each link's `@name ` marker (the exact form
-    /// `extract` produces), emitting a mention segment in the marker's
-    /// place. Links are consumed left-to-right; a link whose marker isn't
-    /// found is appended as a trailing chip rather than dropped.
-    private static func weave(text: String, links: [(name: String, uri: String)]) -> [Segment] {
+    /// Reconstruct segments from the flat `(text, links)` pair, stripping
+    /// the trailing `@name ` marker run that `extract` appends (see
+    /// `init(blocks:)`) and emitting a chip per link. Falls back to
+    /// text-then-chips when the canonical run isn't present so a literal
+    /// `@name` earlier in the prose is never consumed.
+    private static func rebuild(text: String, links: [(name: String, uri: String)]) -> [Segment] {
         guard !links.isEmpty else {
             return text.isEmpty ? [] : [.text(text)]
         }
-        var segments: [Segment] = []
-        var remaining = Substring(text)
-        var unmatched: [(name: String, uri: String)] = []
-        for link in links {
-            if let range = remaining.range(of: "@\(link.name) ") {
-                let before = remaining[remaining.startIndex..<range.lowerBound]
-                if !before.isEmpty { segments.append(.text(String(before))) }
-                segments.append(.mention(displayName: link.name, uri: link.uri))
-                remaining = remaining[range.upperBound...]
-            } else {
-                unmatched.append(link)
-            }
+        let chips = links.map { Segment.mention(displayName: $0.name, uri: $0.uri) }
+        let markerRun = links.map { "@\($0.name) " }.joined()
+        if text.hasSuffix(markerRun) {
+            let prefix = String(text.dropLast(markerRun.count))
+            return (prefix.isEmpty ? [] : [.text(prefix)]) + chips
         }
-        if !remaining.isEmpty { segments.append(.text(String(remaining))) }
-        for link in unmatched {
-            segments.append(.mention(displayName: link.name, uri: link.uri))
-        }
-        return segments
+        return (text.isEmpty ? [] : [.text(text)]) + chips
     }
 
     /// Concatenate `other` onto this draft, separated by a newline when

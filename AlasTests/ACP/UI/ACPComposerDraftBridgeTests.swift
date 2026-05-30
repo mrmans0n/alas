@@ -457,21 +457,52 @@ struct ACPComposerDraftBridgeTests {
 
     // MARK: - Restoring a queued item into the composer (blocks → draft)
 
-    @Test("draft from content blocks weaves resource links into their @markers")
+    @Test("draft from content blocks strips the trailing @marker run")
     func draftFromBlocks() {
-        // Mirror the real serializer: one text block carrying the inline
-        // `@File.swift ` marker, plus a separate resource link for the same
-        // attachment. The marker must be REPLACED by the chip — not kept
+        // Mirror the real serializer: `extract` appends each chip's marker
+        // to the END of the text, so the text ends with `@File.swift `.
+        // That trailing marker must be REPLACED by the chip — not kept
         // alongside it — or the mention duplicates on resubmit.
         let blocks: [ACPContentBlock] = [
-            .text("look at @File.swift please"),
+            .text("look at @File.swift "),
             .resourceLink(uri: "file:///tmp/File.swift", name: "File.swift"),
         ]
 
         #expect(ACPComposerDraft(blocks: blocks) == ACPComposerDraft(segments: [
             .text("look at "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
-            .text("please"),
+        ]))
+    }
+
+    @Test("a literal @name earlier in the text is not mistaken for the chip marker")
+    func literalMarkerNotConsumed() {
+        // Codex P2: the user typed a literal "@here" AND attached a file
+        // named "here". `extract` serializes this as the literal text plus
+        // a TRAILING "@here " marker for the chip. Only the trailing marker
+        // may become a chip; the literal earlier in the prose stays text.
+        let blocks: [ACPContentBlock] = [
+            .text("ping @here and stuff @here "),
+            .resourceLink(uri: "file:///tmp/here", name: "here"),
+        ]
+
+        #expect(ACPComposerDraft(blocks: blocks) == ACPComposerDraft(segments: [
+            .text("ping @here and stuff "),
+            .mention(displayName: "here", uri: "file:///tmp/here"),
+        ]))
+    }
+
+    @Test("two trailing markers map to two chips in order")
+    func twoTrailingMarkers() {
+        let blocks: [ACPContentBlock] = [
+            .text("compare @A.swift @B.swift "),
+            .resourceLink(uri: "file:///A.swift", name: "A.swift"),
+            .resourceLink(uri: "file:///B.swift", name: "B.swift"),
+        ]
+
+        #expect(ACPComposerDraft(blocks: blocks) == ACPComposerDraft(segments: [
+            .text("compare "),
+            .mention(displayName: "A.swift", uri: "file:///A.swift"),
+            .mention(displayName: "B.swift", uri: "file:///B.swift"),
         ]))
     }
 
