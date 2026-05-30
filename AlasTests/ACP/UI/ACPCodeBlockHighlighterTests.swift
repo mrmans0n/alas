@@ -27,6 +27,30 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "not-a-language") == nil)
     }
 
+    @Test("maps regex-backed ACP fence labels to fallback extensions")
+    func mapsRegexBackedFenceLabels() {
+        #expect(ACPCodeLanguage.highlighterExtension(for: "diff") == "diff")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "patch") == "patch")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "html") == "html")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "xml") == "xml")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "css") == "css")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "scss") == "scss")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "sass") == "sass")
+    }
+
+    @Test("future-known unsupported ACP fence labels remain plain")
+    func futureKnownUnsupportedFenceLabelsRemainPlain() {
+        #expect(ACPCodeLanguage.highlighterExtension(for: "sql") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ruby") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "rb") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "php") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "perl") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "lua") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "elixir") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "dockerfile") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == nil)
+    }
+
     @Test("Swift code applies syntax color while preserving monospaced font")
     func swiftCodeAppliesSyntaxColor() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
