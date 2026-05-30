@@ -28,6 +28,8 @@ extension EnvironmentValues {
 /// `transcript.objectWillChange`).
 struct ACPPlanPill: View {
     @ObservedObject var transcript: ACPTranscript
+    var sidebarUserMinimized: Bool = false
+    var onRestoreSidebar: () -> Void = {}
     @Environment(\.theme) private var theme
     @Environment(\.acpPlanSidebarVisible) private var sidebarVisible
     @State private var popoverOpen = false
@@ -38,7 +40,14 @@ struct ACPPlanPill: View {
         // popover open at the moment the sidebar appears would never
         // be told to close, and would linger next to the sidebar.
         Group {
-            if !sidebarVisible, let state = ACPPlanPillState(items: transcript.currentPlan) {
+            if sidebarUserMinimized,
+               ACPPlanSidebarVisibility.restorePillVisible(
+                    hasPlan: transcript.latestPlan?.isEmpty == false,
+                    userMinimized: sidebarUserMinimized
+               ),
+               let state = ACPPlanPillState(items: transcript.latestPlan) {
+                pill(state: state, mode: .restore)
+            } else if !sidebarVisible, let state = ACPPlanPillState(items: transcript.currentPlan) {
                 pill(state: state)
             } else {
                 EmptyView()
@@ -49,10 +58,21 @@ struct ACPPlanPill: View {
         }
     }
 
+    private enum Mode {
+        case popover
+        case restore
+    }
+
     @ViewBuilder
-    private func pill(state: ACPPlanPillState) -> some View {
+    private func pill(state: ACPPlanPillState, mode: Mode = .popover) -> some View {
         Button {
-            popoverOpen.toggle()
+            switch mode {
+            case .popover:
+                popoverOpen.toggle()
+            case .restore:
+                popoverOpen = false
+                onRestoreSidebar()
+            }
         } label: {
             HStack(spacing: 8) {
                 statusDot(animating: state.isAnimating)
@@ -66,7 +86,7 @@ struct ACPPlanPill: View {
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
                 progressBar(done: state.done, total: state.total)
-                Image(systemName: popoverOpen ? "chevron.up" : "chevron.down")
+                Image(systemName: accessoryIconName(mode: mode))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(theme.color("fg-faint"))
             }
@@ -78,11 +98,13 @@ struct ACPPlanPill: View {
             .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
         }
         .buttonStyle(.plain)
-        .help("Plan — click to view all steps")
+        .help(mode == .restore ? "Restore tasks sidebar" : "Plan — click to view all steps")
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-            if let items = transcript.currentPlan, !items.isEmpty {
-                ACPPlanChecklist(items: items)
-                    .frame(width: 320)
+            if mode == .popover {
+                if let items = transcript.currentPlan, !items.isEmpty {
+                    ACPPlanChecklist(items: items)
+                        .frame(width: 320)
+                }
             }
         }
     }
@@ -95,6 +117,15 @@ struct ACPPlanPill: View {
             ],
             startPoint: .top, endPoint: .bottom
         )
+    }
+
+    private func accessoryIconName(mode: Mode) -> String {
+        switch mode {
+        case .restore:
+            return "sidebar.right"
+        case .popover:
+            return popoverOpen ? "chevron.up" : "chevron.down"
+        }
     }
 
     @ViewBuilder

@@ -67,7 +67,8 @@ private struct ACPSessionView: View {
         let next = ACPPlanSidebarVisibility.next(
             paneWidth: paneWidth,
             hasPlan: hasPlan,
-            current: showPlanSidebar
+            current: showPlanSidebar,
+            userMinimized: session.planSidebarMinimized
         )
         if next != showPlanSidebar {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
@@ -83,7 +84,11 @@ private struct ACPSessionView: View {
                 manager: manager,
                 agentLookup: { state.agent(id: $0) },
                 state: state,
-                worktree: worktree
+                worktree: worktree,
+                planSidebarUserMinimized: session.planSidebarMinimized,
+                onRestorePlanSidebar: {
+                    session.planSidebarMinimized = false
+                }
             )
             adapterBanner()
             if let err = session.lastError {
@@ -270,7 +275,10 @@ private struct ACPSessionView: View {
                 }
 
                 if showPlanSidebar {
-                    ACPPlanSidebar(transcript: session.transcript)
+                    ACPPlanSidebar(
+                        transcript: session.transcript,
+                        onMinimize: { session.planSidebarMinimized = true }
+                    )
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
@@ -280,6 +288,9 @@ private struct ACPSessionView: View {
                 updatePlanSidebar(paneWidth: newWidth)
             }
             .onChange(of: session.transcript.latestPlan) { _, _ in
+                updatePlanSidebar(paneWidth: proxy.size.width)
+            }
+            .onChange(of: session.planSidebarMinimized) { _, _ in
                 updatePlanSidebar(paneWidth: proxy.size.width)
             }
         }
