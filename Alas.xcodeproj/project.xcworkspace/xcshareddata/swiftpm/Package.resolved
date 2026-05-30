@@ -64,6 +64,15 @@
       }
     },
     {
+      "identity" : "tree-sitter-dockerfile",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/camdencheek/tree-sitter-dockerfile",
+      "state" : {
+        "revision" : "868e44ce378deb68aac902a9db68ff82d2299dd0",
+        "version" : "0.2.0"
+      }
+    },
+    {
       "identity" : "tree-sitter-go",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tree-sitter/tree-sitter-go",

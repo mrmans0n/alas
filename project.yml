@@ -99,6 +99,9 @@ packages:
     # Vendored at ThirdParty/TreeSitterHCL — upstream's Package.swift
     # does not include query resources.
     path: ThirdParty/TreeSitterHCL
+  TreeSitterDockerfile:
+    url: https://github.com/camdencheek/tree-sitter-dockerfile
+    from: 0.2.0
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.4.0
@@ -182,6 +185,8 @@ targets:
         product: TreeSitterMarkdown
       - package: TreeSitterHCL
         product: TreeSitterHCL
+      - package: TreeSitterDockerfile
+        product: TreeSitterDockerfile
       - package: Markdown
         product: Markdown
     settings:
