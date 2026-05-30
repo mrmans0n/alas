@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-05-30
+
+### ✨ Features
+
+- Auto-paginate older ACP messages while preserving scroll position (#374).
+- Add queued prompt editing, restore, and atomic edit-take behavior (#378, #380).
+
+### 🐛 Fixes
+
+- Tune the ACP transcript tail-scroll pause threshold (#375).
+- Clear accepted ACP composer drafts eagerly from memory (#376).
+- Select newly created worktrees immediately (#377).
+- Improve worktree deletion preflight checks (#379).
+
 ## [0.4.7] - 2026-05-30
 
 ### ✨ Features

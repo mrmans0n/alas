@@ -142,7 +142,11 @@ jobs:
             -derivedDataPath build \
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=${{ matrix.arch }}' \
-            -quiet build
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
 
       - name: Sign + notarize + staple .app (${{ matrix.arch }})
         env:
