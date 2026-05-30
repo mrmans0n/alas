@@ -390,6 +390,20 @@ struct TreeSitterHighlighterTests {
         #expect(spans.contains(where: { $0.capture == .string }))
     }
 
+    @Test("PHP uses tree-sitter grammar and query")
+    func phpTreeSitterBasics() throws {
+        #expect(LanguageRegistry.language(forFileExtension: "php") != nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "php") != nil)
+
+        let spans = TreeSitterHighlighter.highlight(
+            source: #"<?php function hello($name) { return "hi"; }"#,
+            fileExtension: "php"
+        )
+        #expect(spans.contains(where: { $0.capture == .keyword }))
+        #expect(spans.contains(where: { $0.capture == .function }))
+        #expect(spans.contains(where: { $0.capture == .string }))
+    }
+
     @Test("CSS fallback does not treat hashes as line comments")
     func cssFallbackDoesNotTreatHashesAsLineComments() throws {
         let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#
