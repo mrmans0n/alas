@@ -274,6 +274,10 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Clears any captured draft — the old segments no longer describe the
     /// new blocks, so a later edit falls back to the heuristic on the
     /// current blocks rather than restoring stale structure.
+    ///
+    /// This is the only correct path to mutate a queued item's `blocks` —
+    /// call it rather than writing `queue[idx].blocks` directly, otherwise a
+    /// now-stale `draft` survives and mis-restores on the next edit.
     func editQueueItem(id: UUID, blocks: [ACPContentBlock]) {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
         if queue[idx].status == .sending { return }

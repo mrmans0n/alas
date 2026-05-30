@@ -46,7 +46,9 @@ struct QueuedPromptTests {
         ])
         let original = QueuedPrompt(
             id: UUID(),
-            // The "@File.swift " marker consumes one trailing space; " please" remains.
+            // `extract` emits "review " + "@File.swift " (the marker adds its own
+            // trailing space) and the following text keeps its leading space in
+            // " please" — hence the double space before "please".
             blocks: [.text("review @File.swift  please"),
                      .resourceLink(uri: "file:///tmp/File.swift", name: "File.swift")],
             enqueuedAt: Date(timeIntervalSince1970: 1_700_000_000),
