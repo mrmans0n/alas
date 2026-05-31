@@ -733,6 +733,7 @@ extension ACPSessionRunner {
                         }
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
+                        self.session.markCompletedOutputBoundary()
                         self.flushQueueIfIdle()
                     }
                     self.cancelledPromptIDs.remove(promptID)
@@ -758,6 +759,7 @@ extension ACPSessionRunner {
                         }
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
+                        self.session.markCompletedOutputBoundary()
                         self.flushQueueIfIdle()
                     }
                     if !hasNewerActivePrompt {
@@ -802,6 +804,7 @@ extension ACPSessionRunner {
                     if isActivePrompt {
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
+                        self.session.markCompletedOutputBoundary()
                         self.flushQueueIfIdle()
                     }
                     if !hasNewerActivePrompt {
@@ -816,6 +819,7 @@ extension ACPSessionRunner {
                     if isActivePrompt {
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
+                        self.session.markCompletedOutputBoundary()
                         self.flushQueueIfIdle()
                     }
                     if !hasNewerActivePrompt {

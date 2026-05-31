@@ -15,6 +15,55 @@ struct ACPSessionTests {
         else { Issue.record("expected single agent message") }
     }
 
+    @Test("agent chunks after a completed output boundary start a new message")
+    func completedOutputBoundaryStartsNewMessage() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("first task output")))
+        session.markCompletedOutputBoundary()
+        session.apply(.agentMessageChunk(.text("next task output")))
+
+        #expect(session.transcript.messages.count == 2)
+        if case .agent(_, let first) = session.transcript.messages[0],
+           case .agent(_, let second) = session.transcript.messages[1] {
+            #expect(first.value == "first task output")
+            #expect(second.value == "next task output")
+        } else {
+            Issue.record("expected two agent messages")
+        }
+    }
+
+    @Test("completed output boundary does not alter existing message text")
+    func completedOutputBoundaryDoesNotAddBlankLines() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("line one\nline two")))
+        session.markCompletedOutputBoundary()
+
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "line one\nline two")
+        } else {
+            Issue.record("expected agent message")
+        }
+    }
+
+    @Test("completed output boundary skips trailing plan rows")
+    func completedOutputBoundarySkipsTrailingPlan() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("first task")))
+        session.apply(.plan([.init(content: "done", priority: nil, status: "completed")]))
+        session.markCompletedOutputBoundary()
+        session.apply(.agentMessageChunk(.text("second task")))
+
+        #expect(session.transcript.messages.count == 3)
+        if case .agent(_, let first) = session.transcript.messages[0],
+           case .plan = session.transcript.messages[1],
+           case .agent(_, let second) = session.transcript.messages[2] {
+            #expect(first.value == "first task")
+            #expect(second.value == "second task")
+        } else {
+            Issue.record("expected agent, plan, agent")
+        }
+    }
+
     @Test("user prompt creates a user message")
     func userPrompt() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
