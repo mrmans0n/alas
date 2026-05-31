@@ -84,6 +84,29 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("completed output boundary survives next task leading thought")
+    func completedOutputBoundarySurvivesNextTaskLeadingThought() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("first answer")))
+        session.apply(.agentThoughtChunk(.text("first thought")))
+        session.markCompletedOutputBoundary()
+        session.apply(.agentThoughtChunk(.text("next thought")))
+        session.apply(.agentMessageChunk(.text("second answer")))
+
+        #expect(session.transcript.messages.count == 4)
+        if case .agent(_, let first) = session.transcript.messages[0],
+           case .thought(_, let firstThought) = session.transcript.messages[1],
+           case .thought(_, let secondThought) = session.transcript.messages[2],
+           case .agent(_, let second) = session.transcript.messages[3] {
+            #expect(first.value == "first answer")
+            #expect(firstThought.value == "first thought")
+            #expect(secondThought.value == "next thought")
+            #expect(second.value == "second answer")
+        } else {
+            Issue.record("expected agent, thought, thought, agent")
+        }
+    }
+
     @Test("user prompt creates a user message")
     func userPrompt() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

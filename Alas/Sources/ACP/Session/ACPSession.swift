@@ -564,8 +564,9 @@ final class ACPSession: ObservableObject, Identifiable {
                                 locate: () -> Int?,
                                 makeNew: () -> ACPMessage) -> Int {
         if let i = locate() {
-            if transcript.completedOutputBoundaryMessageIds.contains(transcript.messages[i].stableId) {
-                transcript.completedOutputBoundaryMessageIds.removeAll()
+            let stableId = transcript.messages[i].stableId
+            if transcript.completedOutputBoundaryMessageIds.contains(stableId) {
+                transcript.completedOutputBoundaryMessageIds.remove(stableId)
             } else {
                 switch transcript.messages[i] {
                 case .agent(_, let buf), .thought(_, let buf):
@@ -578,7 +579,6 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         transcript.messages.append(makeNew())
-        transcript.completedOutputBoundaryMessageIds.removeAll()
         return transcript.messages.count - 1
     }
     /// Returns the index of the matching tool call, or nil if no match.
