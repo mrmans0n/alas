@@ -51,6 +51,8 @@ final class ACPSessionRunner {
     private var nextPromptID = 0
     private var activePromptID: Int?
     private var cancelledPromptIDs: Set<Int> = []
+    private var appliedUpdateCount = 0
+    private var pendingCompletedOutputBoundaryUpdateCount: Int?
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so an
     /// Undo tapped during the cancel round-trip can't drain the just-
@@ -87,7 +89,11 @@ final class ACPSessionRunner {
             for await u in self.connection.client.incomingUpdates {
                 await MainActor.run {
                     let dirty = self.session.apply(u.update)
+                    self.appliedUpdateCount += 1
                     self.persistIndices(dirty)
+                    if self.applyPendingCompletedOutputBoundaryIfReady() {
+                        self.flushQueueIfIdle()
+                    }
                 }
             }
             // The for-await also exits when the task gets cancelled —
@@ -732,8 +738,9 @@ extension ACPSessionRunner {
                             self.persistQueue()
                         }
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
-                        self.flushQueueIfIdle()
+                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
+                            self.flushQueueIfIdle()
+                        }
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     if !hasNewerActivePrompt {
@@ -757,8 +764,9 @@ extension ACPSessionRunner {
                             self.session.lastError = "prompt failed: \(error.localizedDescription)"
                         }
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
-                        self.flushQueueIfIdle()
+                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
+                            self.flushQueueIfIdle()
+                        }
                     }
                     if !hasNewerActivePrompt {
                         onPromptFinished?(wasCancelled)
@@ -801,8 +809,9 @@ extension ACPSessionRunner {
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
-                        self.flushQueueIfIdle()
+                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
+                            self.flushQueueIfIdle()
+                        }
                     }
                     if !hasNewerActivePrompt {
                         onCompleted?(isActivePrompt && !wasCancelled)
@@ -815,8 +824,9 @@ extension ACPSessionRunner {
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
-                        self.flushQueueIfIdle()
+                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
+                            self.flushQueueIfIdle()
+                        }
                     }
                     if !hasNewerActivePrompt {
                         onCompleted?(false)
@@ -846,6 +856,26 @@ extension ACPSessionRunner {
             }
             return nil
         }
+    }
+
+    private func deferCompletedOutputBoundaryUntilUpdatesDrain() -> Bool {
+        let target = connection.client.yieldedUpdateCount
+        pendingCompletedOutputBoundaryUpdateCount = max(
+            pendingCompletedOutputBoundaryUpdateCount ?? target,
+            target
+        )
+        return applyPendingCompletedOutputBoundaryIfReady()
+    }
+
+    private func applyPendingCompletedOutputBoundaryIfReady() -> Bool {
+        guard let target = pendingCompletedOutputBoundaryUpdateCount,
+              appliedUpdateCount >= target
+        else { return false }
+        pendingCompletedOutputBoundaryUpdateCount = nil
+        session.markCompletedOutputBoundary()
+        guard activePromptID == nil else { return false }
+        session.transcript.streamingState = .idle
+        return true
     }
 
     /// Append a system notice to the session AND persist it. Use this

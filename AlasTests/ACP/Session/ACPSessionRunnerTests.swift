@@ -36,6 +36,148 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
+    @Test("prompt completion waits for yielded updates before marking output boundary")
+    func promptCompletionWaitsForYieldedUpdatesBeforeBoundary() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-runner-boundary-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let client = BoundaryRaceClient()
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: client),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        runner.start()
+
+        var completion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            completion = succeeded
+        }
+
+        try await waitUntil { completion == true }
+        #expect(session.transcript.completedOutputBoundaryMessageIds.isEmpty)
+
+        client.emitReserved(.agentMessageChunk(.text(" second")))
+        try await waitUntil {
+            guard session.transcript.messages.count == 2,
+                  case .agent(_, let buffer) = session.transcript.messages[1]
+            else { return false }
+            return buffer.value == "first second"
+                && session.transcript.completedOutputBoundaryMessageIds == [session.transcript.messages[1].stableId]
+        }
+
+        client.emitFresh(.agentMessageChunk(.text("next task")))
+        try await waitUntil { session.transcript.messages.count == 3 }
+        if case .agent(_, let first) = session.transcript.messages[1],
+           case .agent(_, let second) = session.transcript.messages[2] {
+            #expect(first.value == "first second")
+            #expect(second.value == "next task")
+        } else {
+            Issue.record("expected completed output and next output in separate agent messages")
+        }
+    }
+
+    @Test("submits queue while completed output boundary is waiting for updates")
+    func submitQueuesWhileCompletedBoundaryWaitsForUpdates() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-runner-boundary-submit-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let client = BoundaryRaceClient()
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: client),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        runner.start()
+
+        var firstCompletion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            firstCompletion = succeeded
+        }
+        try await waitUntil { firstCompletion == true }
+        #expect(session.transcript.streamingState == .sending)
+
+        var secondAccepted: Bool?
+        runner.send(blocks: [.text("next")], intent: .auto) { succeeded in
+            secondAccepted = succeeded
+        }
+        try await waitUntil { secondAccepted == true }
+        #expect(session.queue.count == 1)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
+
+        client.emitReserved(.agentMessageChunk(.text(" second")))
+        try await waitUntil {
+            client.sent.filter { $0.method == "session/prompt" }.count == 2
+                && session.transcript.messages.count >= 3
+        }
+
+        if case .user(_, let firstUser, _) = session.transcript.messages[0],
+           case .agent(_, let firstAnswer) = session.transcript.messages[1],
+           case .user(_, let secondUser, _) = session.transcript.messages[2] {
+            #expect(firstUser == "hello")
+            #expect(firstAnswer.value == "first second")
+            #expect(secondUser == "next")
+        } else {
+            Issue.record("expected delayed chunk to land before the queued next prompt")
+        }
+    }
+
+    @Test("stale completed boundary does not idle active steer replacement")
+    func staleCompletedBoundaryDoesNotIdleActiveSteerReplacement() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-runner-boundary-steer-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let client = BoundaryRaceClient()
+        let replacementGate = AsyncGate()
+        client.holdSecondPrompt(until: replacementGate)
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: client),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        runner.start()
+
+        var firstCompletion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            firstCompletion = succeeded
+        }
+        try await waitUntil { firstCompletion == true }
+        #expect(session.transcript.streamingState == .sending)
+
+        runner.send(blocks: [.text("replacement")], intent: .steer)
+        try await waitUntil {
+            client.sent.filter { $0.method == "session/prompt" }.count == 2
+                && session.transcript.streamingState == .sending
+        }
+
+        client.emitReserved(.agentMessageChunk(.text(" old-tail")))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(session.transcript.streamingState == .sending)
+
+        await replacementGate.open()
+        client.emitReserved(.agentMessageChunk(.text(" replacement-tail")))
+        try await waitUntil { session.transcript.streamingState == .idle }
+    }
+
     @Test("send treats user-cancelled prompt errors as accepted completion")
     func sendTreatsCancelledPromptErrorsAsAcceptedCompletion() async throws {
         let (runner, mock) = try makeRunner()
@@ -312,6 +454,91 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path
         )
         return (runner, mock)
+    }
+
+    private func waitUntil(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        _ condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while !condition() {
+            if DispatchTime.now().uptimeNanoseconds >= deadline { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(condition())
+    }
+}
+
+private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
+    private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
+    private let updateCountLock = NSLock()
+    private var _yieldedUpdateCount = 0
+    private var promptCount = 0
+    private var secondPromptGate: AsyncGate?
+    private(set) var sent: [ACPRequest] = []
+
+    let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
+    let permissionRequests = AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)> { $0.finish() }
+    let fileRequests = AsyncStream<ACPFileRequest> { $0.finish() }
+    let terminalRequests = AsyncStream<ACPTerminalRequest> { $0.finish() }
+
+    var yieldedUpdateCount: Int {
+        updateCountLock.lock()
+        defer { updateCountLock.unlock() }
+        return _yieldedUpdateCount
+    }
+
+    init() {
+        var updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation!
+        incomingUpdates = AsyncStream { updatesCont = $0 }
+        self.updatesCont = updatesCont
+    }
+
+    func send(_ request: ACPRequest) async throws -> ACPResponse {
+        sent.append(request)
+        guard request.method == "session/prompt" else {
+            throw ACPClientError.noScript(method: request.method)
+        }
+        updateCountLock.lock()
+        promptCount += 1
+        let currentPromptCount = promptCount
+        _yieldedUpdateCount += 2
+        let secondPromptGate = self.secondPromptGate
+        updateCountLock.unlock()
+        updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text("first"))))
+        if currentPromptCount == 2 {
+            await secondPromptGate?.wait()
+        }
+        return ACPResponse(body: Data("{}".utf8))
+    }
+
+    func notify(_ request: ACPRequest) async throws {
+        sent.append(request)
+    }
+
+    func emitReserved(_ update: ACPSessionUpdate) {
+        updatesCont.yield(.init(sessionId: "s", update: update))
+    }
+
+    func emitFresh(_ update: ACPSessionUpdate) {
+        updateCountLock.lock()
+        _yieldedUpdateCount += 1
+        updateCountLock.unlock()
+        updatesCont.yield(.init(sessionId: "s", update: update))
+    }
+
+    func holdSecondPrompt(until gate: AsyncGate) {
+        updateCountLock.lock()
+        secondPromptGate = gate
+        updateCountLock.unlock()
+    }
+
+    func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {}
+    func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
+    func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
+
+    func shutdown() async {
+        updatesCont.finish()
     }
 }
 
