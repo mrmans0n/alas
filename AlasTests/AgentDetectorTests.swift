@@ -55,6 +55,19 @@ struct AgentDetectorTests {
         #expect(dirs == [absolute.path])
     }
 
+    @Test func searchDirectoriesDeduplicateAbsolutePathEntries() throws {
+        let first = try tmpDir()
+        let second = try tmpDir()
+        defer { try? FileManager.default.removeItem(at: first) }
+        defer { try? FileManager.default.removeItem(at: second) }
+
+        let dirs = AgentDetector.executableSearchDirectories(
+            path: "\(first.path):\(second.path):\(first.path):\(second.path)"
+        )
+
+        #expect(dirs == [first.path, second.path])
+    }
+
     @Test func binaryOverrideHonoured() async throws {
         let dir = try tmpDir()
         defer { try? FileManager.default.removeItem(at: dir) }
