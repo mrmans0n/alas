@@ -55,12 +55,12 @@ struct SidebarView: View {
                                     }
                                     return state.harness.summary(forSessionIds: ids)
                                 },
-                                onSelect: { wt in state.selectedWorktreeId = wt.id },
+                                onSelect: { wt in state.selectWorktree(id: wt.id) },
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
                                 onRemoveProject: { onRemoveProject(project.id) },
                                 onOpenTerminal: { wt in
-                                    state.selectedWorktreeId = wt.id
+                                    state.selectWorktree(id: wt.id)
                                     _ = try? state.openTerminalTab(for: wt)
                                 },
                                 onCopyPath: { wt in
