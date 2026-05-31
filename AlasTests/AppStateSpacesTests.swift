@@ -375,4 +375,24 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpaceId == "s2")
         #expect(state.selectedWorktreeId == "wt2")
     }
+
+    @Test func repoSelectorEnvironmentSwitchesSpaceBeforeFocusingWorktree() {
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
+        let env = state.repoSelectorEnvironment(openNewProject: {}, openNewWorktree: { _ in })
+
+        env.focusWorktree("wt2", "p2")
+
+        #expect(state.spacesManager.activeSpaceId == "s2")
+        #expect(state.selectedWorktreeId == "wt2")
+    }
 }

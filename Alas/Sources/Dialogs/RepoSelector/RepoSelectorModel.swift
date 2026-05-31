@@ -284,7 +284,7 @@ final class RepoSelectorModel {
         worktree: Worktree,
         environment env: RepoSelectorEnvironment
     ) -> Activation {
-        env.focusWorktree(worktree.id)
+        env.focusWorktree(worktree.id, worktree.projectId)
         var r = env.readRecents()
         r.bumpProject(worktree.projectId)
         r.bumpWorktree(worktree.id, in: worktree.projectId)

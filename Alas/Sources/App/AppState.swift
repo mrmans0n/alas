@@ -438,13 +438,8 @@ final class AppState {
                 self.config.recentWorktreeRefs = r.recentWorktreeRefs
                 _ = self.saveConfig()
             },
-            focusWorktree: { [weak self] id in
-                guard let self else { return }
-                if let worktree = self.worktree(withId: id) {
-                    self.focusGlobalWorktree(id: id, projectId: worktree.projectId)
-                } else {
-                    self.selectWorktree(id: id)
-                }
+            focusWorktree: { [weak self] id, projectId in
+                self?.focusGlobalWorktree(id: id, projectId: projectId)
             },
             openNewProject: openNewProject,
             openNewWorktree: openNewWorktree,
