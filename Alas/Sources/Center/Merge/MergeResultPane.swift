@@ -111,6 +111,7 @@ struct MergeResultPane: NSViewRepresentable {
         }
         textView.backgroundColor = NSColor(theme.color("bg-1"))
         coordinator.rowHeight = lineHeight()
+        coordinator.contentTopInset = textView.textContainerInset.height
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -147,9 +148,8 @@ struct MergeResultPane: NSViewRepresentable {
                 coord.applyPaneY(y, source: .result)
             }
             MainActor.assumeIsolated {
-                coord.onSyncResult = { @MainActor [weak coord, weak scroll] row in
-                    guard let scroll, let coord else { return }
-                    let y = CGFloat(row) * coord.rowHeight
+                coord.onSyncResult = { @MainActor [weak scroll] y in
+                    guard let scroll else { return }
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
                     scroll.reflectScrolledClipView(scroll.contentView)
                 }

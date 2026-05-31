@@ -2,12 +2,8 @@ import Foundation
 import Observation
 
 /// Single source of truth for synchronized scrolling across the three
-/// merge panes. Holds a logical row index that all three panes derive
-/// their actual scroll Y from. When one pane scrolls (user touched its
-/// trackpad), it pushes the new Y; the coordinator converts to a
-/// logical row and broadcasts the corresponding Y to the others. A
-/// reentry counter prevents the broadcast from being re-interpreted as
-/// a fresh scroll and causing a feedback loop.
+/// merge panes. Holds the exact pixel Y offset so trackpad scrolling
+/// remains smooth; row indexes are derived only for navigation.
 @MainActor
 @Observable
 final class MergeScrollCoordinator {
@@ -19,7 +15,9 @@ final class MergeScrollCoordinator {
     /// font at the same size, so a single number is enough. Set by the
     /// view once the font is known; defaults to 16pt.
     var rowHeight: CGFloat = 16
+    var contentTopInset: CGFloat = 6
 
+    private(set) var scrollY: CGFloat = 0
     private(set) var logicalRow: Int = 0
 
     /// Per-target scroll handlers. Each pane (LOCAL, RESULT, REMOTE)
@@ -27,20 +25,21 @@ final class MergeScrollCoordinator {
     /// each other — a single-slot closure would have meant whichever
     /// pane registered last wins. `applyPaneY` dispatches to the
     /// handler for every target OTHER than the source of the scroll.
-    var onSyncLocal: ((Int) -> Void)?
-    var onSyncResult: ((Int) -> Void)?
-    var onSyncRemote: ((Int) -> Void)?
+    var onSyncLocal: ((CGFloat) -> Void)?
+    var onSyncResult: ((CGFloat) -> Void)?
+    var onSyncRemote: ((CGFloat) -> Void)?
 
     /// Programmatic setter. Doesn't broadcast — the caller is
     /// presumed to be initialization or a non-scroll trigger.
     func setLogicalRow(_ row: Int) {
         logicalRow = max(0, row)
+        scrollY = CGFloat(logicalRow) * rowHeight
     }
 
     /// Returns the Y offset (points) corresponding to the current
     /// logical row, suitable for an `NSClipView.scroll(to:)` call.
     func paneY() -> CGFloat {
-        CGFloat(logicalRow) * rowHeight
+        scrollY
     }
 
     /// Called by a pane's scroll observer when the user scrolls it.
@@ -53,14 +52,16 @@ final class MergeScrollCoordinator {
         // N+1 when y is near (N + 0.5) * rowHeight). floor matches the
         // conventional "the row at top of viewport is the logical row"
         // invariant.
-        let row = max(0, Int((y / max(rowHeight, 1)).rounded(.down)))
-        guard row != logicalRow else { return }
+        let nextY = max(0, y)
+        guard abs(nextY - scrollY) > 0.5 else { return }
+        scrollY = nextY
+        let row = max(0, Int((nextY / max(rowHeight, 1)).rounded(.down)))
         logicalRow = row
         for target in [Source.local, .result, .remote] where target != source {
             switch target {
-            case .local:  onSyncLocal?(row)
-            case .result: onSyncResult?(row)
-            case .remote: onSyncRemote?(row)
+            case .local:  onSyncLocal?(nextY)
+            case .result: onSyncResult?(nextY)
+            case .remote: onSyncRemote?(nextY)
             }
         }
     }

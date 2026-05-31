@@ -2,12 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Narrow vertical strip between LOCAL ↔ RESULT or RESULT ↔ REMOTE.
-/// Two responsibilities:
-/// 1. Draws a diagonal quadrilateral per conflict block, connecting
-///    the hunk's row range in the side pane to the corresponding row
-///    range inside RESULT.
-/// 2. Hosts the accept (`»`/`«`) and reject (`×`) glyphs aligned with
-///    each hunk's first visible row, positioned above the diagonal.
+/// Draws a small rounded rail per conflict block and hosts accept /
+/// reject controls aligned to the same row coordinates.
 ///
 /// Layout positions are driven by `MergeScrollCoordinator` and the
 /// per-pane row mappings published by `MergeRegionVisualLayout`. The
@@ -58,24 +54,26 @@ struct MergeActionGutter: NSViewRepresentable {
             super.draw(dirtyRect)
             guard let coordinator else { return }
             let rowHeight = coordinator.rowHeight
-            let scrollOffset = CGFloat(coordinator.logicalRow) * rowHeight
-            let fill: NSColor = side == .localToResult
+            let scrollOffset = coordinator.scrollY
+            let fill = side == .localToResult
                 ? NSColor.systemGreen.withAlphaComponent(0.22)
                 : NSColor.systemBlue.withAlphaComponent(0.22)
+            let stroke = side == .localToResult
+                ? NSColor.systemGreen.withAlphaComponent(0.58)
+                : NSColor.systemBlue.withAlphaComponent(0.58)
             for range in conflictRanges {
                 let pts = endpoints(for: range)
-                let leftTop = CGFloat(pts.leftStart) * rowHeight - scrollOffset
-                let leftBottom = CGFloat(pts.leftEnd) * rowHeight - scrollOffset
-                let rightTop = CGFloat(pts.rightStart) * rowHeight - scrollOffset
-                let rightBottom = CGFloat(pts.rightEnd) * rowHeight - scrollOffset
-                let path = NSBezierPath()
-                path.move(to: NSPoint(x: 0, y: leftTop))
-                path.line(to: NSPoint(x: bounds.width, y: rightTop))
-                path.line(to: NSPoint(x: bounds.width, y: rightBottom))
-                path.line(to: NSPoint(x: 0, y: leftBottom))
-                path.close()
+                let top = min(CGFloat(pts.leftStart), CGFloat(pts.rightStart)) * rowHeight + coordinator.contentTopInset - scrollOffset
+                let bottom = max(CGFloat(pts.leftEnd), CGFloat(pts.rightEnd)) * rowHeight + coordinator.contentTopInset - scrollOffset
+                let railHeight = max(rowHeight, bottom - top)
+                let railX = side == .localToResult ? bounds.width - 10 : 4
+                let rect = NSRect(x: railX, y: top, width: 6, height: railHeight)
+                let path = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
                 fill.setFill()
                 path.fill()
+                stroke.setStroke()
+                path.lineWidth = 1
+                path.stroke()
             }
         }
 
@@ -84,10 +82,10 @@ struct MergeActionGutter: NSViewRepresentable {
             subviews.forEach { $0.removeFromSuperview() }
             guard let coordinator else { return }
             let rowHeight = coordinator.rowHeight
-            let scrollOffset = CGFloat(coordinator.logicalRow) * rowHeight
+            let scrollOffset = coordinator.scrollY
             for range in conflictRanges {
                 let pts = endpoints(for: range)
-                let y = CGFloat(pts.sourceStart) * rowHeight - scrollOffset
+                let y = CGFloat(pts.sourceStart) * rowHeight + coordinator.contentTopInset - scrollOffset
                 let accept = makeButton(
                     glyph: side == .localToResult ? "chevron.right.2" : "chevron.left.2",
                     label: side == .localToResult
@@ -95,7 +93,7 @@ struct MergeActionGutter: NSViewRepresentable {
                         : "Accept REMOTE conflict \(range.conflictOrdinal + 1)",
                     accent: NSColor.systemBlue
                 ) { [weak self] in self?.onAccept?(range.conflictOrdinal) }
-                accept.frame = NSRect(x: 4, y: y, width: 16, height: rowHeight)
+                accept.frame = NSRect(x: 6, y: y, width: 16, height: rowHeight)
                 addSubview(accept)
                 let reject = makeButton(
                     glyph: "xmark",
@@ -104,20 +102,14 @@ struct MergeActionGutter: NSViewRepresentable {
                         : "Reject REMOTE conflict \(range.conflictOrdinal + 1)",
                     accent: NSColor.gray
                 ) { [weak self] in self?.onReject?(range.conflictOrdinal) }
-                reject.frame = NSRect(x: 4, y: y + rowHeight, width: 16, height: rowHeight)
+                reject.frame = NSRect(x: 6, y: y + rowHeight, width: 16, height: rowHeight)
                 addSubview(reject)
             }
         }
 
         /// Left-edge and right-edge row ranges (half-open) for the
-        /// diagonal quad. "Left" is the column nearer x=0 in the
-        /// gutter, "right" is nearer x=bounds.width. For
-        /// `.localToResult` that means LOCAL on the left and RESULT
-        /// on the right; for `.resultToRemote` it's RESULT on the
-        /// left and REMOTE on the right. Returning left/right
-        /// directly avoids the naming inversion that would happen if
-        /// we returned (source, result) because RESULT plays "source"
-        /// in one branch and "destination" in the other.
+        /// visual hunk rail. "Left" is the column nearer x=0 in the
+        /// gutter, "right" is nearer x=bounds.width.
         private func endpoints(for range: MergeRegionVisualLayout.VisualConflictRange) -> (
             leftStart: Int, leftEnd: Int,
             rightStart: Int, rightEnd: Int,
