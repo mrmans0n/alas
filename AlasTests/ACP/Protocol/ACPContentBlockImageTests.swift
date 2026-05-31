@@ -30,4 +30,23 @@ struct ACPContentBlockImageTests {
         let decoded = try JSONDecoder().decode(ACPContentBlock.self, from: data)
         #expect(decoded == block)
     }
+
+    @Test("round-trips embedded text resource block")
+    func roundTripsResource() throws {
+        let block = ACPContentBlock.resource(
+            uri: "file:///tmp/File.swift",
+            mimeType: "text/plain",
+            text: "let value = 1\n"
+        )
+        let data = try JSONEncoder().encode(block)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["type"] as? String == "resource")
+        let resource = try #require(json["resource"] as? [String: Any])
+        #expect(resource["uri"] as? String == "file:///tmp/File.swift")
+        #expect(resource["mimeType"] as? String == "text/plain")
+        #expect(resource["text"] as? String == "let value = 1\n")
+
+        let decoded = try JSONDecoder().decode(ACPContentBlock.self, from: data)
+        #expect(decoded == block)
+    }
 }

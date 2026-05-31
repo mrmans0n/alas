@@ -123,6 +123,8 @@ extension ACPComposerDraft {
                 text += value
             case .resourceLink(let uri, let name):
                 links.append((name ?? Self.displayName(forURI: uri), uri))
+            case .resource(let uri, _, _):
+                links.append((Self.displayName(forURI: uri), uri))
             case .image(_, let uri, let mimeType):
                 if let uri {
                     segments.append(contentsOf: Self.rebuild(text: text, links: links))

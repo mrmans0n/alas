@@ -15,5 +15,17 @@ struct ACPPromptCapabilitiesTests {
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: json)
         #expect(result.agentCapabilities?.promptCapabilities?.image == true)
         #expect(result.agentCapabilities?.promptCapabilities?.audio == false)
+        #expect(result.agentCapabilities?.promptCapabilities?.embeddedContext == false)
+    }
+
+    @Test("embedded context capability decodes")
+    func embeddedContextDecodes() throws {
+        let json = #"""
+        {"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"embeddedContext":true}},"authMethods":[]}
+        """#.data(using: .utf8)!
+        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: json)
+        #expect(result.agentCapabilities?.promptCapabilities?.image == false)
+        #expect(result.agentCapabilities?.promptCapabilities?.audio == false)
+        #expect(result.agentCapabilities?.promptCapabilities?.embeddedContext == true)
     }
 }

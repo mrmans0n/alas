@@ -28,6 +28,31 @@ struct ACPConnectionTests {
         #expect(new.availableModes.first?.id == "agent")
     }
 
+    @Test("initialize returns prompt capabilities")
+    func initializeReturnsPromptCapabilities() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(
+                    promptCapabilities: .init(
+                        image: true,
+                        audio: false,
+                        embeddedContext: true
+                    )
+                ),
+                authMethods: []
+            ))
+        }
+
+        let conn = ACPConnection(client: mock)
+        let capabilities = try await conn.initialize()
+
+        #expect(capabilities.image == true)
+        #expect(capabilities.audio == false)
+        #expect(capabilities.embeddedContext == true)
+    }
+
     @Test("loadSession sends session/load with cwd and remote session id")
     func loadSessionRPC() async throws {
         let mock = ACPMockClient()

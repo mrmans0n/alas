@@ -514,29 +514,91 @@ extension ACPSessionRunner {
     /// Maximum dimension for an inline base64 image, in pixels.
     nonisolated static let inlineImageMaxDimension: CGFloat = 1568
 
-    /// Resolve deferred image blocks just before sending. When the agent
-    /// supports inline images, read the staged file, downscale, and base64-
-    /// encode it; otherwise degrade to a `file://` resource link the agent
-    /// reads from disk. Non-image blocks (and already-hydrated images that
-    /// carry `data`) pass through untouched.
+    /// Resolve deferred attachment blocks just before sending. When the agent
+    /// supports inline images, read the staged image file, downscale, and
+    /// base64-encode it; otherwise degrade to a `file://` resource link the
+    /// agent reads from disk. When the agent supports embedded context,
+    /// readable text resource links inside the worktree become ACP `resource`
+    /// blocks. Persisted queue state stays lightweight either way.
     ///
     /// `nonisolated async` so the synchronous file reads + downscale/base64
     /// encoding (up to 10 × 20 MB) run off the main actor; awaiting it from the
     /// main-actor send path hops to the cooperative pool instead of freezing
     /// the composer/transcript while a prompt is prepared.
-    nonisolated static func hydrate(_ blocks: [ACPContentBlock], imageInputSupported: Bool) async -> [ACPContentBlock] {
+    nonisolated static func hydrate(
+        _ blocks: [ACPContentBlock],
+        promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
+        worktreePath: String
+    ) async -> [ACPContentBlock] {
         blocks.map { block in
-            guard case .image(let data, let uri, let mime) = block, data == nil, let uri else {
-                return block
+            if case .image(let data, let uri, _) = block, data == nil, let uri {
+                let name = (URL(string: uri)?.lastPathComponent) ?? "image"
+                if promptCapabilities.image,
+                   let fileURL = URL(string: uri),
+                   let encoded = ACPImageEncoding.inlineBase64(fileURL: fileURL, maxDimension: inlineImageMaxDimension) {
+                    return .image(data: encoded.data, uri: nil, mimeType: encoded.mimeType)
+                }
+                return .resourceLink(uri: uri, name: name)
             }
-            let name = (URL(string: uri)?.lastPathComponent) ?? "image"
-            if imageInputSupported,
-               let fileURL = URL(string: uri),
-               let encoded = ACPImageEncoding.inlineBase64(fileURL: fileURL, maxDimension: inlineImageMaxDimension) {
-                return .image(data: encoded.data, uri: nil, mimeType: encoded.mimeType)
+            if case .resourceLink(let uri, let name) = block,
+               promptCapabilities.embeddedContext,
+               let embedded = Self.embeddedTextResource(uri: uri, name: name, worktreePath: worktreePath) {
+                return embedded
             }
-            return .resourceLink(uri: uri, name: name)
+            return block
         }
+    }
+
+    nonisolated private static func embeddedTextResource(
+        uri: String,
+        name: String?,
+        worktreePath: String
+    ) -> ACPContentBlock? {
+        guard let fileURL = URL(string: uri), fileURL.isFileURL else {
+            return nil
+        }
+        let rootURL = URL(fileURLWithPath: worktreePath).resolvingSymlinksInPath()
+        let resolvedURL = fileURL.resolvingSymlinksInPath()
+        guard Self.isWithinWorktree(resolvedURL, rootURL: rootURL) else {
+            return nil
+        }
+        guard let values = try? resolvedURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              values.isRegularFile == true else {
+            return nil
+        }
+        if let byteCount = values.fileSize, byteCount > 1_000_000 {
+            return nil
+        }
+        guard let text = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
+            return nil
+        }
+        return .resource(uri: uri, mimeType: Self.textMimeType(for: resolvedURL, fallbackName: name), text: text)
+    }
+
+    nonisolated private static func isWithinWorktree(_ url: URL, rootURL: URL) -> Bool {
+        let rootPath = rootURL.path
+        let path = url.path
+        return path == rootPath || path.hasPrefix(rootPath + "/")
+    }
+
+    nonisolated private static func textMimeType(for url: URL, fallbackName: String?) -> String {
+        let ext = (url.pathExtension.isEmpty ? URL(fileURLWithPath: fallbackName ?? "").pathExtension : url.pathExtension)
+            .lowercased()
+        switch ext {
+        case "md", "markdown": return "text/markdown"
+        case "json": return "application/json"
+        case "html", "htm": return "text/html"
+        case "css": return "text/css"
+        case "js", "mjs", "cjs": return "text/javascript"
+        case "xml": return "application/xml"
+        case "yaml", "yml": return "application/yaml"
+        default: return "text/plain"
+        }
+    }
+
+    /// Backwards-compatible helper for existing image-only tests.
+    nonisolated static func hydrate(_ blocks: [ACPContentBlock], imageInputSupported: Bool) async -> [ACPContentBlock] {
+        await hydrate(blocks, promptCapabilities: .init(image: imageInputSupported), worktreePath: "/")
     }
 
     /// Primary entry. Resolves the routing then dispatches to one of:
@@ -772,10 +834,14 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                // Read the capability flag on the main actor (cheap), then
-                // hydrate off-main so file reads + base64 encoding don't block UI.
-                let imageSupported = self.session.imageInputSupported
-                let wireBlocks = await Self.hydrate(blocks, imageInputSupported: imageSupported)
+                // Read the capability flags on the main actor (cheap), then
+                // hydrate off-main so file reads + encoding don't block UI.
+                let promptCapabilities = self.session.promptCapabilities
+                let wireBlocks = await Self.hydrate(
+                    blocks,
+                    promptCapabilities: promptCapabilities,
+                    worktreePath: self.worktreePath
+                )
                 try await self.connection.prompt(sessionId: remoteId, blocks: wireBlocks)
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
@@ -904,6 +970,9 @@ extension ACPSessionRunner {
         blocks.compactMap { b -> ACPMessage.Attachment? in
             if case .resourceLink(let uri, let name) = b {
                 return ACPMessage.Attachment(uri: uri, name: name)
+            }
+            if case .resource(let uri, _, _) = b {
+                return ACPMessage.Attachment(uri: uri, name: URL(string: uri)?.lastPathComponent)
             }
             if case .image(_, let uri, let mime) = b, let uri {
                 let name = URL(string: uri)?.lastPathComponent

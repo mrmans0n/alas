@@ -584,7 +584,7 @@ extension ACPSessionManager {
             }
         }
         do {
-            session.imageInputSupported = (try await connection.initialize())
+            session.promptCapabilities = (try await connection.initialize())
             let pendingRecovery = (try? store.loadSession(id: sessionId)?.contextRecoveryPending) == true
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?

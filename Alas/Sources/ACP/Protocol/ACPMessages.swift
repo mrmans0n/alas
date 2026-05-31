@@ -74,20 +74,23 @@ struct ACPInitializeResult: Codable, Equatable {
     struct ACPPromptCapabilities: Codable, Equatable {
         let image: Bool
         let audio: Bool
+        let embeddedContext: Bool
 
-        init(image: Bool = false, audio: Bool = false) {
+        init(image: Bool = false, audio: Bool = false, embeddedContext: Bool = false) {
             self.image = image
             self.audio = audio
+            self.embeddedContext = embeddedContext
         }
 
         // ACP defines each prompt capability as defaulting to false when
         // omitted, so an agent advertising only `{ "image": true }` must still
-        // decode (a non-optional `audio` would otherwise fail the whole
-        // initialize result and silently drop image support).
+        // decode (a non-optional `audio` or `embeddedContext` would otherwise
+        // fail the whole initialize result and silently drop image support).
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             image = try c.decodeIfPresent(Bool.self, forKey: .image) ?? false
             audio = try c.decodeIfPresent(Bool.self, forKey: .audio) ?? false
+            embeddedContext = try c.decodeIfPresent(Bool.self, forKey: .embeddedContext) ?? false
         }
     }
     struct ACPAuthMethod: Codable, Equatable {
@@ -349,8 +352,27 @@ enum ACPContentBlock: Codable, Equatable {
     case text(String)
     case resourceLink(uri: String, name: String?)
     case image(data: String?, uri: String?, mimeType: String?)
+    case resource(uri: String, mimeType: String?, text: String)
 
-    private enum Keys: String, CodingKey { case type, text, uri, name, mimeType, data }
+    private enum Keys: String, CodingKey { case type, text, uri, name, mimeType, data, resource }
+    private struct EmbeddedResource: Codable, Equatable {
+        let uri: String
+        let mimeType: String?
+        let text: String?
+        let blob: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case uri, mimeType, text, blob
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(uri, forKey: .uri)
+            try c.encodeIfPresent(mimeType, forKey: .mimeType)
+            try c.encodeIfPresent(text, forKey: .text)
+            try c.encodeIfPresent(blob, forKey: .blob)
+        }
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -366,6 +388,13 @@ enum ACPContentBlock: Codable, Equatable {
                 data: try? c.decode(String.self, forKey: .data),
                 uri: try? c.decode(String.self, forKey: .uri),
                 mimeType: try? c.decode(String.self, forKey: .mimeType))
+        case "resource":
+            let resource = try c.decode(EmbeddedResource.self, forKey: .resource)
+            if let text = resource.text {
+                self = .resource(uri: resource.uri, mimeType: resource.mimeType, text: text)
+            } else {
+                self = .resourceLink(uri: resource.uri, name: URL(string: resource.uri)?.lastPathComponent)
+            }
         default:
             self = .text("")
         }
@@ -385,6 +414,11 @@ enum ACPContentBlock: Codable, Equatable {
             try c.encodeIfPresent(data, forKey: .data)
             try c.encodeIfPresent(uri, forKey: .uri)
             try c.encodeIfPresent(mime, forKey: .mimeType)
+        case .resource(let uri, let mime, let text):
+            try c.encode("resource", forKey: .type)
+            try c.encode(
+                EmbeddedResource(uri: uri, mimeType: mime, text: text, blob: nil),
+                forKey: .resource)
         }
     }
 }

@@ -23,7 +23,11 @@ struct ACPImageBlocksTests {
             .text("x"),
             .image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png")
         ]
-        let wire = await ACPSessionRunner.hydrate(deferred, imageInputSupported: false)
+        let wire = await ACPSessionRunner.hydrate(
+            deferred,
+            promptCapabilities: .init(image: false),
+            worktreePath: "/tmp"
+        )
         #expect(wire.contains(.text("x")))
         #expect(wire.contains(.resourceLink(uri: "file:///tmp/shot.png", name: "shot.png")))
         #expect(!wire.contains { block in
@@ -48,5 +52,58 @@ struct ACPImageBlocksTests {
             text: " ",
             attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")])
         #expect(blocks == [.image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png")])
+    }
+
+    @Test("hydrate embeds readable worktree text resource when supported")
+    func hydrateEmbedsTextResource() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-acp-resource-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let file = root.appendingPathComponent("File.swift")
+        try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let wire = await ACPSessionRunner.hydrate(
+            [.resourceLink(uri: file.absoluteString, name: "File.swift")],
+            promptCapabilities: .init(embeddedContext: true),
+            worktreePath: root.path
+        )
+
+        #expect(wire == [
+            .resource(
+                uri: file.absoluteString,
+                mimeType: "text/plain",
+                text: "let value = 1\n"
+            )
+        ])
+    }
+
+    @Test("hydrate keeps resource link when embedded context is unsupported or outside worktree")
+    func hydrateResourceFallbacks() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-acp-resource-\(UUID().uuidString)", isDirectory: true)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-acp-outside-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "outside\n".write(to: outside, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        let unsupported = await ACPSessionRunner.hydrate(
+            [.resourceLink(uri: outside.absoluteString, name: "outside.txt")],
+            promptCapabilities: .init(embeddedContext: false),
+            worktreePath: root.path
+        )
+        #expect(unsupported == [.resourceLink(uri: outside.absoluteString, name: "outside.txt")])
+
+        let outsideWorktree = await ACPSessionRunner.hydrate(
+            [.resourceLink(uri: outside.absoluteString, name: "outside.txt")],
+            promptCapabilities: .init(embeddedContext: true),
+            worktreePath: root.path
+        )
+        #expect(outsideWorktree == [.resourceLink(uri: outside.absoluteString, name: "outside.txt")])
     }
 }
