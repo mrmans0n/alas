@@ -134,6 +134,50 @@ struct ACPSessionRunnerTests {
         }
     }
 
+    @Test("stale completed boundary does not idle active steer replacement")
+    func staleCompletedBoundaryDoesNotIdleActiveSteerReplacement() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-runner-boundary-steer-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let client = BoundaryRaceClient()
+        let replacementGate = AsyncGate()
+        client.holdSecondPrompt(until: replacementGate)
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: client),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        runner.start()
+
+        var firstCompletion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            firstCompletion = succeeded
+        }
+        try await waitUntil { firstCompletion == true }
+        #expect(session.transcript.streamingState == .sending)
+
+        runner.send(blocks: [.text("replacement")], intent: .steer)
+        try await waitUntil {
+            client.sent.filter { $0.method == "session/prompt" }.count == 2
+                && session.transcript.streamingState == .sending
+        }
+
+        client.emitReserved(.agentMessageChunk(.text(" old-tail")))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(session.transcript.streamingState == .sending)
+
+        await replacementGate.open()
+        client.emitReserved(.agentMessageChunk(.text(" replacement-tail")))
+        try await waitUntil { session.transcript.streamingState == .idle }
+    }
+
     @Test("send treats user-cancelled prompt errors as accepted completion")
     func sendTreatsCancelledPromptErrorsAsAcceptedCompletion() async throws {
         let (runner, mock) = try makeRunner()
@@ -429,6 +473,8 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let updateCountLock = NSLock()
     private var _yieldedUpdateCount = 0
+    private var promptCount = 0
+    private var secondPromptGate: AsyncGate?
     private(set) var sent: [ACPRequest] = []
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
@@ -454,9 +500,15 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
             throw ACPClientError.noScript(method: request.method)
         }
         updateCountLock.lock()
+        promptCount += 1
+        let currentPromptCount = promptCount
         _yieldedUpdateCount += 2
+        let secondPromptGate = self.secondPromptGate
         updateCountLock.unlock()
         updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text("first"))))
+        if currentPromptCount == 2 {
+            await secondPromptGate?.wait()
+        }
         return ACPResponse(body: Data("{}".utf8))
     }
 
@@ -473,6 +525,12 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
         _yieldedUpdateCount += 1
         updateCountLock.unlock()
         updatesCont.yield(.init(sessionId: "s", update: update))
+    }
+
+    func holdSecondPrompt(until gate: AsyncGate) {
+        updateCountLock.lock()
+        secondPromptGate = gate
+        updateCountLock.unlock()
     }
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {}

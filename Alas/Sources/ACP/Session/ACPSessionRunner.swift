@@ -873,6 +873,7 @@ extension ACPSessionRunner {
         else { return false }
         pendingCompletedOutputBoundaryUpdateCount = nil
         session.markCompletedOutputBoundary()
+        guard activePromptID == nil else { return false }
         session.transcript.streamingState = .idle
         return true
     }
