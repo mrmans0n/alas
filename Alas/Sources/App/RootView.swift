@@ -8,7 +8,6 @@ struct RootView: View {
     @State private var removingProject: ProjectConfig?
     @State private var showNewWorktree = false
     @State private var newWorktreePresetProjectId: String?
-    @State private var collapsedProjects: Set<String> = []
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -36,7 +35,13 @@ struct RootView: View {
                         sidebar: {
                             SidebarView(
                                 state: state,
-                                collapsedProjects: $collapsedProjects,
+                                collapsedProjects: Binding(
+                                    get: { Set(state.config.collapsedProjectIds) },
+                                    set: { collapsedProjects in
+                                        state.config.collapsedProjectIds = collapsedProjects.sorted()
+                                        state.saveConfig()
+                                    }
+                                ),
                                 onSettings: { openSettingsWindow() },
                                 onAddProject: { showNewProject = true },
                                 onEditProject: { projectId in
