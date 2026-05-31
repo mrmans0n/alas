@@ -61,6 +61,8 @@ struct MergeRegionVisualLayoutTests {
         #expect(layout.conflictRanges.count == 1)
         let r = layout.conflictRanges[0]
         #expect(r.resultRows == 1 ..< 4)
+        #expect(r.resultLocalRows == 1 ..< 3)
+        #expect(r.resultRemoteRows == 3 ..< 4)
         #expect(r.localRows == 1 ..< 3)
         #expect(r.remoteRows == 3 ..< 4)
     }
@@ -147,6 +149,8 @@ struct MergeRegionVisualLayoutTests {
         // conflictRange.baseRows covers the BASE portion in RESULT.
         let r = try #require(layout.conflictRanges.first)
         #expect(r.baseRows == 2 ..< 4)
+        #expect(r.resultLocalRows == 1 ..< 2)
+        #expect(r.resultRemoteRows == 4 ..< 5)
         #expect(r.localRows == 1 ..< 2)
         #expect(r.remoteRows == 4 ..< 5)
         #expect(r.resultRows == 1 ..< 5)
