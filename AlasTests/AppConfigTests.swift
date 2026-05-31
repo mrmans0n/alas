@@ -23,6 +23,7 @@ struct AppConfigTests {
         #expect(cfg.rightPaneWidth == 320)
         #expect(cfg.rightPaneVisible == true)
         #expect(cfg.sidebarVisible == true)
+        #expect(cfg.collapsedProjectIds == [])
         #expect(cfg.terminal.shell == "/bin/zsh")
         #expect(cfg.harness.notifyOnFinish == true)
         #expect(cfg.harness.notifyOnAwaiting == true)
@@ -64,6 +65,17 @@ struct AppConfigTests {
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(cfg.harness.notifyOnFinish == false)
         #expect(cfg.harness.notifyOnAwaiting == true)
+        #expect(cfg.collapsedProjectIds == [])
+    }
+
+    @Test func collapsedProjectIdsRoundTripIndependently() throws {
+        var cfg = AppConfig.defaults
+        cfg.collapsedProjectIds = ["project-b", "project-a"]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.collapsedProjectIds == ["project-b", "project-a"])
     }
 
     @Test func decodeOldConfigPreservesPreviousSidebarMaterial() throws {
