@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-05-31
+
+### 🐛 Fixes
+
+- Size the Changes tab comparison branch dropdown so at least five refs are visible when available (#414).
+- Fix merge conflict gutter alignment and scrolling behavior (#412, #413).
+- Deduplicate ACP agent discovery path entries and ignore unsafe path values (#410, #411).
+
 ## [0.4.9] - 2026-05-31
 
 ### ✨ Features
