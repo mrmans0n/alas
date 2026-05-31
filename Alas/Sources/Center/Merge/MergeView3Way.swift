@@ -141,9 +141,10 @@ struct MergeView3Way: View {
         guard ordinal < layout.conflictRanges.count else { return }
         let row = layout.conflictRanges[ordinal].resultRows.lowerBound
         coordinator.setLogicalRow(row)
-        coordinator.onSyncLocal?(row)
-        coordinator.onSyncResult?(row)
-        coordinator.onSyncRemote?(row)
+        let y = coordinator.paneY()
+        coordinator.onSyncLocal?(y)
+        coordinator.onSyncResult?(y)
+        coordinator.onSyncRemote?(y)
     }
 
     private func acceptLocal(at ordinal: Int) {
@@ -175,6 +176,7 @@ struct MergeView3Way: View {
                         .padding(.horizontal, 4)
                 }
             }
+            .padding(.top, coordinator.contentTopInset)
             .offset(y: -coordinator.paneY())
             Spacer(minLength: 0)
         }

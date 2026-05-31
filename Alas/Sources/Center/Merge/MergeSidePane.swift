@@ -77,6 +77,7 @@ struct MergeSidePane: NSViewRepresentable {
         context.coordinator.side = side
         context.coordinator.lastRowHeight = lineHeight()
         coordinator.rowHeight = lineHeight()
+        coordinator.contentTopInset = textView.textContainerInset.height
     }
 
     func makeCoordinator() -> Coordinator {
@@ -114,9 +115,8 @@ struct MergeSidePane: NSViewRepresentable {
             }
             let mySource: MergeScrollCoordinator.Source = (side == .local) ? .local : .remote
             MainActor.assumeIsolated {
-                let handler: @MainActor (Int) -> Void = { [weak coord, weak scroll] row in
-                    guard let scroll, let coord else { return }
-                    let y = CGFloat(row) * coord.rowHeight
+                let handler: @MainActor (CGFloat) -> Void = { [weak scroll] y in
+                    guard let scroll else { return }
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
                     scroll.reflectScrolledClipView(scroll.contentView)
                 }
