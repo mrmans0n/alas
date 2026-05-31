@@ -37,16 +37,17 @@ enum AgentDetector {
     }
 
     static func executableSearchDirectories(path: String) -> [String] {
-        path
-            .split(separator: ":", omittingEmptySubsequences: true)
-            .compactMap { raw in
-                let dir = String(raw)
-                guard dir.hasPrefix("/") else { return nil }
-                var isDir: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir),
-                      isDir.boolValue else { return nil }
-                return dir
-            }
+        var seen: Set<String> = []
+        var dirs: [String] = []
+        for raw in path.split(separator: ":", omittingEmptySubsequences: true) {
+            let dir = String(raw)
+            guard dir.hasPrefix("/"), seen.insert(dir).inserted else { continue }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir),
+                  isDir.boolValue else { continue }
+            dirs.append(dir)
+        }
+        return dirs
     }
 
     /// Scan the running process's `PATH`, augmented with well-known CLI
