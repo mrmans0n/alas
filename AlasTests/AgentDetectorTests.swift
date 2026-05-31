@@ -39,6 +39,22 @@ struct AgentDetectorTests {
         #expect(installed.isEmpty)
     }
 
+    @Test func searchDirectoriesIgnoreRelativeCurrentAndEmptyPathEntries() throws {
+        let absolute = try tmpDir()
+        let homeRelativeName = "alas-det-home-path-\(UUID().uuidString)"
+        let homeRelative = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(homeRelativeName)
+        defer { try? FileManager.default.removeItem(at: absolute) }
+        defer { try? FileManager.default.removeItem(at: homeRelative) }
+        try FileManager.default.createDirectory(at: homeRelative, withIntermediateDirectories: true)
+
+        let dirs = AgentDetector.executableSearchDirectories(
+            path: ":\(absolute.path):relative-bin:.:~/\(homeRelativeName):/missing/path:"
+        )
+
+        #expect(dirs == [absolute.path])
+    }
+
     @Test func binaryOverrideHonoured() async throws {
         let dir = try tmpDir()
         defer { try? FileManager.default.removeItem(at: dir) }
