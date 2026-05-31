@@ -9,6 +9,7 @@ final class AppState {
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
+    var spacesManager: SpacesManager
     var selectedWorktreeId: String?
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
@@ -288,11 +289,18 @@ final class AppState {
         self.terminalSessionOpener = terminalSessionOpener
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
+        let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
         self.config = config
         // Publish the effective shortcut reservations so the terminal pane
         // can honor user overrides from the very first keystroke.
         ShortcutReservations.update(from: config)
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
+        let spacesManager = spacesFile.map(SpacesManager.init(file:))
+            ?? SpacesManager.migrating(projects: projectsFile.projects)
+        if spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id))) {
+            _ = try? store.write(spacesManager.file, to: Paths.spacesFile)
+        }
+        self.spacesManager = spacesManager
         let themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
         // Apply the persisted accent override so the picker's selection
         // survives relaunches; otherwise launches always show the theme's
@@ -347,7 +355,7 @@ final class AppState {
             cleanupWorktreeState(worktreeId: id)
         }
         if let current = selectedWorktreeId, !afterIds.contains(current) {
-            selectedWorktreeId = firstVisibleWorktreeId()
+            selectWorktree(id: resolvedSelectionForActiveSpace() ?? firstVisibleWorktreeId())
         }
     }
 
@@ -382,6 +390,10 @@ final class AppState {
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
+
+    var activeSpaceProjects: [ProjectConfig] {
+        spacesManager.activeProjects(from: projects)
+    }
 
     /// Build a `RepoSelectorEnvironment` that captures `self`. Used by
     /// `RepoSelectorDialog` to bind the model to the live app state.
@@ -422,7 +434,12 @@ final class AppState {
                 _ = self.saveConfig()
             },
             focusWorktree: { [weak self] id in
-                self?.selectedWorktreeId = id
+                guard let self else { return }
+                if let worktree = self.worktree(withId: id) {
+                    self.focusGlobalWorktree(id: id, projectId: worktree.projectId)
+                } else {
+                    self.selectWorktree(id: id)
+                }
             },
             openNewProject: openNewProject,
             openNewWorktree: openNewWorktree,
@@ -453,6 +470,37 @@ final class AppState {
             persistenceErrorHandler("Projects Save Failed", error.localizedDescription)
             return false
         }
+    }
+
+    @discardableResult
+    func saveSpaces() -> Bool {
+        do {
+            try store.write(spacesManager.file, to: Paths.spacesFile)
+            return true
+        } catch {
+            persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
+            return false
+        }
+    }
+
+    func selectWorktree(id: String?) {
+        selectedWorktreeId = id
+        spacesManager.setLastSelectedWorktree(id)
+        saveSpaces()
+    }
+
+    func switchToSpace(id: String) {
+        spacesManager.switchToSpace(id: id)
+        selectedWorktreeId = resolvedSelectionForActiveSpace()
+        saveSpaces()
+    }
+
+    func focusGlobalWorktree(id: String, projectId: String) {
+        if let containing = spacesManager.containingSpaceId(forProjectId: projectId),
+           containing != spacesManager.activeSpaceId {
+            spacesManager.switchToSpace(id: containing)
+        }
+        selectWorktree(id: id)
     }
 
     /// Optimistically insert a worktree row and run the git operation async.
@@ -506,7 +554,7 @@ final class AppState {
         )
         projectsManager.insertOptimisticWorktree(optimistic)
         projectsManager.setOperationState(id: optimistic.id, state: .creating)
-        selectedWorktreeId = optimistic.id
+        selectWorktree(id: optimistic.id)
 
         let repoPath = URL(fileURLWithPath: project.path)
         let startupScript = StartupScriptResolver.worktreeCreateScript(
@@ -560,7 +608,7 @@ final class AppState {
                         saveProjects()
                     }
 
-                    selectedWorktreeId = newWorktree.id
+                    selectWorktree(id: newWorktree.id)
 
                     switch launchSurface {
                     case .none:
@@ -688,13 +736,15 @@ final class AppState {
         cleanupWorktreeState(worktreeId: id)
         projectsManager.removeOptimisticWorktree(id: id, projectId: projectId)
         if selectedWorktreeId == id {
-            selectedWorktreeId = firstVisibleWorktreeId()
+            selectWorktree(id: resolvedSelectionForActiveSpace() ?? firstVisibleWorktreeId())
         }
     }
 
     func addProject(path: URL, displayName: String, color: String) async throws {
         let project = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
+        spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()
+        saveSpaces()
         if await projectsManager.refreshAll() {
             saveProjects()
         }
@@ -762,7 +812,9 @@ final class AppState {
         }
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
+        spacesManager.removeProjectEverywhere(id)
         saveProjects()
+        saveSpaces()
         let removedIds = beforeIds.subtracting(allWorktreeIds())
         cleanupMissingWorktrees(beforeIds: beforeIds)
         for worktreeId in removedIds {
@@ -914,10 +966,10 @@ final class AppState {
         saveProjects()
 
         if wasSelected {
-            selectedWorktreeId = selectionAfterRemoval(
+            selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,
                 removedAtIndex: removedIndex
-            )
+            ))
         }
     }
 
@@ -1053,8 +1105,9 @@ final class AppState {
                     revealCharacter: nil,
                     originatingRelativePath: nil
                 )
-                if self.selectedWorktreeId != worktreeId {
-                    self.selectedWorktreeId = worktreeId
+                if self.selectedWorktreeId != worktreeId,
+                   let worktree = self.worktree(withId: worktreeId) {
+                    self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
             },
             activateApp: {
@@ -1070,8 +1123,8 @@ final class AppState {
     /// focusing is needed. If the tab is no longer present (session was
     /// closed mid-flight) the worktree is still selected so the user lands
     /// somewhere sensible.
-    func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
-        selectedWorktreeId = worktreeId
+    func activateHarnessSession(projectId: String, worktreeId: String, sessionId: String) {
+        focusGlobalWorktree(id: worktreeId, projectId: projectId)
         var matchedTabId: TabID?
         var matchedLeafId: String?
         for tab in tabs.tabs(forWorktree: worktreeId) {
@@ -1837,6 +1890,19 @@ final class AppState {
             let i = min(removedAtIndex, siblings.count - 1)
             return siblings[i].id
         }
+        for project in activeSpaceProjects {
+            if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
+                return first.id
+            }
+        }
+        return firstVisibleWorktreeId()
+    }
+
+    func firstVisibleWorktreeId() -> String? {
+        firstVisibleWorktreeId(in: projects)
+    }
+
+    func firstVisibleWorktreeId(in projects: [ProjectConfig]) -> String? {
         for project in projects {
             if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
                 return first.id
@@ -1845,13 +1911,14 @@ final class AppState {
         return nil
     }
 
-    func firstVisibleWorktreeId() -> String? {
-        for project in projects {
-            if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
-                return first.id
-            }
+    private func resolvedSelectionForActiveSpace() -> String? {
+        if let remembered = spacesManager.activeSpace?.lastSelectedWorktreeId,
+           activeSpaceProjects.contains(where: { project in
+               projectsManager.visibleWorktrees(projectId: project.id).contains(where: { $0.id == remembered })
+           }) {
+            return remembered
         }
-        return nil
+        return firstVisibleWorktreeId(in: activeSpaceProjects)
     }
 
     var canFocusMainWorktreeForCurrentProject: Bool {
@@ -1860,7 +1927,7 @@ final class AppState {
 
     func focusMainWorktreeForCurrentProject() {
         guard let main = mainWorktreeForCurrentProject() else { return }
-        selectedWorktreeId = main.id
+        selectWorktree(id: main.id)
     }
 
     private func mainWorktreeForCurrentProject() -> Worktree? {
@@ -1926,7 +1993,9 @@ final class AppState {
         // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
-        if selectedWorktreeId != worktree.id { selectedWorktreeId = worktree.id }
+        if selectedWorktreeId != worktree.id {
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        }
 
         if ImageFileType.isSupported(relativePath: relativePath) {
             _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
@@ -2237,10 +2306,10 @@ final class AppState {
             saveProjects()
         }
         if selectedWorktreeId == worktree.id {
-            selectedWorktreeId = selectionAfterRemoval(
+            selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,
                 removedAtIndex: removedIndex
-            )
+            ))
         }
     }
 

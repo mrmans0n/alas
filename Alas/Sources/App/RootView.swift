@@ -174,7 +174,7 @@ struct RootView: View {
             // can't do this because refreshAll runs async after init.
             state.reloadTabs()
             if state.selectedWorktreeId == nil {
-                state.selectedWorktreeId = firstWorktreeId()
+                state.selectWorktree(id: firstWorktreeId())
             }
             state.startAllProjectGitWatchers()
             state.rescanAgents()
@@ -189,7 +189,7 @@ struct RootView: View {
     private func centerContent() -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.projects,
+            projects: state.activeSpaceProjects,
             projectsManager: state.projectsManager
         )
         switch resolver.resolve() {
@@ -227,7 +227,7 @@ struct RootView: View {
 
     private func selectedWorktree() -> Worktree? {
         guard let id = state.selectedWorktreeId else { return nil }
-        for project in state.projects {
+        for project in state.activeSpaceProjects {
             if let wt = state.projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
                 // Do not treat a creating/deleting/failed-create row as the active worktree.
                 if let op = state.projectsManager.operationState(for: wt.id) {
@@ -245,7 +245,7 @@ struct RootView: View {
     }
 
     private func firstWorktreeId() -> String? {
-        state.firstVisibleWorktreeId()
+        state.firstVisibleWorktreeId(in: state.activeSpaceProjects)
     }
 
     private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool) {
