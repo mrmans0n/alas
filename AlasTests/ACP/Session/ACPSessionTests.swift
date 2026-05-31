@@ -64,6 +64,26 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("completed output boundary tracks agent before trailing thought")
+    func completedOutputBoundaryTracksAgentBeforeTrailingThought() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("visible answer")))
+        session.apply(.agentThoughtChunk(.text("trailing thought")))
+        session.markCompletedOutputBoundary()
+        session.apply(.agentMessageChunk(.text("next task")))
+
+        #expect(session.transcript.messages.count == 3)
+        if case .agent(_, let first) = session.transcript.messages[0],
+           case .thought(_, let thought) = session.transcript.messages[1],
+           case .agent(_, let second) = session.transcript.messages[2] {
+            #expect(first.value == "visible answer")
+            #expect(thought.value == "trailing thought")
+            #expect(second.value == "next task")
+        } else {
+            Issue.record("expected agent, thought, agent")
+        }
+    }
+
     @Test("user prompt creates a user message")
     func userPrompt() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

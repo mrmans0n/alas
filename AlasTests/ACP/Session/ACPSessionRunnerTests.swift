@@ -61,7 +61,7 @@ struct ACPSessionRunnerTests {
         }
 
         try await waitUntil { completion == true }
-        #expect(session.transcript.completedOutputBoundaryMessageId == nil)
+        #expect(session.transcript.completedOutputBoundaryMessageIds.isEmpty)
 
         client.emitReserved(.agentMessageChunk(.text(" second")))
         try await waitUntil {
@@ -69,7 +69,7 @@ struct ACPSessionRunnerTests {
                   case .agent(_, let buffer) = session.transcript.messages[1]
             else { return false }
             return buffer.value == "first second"
-                && session.transcript.completedOutputBoundaryMessageId == session.transcript.messages[1].stableId
+                && session.transcript.completedOutputBoundaryMessageIds == [session.transcript.messages[1].stableId]
         }
 
         client.emitFresh(.agentMessageChunk(.text("next task")))

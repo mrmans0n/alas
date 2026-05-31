@@ -143,7 +143,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
         transcript.messages.append(.user(id: UUID(), text: text, attachments: attachments))
-        transcript.completedOutputBoundaryMessageId = nil
+        transcript.completedOutputBoundaryMessageIds.removeAll()
         if titleSource == .placeholder {
             let candidate = text
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -175,7 +175,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .userMessageChunk(let block):
             // Agents rarely emit these; treat as informational.
             transcript.messages.append(.systemNotice(id: UUID(), text: text(of: block)))
-            transcript.completedOutputBoundaryMessageId = nil
+            transcript.completedOutputBoundaryMessageIds.removeAll()
             return [transcript.messages.count - 1]
         case .agentThoughtChunk(let block):
             let txt = text(of: block)
@@ -195,7 +195,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 preview: Self.previewLine(full),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: Self.extractTerminalIds(items))))
-            transcript.completedOutputBoundaryMessageId = nil
+            transcript.completedOutputBoundaryMessageIds.removeAll()
             return [transcript.messages.count - 1]
         case .toolCallUpdate(let u):
             let touched = updateToolCall(id: u.toolCallId) { tc in
@@ -228,7 +228,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 return [i]
             } else {
                 transcript.messages.append(.plan(id: UUID(), items))
-                transcript.completedOutputBoundaryMessageId = nil
+                transcript.completedOutputBoundaryMessageIds.removeAll()
                 return [transcript.messages.count - 1]
             }
         case .availableModelsUpdate(let ms):
@@ -257,23 +257,22 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
         transcript.messages.append(.fileEdit(id: UUID(), edit))
-        transcript.completedOutputBoundaryMessageId = nil
+        transcript.completedOutputBoundaryMessageIds.removeAll()
     }
 
     func markCompletedOutputBoundary() {
+        transcript.completedOutputBoundaryMessageIds.removeAll()
         for message in transcript.messages.reversed() {
             switch message {
             case .agent, .thought:
-                transcript.completedOutputBoundaryMessageId = message.stableId
-                return
+                transcript.completedOutputBoundaryMessageIds.insert(message.stableId)
+                continue
             case .plan:
                 continue
             default:
-                transcript.completedOutputBoundaryMessageId = nil
                 return
             }
         }
-        transcript.completedOutputBoundaryMessageId = nil
     }
 
     /// Append a new pending item to the tail of the queue. Used by the
@@ -565,8 +564,8 @@ final class ACPSession: ObservableObject, Identifiable {
                                 locate: () -> Int?,
                                 makeNew: () -> ACPMessage) -> Int {
         if let i = locate() {
-            if transcript.completedOutputBoundaryMessageId == transcript.messages[i].stableId {
-                transcript.completedOutputBoundaryMessageId = nil
+            if transcript.completedOutputBoundaryMessageIds.contains(transcript.messages[i].stableId) {
+                transcript.completedOutputBoundaryMessageIds.removeAll()
             } else {
                 switch transcript.messages[i] {
                 case .agent(_, let buf), .thought(_, let buf):
@@ -579,7 +578,7 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         transcript.messages.append(makeNew())
-        transcript.completedOutputBoundaryMessageId = nil
+        transcript.completedOutputBoundaryMessageIds.removeAll()
         return transcript.messages.count - 1
     }
     /// Returns the index of the matching tool call, or nil if no match.

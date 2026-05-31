@@ -33,10 +33,10 @@ final class ACPTranscript: ObservableObject {
     /// loading state, smaller steps require too many clicks.
     static let tailWindow: Int = 30
 
-    /// Stable id of the latest streaming text row whose prompt has
-    /// completed. A later ACP text chunk must start a fresh row instead
-    /// of appending directly to that completed output.
-    var completedOutputBoundaryMessageId: String?
+    /// Stable ids of streaming text rows whose prompt has completed. A
+    /// later ACP text chunk must start a fresh row instead of appending
+    /// directly to any completed output.
+    var completedOutputBoundaryMessageIds: Set<String> = []
 
     // MARK: - Per-message markdown caches
 
