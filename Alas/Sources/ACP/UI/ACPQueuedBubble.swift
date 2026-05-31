@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A single queued-item bubble, rendered below the transcript. Right-
@@ -37,20 +38,36 @@ struct ACPQueuedBubble: View {
                         actionsRow
                     }
                 }
-                ACPMarkdownText(raw: Self.textPreview(of: item.blocks))
-                    .padding(.vertical, 9).padding(.horizontal, 13)
-                    .background(theme.color("accent").opacity(0.10))
-                    .clipShape(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+                if !imageURLs.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(Array(imageURLs.enumerated()), id: \.offset) { _, url in
+                            if let image = NSImage(contentsOf: url) {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 48, height: 48)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                        }
+                    }
+                }
+                let preview = Self.textPreview(of: item.blocks)
+                if !preview.isEmpty {
+                    ACPMarkdownText(raw: preview)
+                        .padding(.vertical, 9).padding(.horizontal, 13)
+                        .background(theme.color("accent").opacity(0.10))
+                        .clipShape(
+                            UnevenRoundedRectangle(
+                                cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+                            )
                         )
-                    )
-                    .overlay(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+                        .overlay(
+                            UnevenRoundedRectangle(
+                                cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+                            )
+                            .strokeBorder(borderColor, style: borderStyle)
                         )
-                        .strokeBorder(borderColor, style: borderStyle)
-                    )
+                }
             }
             .opacity(item.status == .sending ? 0.85 : 0.6)
             .frame(maxWidth: 540, alignment: .trailing)
@@ -95,6 +112,15 @@ struct ACPQueuedBubble: View {
             }
             .buttonStyle(.plain)
             .help("Remove from queue")
+        }
+    }
+
+    /// Staged file URLs for the queued prompt's image blocks, so an image-only
+    /// queued item still shows a thumbnail (its text preview is empty).
+    private var imageURLs: [URL] {
+        item.blocks.compactMap { block in
+            if case .image(_, let uri, _) = block, let uri { return URL(string: uri) }
+            return nil
         }
     }
 

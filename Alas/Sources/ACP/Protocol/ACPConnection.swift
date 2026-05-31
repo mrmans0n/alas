@@ -7,14 +7,18 @@ final class ACPConnection: @unchecked Sendable {
 
     init(client: ACPClient) { self.client = client }
 
-    func initialize() async throws {
+    /// Returns whether the agent advertises inline-image prompt capability.
+    @discardableResult
+    func initialize() async throws -> Bool {
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
                                 protocolVersion: ACPProtocolVersion.current,
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
                                     terminal: true)))
-        _ = try await client.send(req)
+        let resp = try await client.send(req)
+        let result = try? JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
+        return result?.agentCapabilities?.promptCapabilities?.image ?? false
     }
 
     func newSession(cwd: String) async throws -> ACPSessionNewResult {

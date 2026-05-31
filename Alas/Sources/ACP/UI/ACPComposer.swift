@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 typealias ACPComposerSubmitCompletion = @MainActor (_ succeeded: Bool) -> Void
 typealias ACPComposerSubmitHandler = (
@@ -27,6 +28,9 @@ struct ACPInputField: NSViewRepresentable {
     /// textview should be cleared) or `false` to keep the draft in
     /// place (e.g. session not ready, prompt already in flight).
     let onSubmit: ACPComposerSubmitHandler
+    /// Called when image staging fails so the chrome can show a transient
+    /// notice. Receives the specific error that caused the failure.
+    let onImageError: (ACPImageStaging.StagingError) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -42,6 +46,8 @@ struct ACPInputField: NSViewRepresentable {
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
         textView.insertionPointColor = NSColor.controlAccentColor
         context.coordinator.textView = textView
+        context.coordinator.onImageError = onImageError
+        textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         context.coordinator.restoreInitialDraft(into: textView)
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
@@ -49,6 +55,10 @@ struct ACPInputField: NSViewRepresentable {
         actions.submitWithIntent = { [weak coord] intent in
             guard let coord, let tv = coord.textView else { return }
             coord.submit(tv, intent: intent)
+        }
+        actions.presentImagePicker = { [weak coord] in
+            guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
+            tv.presentImagePicker()
         }
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -130,6 +140,8 @@ struct ACPInputField: NSViewRepresentable {
         /// can render its SwiftUI content with our theme tokens.
         var theme: Theme?
         weak var textView: NSTextView?
+        /// Set by the composer chrome to surface staging failures (Task 14).
+        var onImageError: ((ACPImageStaging.StagingError) -> Void)?
         private var restoringDraft = false
         private var lastSyncedDraft: ACPComposerDraft
         private var nextSubmitID = 0
@@ -138,6 +150,10 @@ struct ACPInputField: NSViewRepresentable {
         private var pendingRestyleGeneration = 0
         private var pendingRestyleRange: NSRange?
         private static let restyleDebounceInterval: Double = 0.5
+
+        func reportImageError(_ error: ACPImageStaging.StagingError) {
+            onImageError?(error)
+        }
 
         func flushPendingRestyleNow() {
             guard let work = pendingRestyleWork else { return }
@@ -255,7 +271,10 @@ struct ACPInputField: NSViewRepresentable {
             flushPendingRestyleNow()
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            // Allow image-only prompts: an attached image carries no text, so
+            // submit must be gated on text OR attachments, not text alone.
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !attachments.isEmpty else { return }
             let draft = Self.draft(from: attributed)
             // Rejected submits keep the editable draft in place. Accepted
             // submits clear only the visible text view here; persisted
@@ -328,12 +347,12 @@ struct ACPInputField: NSViewRepresentable {
             let full = NSRange(location: 0, length: attributed.length)
             guard attributed.length > 0 else { return ACPComposerDraft(segments: []) }
 
-            // Fast path: no chip mentions in the storage. The whole
-            // string is plain text, so skip the enumerateAttribute walk
-            // entirely. This is the common case while typing.
+            // Fast path: no chip mentions or image chips in the storage.
+            // The whole string is plain text, so skip the enumerateAttributes
+            // walk entirely. This is the common case while typing.
             var hasChip = false
-            attributed.enumerateAttribute(.attachmentURI, in: full) { value, _, stop in
-                if value != nil {
+            attributed.enumerateAttributes(in: full) { keys, _, stop in
+                if keys[.attachmentURI] != nil || keys[.imageAttachmentURI] != nil {
                     hasChip = true
                     stop.pointee = true
                 }
@@ -344,20 +363,22 @@ struct ACPInputField: NSViewRepresentable {
             }
 
             var segments: [ACPComposerDraft.Segment] = []
-            attributed.enumerateAttribute(.attachmentURI, in: full) { value, range, _ in
-                if let uri = value as? String,
-                   let chip = attributed.attribute(.attachment, at: range.location, effectiveRange: nil)
-                   as? ACPMentionChipAttachment {
-                    segments.append(.mention(displayName: chip.displayName, uri: uri))
-                } else if let uri = value as? String {
-                    let segment = attributed.attributedSubstring(from: range).string
-                    let displayName = segment.trimmingCharacters(in: .init(charactersIn: "@ "))
-                    segments.append(.mention(displayName: displayName, uri: uri))
+            attributed.enumerateAttributes(in: full) { keys, range, _ in
+                if let uri = keys[.imageAttachmentURI] as? String {
+                    let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
+                    segments.append(.image(uri: uri, mimeType: mime))
+                } else if let uri = keys[.attachmentURI] as? String {
+                    if let chip = attributed.attribute(.attachment, at: range.location, effectiveRange: nil)
+                       as? ACPMentionChipAttachment {
+                        segments.append(.mention(displayName: chip.displayName, uri: uri))
+                    } else {
+                        let segment = attributed.attributedSubstring(from: range).string
+                        let displayName = segment.trimmingCharacters(in: .init(charactersIn: "@ "))
+                        segments.append(.mention(displayName: displayName, uri: uri))
+                    }
                 } else {
                     let text = attributed.attributedSubstring(from: range).string
-                    if !text.isEmpty {
-                        segments.append(.text(text))
-                    }
+                    if !text.isEmpty { segments.append(.text(text)) }
                 }
             }
             return ACPComposerDraft(segments: segments)
@@ -381,34 +402,52 @@ struct ACPInputField: NSViewRepresentable {
                         .toolTip: URL(string: uri)?.path ?? uri,
                     ], range: NSRange(location: 0, length: chip.length))
                     result.append(chip)
+                case .image(let uri, let mimeType):
+                    // Drop the chip if the staged file is gone — a deleted
+                    // attachment shouldn't restore as a broken placeholder or
+                    // get sent as a dangling resource link.
+                    guard let fileURL = URL(string: uri),
+                          FileManager.default.fileExists(atPath: fileURL.path) else { break }
+                    let attachment = ACPImageChipAttachment(fileURL: fileURL, mimeType: mimeType)
+                    let chip = NSMutableAttributedString(attachment: attachment)
+                    chip.addAttributes([
+                        .imageAttachmentURI: uri,
+                        .imageAttachmentMime: mimeType,
+                        .toolTip: fileURL.lastPathComponent,
+                    ], range: NSRange(location: 0, length: chip.length))
+                    result.append(chip)
                 }
             }
             return result
         }
 
-        /// Walks the attributed string. Mention chips (attachments tagged
-        /// with `attachmentURI`) become resource_link attachments and emit
-        /// `@filename` in the text. Everything else is concatenated as-is —
-        /// the user's markdown markers (`**bold**`, `# heading`, etc.) are
-        /// preserved verbatim for the receiving agent.
+        /// Walks the attributed string. Image chips (tagged with
+        /// `.imageAttachmentURI`) become image attachments and contribute NO
+        /// text. Mention chips (tagged with `.attachmentURI`) become
+        /// resource_link attachments and emit `@filename` in the text.
+        /// Everything else is concatenated as-is — the user's markdown
+        /// markers (`**bold**`, `# heading`, etc.) are preserved verbatim for
+        /// the receiving agent.
         static func extract(_ attributed: NSAttributedString) -> (String, [ACPMessage.Attachment]) {
             var text = ""
             var atts: [ACPMessage.Attachment] = []
-            attributed.enumerateAttribute(
-                .attachmentURI,
-                in: NSRange(location: 0, length: attributed.length)
-            ) { value, range, _ in
-                if let uri = value as? String,
-                   let chip = attributed.attribute(.attachment, at: range.location, effectiveRange: nil)
-                            as? ACPMentionChipAttachment {
-                    text += "@" + chip.displayName + " "
-                    atts.append(.init(uri: uri, name: chip.displayName))
-                } else if let uri = value as? String {
-                    // Legacy text-based chip (background-color attribute);
-                    // keep the substring so old drafts still work.
-                    let segment = attributed.attributedSubstring(from: range).string
-                    text += segment + " "
-                    atts.append(.init(uri: uri, name: segment.trimmingCharacters(in: .init(charactersIn: "@ "))))
+            let full = NSRange(location: 0, length: attributed.length)
+            attributed.enumerateAttributes(in: full) { keys, range, _ in
+                if let uri = keys[.imageAttachmentURI] as? String {
+                    let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
+                    let name = URL(string: uri)?.lastPathComponent
+                    atts.append(.init(uri: uri, name: name, mimeType: mime))
+                    // Image chips contribute NO text.
+                } else if let uri = keys[.attachmentURI] as? String {
+                    if let chip = attributed.attribute(.attachment, at: range.location, effectiveRange: nil)
+                                as? ACPMentionChipAttachment {
+                        text += "@" + chip.displayName + " "
+                        atts.append(.init(uri: uri, name: chip.displayName))
+                    } else {
+                        let segment = attributed.attributedSubstring(from: range).string
+                        text += segment + " "
+                        atts.append(.init(uri: uri, name: segment.trimmingCharacters(in: .init(charactersIn: "@ "))))
+                    }
                 } else {
                     text += attributed.attributedSubstring(from: range).string
                 }
@@ -420,6 +459,8 @@ struct ACPInputField: NSViewRepresentable {
 
 extension NSAttributedString.Key {
     static let attachmentURI = NSAttributedString.Key("alas.acp.attachmentURI")
+    static let imageAttachmentURI = NSAttributedString.Key("alas.acp.imageAttachmentURI")
+    static let imageAttachmentMime = NSAttributedString.Key("alas.acp.imageAttachmentMime")
 }
 
 final class ACPNSTextView: NSTextView {
@@ -459,6 +500,16 @@ final class ACPNSTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // ⌃V parity with agent CLIs — paste an image when one is on the
+        // clipboard. Only intercept when there IS an image, so Cocoa's
+        // default ⌃V (page down / emacs binding) is otherwise preserved.
+        if event.modifierFlags.contains(.control),
+           event.charactersIgnoringModifiers?.lowercased() == "v",
+           pasteboardHasImage {
+            paste(nil)
+            return
+        }
+
         // Slash-picker keyboard handling — runs BEFORE super so the
         // arrow keys / Enter don't fall through to text-view motion or
         // submit. Esc closes the picker without canceling the prompt.
@@ -567,6 +618,178 @@ final class ACPNSTextView: NSTextView {
     /// without reaching across private state.
     var isSlashPanelOpen: Bool { slashPanel != nil }
     func dismissSlashPanel() { closeSlashPanel() }
+
+    var worktreeIdForStaging: String {
+        coordinator?.worktreeRoot.lastPathComponent ?? "default"
+    }
+
+    static let maxImagesPerMessage = 10
+
+    private func currentImageChipCount() -> Int {
+        guard let storage = textStorage else { return 0 }
+        var count = 0
+        storage.enumerateAttribute(.imageAttachmentURI, in: NSRange(location: 0, length: storage.length)) { v, _, _ in
+            if v != nil { count += 1 }
+        }
+        return count
+    }
+
+    @discardableResult
+    func insertImage(data: Data, worktreeId: String) -> Bool {
+        guard currentImageChipCount() < Self.maxImagesPerMessage else {
+            coordinator?.reportImageError(.tooManyImages)
+            return false
+        }
+        do {
+            let staged = try ACPImageStaging.stage(data: data, into: worktreeId)
+            let attachment = ACPImageChipAttachment(fileURL: staged.url, mimeType: staged.mimeType)
+            let chipString = NSMutableAttributedString(attachment: attachment)
+            chipString.addAttributes([
+                .imageAttachmentURI: staged.url.absoluteString,
+                .imageAttachmentMime: staged.mimeType,
+                .toolTip: staged.url.lastPathComponent,
+            ], range: NSRange(location: 0, length: chipString.length))
+            // Color the trailing space and reset typingAttributes so text the
+            // user types right after the chip is the normal label color
+            // immediately — otherwise it inherits color-less attributes and
+            // renders black until the debounced restyler repaints the line.
+            let baseAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+            ]
+            chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
+            let insertAt = selectedRange()
+            textStorage?.replaceCharacters(in: insertAt, with: chipString)
+            setSelectedRange(NSRange(location: insertAt.location + chipString.length, length: 0))
+            typingAttributes = baseAttrs
+            didChangeText()
+            return true
+        } catch let error as ACPImageStaging.StagingError {
+            coordinator?.reportImageError(error)
+            return false
+        } catch {
+            coordinator?.reportImageError(.writeFailed)
+            return false
+        }
+    }
+
+    func presentImagePicker() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
+        panel.begin { [weak self] response in
+            guard let self, response == .OK else { return }
+            for url in panel.urls {
+                switch Self.readImageFile(url) {
+                case .data(let data):
+                    _ = self.insertImage(data: data, worktreeId: self.worktreeIdForStaging)
+                case .tooLarge:
+                    self.coordinator?.reportImageError(.tooLarge)
+                case .unsupported:
+                    break
+                }
+            }
+        }
+    }
+
+    /// Cheap probe: does `pb` hold a supported image, WITHOUT reading whole
+    /// files? Inspects pasteboard types for raw image data and peeks only the
+    /// header + size of image file URLs, so hovering a huge file during a drag
+    /// (or a ⌃V availability check) doesn't allocate the whole file.
+    private func hasImage(in pb: NSPasteboard) -> Bool {
+        let types = pb.types ?? []
+        if types.contains(.png) || types.contains(.tiff) { return true }
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+            return urls.contains { Self.isSupportedImageFile($0) }
+        }
+        return false
+    }
+
+    /// True when `url` is a supported image within the size cap, decided by
+    /// reading only its first bytes — never the whole file.
+    private static func isSupportedImageFile(_ url: URL) -> Bool {
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size > ACPImageStaging.maxBytes { return false }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let header = (try? handle.read(upToCount: 16)) ?? Data()
+        return ACPImageStaging.sniffMIME(header) != nil
+    }
+
+    enum FileImageRead {
+        case data(Data)
+        case tooLarge
+        case unsupported
+    }
+
+    /// Read a file URL's image bytes, applying the size cap from its metadata
+    /// BEFORE reading the file into memory (so an oversized pick/drop reports
+    /// `.tooLarge` instead of allocating the whole file).
+    static func readImageFile(_ url: URL) -> FileImageRead {
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size > ACPImageStaging.maxBytes { return .tooLarge }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return .unsupported }
+        let header = (try? handle.read(upToCount: 16)) ?? Data()
+        try? handle.close()
+        guard ACPImageStaging.sniffMIME(header) != nil,
+              let data = try? Data(contentsOf: url) else { return .unsupported }
+        return .data(data)
+    }
+
+    /// Stage and insert every supported image from `pb` — raw bitmap data
+    /// (one screenshot) or one-per image file URL (multiple Finder files). Each
+    /// `insertImage` enforces the per-message cap; oversized file URLs surface
+    /// the `.tooLarge` notice. Returns true if any image source was handled.
+    @discardableResult
+    private func insertImages(from pb: NSPasteboard) -> Bool {
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            if let data = pb.data(forType: type) {
+                if type == .tiff, let rep = NSBitmapImageRep(data: data),
+                   let png = rep.representation(using: .png, properties: [:]) {
+                    _ = insertImage(data: png, worktreeId: worktreeIdForStaging)
+                    return true
+                }
+                if ACPImageStaging.sniffMIME(data) != nil {
+                    _ = insertImage(data: data, worktreeId: worktreeIdForStaging)
+                    return true
+                }
+            }
+        }
+        guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
+        else { return false }
+        var handled = false
+        for url in urls {
+            switch Self.readImageFile(url) {
+            case .data(let data):
+                handled = true
+                _ = insertImage(data: data, worktreeId: worktreeIdForStaging)
+            case .tooLarge:
+                handled = true
+                coordinator?.reportImageError(.tooLarge)
+            case .unsupported:
+                break
+            }
+        }
+        return handled
+    }
+
+    /// True when the general pasteboard currently holds a supported image.
+    private var pasteboardHasImage: Bool { hasImage(in: NSPasteboard.general) }
+
+    override func paste(_ sender: Any?) {
+        if insertImages(from: NSPasteboard.general) { return }
+        super.paste(sender)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        hasImage(in: sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if insertImages(from: sender.draggingPasteboard) { return true }
+        return super.performDragOperation(sender)
+    }
 
     private func insertMention(_ url: URL) {
         let name = url.lastPathComponent

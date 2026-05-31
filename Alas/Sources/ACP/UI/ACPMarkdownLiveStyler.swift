@@ -55,10 +55,11 @@ enum ACPMarkdownLiveStyler {
         storage.beginEditing()
         defer { storage.endEditing() }
 
-        // Reset to defaults — but preserve our chip attribute so existing
-        // mentions don't get bulldozed by every keystroke.
-        storage.enumerateAttribute(.attachmentURI, in: target) { value, range, _ in
-            if value == nil {
+        // Reset to defaults — but preserve our chip attributes so existing
+        // mention AND image chips don't get bulldozed (their `.attachment`
+        // cell stripped) by every keystroke's restyle.
+        storage.enumerateAttributes(in: target) { attrs, range, _ in
+            if attrs[.attachmentURI] == nil, attrs[.imageAttachmentURI] == nil {
                 storage.setAttributes([
                     .font: baseFont,
                     .foregroundColor: NSColor.labelColor,
@@ -106,10 +107,10 @@ enum ACPMarkdownLiveStyler {
                               attrs: [NSAttributedString.Key: Any]) {
         regex.enumerateMatches(in: storage.string, range: range) { match, _, _ in
             guard let m = match else { return }
-            // Don't double-style chip mentions.
+            // Don't double-style chip mentions or image chips.
             var skip = false
-            storage.enumerateAttribute(.attachmentURI, in: m.range) { v, _, stop in
-                if v != nil {
+            storage.enumerateAttributes(in: m.range) { attrs, _, stop in
+                if attrs[.attachmentURI] != nil || attrs[.imageAttachmentURI] != nil {
                     skip = true
                     stop.pointee = true
                 }

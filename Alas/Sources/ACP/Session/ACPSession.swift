@@ -48,6 +48,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// lifecycle), distinct from `StreamingState.idle` which means
     /// "runner is attached but not currently mid-prompt" (turn lifecycle).
     @Published var agentState: AgentState = .idle
+    /// Whether the connected agent accepts inline image content blocks
+    /// (`promptCapabilities.image`). Runtime-only: re-learned on each
+    /// `initialize`, never persisted. Drives the send-time hydration in
+    /// `ACPSessionRunner.hydrate`.
+    @Published var imageInputSupported: Bool = false
 
     enum AgentState: Equatable {
         case idle
@@ -442,7 +447,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 out.append(s)
             case .content(.resourceLink(let uri, let name)):
                 out.append("[\(name ?? uri)]")
-            case .content(.image(_, _)):
+            case .content(.image):
                 out.append("[image]")
             case .diff(let path, let old, let new):
                 var lines: [String] = ["--- \(path)"]

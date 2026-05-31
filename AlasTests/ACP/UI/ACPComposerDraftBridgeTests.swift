@@ -628,12 +628,12 @@ struct ACPComposerDraftBridgeTests {
         ]))
     }
 
-    @Test("image block becomes a mention chip carrying its uri")
-    func imageBlockBecomesMention() {
+    @Test("image block becomes an image segment carrying its uri and mime")
+    func imageBlockBecomesImageSegment() {
         #expect(ACPComposerDraft(blocks: [
-            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .image(data: nil, uri: "file:///tmp/shot.png", mimeType: "image/png"),
         ]) == ACPComposerDraft(segments: [
-            .mention(displayName: "shot.png", uri: "file:///tmp/shot.png"),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
         ]))
     }
 

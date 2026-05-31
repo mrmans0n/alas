@@ -19,7 +19,7 @@ struct ACPToolCallContentTests {
         }
         #expect(uri == "file:///tmp/x.txt")
         #expect(name == "x.txt")
-        guard case .content(.image(let uri2, let mime)) = items[2] else {
+        guard case .content(.image(_, let uri2, let mime)) = items[2] else {
             Issue.record("expected .content(.image)")
             return
         }

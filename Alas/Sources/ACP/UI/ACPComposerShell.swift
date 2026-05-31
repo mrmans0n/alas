@@ -18,6 +18,7 @@ struct ACPComposer: View {
     @State private var inputFocused = false
     @StateObject private var actions = ACPComposerActions()
     @State private var hasText: Bool = false
+    @State private var imageNotice: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,6 +51,13 @@ struct ACPComposer: View {
 
     private var pill: some View {
         VStack(spacing: 6) {
+            if let imageNotice {
+                Text(imageNotice)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.color("del"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            }
             ACPInputField(
                 session: session,
                 worktreeRoot: worktreeRoot,
@@ -61,7 +69,13 @@ struct ACPComposer: View {
                     hasText = draft.hasContent
                 },
                 onDraftClear: { manager.clearComposerDraft(for: session) },
-                onSubmit: onSubmit
+                onSubmit: onSubmit,
+                onImageError: { error in
+                    imageNotice = error.userMessage
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        if imageNotice == error.userMessage { imageNotice = nil }
+                    }
+                }
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
@@ -74,6 +88,7 @@ struct ACPComposer: View {
             HStack(spacing: 8) {
                 hint
                 Spacer()
+                attachButton
                 autoRunToggle
                 if let thinking = session.chipState.thinking {
                     thinkingChip(thinking)
@@ -227,6 +242,22 @@ struct ACPComposer: View {
         session.autoRunEnabled
             ? Color.blend(theme.color("caution"), .white, t: 0.55)
             : theme.color("fg-muted")
+    }
+
+    private var attachButton: some View {
+        Button {
+            actions.presentImagePicker?()
+        } label: {
+            Image(systemName: "photo")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.color("fg-muted"))
+                .frame(width: 28, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Attach image")
+        .help("Attach an image")
     }
 
     // MARK: - Chip builders driven by ACPChipState
