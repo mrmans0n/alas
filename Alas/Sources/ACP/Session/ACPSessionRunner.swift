@@ -52,6 +52,7 @@ final class ACPSessionRunner {
     private var activePromptID: Int?
     private var cancelledPromptIDs: Set<Int> = []
     private var appliedUpdateCount = 0
+    private var persistedMessageCount: Int
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
@@ -79,13 +80,12 @@ final class ACPSessionRunner {
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
+        self.persistedMessageCount = (try? store.messageCount(sessionId: sessionId)) ?? 0
         self.policy = ACPPermissionPolicy(
             session: session,
             log: ACPPermissionDecisionLog(store: store)
         )
-        if let stored = try? store.loadMessages(sessionId: sessionId) {
-            self.seq = Int64(stored.count)
-        }
+        self.seq = Int64(persistedMessageCount)
     }
 
     func start() {
@@ -1051,17 +1051,21 @@ extension ACPSessionRunner {
         guard !indices.isEmpty else { return }
         let messages = session.transcript.messages
         let now = Int64(Date().timeIntervalSince1970)
-        let existingCount = (try? store.loadMessages(sessionId: sessionId).count) ?? 0
         for i in indices.sorted() {
             guard i >= 0, i < messages.count else { continue }
             let m = messages[i]
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(sessionId)-\(i)"
-            if i < existingCount {
+            if i < persistedMessageCount {
                 try? store.updateMessagePayload(id: id, payload: payload)
             } else {
-                try? store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
-                                         seq: Int64(i), payload: payload, createdAt: now)
+                do {
+                    try store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
+                                            seq: Int64(i), payload: payload, createdAt: now)
+                    persistedMessageCount = max(persistedMessageCount, i + 1)
+                } catch {
+                    continue
+                }
             }
         }
     }
@@ -1094,16 +1098,20 @@ extension ACPSessionRunner {
         }
 
         let now = Int64(Date().timeIntervalSince1970)
-        let existingCount = (try? store.loadMessages(sessionId: sessionId).count) ?? 0
         for i in lowerBound..<messages.count {
             let m = messages[i]
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(sessionId)-\(i)"
-            if i < existingCount {
+            if i < persistedMessageCount {
                 try? store.updateMessagePayload(id: id, payload: payload)
             } else {
-                try? store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
-                                         seq: Int64(i), payload: payload, createdAt: now)
+                do {
+                    try store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
+                                            seq: Int64(i), payload: payload, createdAt: now)
+                    persistedMessageCount = max(persistedMessageCount, i + 1)
+                } catch {
+                    continue
+                }
             }
         }
     }

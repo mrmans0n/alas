@@ -36,6 +36,7 @@ final class ACPSessionStore {
         } else if current < Self.targetSchemaVersion {
             try db.exec("UPDATE schema_version SET version = ?", bindings: [Int64(Self.targetSchemaVersion)])
         }
+        try db.exec("CREATE INDEX IF NOT EXISTS messages_session_kind_seq_idx ON messages(session_id, kind, seq)")
     }
 
     private func migrate_to_v1() throws {
@@ -247,6 +248,14 @@ extension ACPSessionStore {
         try db.exec("UPDATE messages SET payload = ? WHERE id = ?", bindings: [payload, id])
     }
 
+    func messageCount(sessionId: String) throws -> Int {
+        let rows = try db.query("""
+        SELECT COUNT(*) AS count
+        FROM messages WHERE session_id = ?
+        """, bindings: [sessionId])
+        return Int((rows.first?["count"] as? Int64) ?? 0)
+    }
+
     func loadMessages(sessionId: String) throws -> [ACPStoredMessage] {
         let rows = try db.query("""
         SELECT id, session_id, kind, seq, payload, created_at
@@ -261,6 +270,23 @@ extension ACPSessionStore {
                 payload: (r["payload"] as? Data) ?? Data(),
                 createdAt: (r["created_at"] as? Int64) ?? 0)
         }
+    }
+
+    func loadToolCallContent(sessionId: String, toolCallId: String) throws -> String? {
+        let rows = try db.query("""
+        SELECT payload FROM messages
+        WHERE session_id = ? AND kind = 'tool_call'
+        ORDER BY seq ASC
+        """, bindings: [sessionId])
+        let decoder = JSONDecoder()
+        for row in rows {
+            guard let payload = row["payload"] as? Data,
+                  let tc = try? decoder.decode(ACPMessage.ToolCall.self, from: payload),
+                  tc.toolCallId == toolCallId
+            else { continue }
+            return tc.content
+        }
+        return nil
     }
 
     private static func rowToSession(_ r: [String: Any?]) -> ACPSessionRow {

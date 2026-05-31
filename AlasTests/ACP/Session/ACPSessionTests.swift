@@ -127,6 +127,29 @@ struct ACPSessionTests {
         #expect(!session.followsTranscriptTail)
     }
 
+    @Test("live transcript advances render window while following tail")
+    func liveTranscriptAdvancesRenderWindow() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        for i in 0..<50 {
+            session.appendSystemNotice("notice \(i)")
+        }
+
+        #expect(session.transcript.visibleHead == 20)
+    }
+
+    @Test("live transcript does not advance render window when user is reading history")
+    func liveTranscriptKeepsWindowWhenNotFollowingTail() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.followsTranscriptTail = false
+
+        for i in 0..<50 {
+            session.appendSystemNotice("notice \(i)")
+        }
+
+        #expect(session.transcript.visibleHead == 0)
+    }
+
     @Test("empty transcript has no conversation transcript")
     func emptyTranscriptHasNoConversationTranscript() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
