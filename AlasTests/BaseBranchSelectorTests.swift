@@ -128,6 +128,20 @@ struct BaseBranchSelectorTests {
         #expect(!BaseBranchSelector.shouldShowLoading(isLoading: false, hasLoaded: true))
     }
 
+    @Test func branchListShowsUpToFiveRows() {
+        #expect(BaseBranchSelector.visibleBranchRowCount(optionCount: 1) == 1)
+        #expect(BaseBranchSelector.visibleBranchRowCount(optionCount: 4) == 4)
+        #expect(BaseBranchSelector.visibleBranchRowCount(optionCount: 5) == 5)
+        #expect(BaseBranchSelector.visibleBranchRowCount(optionCount: 8) == 5)
+    }
+
+    @Test func branchListHeightMatchesVisibleRows() {
+        let oneRow = BaseBranchSelector.branchListHeight(optionCount: 1)
+        #expect(BaseBranchSelector.branchListHeight(optionCount: 4) == oneRow * 4)
+        #expect(BaseBranchSelector.branchListHeight(optionCount: 5) == oneRow * 5)
+        #expect(BaseBranchSelector.branchListHeight(optionCount: 12) == oneRow * 5)
+    }
+
     @Test func smartListIncludesCurrentRefWhenAbsentFromShortlist() {
         let result = BaseBranchSelector.smartList(
             branches: ["main", "origin/main"],
