@@ -38,6 +38,10 @@ protocol ACPClient: AnyObject {
 
     /// Streaming `session/update` notifications.
     var incomingUpdates: AsyncStream<ACPSessionUpdateParams> { get }
+    /// Monotonic count of `session/update` notifications yielded to
+    /// `incomingUpdates`. Runners use this as a drain target when an RPC
+    /// response races ahead of already-yielded update notifications.
+    var yieldedUpdateCount: Int { get }
 
     /// Permission requests (`session/request_permission`). The client owner must
     /// call `respondToPermission(id:decision:)` exactly once per emitted request.

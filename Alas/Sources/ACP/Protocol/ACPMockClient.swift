@@ -8,8 +8,15 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let updateCountLock = NSLock()
+    private var _yieldedUpdateCount = 0
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
+    var yieldedUpdateCount: Int {
+        updateCountLock.lock()
+        defer { updateCountLock.unlock() }
+        return _yieldedUpdateCount
+    }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
@@ -49,7 +56,12 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         sent.append(request)
     }
 
-    func emit(_ update: ACPSessionUpdateParams) { updatesCont.yield(update) }
+    func emit(_ update: ACPSessionUpdateParams) {
+        updateCountLock.lock()
+        _yieldedUpdateCount += 1
+        updateCountLock.unlock()
+        updatesCont.yield(update)
+    }
     func emitPermission(id: JSONRPCID, params: ACPPermissionRequestParams) { permsCont.yield((id, params)) }
     func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }
     func emitTerminal(_ req: ACPTerminalRequest) { terminalsCont.yield(req) }

@@ -9,6 +9,11 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let stderrCont: AsyncStream<Data>.Continuation
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
+    var yieldedUpdateCount: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _yieldedUpdateCount
+    }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
@@ -16,6 +21,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
 
     private let stateLock = NSLock()
     private var nextId: Int = 0
+    private var _yieldedUpdateCount = 0
     private var pending: [JSONRPCID: CheckedContinuation<Data, Error>] = [:]
     private var dispatchTask: Task<Void, Never>?
 
@@ -142,7 +148,12 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         switch method {
         case "session/update":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPSessionUpdateParams>.self, from: data),
-               let p = env.params { updatesCont.yield(p) }
+               let p = env.params {
+                stateLock.lock()
+                _yieldedUpdateCount += 1
+                stateLock.unlock()
+                updatesCont.yield(p)
+            }
         case "session/request_permission":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data),
                let id = env.id, let p = env.params { permsCont.yield((id, p)) }
