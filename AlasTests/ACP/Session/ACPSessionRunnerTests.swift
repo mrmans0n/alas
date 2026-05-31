@@ -83,6 +83,57 @@ struct ACPSessionRunnerTests {
         }
     }
 
+    @Test("submits queue while completed output boundary is waiting for updates")
+    func submitQueuesWhileCompletedBoundaryWaitsForUpdates() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-runner-boundary-submit-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let client = BoundaryRaceClient()
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: client),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        runner.start()
+
+        var firstCompletion: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            firstCompletion = succeeded
+        }
+        try await waitUntil { firstCompletion == true }
+        #expect(session.transcript.streamingState == .sending)
+
+        var secondAccepted: Bool?
+        runner.send(blocks: [.text("next")], intent: .auto) { succeeded in
+            secondAccepted = succeeded
+        }
+        try await waitUntil { secondAccepted == true }
+        #expect(session.queue.count == 1)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
+
+        client.emitReserved(.agentMessageChunk(.text(" second")))
+        try await waitUntil {
+            client.sent.filter { $0.method == "session/prompt" }.count == 2
+                && session.transcript.messages.count >= 3
+        }
+
+        if case .user(_, let firstUser, _) = session.transcript.messages[0],
+           case .agent(_, let firstAnswer) = session.transcript.messages[1],
+           case .user(_, let secondUser, _) = session.transcript.messages[2] {
+            #expect(firstUser == "hello")
+            #expect(firstAnswer.value == "first second")
+            #expect(secondUser == "next")
+        } else {
+            Issue.record("expected delayed chunk to land before the queued next prompt")
+        }
+    }
+
     @Test("send treats user-cancelled prompt errors as accepted completion")
     func sendTreatsCancelledPromptErrorsAsAcceptedCompletion() async throws {
         let (runner, mock) = try makeRunner()

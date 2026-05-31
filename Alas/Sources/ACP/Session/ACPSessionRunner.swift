@@ -738,7 +738,6 @@ extension ACPSessionRunner {
                             self.persistQueue()
                         }
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
@@ -765,7 +764,6 @@ extension ACPSessionRunner {
                             self.session.lastError = "prompt failed: \(error.localizedDescription)"
                         }
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
@@ -811,7 +809,6 @@ extension ACPSessionRunner {
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
@@ -827,7 +824,6 @@ extension ACPSessionRunner {
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
-                        self.session.transcript.streamingState = .idle
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
@@ -877,6 +873,7 @@ extension ACPSessionRunner {
         else { return false }
         pendingCompletedOutputBoundaryUpdateCount = nil
         session.markCompletedOutputBoundary()
+        session.transcript.streamingState = .idle
         return true
     }
 
