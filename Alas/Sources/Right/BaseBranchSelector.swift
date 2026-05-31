@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct BaseBranchSelector: View {
+    private static let branchRowHeight: CGFloat = 28
+    private static let maxVisibleBranchRows = 5
+
     @Binding var baseBranch: String
     let branches: [String]
     let isLoadingBranches: Bool
@@ -69,7 +72,7 @@ struct BaseBranchSelector: View {
                         }
                     }
                 }
-                .frame(maxHeight: 320)
+                .frame(height: Self.branchListHeight(optionCount: filteredBranches.count))
             }
         }
         .frame(width: 280)
@@ -93,7 +96,7 @@ struct BaseBranchSelector: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .frame(height: Self.branchRowHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -103,6 +106,14 @@ struct BaseBranchSelector: View {
 extension BaseBranchSelector {
     static func shouldShowLoading(isLoading: Bool, hasLoaded: Bool) -> Bool {
         isLoading || !hasLoaded
+    }
+
+    static func visibleBranchRowCount(optionCount: Int) -> Int {
+        min(max(optionCount, 1), maxVisibleBranchRows)
+    }
+
+    static func branchListHeight(optionCount: Int) -> CGFloat {
+        CGFloat(visibleBranchRowCount(optionCount: optionCount)) * branchRowHeight
     }
 
     static func isSelected(row name: String, baseBranch: String, currentRef: String?) -> Bool {
