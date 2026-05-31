@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-05-31
+
+### ✨ Features
+
+- Add ACP embedded resource support (#407).
+- Add paste and image attachment support to the ACP composer (#404).
+- Add tree-sitter code block labels and syntax highlighting for Ruby, Lua, HTML, CSS, PHP, Markdown, HCL, Dockerfile, and zsh (#386-#396).
+- Allow minimizing the ACP task sidebar (#382).
+
+### 🐛 Fixes
+
+- Load right-sidebar branches before showing the branch selector (#409).
+- Clean up ACP mention chip insertion, text color, and chip baseline alignment (#408).
+- Suppress ACP load replay after hydration (#406).
+- Reduce ACP composer draft observation jank (#405).
+- Preserve separate completed ACP output blocks (#403).
+- Make worktree launch segments keyboard-focusable (#402).
+- Keep ACP agent copy buttons clickable while hovering (#401).
+- Drop the repo selector outer max-height that centered content unexpectedly (#399).
+- Preserve ACP transcript recovery state (#398).
+- Address tree-sitter highlight review gaps (#397).
+- Improve ACP composer chip contrast and focus styling (#383, #385).
+- Restore the ACP composer split action button (#384).
+- Only pause ACP tail-follow on user-driven scroll (#381).
+
+### 🏗️ Internal
+
+- Add Xcode build-state remediation scripts (#400).
+
 ## [0.4.8] - 2026-05-30
 
 ### ✨ Features
