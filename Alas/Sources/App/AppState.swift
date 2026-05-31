@@ -491,8 +491,7 @@ final class AppState {
 
     func switchToSpace(id: String) {
         spacesManager.switchToSpace(id: id)
-        selectedWorktreeId = resolvedSelectionForActiveSpace()
-        saveSpaces()
+        selectWorktree(id: resolvedSelectionForActiveSpace())
     }
 
     func focusGlobalWorktree(id: String, projectId: String) {

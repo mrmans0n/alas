@@ -108,6 +108,7 @@ struct AppStateSpacesTests {
 
         #expect(state.spacesManager.activeSpaceId == "s2")
         #expect(state.selectedWorktreeId == "wt2")
+        #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt2")
     }
 
     @Test func focusingGlobalWorktreeSwitchesToContainingSpace() {
