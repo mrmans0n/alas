@@ -12,6 +12,7 @@ typealias ACPComposerSubmitHandler = (
 
 struct ACPInputField: NSViewRepresentable {
     @ObservedObject var session: ACPSession
+    @ObservedObject var composer: ACPComposerState
     let worktreeRoot: URL
     let actions: ACPComposerActions
     @Binding var isFocused: Bool
@@ -74,7 +75,7 @@ struct ACPInputField: NSViewRepresentable {
         if let tv = nsView.documentView as? ACPNSTextView {
             tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
             tv.needsDisplay = true
-            context.coordinator.syncPersistedDraft(session.composerDraft, into: tv)
+            context.coordinator.syncPersistedDraft(composer.draft, into: tv)
         }
     }
 
@@ -101,7 +102,7 @@ struct ACPInputField: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             worktreeRoot: worktreeRoot,
-            initialDraft: session.composerDraft,
+            initialDraft: composer.draft,
             isFocused: $isFocused,
             sendOnEnter: sendOnEnter,
             onDraftChange: onDraftChange,

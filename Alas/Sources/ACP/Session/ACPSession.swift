@@ -1,6 +1,21 @@
 import Foundation
 import Combine
 
+/// Narrow observable holder for the rapidly-mutating composer draft.
+/// Keystrokes update this object instead of `ACPSession` so the transcript
+/// pane is not invalidated while the user types in long sessions.
+@MainActor
+final class ACPComposerState: ObservableObject {
+    private(set) var draft: ACPComposerDraft = .empty
+    private(set) var revision: Int = 0
+
+    func replaceDraft(_ draft: ACPComposerDraft) {
+        objectWillChange.send()
+        self.draft = draft
+        revision += 1
+    }
+}
+
 enum ACPSessionTitleSource: String, Codable {
     case placeholder
     case generated
@@ -17,6 +32,7 @@ final class ACPSession: ObservableObject, Identifiable {
     let createdAt: Date
     let restoredFromPersistence: Bool
     let transcript = ACPTranscript()
+    let composer = ACPComposerState()
     let terminalHost: ACPTerminalHost = ACPTerminalHost(sessionCwd: "/", sessionEnv: [:])
 
     @Published var title: String
@@ -28,8 +44,6 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var currentMode: String?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false
-    @Published var composerDraft: ACPComposerDraft = .empty
-    @Published private(set) var composerDraftRevision: Int = 0
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
     @Published var contextRestoreWarning: ContextRestoreWarning?
@@ -99,9 +113,11 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    var composerDraft: ACPComposerDraft { composer.draft }
+    var composerDraftRevision: Int { composer.revision }
+
     func replaceComposerDraft(_ draft: ACPComposerDraft) {
-        composerDraft = draft
-        composerDraftRevision += 1
+        composer.replaceDraft(draft)
     }
 
     enum HydrationState: Equatable {

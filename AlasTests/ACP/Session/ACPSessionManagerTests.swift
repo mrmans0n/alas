@@ -100,6 +100,32 @@ struct ACPSessionManagerTests {
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
     }
 
+    @Test("persisting composer drafts does not publish the whole session")
+    func persistingComposerDraftDoesNotPublishWholeSession() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-observation-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let sessionStorageLabels = Set(Mirror(reflecting: session).children.compactMap(\.label))
+        var sessionPublishCount = 0
+        var composerPublishCount = 0
+        let sessionCancellable = session.objectWillChange.sink { _ in
+            sessionPublishCount += 1
+        }
+        let composerCancellable = session.composer.objectWillChange.sink { _ in
+            composerPublishCount += 1
+        }
+
+        withExtendedLifetime((sessionCancellable, composerCancellable)) {
+            mgr.persistComposerDraft(ACPComposerDraft(segments: [.text("typing")]), for: session)
+        }
+
+        #expect(!sessionStorageLabels.contains("_composerDraft"))
+        #expect(!sessionStorageLabels.contains("_composerDraftRevision"))
+        #expect(sessionPublishCount == 0)
+        #expect(composerPublishCount == 1)
+    }
+
     @Test("clearComposerDraft removes draft from memory and store")
     func clearComposerDraft() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-clear-explicit-\(UUID()).sqlite")

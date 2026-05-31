@@ -5,6 +5,7 @@ import SwiftUI
 /// animated send button that mirrors `session.transcript.streamingState`.
 struct ACPComposer: View {
     @ObservedObject var session: ACPSession
+    @ObservedObject private var composer: ACPComposerState
     let manager: ACPSessionManager
     let worktreeRoot: URL
     let agentLookup: (String) -> AgentDefinition?
@@ -18,6 +19,23 @@ struct ACPComposer: View {
     @State private var inputFocused = false
     @StateObject private var actions = ACPComposerActions()
     @State private var hasText: Bool = false
+
+    init(
+        session: ACPSession,
+        manager: ACPSessionManager,
+        worktreeRoot: URL,
+        agentLookup: @escaping (String) -> AgentDefinition?,
+        sendOnEnter: Bool,
+        onSubmit: @escaping ACPComposerSubmitHandler
+    ) {
+        self._session = ObservedObject(wrappedValue: session)
+        self._composer = ObservedObject(wrappedValue: session.composer)
+        self.manager = manager
+        self.worktreeRoot = worktreeRoot
+        self.agentLookup = agentLookup
+        self.sendOnEnter = sendOnEnter
+        self.onSubmit = onSubmit
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,6 +70,7 @@ struct ACPComposer: View {
         VStack(spacing: 6) {
             ACPInputField(
                 session: session,
+                composer: composer,
                 worktreeRoot: worktreeRoot,
                 actions: actions,
                 isFocused: $inputFocused,
@@ -65,10 +84,10 @@ struct ACPComposer: View {
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
-                hasText = session.composerDraft.hasContent
+                hasText = composer.draft.hasContent
             }
-            .onChange(of: session.composerDraftRevision) { _, _ in
-                hasText = session.composerDraft.hasContent
+            .onChange(of: composer.revision) { _, _ in
+                hasText = composer.draft.hasContent
             }
 
             HStack(spacing: 8) {
