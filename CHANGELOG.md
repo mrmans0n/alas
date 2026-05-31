@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-05-31
+
+### 🐛 Fixes
+
+- Persist left-sidebar project expansion and collapse state across app launches (#416).
+- Align Settings row dropdown controls to the left edge of their right-column area (#417).
+- Reduce ACP long-session scaling work (#415).
+
 ## [0.4.10] - 2026-05-31
 
 ### 🐛 Fixes
