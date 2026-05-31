@@ -11,6 +11,8 @@ struct SidebarView: View {
     let onNewWorktree: (_ projectId: String?) -> Void
     let onHideSidebar: () -> Void
     @Environment(\.theme) var theme
+    @State private var spaceTitleVisible = false
+    @State private var hideTitleTask: Task<Void, Never>?
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -59,6 +61,17 @@ struct SidebarView: View {
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
                                 onRemoveProject: { onRemoveProject(project.id) },
+                                spaces: state.spacesManager.spaces,
+                                activeSpaceId: state.spacesManager.activeSpaceId,
+                                isProjectInSpace: { spaceId in
+                                    state.spacesManager.space(id: spaceId)?.projectIds.contains(project.id) == true
+                                },
+                                canRemoveFromSpace: { _ in
+                                    state.spacesManager.membershipCount(forProject: project.id) > 1
+                                },
+                                onToggleSpaceMembership: { spaceId in
+                                    state.toggleProject(projectId: project.id, inSpace: spaceId)
+                                },
                                 onOpenTerminal: { wt in
                                     state.selectWorktree(id: wt.id)
                                     _ = try? state.openTerminalTab(for: wt)
@@ -150,8 +163,40 @@ struct SidebarView: View {
                     }
                     .padding(.top, 8)
                 }
+                if state.spacesManager.shouldShowSpaceAffordance {
+                    SpacePagerIndicator(
+                        spaces: state.spacesManager.spaces,
+                        activeSpaceId: state.spacesManager.activeSpaceId,
+                        titleVisible: spaceTitleVisible
+                    )
+                }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
+        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
+                    if value.translation.width < 0 {
+                        state.switchToAdjacentSpace(offset: 1)
+                    } else {
+                        state.switchToAdjacentSpace(offset: -1)
+                    }
+                    showTransientSpaceTitle()
+                }
+        )
+        .onDisappear {
+            hideTitleTask?.cancel()
+            hideTitleTask = nil
+        }
+    }
+
+    private func showTransientSpaceTitle() {
+        hideTitleTask?.cancel()
+        spaceTitleVisible = true
+        hideTitleTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            spaceTitleVisible = false
         }
     }
 }

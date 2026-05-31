@@ -19,6 +19,11 @@ struct RepoGroupView: View {
     let onNewWorktree: () -> Void
     let onEditProject: () -> Void
     let onRemoveProject: () -> Void
+    let spaces: [SpaceConfig]
+    let activeSpaceId: String
+    let isProjectInSpace: (_ spaceId: String) -> Bool
+    let canRemoveFromSpace: (_ spaceId: String) -> Bool
+    let onToggleSpaceMembership: (_ spaceId: String) -> Void
     let onOpenTerminal: (Worktree) -> Void
     let onCopyPath: (Worktree) -> Void
     let onCopyBranch: (Worktree) -> Void
@@ -60,6 +65,20 @@ struct RepoGroupView: View {
             .onTapGesture { collapsed.toggle() }
             .contextMenu {
                 Button("Edit Project…", action: onEditProject)
+                Menu("Spaces") {
+                    ForEach(spaces) { space in
+                        let isMember = isProjectInSpace(space.id)
+                        Button {
+                            onToggleSpaceMembership(space.id)
+                        } label: {
+                            HStack {
+                                Text("\(space.emoji) \(space.name)")
+                                if isMember { Text("✓") }
+                            }
+                        }
+                        .disabled(isMember && !canRemoveFromSpace(space.id))
+                    }
+                }
                 Divider()
                 Button("Remove Project…", role: .destructive, action: onRemoveProject)
             }
