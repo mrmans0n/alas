@@ -138,6 +138,8 @@ struct ChangesTabView: View {
                     upstream: rps.upstreamRef,
                     recent: rps.recentBaseBranches
                 ),
+                isLoadingBranches: rps.isFetchingBranches,
+                hasLoadedBranches: rps.hasFetchedBranches,
                 onSelect: onSelectCommit,
                 onCopySHA: copyCommitSHA,
                 onEdit: { commit in

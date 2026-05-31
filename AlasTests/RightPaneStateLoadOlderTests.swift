@@ -43,6 +43,21 @@ struct RightPaneStateLoadOlderTests {
         return repo
     }
 
+    private func makeRepoWithRemoteBranches() async throws -> (repo: URL, remote: URL) {
+        let repo = try await makeRepoOnMain(commits: 1)
+        let remote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-\(UUID().uuidString).git")
+        _ = try await Process.git(["init", "-q", "--bare", remote.path], cwd: repo)
+        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "worktree/task-branch"], cwd: repo)
+        try "task\n".write(to: repo.appendingPathComponent("task.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "feat: task"], cwd: repo)
+        _ = try await Process.git(["push", "-q", "origin", "main", "worktree/task-branch"], cwd: repo)
+        _ = try await Process.git(["fetch", "-q", "origin"], cwd: repo)
+        return (repo, remote)
+    }
+
     @Test func firstPageUsesParentOfLastAheadCommit() async throws {
         let repo = try await makeBranchAhead(base: 25, ahead: 3)
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -58,6 +73,39 @@ struct RightPaneStateLoadOlderTests {
         // First older entry is the parent of the oldest ahead commit
         // ("ahead1"), which is the latest base commit "c25".
         #expect(state.olderCommits[0].subject == "c25")
+    }
+
+    @Test func branchFetchMarksLoadingAndPublishesCompleteInitialList() async throws {
+        let fixture = try await makeRepoWithRemoteBranches()
+        defer {
+            try? FileManager.default.removeItem(at: fixture.repo)
+            try? FileManager.default.removeItem(at: fixture.remote)
+        }
+        let state = RightPaneState(
+            worktree: makeWorktree(at: fixture.repo, branch: "worktree/task-branch"),
+            baseBranch: "main"
+        )
+
+        #expect(state.availableBranches.isEmpty)
+        #expect(state.isFetchingBranches == false)
+        #expect(state.hasFetchedBranches == false)
+        #expect(BaseBranchSelector.shouldShowLoading(
+            isLoading: state.isFetchingBranches,
+            hasLoaded: state.hasFetchedBranches
+        ))
+
+        await state.fetchBranches()
+
+        #expect(state.isFetchingBranches == false)
+        #expect(state.hasFetchedBranches)
+        #expect(!BaseBranchSelector.shouldShowLoading(
+            isLoading: state.isFetchingBranches,
+            hasLoaded: state.hasFetchedBranches
+        ))
+        #expect(state.availableBranches.contains("main"))
+        #expect(state.availableBranches.contains("worktree/task-branch"))
+        #expect(state.availableBranches.contains("origin/main"))
+        #expect(state.availableBranches.contains("origin/worktree/task-branch"))
     }
 
     @Test func subsequentPageContinuesFromOlderCursor() async throws {

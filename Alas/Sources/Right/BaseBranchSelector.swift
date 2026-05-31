@@ -3,6 +3,8 @@ import SwiftUI
 struct BaseBranchSelector: View {
     @Binding var baseBranch: String
     let branches: [String]
+    let isLoadingBranches: Bool
+    let hasLoadedBranches: Bool
     let currentRef: String?
     let onSelect: (String) -> Void
     let onOpen: () -> Void
@@ -45,7 +47,16 @@ struct BaseBranchSelector: View {
             AlasField(text: $search, placeholder: "Search branches...")
                 .padding(8)
             Divider().background(theme.color("line"))
-            if branches.isEmpty {
+            if Self.shouldShowLoading(isLoading: isLoadingBranches, hasLoaded: hasLoadedBranches) {
+                HStack(spacing: 8) {
+                    Spinner(lineWidth: 1.5, duration: 0.7)
+                        .frame(width: 12, height: 12)
+                    Text("Loading branches...")
+                        .font(.system(size: 12))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
+                .padding(12)
+            } else if branches.isEmpty {
                 Text("No branches")
                     .font(.system(size: 12))
                     .foregroundColor(theme.color("fg-dim"))
@@ -90,6 +101,10 @@ struct BaseBranchSelector: View {
 }
 
 extension BaseBranchSelector {
+    static func shouldShowLoading(isLoading: Bool, hasLoaded: Bool) -> Bool {
+        isLoading || !hasLoaded
+    }
+
     static func isSelected(row name: String, baseBranch: String, currentRef: String?) -> Bool {
         name == (currentRef ?? baseBranch)
     }

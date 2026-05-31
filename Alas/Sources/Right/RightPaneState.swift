@@ -121,6 +121,8 @@ final class RightPaneState {
     /// Branches available in this worktree, populated on-demand by
     /// `fetchBranches()`. Used by the base-branch picker.
     private(set) var availableBranches: [String] = []
+    private(set) var isFetchingBranches: Bool = false
+    private(set) var hasFetchedBranches: Bool = false
 
     /// Upstream tracking ref of the current branch (e.g. `origin/main`),
     /// resolved during `refreshSyncStatus()`. Used by the base-branch
@@ -211,6 +213,13 @@ final class RightPaneState {
 
     /// Populate `availableBranches` from git. Best-effort; errors are logged.
     func fetchBranches() async {
+        guard !isFetchingBranches else { return }
+        isFetchingBranches = true
+        defer {
+            isFetchingBranches = false
+            hasFetchedBranches = true
+        }
+
         do {
             availableBranches = try await git.branches(at: worktree.path)
         } catch {

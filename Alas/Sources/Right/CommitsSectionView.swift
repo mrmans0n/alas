@@ -30,6 +30,8 @@ struct CommitsSectionView: View {
     @Binding var expanded: Bool
     @Binding var baseBranch: String
     let branches: [String]
+    let isLoadingBranches: Bool
+    let hasLoadedBranches: Bool
     let onSelect: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
     let onEdit: (CommitInfo) -> Void
@@ -64,6 +66,8 @@ struct CommitsSectionView: View {
                     BaseBranchSelector(
                         baseBranch: $baseBranch,
                         branches: branches,
+                        isLoadingBranches: isLoadingBranches,
+                        hasLoadedBranches: hasLoadedBranches,
                         currentRef: comparisonRef,
                         onSelect: onSelectBaseBranch,
                         onOpen: onOpenBaseBranchSelector

@@ -121,6 +121,13 @@ struct BaseBranchSelectorTests {
         #expect(result.isEmpty)
     }
 
+    @Test func unloadedBranchesRenderAsLoading() {
+        #expect(BaseBranchSelector.shouldShowLoading(isLoading: false, hasLoaded: false))
+        #expect(BaseBranchSelector.shouldShowLoading(isLoading: true, hasLoaded: false))
+        #expect(BaseBranchSelector.shouldShowLoading(isLoading: true, hasLoaded: true))
+        #expect(!BaseBranchSelector.shouldShowLoading(isLoading: false, hasLoaded: true))
+    }
+
     @Test func smartListIncludesCurrentRefWhenAbsentFromShortlist() {
         let result = BaseBranchSelector.smartList(
             branches: ["main", "origin/main"],
