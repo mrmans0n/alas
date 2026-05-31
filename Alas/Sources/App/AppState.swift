@@ -297,7 +297,12 @@ final class AppState {
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
-        if spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id))) {
+        var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
+        for project in projectsFile.projects where spacesManager.membershipCount(forProject: project.id) == 0 {
+            spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
+            spacesChanged = true
+        }
+        if spacesChanged {
             _ = try? store.write(spacesManager.file, to: Paths.spacesFile)
         }
         self.spacesManager = spacesManager
@@ -355,7 +360,7 @@ final class AppState {
             cleanupWorktreeState(worktreeId: id)
         }
         if let current = selectedWorktreeId, !afterIds.contains(current) {
-            selectWorktree(id: resolvedSelectionForActiveSpace() ?? firstVisibleWorktreeId())
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
     }
 
@@ -484,6 +489,7 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
+        guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
         saveSpaces()
@@ -735,7 +741,7 @@ final class AppState {
         cleanupWorktreeState(worktreeId: id)
         projectsManager.removeOptimisticWorktree(id: id, projectId: projectId)
         if selectedWorktreeId == id {
-            selectWorktree(id: resolvedSelectionForActiveSpace() ?? firstVisibleWorktreeId())
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
     }
 
@@ -1894,7 +1900,7 @@ final class AppState {
                 return first.id
             }
         }
-        return firstVisibleWorktreeId()
+        return nil
     }
 
     func firstVisibleWorktreeId() -> String? {

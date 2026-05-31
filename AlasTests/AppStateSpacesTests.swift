@@ -51,13 +51,28 @@ struct AppStateSpacesTests {
             version: 1,
             activeSpaceId: "s1",
             spaces: [
-                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p2"], lastSelectedWorktreeId: nil, createdAt: Date())
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p2"], lastSelectedWorktreeId: nil, createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date())
             ]
         )
         let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1"), project("p2")]), spacesFile: spaces))
 
         #expect(state.activeSpaceProjects.map(\.id) == ["p2"])
         #expect(state.projects.map(\.id) == ["p1", "p2"])
+    }
+
+    @Test func initAddsOrphanProjectsToActiveSpace() {
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1"), project("p2")]), spacesFile: spaces))
+
+        #expect(state.activeSpaceProjects.map(\.id) == ["p1", "p2"])
+        #expect(state.spacesManager.activeSpace?.projectIds == ["p1", "p2"])
     }
 
     @Test func selectingWorktreeStoresLastSelectionForActiveSpace() {
@@ -130,6 +145,54 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpaceId == "s2")
         #expect(state.selectedWorktreeId == "wt2")
         #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt2")
+    }
+
+    @Test func cleanupMissingActiveSpaceWorktreeDoesNotSelectOtherSpaceWorktree() {
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: "wt1", createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: "wt2", createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
+        state.selectedWorktreeId = "wt1"
+        let beforeIds = state.allWorktreeIds()
+        state.projectsManager.removeOptimisticWorktree(id: "wt1", projectId: "p1")
+
+        state.cleanupMissingWorktrees(beforeIds: beforeIds)
+
+        #expect(state.spacesManager.activeSpaceId == "s1")
+        #expect(state.selectedWorktreeId == nil)
+        #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == nil)
+    }
+
+    @Test func removingFailedActiveSpaceWorktreeDoesNotSelectOtherSpaceWorktree() {
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: "wt1", createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: "wt2", createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
+        state.selectedWorktreeId = "wt1"
+
+        state.removeFailedOptimisticWorktree(id: "wt1", projectId: "p1")
+
+        #expect(state.spacesManager.activeSpaceId == "s1")
+        #expect(state.selectedWorktreeId == nil)
+        #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == nil)
     }
 
     @Test func focusingGlobalWorktreeSwitchesToContainingSpace() {
