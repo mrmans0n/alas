@@ -478,6 +478,7 @@ enum ACPUserScrollEvent {
 /// `ACPTranscriptMarkdown.messageBody` would return for this row.
 private struct ACPHoverCopyButton: View {
     let markdown: String
+    var onHoverChange: ((Bool) -> Void)? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -494,7 +495,43 @@ private struct ACPHoverCopyButton: View {
                 .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+        .onHover { onHoverChange?($0) }
         .help("Copy message as Markdown")
+    }
+}
+
+@MainActor
+final class ACPDelayedHoverVisibility: ObservableObject {
+    @Published private(set) var isVisible = false
+
+    private let hideDelayNanoseconds: UInt64
+    private var hideTask: Task<Void, Never>?
+
+    init(hideDelayNanoseconds: UInt64 = 350_000_000) {
+        self.hideDelayNanoseconds = hideDelayNanoseconds
+    }
+
+    deinit {
+        hideTask?.cancel()
+    }
+
+    func enter() {
+        hideTask?.cancel()
+        hideTask = nil
+        isVisible = true
+    }
+
+    func leave() {
+        hideTask?.cancel()
+        let delay = hideDelayNanoseconds
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self?.isVisible = false
+                self?.hideTask = nil
+            }
+        }
     }
 }
 
@@ -560,16 +597,29 @@ private struct AgentMessageRow: View {
     let messageId: String
     let transcript: ACPTranscript
     @ObservedObject var buffer: StreamingText
-    @State private var hovering = false
+    @StateObject private var hoverVisibility = ACPDelayedHoverVisibility()
     var body: some View {
         ACPMarkdownText(raw: buffer.value, cache: transcript.markdownCache(forMessage: messageId))
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .topTrailing) {
-                if hovering {
-                    ACPHoverCopyButton(markdown: buffer.value).offset(x: -2, y: -6)
+                if hoverVisibility.isVisible {
+                    ACPHoverCopyButton(markdown: buffer.value) { hovering in
+                        if hovering {
+                            hoverVisibility.enter()
+                        } else {
+                            hoverVisibility.leave()
+                        }
+                    }
+                    .offset(x: -2, y: -6)
                 }
             }
-            .onHover { hovering = $0 }
+            .onHover { hovering in
+                if hovering {
+                    hoverVisibility.enter()
+                } else {
+                    hoverVisibility.leave()
+                }
+            }
     }
 }
 
