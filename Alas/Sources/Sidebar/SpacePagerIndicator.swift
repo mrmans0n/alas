@@ -38,5 +38,12 @@ struct SpacePagerIndicator: View {
         .padding(.vertical, 10)
         .animation(.easeInOut(duration: 0.18), value: titleVisible)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel("Spaces")
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        guard let index = spaces.firstIndex(where: { $0.id == activeSpaceId }) else { return "" }
+        return "\(spaces[index].name), \(index + 1) of \(spaces.count)"
     }
 }

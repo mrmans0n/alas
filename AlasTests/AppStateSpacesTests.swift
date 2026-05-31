@@ -121,6 +121,57 @@ struct AppStateSpacesTests {
         #expect(state.selectedWorktreeId == "wt2")
     }
 
+    @Test func switchingToAdjacentSpaceReturnsFalseWithSingleSpace() {
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1")])))
+        let activeSpaceId = state.spacesManager.activeSpaceId
+
+        let changed = state.switchToAdjacentSpace(offset: 1)
+
+        #expect(!changed)
+        #expect(state.spacesManager.activeSpaceId == activeSpaceId)
+    }
+
+    @Test func switchingToAdjacentSpaceReturnsTrueAndChangesActiveSpace() {
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
+
+        let changed = state.switchToAdjacentSpace(offset: 1)
+
+        #expect(changed)
+        #expect(state.spacesManager.activeSpaceId == "s2")
+    }
+
+    @Test func togglingFinalProjectSpaceMembershipDoesNotPersistNoOp() {
+        var writeCount = 0
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [project("p1")]),
+            spacesFile: spaces,
+            writes: { _, _ in writeCount += 1 }
+        ))
+        writeCount = 0
+
+        state.toggleProject(projectId: "p1", inSpace: "s1")
+
+        #expect(writeCount == 0)
+        #expect(state.spacesManager.space(id: "s1")?.projectIds == ["p1"])
+    }
+
     @Test func switchingSpacesFallsBackToFirstVisibleWorktreeWhenRememberedSelectionIsStale() {
         let p1 = project("p1")
         let p2 = project("p2")

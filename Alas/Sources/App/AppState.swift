@@ -500,20 +500,25 @@ final class AppState {
         selectWorktree(id: resolvedSelectionForActiveSpace())
     }
 
-    func switchToAdjacentSpace(offset: Int) {
+    @discardableResult
+    func switchToAdjacentSpace(offset: Int) -> Bool {
         let spaces = spacesManager.spaces
         guard spaces.count > 1,
               let current = spaces.firstIndex(where: { $0.id == spacesManager.activeSpaceId })
-        else { return }
+        else { return false }
         let next = (current + offset + spaces.count) % spaces.count
+        guard next != current else { return false }
         switchToSpace(id: spaces[next].id)
+        return true
     }
 
     func toggleProject(projectId: String, inSpace spaceId: String) {
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
-            _ = spacesManager.removeProject(projectId, fromSpace: spaceId)
+            guard spacesManager.removeProject(projectId, fromSpace: spaceId) else { return }
         } else {
+            guard spacesManager.space(id: spaceId) != nil else { return }
             spacesManager.addProject(projectId, toSpace: spaceId)
+            guard spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true else { return }
         }
         saveSpaces()
     }

@@ -169,26 +169,27 @@ struct SidebarView: View {
                         activeSpaceId: state.spacesManager.activeSpaceId,
                         titleVisible: spaceTitleVisible
                     )
+                    .contentShape(Rectangle())
+                    .gesture(spacePagingGesture)
                 }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
         }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 24)
-                .onEnded { value in
-                    guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
-                    if value.translation.width < 0 {
-                        state.switchToAdjacentSpace(offset: 1)
-                    } else {
-                        state.switchToAdjacentSpace(offset: -1)
-                    }
-                    showTransientSpaceTitle()
-                }
-        )
         .onDisappear {
             hideTitleTask?.cancel()
             hideTitleTask = nil
         }
+    }
+
+    private var spacePagingGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
+                let offset = value.translation.width < 0 ? 1 : -1
+                if state.switchToAdjacentSpace(offset: offset) {
+                    showTransientSpaceTitle()
+                }
+            }
     }
 
     private func showTransientSpaceTitle() {
