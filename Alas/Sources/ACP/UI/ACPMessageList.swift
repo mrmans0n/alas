@@ -548,9 +548,25 @@ private struct UserMessageRow: View {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
                 if !attachments.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(attachments, id: \.uri) { a in
-                            FileChip(path: a.name ?? a.uri, lines: nil, iconSystemName: "at")
+                    let images = attachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
+                    let others = attachments.filter { ($0.mimeType?.hasPrefix("image/")) != true }
+                    if !images.isEmpty {
+                        HStack(spacing: 6) {
+                            // Key by index, not uri: content-addressed staging
+                            // means the same image attached twice shares a uri,
+                            // and duplicate ForEach ids collapse the row.
+                            ForEach(Array(images.enumerated()), id: \.offset) { _, a in
+                                if let url = URL(string: a.uri) {
+                                    ACPImageThumbnail(fileURL: url)
+                                }
+                            }
+                        }
+                    }
+                    if !others.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(others, id: \.uri) { a in
+                                FileChip(path: a.name ?? a.uri, lines: nil, iconSystemName: "at")
+                            }
                         }
                     }
                 }

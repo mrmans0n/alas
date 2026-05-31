@@ -47,3 +47,11 @@ extension Paths {
         appSupportRoot.appendingPathComponent("acp-adapter-updates.json")
     }
 }
+
+extension Paths {
+    static var acpAttachmentsRoot: URL { appSupportRoot.appendingPathComponent("acp-attachments", isDirectory: true) }
+
+    static func acpAttachmentsDir(forWorktreeId id: String) -> URL {
+        acpAttachmentsRoot.appendingPathComponent(id, isDirectory: true)
+    }
+}

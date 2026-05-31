@@ -10,7 +10,7 @@ struct ACPComposerDraft: Codable, Equatable {
             switch segment {
             case .text(let value):
                 value.isEmpty
-            case .mention:
+            case .mention, .image:
                 false
             }
         }
@@ -24,7 +24,7 @@ struct ACPComposerDraft: Codable, Equatable {
             switch segment {
             case .text(let value):
                 return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .mention:
+            case .mention, .image:
                 return true
             }
         }
@@ -33,17 +33,20 @@ struct ACPComposerDraft: Codable, Equatable {
     enum Segment: Codable, Equatable {
         case text(String)
         case mention(displayName: String, uri: String)
+        case image(uri: String, mimeType: String)
 
         private enum CodingKeys: String, CodingKey {
             case type
             case text
             case displayName
             case uri
+            case mimeType
         }
 
         private enum SegmentType: String, Codable {
             case text
             case mention
+            case image
         }
 
         init(from decoder: Decoder) throws {
@@ -57,6 +60,10 @@ struct ACPComposerDraft: Codable, Equatable {
                     displayName: try container.decode(String.self, forKey: .displayName),
                     uri: try container.decode(String.self, forKey: .uri)
                 )
+            case .image:
+                self = .image(
+                    uri: try container.decode(String.self, forKey: .uri),
+                    mimeType: try container.decode(String.self, forKey: .mimeType))
             }
         }
 
@@ -70,6 +77,10 @@ struct ACPComposerDraft: Codable, Equatable {
                 try container.encode(SegmentType.mention, forKey: .type)
                 try container.encode(displayName, forKey: .displayName)
                 try container.encode(uri, forKey: .uri)
+            case .image(let uri, let mimeType):
+                try container.encode(SegmentType.image, forKey: .type)
+                try container.encode(uri, forKey: .uri)
+                try container.encode(mimeType, forKey: .mimeType)
             }
         }
     }
@@ -103,6 +114,7 @@ extension ACPComposerDraft {
     /// Declared in an extension so the compiler keeps synthesizing the
     /// memberwise `init(segments:)` that the rest of the codebase relies on.
     init(blocks: [ACPContentBlock]) {
+        var segments: [Segment] = []
         var text = ""
         var links: [(name: String, uri: String)] = []
         for block in blocks {
@@ -111,11 +123,17 @@ extension ACPComposerDraft {
                 text += value
             case .resourceLink(let uri, let name):
                 links.append((name ?? Self.displayName(forURI: uri), uri))
-            case .image(let uri, _):
-                links.append((Self.displayName(forURI: uri), uri))
+            case .image(_, let uri, let mimeType):
+                if let uri {
+                    segments.append(contentsOf: Self.rebuild(text: text, links: links))
+                    text = ""
+                    links = []
+                    segments.append(.image(uri: uri, mimeType: mimeType ?? "image/png"))
+                }
             }
         }
-        self.segments = Self.rebuild(text: text, links: links)
+        segments.append(contentsOf: Self.rebuild(text: text, links: links))
+        self.segments = segments
     }
 
     private static func displayName(forURI uri: String) -> String {

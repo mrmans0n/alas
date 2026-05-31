@@ -480,19 +480,63 @@ extension ACPSessionRunner {
     }
 
     /// Build the canonical `[ACPContentBlock]` array from a composer-shaped
-    /// `(text, attachments)` pair: leading text block followed by one
-    /// `.resourceLink` per attachment. Shared with
+    /// `(text, attachments)` pair: a leading text block followed by one block
+    /// per attachment — a DEFERRED `.image` (data: nil, carrying the staged
+    /// file uri) for image attachments, a `.resourceLink` for everything else.
+    /// Image blocks stay deferred here so SQLite never holds base64; `hydrate`
+    /// resolves them at send time. Shared with
     /// `ACPSessionManager.enqueueWhileRecovering` so prompts persisted before
     /// the runner exists look identical on the wire to ones the runner enqueues.
     static func blocks(
         text: String,
         attachments: [ACPMessage.Attachment]
     ) -> [ACPContentBlock] {
-        var blocks: [ACPContentBlock] = [.text(text)]
+        // Omit the leading text block for an image-only prompt so we don't send
+        // an empty/whitespace `.text` ahead of the image(s). The composer leaves
+        // a trailing space after an image chip, so the image-only text is " ",
+        // not "" — trim before deciding.
+        var blocks: [ACPContentBlock] = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? []
+            : [.text(text)]
         for a in attachments {
-            blocks.append(.resourceLink(uri: a.uri, name: a.name))
+            if let mime = a.mimeType, mime.hasPrefix("image/") {
+                // Deferred: the staged file is referenced by uri; the inline
+                // base64 (or resource-link fallback) is resolved at send time
+                // by `hydrate`, so SQLite never stores the base64 payload.
+                blocks.append(.image(data: nil, uri: a.uri, mimeType: mime))
+            } else {
+                blocks.append(.resourceLink(uri: a.uri, name: a.name))
+            }
         }
         return blocks
+    }
+
+    /// Maximum dimension for an inline base64 image, in pixels.
+    nonisolated static let inlineImageMaxDimension: CGFloat = 1568
+
+    /// Resolve deferred image blocks just before sending. When the agent
+    /// supports inline images, read the staged file, downscale, and base64-
+    /// encode it; otherwise degrade to a `file://` resource link the agent
+    /// reads from disk. Non-image blocks (and already-hydrated images that
+    /// carry `data`) pass through untouched.
+    ///
+    /// `nonisolated async` so the synchronous file reads + downscale/base64
+    /// encoding (up to 10 × 20 MB) run off the main actor; awaiting it from the
+    /// main-actor send path hops to the cooperative pool instead of freezing
+    /// the composer/transcript while a prompt is prepared.
+    nonisolated static func hydrate(_ blocks: [ACPContentBlock], imageInputSupported: Bool) async -> [ACPContentBlock] {
+        blocks.map { block in
+            guard case .image(let data, let uri, let mime) = block, data == nil, let uri else {
+                return block
+            }
+            let name = (URL(string: uri)?.lastPathComponent) ?? "image"
+            if imageInputSupported,
+               let fileURL = URL(string: uri),
+               let encoded = ACPImageEncoding.inlineBase64(fileURL: fileURL, maxDimension: inlineImageMaxDimension) {
+                return .image(data: encoded.data, uri: nil, mimeType: encoded.mimeType)
+            }
+            return .resourceLink(uri: uri, name: name)
+        }
     }
 
     /// Primary entry. Resolves the routing then dispatches to one of:
@@ -728,7 +772,11 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                try await self.connection.prompt(sessionId: remoteId, blocks: blocks)
+                // Read the capability flag on the main actor (cheap), then
+                // hydrate off-main so file reads + base64 encoding don't block UI.
+                let imageSupported = self.session.imageInputSupported
+                let wireBlocks = await Self.hydrate(blocks, imageInputSupported: imageSupported)
+                try await self.connection.prompt(sessionId: remoteId, blocks: wireBlocks)
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
@@ -846,13 +894,20 @@ extension ACPSessionRunner {
         }.joined()
     }
 
-    /// Resource-link attachments derived from the prompt blocks. Mirrors
-    /// the shape `recordUserPrompt` expects (which previously came from
-    /// the composer-level attachments array).
+    /// Attachments derived from the prompt blocks for the user-bubble UI:
+    /// resource links plus deferred image blocks (which still carry the staged
+    /// file uri). Mirrors the shape `recordUserPrompt` expects (which
+    /// previously came from the composer-level attachments array). Inline-
+    /// hydrated images (uri == nil) are intentionally skipped — they have no
+    /// file to point the thumbnail at and only appear post-`hydrate`.
     static func attachments(of blocks: [ACPContentBlock]) -> [ACPMessage.Attachment] {
         blocks.compactMap { b -> ACPMessage.Attachment? in
             if case .resourceLink(let uri, let name) = b {
                 return ACPMessage.Attachment(uri: uri, name: name)
+            }
+            if case .image(_, let uri, let mime) = b, let uri {
+                let name = URL(string: uri)?.lastPathComponent
+                return ACPMessage.Attachment(uri: uri, name: name, mimeType: mime ?? "image/png")
             }
             return nil
         }

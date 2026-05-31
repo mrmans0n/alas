@@ -38,6 +38,17 @@ enum ACPMessage: Equatable {
     struct Attachment: Codable, Equatable, Hashable, Sendable {
         let uri: String
         let name: String?
+        /// Image MIME type (e.g. `image/png`) when this attachment is an
+        /// image; `nil` for mention/resource-link attachments. Drives
+        /// thumbnail rendering in the user bubble. Synthesized Codable
+        /// decodes a missing key as nil, so legacy rows stay valid.
+        let mimeType: String?
+
+        init(uri: String, name: String?, mimeType: String? = nil) {
+            self.uri = uri
+            self.name = name
+            self.mimeType = mimeType
+        }
     }
 
     struct ToolCall: Codable, Equatable, Hashable, Sendable {

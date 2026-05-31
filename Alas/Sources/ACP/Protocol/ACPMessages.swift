@@ -74,6 +74,21 @@ struct ACPInitializeResult: Codable, Equatable {
     struct ACPPromptCapabilities: Codable, Equatable {
         let image: Bool
         let audio: Bool
+
+        init(image: Bool = false, audio: Bool = false) {
+            self.image = image
+            self.audio = audio
+        }
+
+        // ACP defines each prompt capability as defaulting to false when
+        // omitted, so an agent advertising only `{ "image": true }` must still
+        // decode (a non-optional `audio` would otherwise fail the whole
+        // initialize result and silently drop image support).
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            image = try c.decodeIfPresent(Bool.self, forKey: .image) ?? false
+            audio = try c.decodeIfPresent(Bool.self, forKey: .audio) ?? false
+        }
     }
     struct ACPAuthMethod: Codable, Equatable {
         let id: String
@@ -333,9 +348,9 @@ struct ACPSessionPromptParams: Codable, Equatable {
 enum ACPContentBlock: Codable, Equatable {
     case text(String)
     case resourceLink(uri: String, name: String?)
-    case image(uri: String, mimeType: String?)
+    case image(data: String?, uri: String?, mimeType: String?)
 
-    private enum Keys: String, CodingKey { case type, text, uri, name, mimeType }
+    private enum Keys: String, CodingKey { case type, text, uri, name, mimeType, data }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -348,7 +363,8 @@ enum ACPContentBlock: Codable, Equatable {
                 name: try? c.decode(String.self, forKey: .name))
         case "image":
             self = .image(
-                uri: try c.decode(String.self, forKey: .uri),
+                data: try? c.decode(String.self, forKey: .data),
+                uri: try? c.decode(String.self, forKey: .uri),
                 mimeType: try? c.decode(String.self, forKey: .mimeType))
         default:
             self = .text("")
@@ -364,9 +380,10 @@ enum ACPContentBlock: Codable, Equatable {
             try c.encode("resource_link", forKey: .type)
             try c.encode(uri, forKey: .uri)
             try c.encodeIfPresent(name, forKey: .name)
-        case .image(let uri, let mime):
+        case .image(let data, let uri, let mime):
             try c.encode("image", forKey: .type)
-            try c.encode(uri, forKey: .uri)
+            try c.encodeIfPresent(data, forKey: .data)
+            try c.encodeIfPresent(uri, forKey: .uri)
             try c.encodeIfPresent(mime, forKey: .mimeType)
         }
     }

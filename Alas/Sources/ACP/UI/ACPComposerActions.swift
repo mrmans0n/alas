@@ -7,6 +7,9 @@ import Foundation
 @MainActor
 final class ACPComposerActions: ObservableObject {
     var submitWithIntent: ((ACPSubmitIntent) -> Void)?
+    /// Published by the coordinator; opens an image picker and inserts the
+    /// chosen files as chips.
+    var presentImagePicker: (() -> Void)?
     /// Convenience used by call sites that just want default submit.
     func submit() { submitWithIntent?(.auto) }
 }
