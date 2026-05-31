@@ -518,18 +518,37 @@ final class AppState {
     }
 
     func renameSpace(id: String, name: String) {
+        let previous = spacesManager.space(id: id)?.name
         spacesManager.renameSpace(id: id, name: name)
+        guard spacesManager.space(id: id)?.name != previous else { return }
         saveSpaces()
     }
 
     func setSpaceEmoji(id: String, emoji: String) {
+        let previous = spacesManager.space(id: id)?.emoji
         spacesManager.setEmoji(spaceId: id, emoji: emoji.isEmpty ? SpaceConfig.defaultEmoji : emoji)
+        guard spacesManager.space(id: id)?.emoji != previous else { return }
+        saveSpaces()
+    }
+
+    func updateSpace(id: String, name: String, emoji: String) {
+        guard let previous = spacesManager.space(id: id) else { return }
+        spacesManager.renameSpace(id: id, name: name)
+        spacesManager.setEmoji(spaceId: id, emoji: emoji.isEmpty ? SpaceConfig.defaultEmoji : emoji)
+        guard let updated = spacesManager.space(id: id),
+              updated.name != previous.name || updated.emoji != previous.emoji
+        else { return }
         saveSpaces()
     }
 
     func deleteSpace(id: String) {
+        let wasActiveSpace = spacesManager.activeSpaceId == id
         guard spacesManager.deleteSpace(id: id) else { return }
-        selectWorktree(id: resolvedSelectionForActiveSpaceForStartup())
+        if wasActiveSpace {
+            let fallbackSelection = resolvedSelectionForActiveSpaceForStartup()
+            selectedWorktreeId = fallbackSelection
+            spacesManager.setLastSelectedWorktree(fallbackSelection)
+        }
         saveSpaces()
     }
 

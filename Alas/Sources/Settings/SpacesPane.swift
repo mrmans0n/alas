@@ -45,34 +45,70 @@ private struct SpaceSettingsRow: View {
     @Bindable var state: AppState
     let space: SpaceConfig
     let canDelete: Bool
+    @State private var nameDraft: String
+    @State private var emojiDraft: String
+    @State private var isConfirmingDelete = false
+
+    init(state: AppState, space: SpaceConfig, canDelete: Bool) {
+        self.state = state
+        self.space = space
+        self.canDelete = canDelete
+        _nameDraft = State(initialValue: space.name)
+        _emojiDraft = State(initialValue: space.emoji)
+    }
 
     var body: some View {
         SettingsRow(name: space.name, desc: "Customize this space.") {
             HStack(spacing: 8) {
-                AlasField(text: nameBinding)
+                AlasField(text: $nameDraft, onSubmit: applyChanges)
                     .frame(width: 180)
-                AlasField(text: emojiBinding)
+                    .accessibilityLabel("Space name for \(space.name)")
+                AlasField(text: $emojiDraft, onSubmit: applyChanges)
                     .frame(width: 48)
+                    .accessibilityLabel("Space emoji for \(space.name)")
+                AlasButton(title: "Apply", icon: "checkmark", style: .normal, action: applyChanges)
+                    .disabled(!hasDraftChanges)
                 AlasButton(title: "Delete", icon: "trash", style: .normal) {
-                    state.deleteSpace(id: space.id)
+                    isConfirmingDelete = true
                 }
                 .disabled(!canDelete)
+                .accessibilityLabel("Delete space \(space.name)")
             }
+        }
+        .confirmationDialog(
+            "Delete \(space.name)?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Space", role: .destructive) {
+                state.deleteSpace(id: space.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Repos and files will not be deleted. Only this space organization will be removed.")
+        }
+        .onChange(of: space.name) { oldName, newName in
+            guard nameDraft == oldName else { return }
+            nameDraft = newName
+        }
+        .onChange(of: space.emoji) { oldEmoji, newEmoji in
+            guard emojiDraft == oldEmoji else { return }
+            emojiDraft = newEmoji
         }
     }
 
-    private var nameBinding: Binding<String> {
-        Binding(
-            get: { state.spacesManager.space(id: space.id)?.name ?? space.name },
-            set: { state.renameSpace(id: space.id, name: $0) }
-        )
+    private var hasDraftChanges: Bool {
+        nameDraft != (state.spacesManager.space(id: space.id)?.name ?? space.name)
+            || emojiDraft != (state.spacesManager.space(id: space.id)?.emoji ?? space.emoji)
     }
 
-    private var emojiBinding: Binding<String> {
-        Binding(
-            get: { state.spacesManager.space(id: space.id)?.emoji ?? space.emoji },
-            set: { state.setSpaceEmoji(id: space.id, emoji: String($0.prefix(1))) }
-        )
+    private func applyChanges() {
+        let committedEmoji = String(emojiDraft.prefix(1))
+        state.updateSpace(id: space.id, name: nameDraft, emoji: committedEmoji)
+        if let updated = state.spacesManager.space(id: space.id) {
+            nameDraft = updated.name
+            emojiDraft = updated.emoji
+        }
     }
 }
 

@@ -150,6 +150,101 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpaceId == "s2")
     }
 
+    @Test func deletingActiveSpaceSelectsFallbackAndPersistsOnce() {
+        var spaceWriteCount = 0
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s2",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: "wt1", createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: "wt2", createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [p1, p2]),
+            spacesFile: spaces,
+            writes: { _, url in
+                if url == Paths.spacesFile {
+                    spaceWriteCount += 1
+                }
+            }
+        ))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
+        state.selectedWorktreeId = "wt2"
+        spaceWriteCount = 0
+
+        state.deleteSpace(id: "s2")
+
+        #expect(state.spacesManager.activeSpaceId == "s1")
+        #expect(state.selectedWorktreeId == "wt1")
+        #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt1")
+        #expect(spaceWriteCount == 1)
+    }
+
+    @Test func deletingInactiveSpacePersistsOnceWithoutChangingSelection() {
+        var spaceWriteCount = 0
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: "wt1", createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: "wt2", createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [p1, p2]),
+            spacesFile: spaces,
+            writes: { _, url in
+                if url == Paths.spacesFile {
+                    spaceWriteCount += 1
+                }
+            }
+        ))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
+        state.selectedWorktreeId = "wt1"
+        spaceWriteCount = 0
+
+        state.deleteSpace(id: "s2")
+
+        #expect(state.spacesManager.activeSpaceId == "s1")
+        #expect(state.selectedWorktreeId == "wt1")
+        #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt1")
+        #expect(spaceWriteCount == 1)
+    }
+
+    @Test func deletingFinalSpaceDoesNotPersist() {
+        var spaceWriteCount = 0
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [project("p1")]),
+            spacesFile: spaces,
+            writes: { _, url in
+                if url == Paths.spacesFile {
+                    spaceWriteCount += 1
+                }
+            }
+        ))
+        spaceWriteCount = 0
+
+        state.deleteSpace(id: "s1")
+
+        #expect(state.spacesManager.activeSpaceId == "s1")
+        #expect(state.spacesManager.spaces.count == 1)
+        #expect(spaceWriteCount == 0)
+    }
+
     @Test func togglingFinalProjectSpaceMembershipDoesNotPersistNoOp() {
         var writeCount = 0
         let spaces = SpacesFile(
