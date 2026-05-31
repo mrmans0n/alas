@@ -39,7 +39,7 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
     }
 
     override func cellBaselineOffset() -> NSPoint {
-        NSPoint(x: 0, y: -3)
+        NSPoint(x: 0, y: -1)
     }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
