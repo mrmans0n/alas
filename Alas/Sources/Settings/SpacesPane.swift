@@ -68,6 +68,7 @@ private struct SpaceSettingsRow: View {
                     .accessibilityLabel("Space emoji for \(space.name)")
                 AlasButton(title: "Apply", icon: "checkmark", style: .normal, action: applyChanges)
                     .disabled(!hasDraftChanges)
+                    .accessibilityLabel("Apply changes to \(space.name) space")
                 AlasButton(title: "Delete", icon: "trash", style: .normal) {
                     isConfirmingDelete = true
                 }
@@ -127,6 +128,8 @@ private struct ProjectSpaceMembershipRow: View {
                     }
                     .toggleStyle(.checkbox)
                     .disabled(isMember && state.spacesManager.membershipCount(forProject: project.id) == 1)
+                    .accessibilityLabel("Include \(project.name) in \(space.name) space")
+                    .accessibilityValue(isMember ? "included" : "not included")
                 }
             }
         }
