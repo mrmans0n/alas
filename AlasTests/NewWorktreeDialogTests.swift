@@ -180,6 +180,13 @@ struct NewWorktreeDialogTests {
         #expect(!NewWorktreeDialog.acpSegmentEnabled(enabledAgents: agents))
     }
 
+    @Test func launchSurfaceSegmentsExposeEnabledOptionsToKeyboardFocus() {
+        #expect(NewWorktreeDialog.launchSurfaceSegmentFocusable(.none, acpSegmentEnabled: false))
+        #expect(NewWorktreeDialog.launchSurfaceSegmentFocusable(.terminal, acpSegmentEnabled: false))
+        #expect(!NewWorktreeDialog.launchSurfaceSegmentFocusable(.acp, acpSegmentEnabled: false))
+        #expect(NewWorktreeDialog.launchSurfaceSegmentFocusable(.acp, acpSegmentEnabled: true))
+    }
+
     @Test func resolvedLaunchAgentKeepsInitialWhenValidForTerminalMode() {
         let agents = [
             Self.agent(id: "claude", displayName: "Claude"),

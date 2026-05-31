@@ -1,5 +1,11 @@
 import SwiftUI
 
+enum NewWorktreeLaunchSurfaceSegment: Hashable {
+    case none
+    case terminal
+    case acp
+}
+
 struct NewWorktreeDialog: View {
     @Bindable var state: AppState
     @Binding var presented: Bool
@@ -22,6 +28,7 @@ struct NewWorktreeDialog: View {
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
     @State private var createErrorMessage: String?
+    @FocusState private var focusedLaunchSurfaceSegment: NewWorktreeLaunchSurfaceSegment?
 
     @Environment(\.theme) var theme
 
@@ -353,6 +360,7 @@ struct NewWorktreeDialog: View {
         HStack(spacing: 0) {
             HStack(spacing: 2) {
                 segment(
+                    id: .none,
                     isSelected: !openAfterCreate,
                     icon: "circle.slash",
                     label: "No tab",
@@ -361,6 +369,7 @@ struct NewWorktreeDialog: View {
                     openAfterCreate = false
                 }
                 segment(
+                    id: .terminal,
                     isSelected: openAfterCreate && launchMode == .terminal,
                     icon: "terminal",
                     label: "Terminal",
@@ -376,6 +385,7 @@ struct NewWorktreeDialog: View {
                     )
                 }
                 segment(
+                    id: .acp,
                     isSelected: openAfterCreate && launchMode == .acp,
                     icon: "sparkle",
                     label: "Chat",
@@ -404,6 +414,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func segment(
+        id: NewWorktreeLaunchSurfaceSegment,
         isSelected: Bool,
         icon: String,
         label: String,
@@ -411,7 +422,12 @@ struct NewWorktreeDialog: View {
         disabledHelp: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let isFocused = focusedLaunchSurfaceSegment == id
+        let isFocusable = isEnabled && Self.launchSurfaceSegmentFocusable(
+            id,
+            acpSegmentEnabled: acpSegmentEnabled
+        )
+        return Button(action: action) {
             HStack(spacing: 5) {
                 Icon(name: icon, size: 11,
                      color: isSelected ? theme.color("fg") : theme.color("fg-muted"))
@@ -431,10 +447,16 @@ struct NewWorktreeDialog: View {
                     }
                 }
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(theme.color("accent"), lineWidth: isFocused ? 1 : 0)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusable(isFocusable)
+        .focused($focusedLaunchSurfaceSegment, equals: id)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
         .modifier(SegmentHelpModifier(text: isEnabled ? nil : disabledHelp))
@@ -456,6 +478,18 @@ struct NewWorktreeDialog: View {
 
     nonisolated static func acpSegmentEnabled(enabledAgents: [AgentDefinition]) -> Bool {
         !acpCapableAgents(from: enabledAgents).isEmpty
+    }
+
+    nonisolated static func launchSurfaceSegmentFocusable(
+        _ segment: NewWorktreeLaunchSurfaceSegment,
+        acpSegmentEnabled: Bool
+    ) -> Bool {
+        switch segment {
+        case .none, .terminal:
+            return true
+        case .acp:
+            return acpSegmentEnabled
+        }
     }
 
     /// Decide which agent id the picker should hold given the desired
