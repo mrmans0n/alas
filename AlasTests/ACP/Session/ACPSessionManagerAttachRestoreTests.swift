@@ -25,6 +25,175 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-restored")
     }
 
+    @Test("replayed load history is ignored when a session is already hydrated")
+    func replayedLoadHistoryIgnoredWhenHydrated() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        try appendMessage(
+            .user(
+                id: UUID(),
+                text: "look at this",
+                attachments: [
+                    .init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")
+                ]
+            ),
+            to: store,
+            seq: 0
+        )
+        try appendMessage(
+            .agent(id: UUID(), StreamingText("the image looks good")),
+            to: store,
+            seq: 1
+        )
+        try appendMessage(
+            .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Read file",
+                kind: "read",
+                status: "completed",
+                content: "done"
+            )),
+            to: store,
+            seq: 2
+        )
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.scriptAsync(method: "session/load") { _ in
+            client.emit(.init(sessionId: "remote-old", update: .userMessageChunk(.text("look at this"))))
+            client.emit(.init(sessionId: "remote-old", update: .agentMessageChunk(.text("the image looks good"))))
+            client.emit(.init(sessionId: "remote-old", update: .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Read file",
+                kind: "read",
+                status: "completed",
+                content: [.content(.text("done"))],
+                locations: nil,
+                rawInput: nil,
+                rawOutput: nil
+            ))))
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-restored",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/prompt") { _ in
+            client.emit(.init(sessionId: "remote-restored", update: .agentMessageChunk(.text("prompt response"))))
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        #expect(session.transcript.messages.count == 3)
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.yieldedUpdateCount == 3)
+        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
+        #expect(session.transcript.messages.count == 3)
+        #expect(try store.loadMessages(sessionId: "local").count == 3)
+        guard case .user(_, let text, let attachments) = session.transcript.messages[0] else {
+            Issue.record("Expected hydrated user message to remain first")
+            return
+        }
+        #expect(text == "look at this")
+        #expect(attachments == [
+            .init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")
+        ])
+
+        client.emit(.init(sessionId: "remote-restored", update: .agentMessageChunk(.text("live follow-up"))))
+        try await waitUntil { session.transcript.messages.count == 4 }
+        guard case .agent(_, let liveText) = session.transcript.messages[3] else {
+            Issue.record("Expected post-load live update to be applied")
+            return
+        }
+        #expect(liveText.value == "live follow-up")
+
+        let runner = try #require(manager.runners[session.id])
+        var delivered: Bool?
+        runner.send(text: "next prompt", attachments: []) { succeeded in
+            delivered = succeeded
+        }
+        try await waitUntil {
+            delivered == true
+                && session.transcript.streamingState == .idle
+                && session.transcript.messages.count == 6
+        }
+    }
+
+    @Test("fresh session keeps updates emitted during session new")
+    func freshSessionKeepsUpdatesEmittedDuringNew() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.scriptAsync(method: "session/new") { _ in
+            client.emit(.init(sessionId: "remote-new", update: .agentMessageChunk(.text("welcome"))))
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+        try await waitUntil { session.transcript.messages.count == 1 }
+
+        guard case .agent(_, let text) = session.transcript.messages[0] else {
+            Issue.record("Expected fresh session update to be applied")
+            return
+        }
+        #expect(text.value == "welcome")
+    }
+
+    @Test("non-replaying load still flushes queued prompt")
+    func nonReplayingLoadStillFlushesQueuedPrompt() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        try appendMessage(
+            .user(id: UUID(), text: "prior prompt", attachments: []),
+            to: store,
+            seq: 0
+        )
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("queued prompt")])
+        ])
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-restored")
+        client.script(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            #expect(params.sessionId == "remote-restored")
+            #expect(params.prompt == [.text("queued prompt")])
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/prompt"]
+                && session.queue.isEmpty
+        }
+        #expect(session.transcript.messages.count == 2)
+        guard case .user(_, let text, _) = session.transcript.messages[1] else {
+            Issue.record("Expected queued prompt to append after hydrated transcript")
+            return
+        }
+        #expect(text == "queued prompt")
+    }
+
     @Test("load failure falls back to session/new with transcript warning")
     func loadFailureFallsBackToNewWithWarning() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

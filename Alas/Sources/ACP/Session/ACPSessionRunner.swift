@@ -53,6 +53,9 @@ final class ACPSessionRunner {
     private var cancelledPromptIDs: Set<Int> = []
     private var appliedUpdateCount = 0
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
+    private var suppressingLoadReplay: Bool
+    private var loadReplaySuppressionTarget: Int?
+    private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so an
     /// Undo tapped during the cancel round-trip can't drain the just-
@@ -63,6 +66,7 @@ final class ACPSessionRunner {
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
          sessionId: String, worktreePath: String,
          agentEnv: [String: String] = ProcessInfo.processInfo.environment,
+         suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil)
     {
@@ -72,6 +76,7 @@ final class ACPSessionRunner {
         self.sessionId = sessionId
         self.worktreePath = worktreePath
         self.agentEnv = agentEnv
+        self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.policy = ACPPermissionPolicy(
@@ -88,8 +93,16 @@ final class ACPSessionRunner {
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
                 await MainActor.run {
-                    let dirty = self.session.apply(u.update)
+                    self.observedUpdateCount += 1
                     self.appliedUpdateCount += 1
+                    if self.suppressingLoadReplay {
+                        if let target = self.loadReplaySuppressionTarget,
+                           self.observedUpdateCount >= target {
+                            self.suppressingLoadReplay = false
+                        }
+                        return
+                    }
+                    let dirty = self.session.apply(u.update)
                     self.persistIndices(dirty)
                     if self.applyPendingCompletedOutputBoundaryIfReady() {
                         self.flushQueueIfIdle()
@@ -209,6 +222,14 @@ final class ACPSessionRunner {
             for await req in self.connection.client.terminalRequests {
                 self.handleTerminalRequest(req)
             }
+        }
+    }
+
+    func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
+        guard suppressingLoadReplay else { return }
+        loadReplaySuppressionTarget = target
+        if observedUpdateCount >= target {
+            suppressingLoadReplay = false
         }
     }
 

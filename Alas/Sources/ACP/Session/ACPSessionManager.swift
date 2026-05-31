@@ -583,8 +583,30 @@ extension ACPSessionManager {
                 stderrBuffer.append(data)
             }
         }
+        var startedRunner: ACPSessionRunner?
         do {
             session.promptCapabilities = (try await connection.initialize())
+            let shouldSuppressLoadReplay = !freshlyCreated
+                && session.hydrationState == .ready
+                && session.hasConversationTranscript
+                && !(session.remoteSessionId ?? "").isEmpty
+            let runner = ACPSessionRunner(session: session, connection: connection,
+                                          store: store, sessionId: sessionId,
+                                          worktreePath: worktreePath,
+                                          agentEnv: Self.mergeEnv(extra: spec.extraEnv),
+                                          suppressingLoadReplay: shouldSuppressLoadReplay,
+                                          onDirtyCheck: onDirtyCheck,
+                                          onLiveBufferRead: onLiveBufferRead)
+            var runnerStarted = false
+            func startRunnerIfNeeded() {
+                guard !runnerStarted else { return }
+                runner.start()
+                runnerStarted = true
+                startedRunner = runner
+            }
+            if shouldSuppressLoadReplay {
+                startRunnerIfNeeded()
+            }
             let pendingRecovery = (try? store.loadSession(id: sessionId)?.contextRecoveryPending) == true
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
@@ -594,7 +616,13 @@ extension ACPSessionManager {
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
                 do {
                     result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                    runner.finishSuppressingLoadReplay(
+                        throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                    )
                 } catch {
+                    runner.finishSuppressingLoadReplay(
+                        throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                    )
                     result = try await connection.newSession(cwd: worktreePath)
                     if session.hasConversationTranscript {
                         shouldHoldQueueForRecovery = true
@@ -631,13 +659,7 @@ extension ACPSessionManager {
             session.availableConfigOptions = result.configOptions
             session.contextRestoreWarning = restoreWarning
             persistSessionRemoteId(session)
-            let runner = ACPSessionRunner(session: session, connection: connection,
-                                          store: store, sessionId: sessionId,
-                                          worktreePath: worktreePath,
-                                          agentEnv: Self.mergeEnv(extra: spec.extraEnv),
-                                          onDirtyCheck: onDirtyCheck,
-                                          onLiveBufferRead: onLiveBufferRead)
-            runner.start()
+            startRunnerIfNeeded()
             runners[sessionId] = runner
             session.agentState = .ready
             if !shouldHoldQueueForRecovery {
@@ -653,6 +675,7 @@ extension ACPSessionManager {
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
             session.agentState = .failed(full)
+            startedRunner?.stop()
             await connection.shutdown()
         }
     }
