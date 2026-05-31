@@ -93,6 +93,7 @@ final class ACPSession: ObservableObject, Identifiable {
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = []
     @Published var steerUndo: SteerUndoState?
+    private var toolCallIndices: [String: Int] = [:]
 
     struct SteerUndoState: Equatable {
         /// Unique per-snapshot id used by SwiftUI for view diffing — letting
@@ -166,6 +167,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
         transcript.messages.append(.user(id: UUID(), text: text, attachments: attachments))
+        didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         if titleSource == .placeholder {
             let candidate = text
@@ -198,6 +200,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .userMessageChunk(let block):
             // Agents rarely emit these; treat as informational.
             transcript.messages.append(.systemNotice(id: UUID(), text: text(of: block)))
+            didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             return [transcript.messages.count - 1]
         case .agentThoughtChunk(let block):
@@ -218,6 +221,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 preview: Self.previewLine(full),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: Self.extractTerminalIds(items))))
+            didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             return [transcript.messages.count - 1]
         case .toolCallUpdate(let u):
@@ -251,6 +255,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 return [i]
             } else {
                 transcript.messages.append(.plan(id: UUID(), items))
+                didAppendTranscriptMessage()
                 transcript.completedOutputBoundaryMessageIds.removeAll()
                 return [transcript.messages.count - 1]
             }
@@ -276,11 +281,18 @@ final class ACPSession: ObservableObject, Identifiable {
 
     func appendSystemNotice(_ text: String) {
         transcript.messages.append(.systemNotice(id: UUID(), text: text))
+        didAppendTranscriptMessage()
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
         transcript.messages.append(.fileEdit(id: UUID(), edit))
+        didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
+    }
+
+    func replaceTranscriptMessages(_ messages: [ACPMessage]) {
+        transcript.messages = messages
+        rebuildToolCallIndices()
     }
 
     func markCompletedOutputBoundary() {
@@ -604,17 +616,50 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         transcript.messages.append(makeNew())
+        didAppendTranscriptMessage()
         return transcript.messages.count - 1
     }
     /// Returns the index of the matching tool call, or nil if no match.
     private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) -> Int? {
+        if let i = toolCallIndices[id],
+           transcript.messages.indices.contains(i),
+           case .toolCall(var tc) = transcript.messages[i],
+           tc.toolCallId == id {
+            mutate(&tc)
+            transcript.messages[i] = .toolCall(tc)
+            return i
+        }
+
         for i in transcript.messages.indices {
             if case .toolCall(var tc) = transcript.messages[i], tc.toolCallId == id {
+                toolCallIndices[id] = i
                 mutate(&tc)
                 transcript.messages[i] = .toolCall(tc)
                 return i
             }
         }
         return nil
+    }
+
+    private func didAppendTranscriptMessage() {
+        let index = transcript.messages.count - 1
+        if case .toolCall(let tc) = transcript.messages[index] {
+            toolCallIndices[tc.toolCallId] = index
+        }
+        advanceRenderWindowIfFollowingTail()
+    }
+
+    private func rebuildToolCallIndices() {
+        toolCallIndices.removeAll(keepingCapacity: true)
+        for i in transcript.messages.indices {
+            if case .toolCall(let tc) = transcript.messages[i] {
+                toolCallIndices[tc.toolCallId] = i
+            }
+        }
+    }
+
+    private func advanceRenderWindowIfFollowingTail() {
+        guard followsTranscriptTail else { return }
+        transcript.setVisibleHead(max(0, transcript.messages.count - ACPTranscript.tailWindow))
     }
 }

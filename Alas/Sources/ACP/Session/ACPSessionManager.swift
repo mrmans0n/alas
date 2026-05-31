@@ -207,7 +207,7 @@ final class ACPSessionManager: ObservableObject {
     private func applyHydration(_ result: HydrationResult, to session: ACPSession) {
         // Convert wire variants into full ACPMessages (allocates StreamingText
         // for agent/thought) in one main-actor pass.
-        session.transcript.messages = result.wireMessages.map { $0.toMessage() }
+        session.replaceTranscriptMessages(result.wireMessages.map { $0.toMessage() })
         session.transcript.resetWindowToTail()
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
@@ -510,14 +510,7 @@ final class ACPSessionManager: ObservableObject {
     /// was truncated to save memory. Returns nil if the row is gone or
     /// the payload can't be decoded.
     func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) -> String? {
-        guard let stored = try? store.loadMessages(sessionId: sessionId) else { return nil }
-        for row in stored where row.kind == "tool_call" {
-            if let tc = try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: row.payload),
-               tc.toolCallId == toolCallId {
-                return tc.content
-            }
-        }
-        return nil
+        try? store.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
     }
 }
 

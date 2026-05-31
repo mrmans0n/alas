@@ -166,6 +166,27 @@ struct ACPSessionStoreCRUDTests {
         #expect(loaded[0].payload == m1)
     }
 
+    @Test("message count uses a narrow aggregate query")
+    func messageCount() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            titleSource: .placeholder,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        try store.upsertSession(.init(id: "other", agentId: "claude", title: "t",
+            titleSource: .placeholder,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        try store.appendMessage(sessionId: "s", id: "m1", kind: "user", seq: 0, payload: Data("one".utf8), createdAt: 1)
+        try store.appendMessage(sessionId: "s", id: "m2", kind: "agent", seq: 1, payload: Data("two".utf8), createdAt: 2)
+        try store.appendMessage(sessionId: "other", id: "m3", kind: "agent", seq: 0, payload: Data("three".utf8), createdAt: 3)
+
+        #expect(try store.messageCount(sessionId: "s") == 2)
+        #expect(try store.messageCount(sessionId: "other") == 1)
+        #expect(try store.messageCount(sessionId: "missing") == 0)
+    }
+
     @Test("composer draft upsert load and delete round-trips")
     func composerDraftCRUD() throws {
         let url = tmpURL()
