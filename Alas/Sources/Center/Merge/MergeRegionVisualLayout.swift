@@ -22,6 +22,8 @@ enum MergeRegionVisualLayout {
         let localRows: Range<Int>
         let baseRows: Range<Int>
         let resultRows: Range<Int>
+        let resultLocalRows: Range<Int>
+        let resultRemoteRows: Range<Int>
         let remoteRows: Range<Int>
     }
 
@@ -95,6 +97,8 @@ enum MergeRegionVisualLayout {
                     localRows: localStart ..< (localStart + localCount),
                     baseRows: (resultStart + localCount) ..< (resultStart + localCount + baseCount),
                     resultRows: resultStart ..< (resultStart + localCount + baseCount + remoteCount),
+                    resultLocalRows: resultStart ..< (resultStart + localCount),
+                    resultRemoteRows: (resultStart + localCount + baseCount) ..< (resultStart + localCount + baseCount + remoteCount),
                     remoteRows: (remoteStart + localCount + baseCount) ..< (remoteStart + localCount + baseCount + remoteCount)
                 ))
                 ordinal += 1

@@ -128,14 +128,14 @@ struct MergeActionGutter: NSViewRepresentable {
                 return (
                     leftStart: range.localRows.lowerBound,
                     leftEnd: range.localRows.upperBound,
-                    rightStart: range.resultRows.lowerBound,
-                    rightEnd: range.resultRows.upperBound,
+                    rightStart: range.resultLocalRows.lowerBound,
+                    rightEnd: range.resultLocalRows.upperBound,
                     sourceStart: range.localRows.lowerBound
                 )
             case .resultToRemote:
                 return (
-                    leftStart: range.resultRows.lowerBound,
-                    leftEnd: range.resultRows.upperBound,
+                    leftStart: range.resultRemoteRows.lowerBound,
+                    leftEnd: range.resultRemoteRows.upperBound,
                     rightStart: range.remoteRows.lowerBound,
                     rightEnd: range.remoteRows.upperBound,
                     sourceStart: range.remoteRows.lowerBound
