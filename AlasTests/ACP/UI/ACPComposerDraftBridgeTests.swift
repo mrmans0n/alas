@@ -378,6 +378,34 @@ struct ACPComposerDraftBridgeTests {
         #expect(serialized == draft)
     }
 
+    @Test("mention insertion replaces the typed trigger and restores base typing attributes")
+    func mentionInsertionReplacesTriggerAndRestoresTypingAttributes() {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "@"))
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+
+        let inserted = textView.insertMention(URL(fileURLWithPath: "/tmp/File.swift"))
+
+        #expect(inserted)
+        #expect(!textView.string.contains("@"))
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(segments: [
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" "),
+        ]))
+        #expect(textView.selectedRange() == NSRange(location: textView.attributedString().length, length: 0))
+
+        let trailingSpaceIndex = textView.attributedString().length - 1
+        let trailingColor = textView.attributedString().attribute(
+            .foregroundColor,
+            at: trailingSpaceIndex,
+            effectiveRange: nil
+        ) as? NSColor
+        let typingColor = textView.typingAttributes[.foregroundColor] as? NSColor
+
+        #expect(trailingColor == NSColor.labelColor)
+        #expect(typingColor == NSColor.labelColor)
+    }
+
     // MARK: - Keyboard intent resolution (doCommandBy)
 
     private func makeCoordinator(

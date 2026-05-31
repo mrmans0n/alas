@@ -479,6 +479,15 @@ final class ACPNSTextView: NSTextView {
     /// extract the live query and to know what range to replace on
     /// accept.
     private var slashStart: Int = -1
+    private var mentionPanel: ACPMentionPanel?
+    private var mentionStart: Int = -1
+
+    private static var baseTypingAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: NSColor.labelColor,
+        ]
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -533,7 +542,9 @@ final class ACPNSTextView: NSTextView {
         }
 
         if event.charactersIgnoringModifiers == "@" {
+            let triggerLocation = selectedRange().location
             super.keyDown(with: event)
+            mentionStart = triggerLocation
             presentMentionPopover()
             return
         }
@@ -549,10 +560,24 @@ final class ACPNSTextView: NSTextView {
 
     private func presentMentionPopover() {
         guard let coord = coordinator else { return }
-        let panel = ACPMentionPanel(worktreeRoot: coord.worktreeRoot) { [weak self] file in
-            self?.insertMention(file)
-        }
+        closeMentionPanel()
+        let panel = ACPMentionPanel(
+            worktreeRoot: coord.worktreeRoot,
+            onPick: { [weak self] file in
+                self?.insertMention(file)
+            },
+            onCancel: { [weak self] in
+                self?.closeMentionPanel()
+            }
+        )
+        mentionPanel = panel
         positionAndShow(panel)
+    }
+
+    private func closeMentionPanel() {
+        mentionPanel?.close()
+        mentionPanel = nil
+        mentionStart = -1
     }
 
     /// Locate an active `/<word>` token at the caret. Active means: the
@@ -654,10 +679,7 @@ final class ACPNSTextView: NSTextView {
             // user types right after the chip is the normal label color
             // immediately — otherwise it inherits color-less attributes and
             // renders black until the debounced restyler repaints the line.
-            let baseAttrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 13),
-                .foregroundColor: NSColor.labelColor,
-            ]
+            let baseAttrs = Self.baseTypingAttributes
             chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
             let insertAt = selectedRange()
             textStorage?.replaceCharacters(in: insertAt, with: chipString)
@@ -792,7 +814,9 @@ final class ACPNSTextView: NSTextView {
         return super.performDragOperation(sender)
     }
 
-    private func insertMention(_ url: URL) {
+    @discardableResult
+    func insertMention(_ url: URL) -> Bool {
+        guard let textStorage else { return false }
         let name = url.lastPathComponent
         let attachment = ACPMentionChipAttachment(displayName: name, uri: url.absoluteString)
         let chipString = NSMutableAttributedString(attachment: attachment)
@@ -802,10 +826,37 @@ final class ACPNSTextView: NSTextView {
             .attachmentURI: url.absoluteString,
             .toolTip: url.path,
         ], range: NSRange(location: 0, length: chipString.length))
-        chipString.append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 13)]))
-        textStorage?.append(chipString)
-        setSelectedRange(NSRange(location: (textStorage?.length ?? 0), length: 0))
+        let baseAttrs = Self.baseTypingAttributes
+        chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
+
+        let replacementRange = mentionReplacementRange(in: textStorage)
+        textStorage.replaceCharacters(in: replacementRange, with: chipString)
+        setSelectedRange(NSRange(location: replacementRange.location + chipString.length, length: 0))
+        typingAttributes = baseAttrs
+        closeMentionPanel()
         didChangeText()
+        return true
+    }
+
+    private func mentionReplacementRange(in storage: NSTextStorage) -> NSRange {
+        let selected = selectedRange()
+        let caret = min(selected.location, storage.length)
+        let string = storage.string as NSString
+
+        if mentionStart >= 0,
+           mentionStart < storage.length,
+           caret >= mentionStart,
+           string.substring(with: NSRange(location: mentionStart, length: 1)) == "@" {
+            return NSRange(location: mentionStart, length: caret - mentionStart + selected.length)
+        }
+
+        if selected.length == 0,
+           caret > 0,
+           string.substring(with: NSRange(location: caret - 1, length: 1)) == "@" {
+            return NSRange(location: caret - 1, length: 1)
+        }
+
+        return NSRange(location: caret, length: min(selected.length, storage.length - caret))
     }
 
     private func insertSlash(_ suggestion: ACPPromptSuggestion) {
@@ -844,7 +895,7 @@ final class ACPNSTextView: NSTextView {
 /// Glass NSPanel hosting the SwiftUI fuzzy file picker. Floats above
 /// the composer when the user types '@'.
 final class ACPMentionPanel: NSPanel {
-    init(worktreeRoot: URL, onPick: @escaping (URL) -> Void) {
+    init(worktreeRoot: URL, onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void = {}) {
         super.init(
             contentRect: .init(x: 0, y: 0, width: 360, height: 280),
             styleMask: [.borderless, .nonactivatingPanel, .titled, .fullSizeContentView],
@@ -867,6 +918,7 @@ final class ACPMentionPanel: NSPanel {
             },
             onCancel: { [weak self] in
                 self?.close()
+                onCancel()
             }
         ))
         host.frame = contentView?.bounds ?? .init(x: 0, y: 0, width: 360, height: 280)
