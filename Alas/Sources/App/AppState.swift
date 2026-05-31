@@ -512,6 +512,27 @@ final class AppState {
         return true
     }
 
+    func addSpace(name: String, emoji: String) {
+        _ = spacesManager.addSpace(name: name, emoji: emoji)
+        saveSpaces()
+    }
+
+    func renameSpace(id: String, name: String) {
+        spacesManager.renameSpace(id: id, name: name)
+        saveSpaces()
+    }
+
+    func setSpaceEmoji(id: String, emoji: String) {
+        spacesManager.setEmoji(spaceId: id, emoji: emoji.isEmpty ? SpaceConfig.defaultEmoji : emoji)
+        saveSpaces()
+    }
+
+    func deleteSpace(id: String) {
+        guard spacesManager.deleteSpace(id: id) else { return }
+        selectWorktree(id: resolvedSelectionForActiveSpaceForStartup())
+        saveSpaces()
+    }
+
     func toggleProject(projectId: String, inSpace spaceId: String) {
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
             guard spacesManager.removeProject(projectId, fromSpace: spaceId) else { return }
