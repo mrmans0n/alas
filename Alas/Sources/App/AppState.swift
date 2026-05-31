@@ -1887,8 +1887,8 @@ final class AppState {
     /// Prefers the entry now occupying that index in the same project (i.e.
     /// what was the next sibling). Falls back to the new last entry if the
     /// removed worktree was the last one. If the project has no remaining
-    /// visible worktrees, picks the first visible worktree across all projects
-    /// in declaration order. Returns `nil` if nothing is left.
+    /// visible worktrees, picks the first visible worktree in the active space.
+    /// Returns `nil` if the active space has no visible worktrees.
     private func selectionAfterRemoval(removedFromProjectId: String, removedAtIndex: Int) -> String? {
         let siblings = projectsManager.visibleWorktrees(projectId: removedFromProjectId)
         if !siblings.isEmpty {
@@ -1924,6 +1924,10 @@ final class AppState {
             return remembered
         }
         return firstVisibleWorktreeId(in: activeSpaceProjects)
+    }
+
+    func resolvedSelectionForActiveSpaceForStartup() -> String? {
+        resolvedSelectionForActiveSpace()
     }
 
     var canFocusMainWorktreeForCurrentProject: Bool {

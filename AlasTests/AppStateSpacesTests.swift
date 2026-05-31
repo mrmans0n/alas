@@ -84,6 +84,22 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt1")
     }
 
+    @Test func startupSelectionUsesRememberedActiveSpaceWorktreeBeforeFirstVisible() {
+        let p1 = project("p1")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: "wt2", createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1]), spacesFile: spaces))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p1"))
+
+        #expect(state.resolvedSelectionForActiveSpaceForStartup() == "wt2")
+    }
+
     @Test func switchingSpacesRestoresLastSelectionThenFallback() {
         let p1 = project("p1")
         let p2 = project("p2")

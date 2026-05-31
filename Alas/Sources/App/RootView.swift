@@ -174,7 +174,7 @@ struct RootView: View {
             // can't do this because refreshAll runs async after init.
             state.reloadTabs()
             if state.selectedWorktreeId == nil {
-                state.selectWorktree(id: firstWorktreeId())
+                state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
             }
             state.startAllProjectGitWatchers()
             state.rescanAgents()
@@ -242,10 +242,6 @@ struct RootView: View {
             }
         }
         return nil
-    }
-
-    private func firstWorktreeId() -> String? {
-        state.firstVisibleWorktreeId(in: state.activeSpaceProjects)
     }
 
     private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool) {
