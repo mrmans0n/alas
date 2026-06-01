@@ -21,6 +21,7 @@ final class ACPImageChipAttachment: NSTextAttachment {
 private final class ACPImageChipCell: NSTextAttachmentCell {
     private let thumbnail: NSImage?
     private static let side: CGFloat = 20
+    private static let fallbackFont = NSFont.systemFont(ofSize: 13)
 
     init(thumbnail: NSImage?) {
         self.thumbnail = thumbnail
@@ -30,7 +31,9 @@ private final class ACPImageChipCell: NSTextAttachmentCell {
 
     override var cellSize: NSSize { NSSize(width: Self.side, height: Self.side) }
 
-    override func cellBaselineOffset() -> NSPoint { NSPoint(x: 0, y: -5) }
+    override func cellBaselineOffset() -> NSPoint {
+        NSPoint(x: 0, y: Self.baselineOffset(for: Self.fallbackFont, attachmentHeight: cellSize.height))
+    }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
         let rect = frame.insetBy(dx: 1, dy: 1)
@@ -55,6 +58,22 @@ private final class ACPImageChipCell: NSTextAttachmentCell {
                             proposedLineFragment lineFrag: NSRect,
                             glyphPosition position: NSPoint,
                             characterIndex charIndex: Int) -> NSRect {
-        NSRect(origin: .zero, size: cellSize)
+        let size = cellSize
+        let font = textContainer.layoutManager?.textStorage?.attribute(
+            .font,
+            at: charIndex,
+            effectiveRange: nil
+        ) as? NSFont ?? Self.fallbackFont
+        return NSRect(
+            x: 0,
+            y: Self.baselineOffset(for: font, attachmentHeight: size.height),
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private static func baselineOffset(for font: NSFont, attachmentHeight: CGFloat) -> CGFloat {
+        let letterCenterFromBaseline = (font.ascender + font.descender) / 2
+        return letterCenterFromBaseline - attachmentHeight / 2
     }
 }
