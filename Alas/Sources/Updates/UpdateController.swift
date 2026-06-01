@@ -54,11 +54,15 @@ final class UpdateController {
 
     private func runCheck(announceNoUpdate: Bool) async {
         let result = await checker.check(current: currentVersion)
-        defaults.set(Date(), forKey: lastCheckedKey)
         switch result {
         case .updateAvailable(let info):
+            // Stamp only on a successful fetch — a failed check must not consume
+            // the throttle budget, or a transient network error on launch would
+            // suppress auto-checks for a full interval.
+            defaults.set(Date(), forKey: lastCheckedKey)
             presentedUpdate = info
         case .upToDate:
+            defaults.set(Date(), forKey: lastCheckedKey)
             if announceNoUpdate { presentInfo(title: "You're up to date", message: "Alas \(currentVersion) is the latest version.") }
         case .failed(let message):
             if announceNoUpdate { presentInfo(title: "Couldn't check for updates", message: message) }
