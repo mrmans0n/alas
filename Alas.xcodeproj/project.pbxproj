@@ -332,6 +332,7 @@
 		5EA1AA5C8D9DE003BACE8291 /* AlasGhostty.Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */; };
 		5EB258E8B4A4DCD50DFE5E82 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE58EF9CF8EC461667D9430 /* AppConfig.swift */; };
 		5F7E14A0D7E1D3F036806B73 /* MergeOperationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D8D902B9FF4F44E5C2C7F03 /* MergeOperationStateTests.swift */; };
+		5FA0FC131F06178797420608 /* ReleaseChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF99EC1C513C5D76D690BC2 /* ReleaseChecker.swift */; };
 		5FF61283B11E2696A72727D1 /* TreeSitterHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */; };
 		603D2F40A0368A139822CE80 /* ACPLaunchCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B29505F108227C8F43822585 /* ACPLaunchCatalogTests.swift */; };
 		604E881461FC839C4233B0AF /* LSPInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74D394D40BC9060833DD640A /* LSPInstaller.swift */; };
@@ -531,6 +532,7 @@
 		9D439D5F19ACEB5A39B7CB68 /* CodexACPInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3985F2F58DB6E3BBF3520EFD /* CodexACPInstaller.swift */; };
 		9D4F9F5CE9FF51C33E32703C /* ACPMessageWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21F30DB5A812E396262A926 /* ACPMessageWire.swift */; };
 		9D6FE5A4589D73A7480CE2B2 /* IndentationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C3F234BEF9CE053CD4DB1E /* IndentationHelper.swift */; };
+		9D99FFFDFB3A256C4960D388 /* ReleaseCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E0C7ED63A67D16A79DF4BA /* ReleaseCheckerTests.swift */; };
 		9DF0D37CE59DF8AAD7172443 /* ACPSetupChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E9864A515B0ED49C68739B6 /* ACPSetupChecker.swift */; };
 		9E302329243407946D47DC91 /* BranchPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFD4C762D8323B78934ECE7 /* BranchPicker.swift */; };
 		9E349701BA73BBCCCBB135B3 /* DraftCommitTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC3CA543A17D1C3DFA70A80C /* DraftCommitTabView.swift */; };
@@ -1374,6 +1376,7 @@
 		9F650CFAC8E61B1EC99CD04A /* TabActivityPulseTransitionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabActivityPulseTransitionTests.swift; sourceTree = "<group>"; };
 		9F80EA8C6EFF2C0A8F02C62D /* InstallRecipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallRecipe.swift; sourceTree = "<group>"; };
 		9FF41571C93C1C34A77951E2 /* GitRefNameInputFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitRefNameInputFilter.swift; sourceTree = "<group>"; };
+		9FF99EC1C513C5D76D690BC2 /* ReleaseChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseChecker.swift; sourceTree = "<group>"; };
 		A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictMarkerParserTests.swift; sourceTree = "<group>"; };
 		A1BC298112812E38C99E0B71 /* ACPAdapterUpdateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterUpdateStoreTests.swift; sourceTree = "<group>"; };
 		A203964F9055BEF3F6142684 /* CodexACPInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexACPInstallerTests.swift; sourceTree = "<group>"; };
@@ -1479,6 +1482,7 @@
 		C2AEA30B7C74A39A46448AF5 /* NotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationServiceTests.swift; sourceTree = "<group>"; };
 		C2CA853E91C240B7B5551859 /* GitServiceStagedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStagedTests.swift; sourceTree = "<group>"; };
 		C2D7EA3F2B69C0A8D2F8F8A5 /* ACPPromptCapabilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPromptCapabilitiesTests.swift; sourceTree = "<group>"; };
+		C2E0C7ED63A67D16A79DF4BA /* ReleaseCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseCheckerTests.swift; sourceTree = "<group>"; };
 		C34ED0F4DB5FB6620993ECFC /* DiffSelectableTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffSelectableTextTests.swift; sourceTree = "<group>"; };
 		C3B53E3E92FA696866F44FDD /* ACPLaunchSpecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPLaunchSpecTests.swift; sourceTree = "<group>"; };
 		C3BC736DAAD590624B840923 /* ACPSystemNoticeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSystemNoticeView.swift; sourceTree = "<group>"; };
@@ -1978,6 +1982,7 @@
 				CB0315FB9B537C0A240CFA32 /* ProjectsManagerProjectOrderingTests.swift */,
 				4F5B91F414F99741818BCB17 /* ProjectsManagerTests.swift */,
 				3711FACCAD4DE3E29AB13DD2 /* ProjectsManagerWorktreeOrderingTests.swift */,
+				C2E0C7ED63A67D16A79DF4BA /* ReleaseCheckerTests.swift */,
 				6D788808DF3BE405143F91F7 /* ReleaseInfoTests.swift */,
 				01675626CE431DD5867636BF /* RepoGroupViewLayoutTests.swift */,
 				220514C66CF29B6FD04EAB0B /* RepoSelectorModelTests.swift */,
@@ -2675,6 +2680,7 @@
 		96D582F846CA5342C74C984D /* Updates */ = {
 			isa = PBXGroup;
 			children = (
+				9FF99EC1C513C5D76D690BC2 /* ReleaseChecker.swift */,
 				35004DC60214F616FA84ED8B /* ReleaseInfo.swift */,
 				8E8EB674A5221235F1C7594E /* SemanticVersion.swift */,
 			);
@@ -3783,6 +3789,7 @@
 				0FE1A3CCEB283E8780F52076 /* QueuedPrompt.swift in Sources */,
 				3AC6DD00AD2D19FB3A0CCD03 /* RecommendedLanguageCatalog.swift in Sources */,
 				0D8046E333B0DA2B45EE78D4 /* RelativeTime.swift in Sources */,
+				5FA0FC131F06178797420608 /* ReleaseChecker.swift in Sources */,
 				D6F28C27DB02285A62C969A4 /* ReleaseInfo.swift in Sources */,
 				A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */,
 				2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */,
@@ -4162,6 +4169,7 @@
 				66D3CC7109527B2938684292 /* ProjectsManagerWorktreeOrderingTests.swift in Sources */,
 				B6580745C7EDF5AA65DB0A86 /* QueuedPromptTests.swift in Sources */,
 				E89811545A8AD0ED03655AA3 /* RecommendedLanguageCatalogTests.swift in Sources */,
+				9D99FFFDFB3A256C4960D388 /* ReleaseCheckerTests.swift in Sources */,
 				852B01E3449841603FEEDC61 /* ReleaseInfoTests.swift in Sources */,
 				133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */,
 				737EC7C9A35C9ED61ED67B83 /* RepoSelectorModelTests.swift in Sources */,
