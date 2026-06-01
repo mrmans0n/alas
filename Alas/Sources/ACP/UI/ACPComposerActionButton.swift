@@ -37,9 +37,9 @@ struct ACPComposerActionButton: View {
             }
             .foregroundStyle(theme.color("bg-0"))
             .padding(.horizontal, 11)
-            .frame(height: 26)
+            .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
-                RoundedRectangle(cornerRadius: 7).fill(theme.color("accent"))
+                RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius).fill(theme.color("accent"))
             )
             .overlay(alignment: .topTrailing) { badgeOverlay }
         }
@@ -59,12 +59,13 @@ struct ACPComposerActionButton: View {
             }
             .foregroundStyle(theme.color("del"))
             .padding(.horizontal, 11)
-            .frame(height: 26)
+            .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
-                RoundedRectangle(cornerRadius: 7).fill(theme.color("del").opacity(0.15))
+                RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
+                    .fill(theme.color("del").opacity(0.15))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
                     .strokeBorder(theme.color("del").opacity(0.45), lineWidth: 0.75)
             )
         }
@@ -85,8 +86,18 @@ struct ACPComposerActionButton: View {
                 }
                 .foregroundStyle(theme.color("fg"))
                 .padding(.horizontal, 11)
-                .frame(height: 26)
-                .background(theme.color("bg-3"))
+                .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
+                .background(
+                    UnevenRoundedRectangle(
+                        cornerRadii: .init(
+                            topLeading: ACPComposerActionButtonMetrics.cornerRadius,
+                            bottomLeading: ACPComposerActionButtonMetrics.cornerRadius,
+                            bottomTrailing: 0,
+                            topTrailing: 0
+                        )
+                    )
+                    .fill(theme.color("bg-3"))
+                )
                 .overlay(alignment: .topTrailing) { badgeOverlay }
             }
             .buttonStyle(.plain)
@@ -104,8 +115,18 @@ struct ACPComposerActionButton: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                     .padding(.horizontal, 7)
-                    .frame(height: 26)
-                    .background(theme.color("bg-3"))
+                    .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
+                    .background(
+                        UnevenRoundedRectangle(
+                            cornerRadii: .init(
+                                topLeading: 0,
+                                bottomLeading: 0,
+                                bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
+                                topTrailing: ACPComposerActionButtonMetrics.cornerRadius
+                            )
+                        )
+                        .fill(theme.color("bg-3"))
+                    )
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -113,10 +134,9 @@ struct ACPComposerActionButton: View {
             .help("More actions")
         }
         .overlay(
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
                 .strokeBorder(theme.color("line"), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 
     @ViewBuilder
@@ -147,11 +167,26 @@ struct ACPComposerActionButton: View {
                 .monospacedDigit()
                 .foregroundStyle(theme.color("bg-0"))
                 .padding(.horizontal, 4)
-                .frame(minWidth: 16, minHeight: 14)
+                .frame(
+                    minWidth: ACPComposerActionButtonMetrics.badgeMinWidth,
+                    minHeight: ACPComposerActionButtonMetrics.badgeMinHeight
+                )
                 .background(Capsule().fill(theme.color("warn")))
                 .overlay(Capsule().strokeBorder(theme.color("bg-0"), lineWidth: 1))
-                .offset(x: 6, y: -6)
+                .offset(ACPComposerActionButtonMetrics.badgeOffset)
                 .allowsHitTesting(false)
         }
+    }
+}
+
+enum ACPComposerActionButtonMetrics {
+    static let capsuleHeight: CGFloat = 26
+    static let cornerRadius: CGFloat = 7
+    static let badgeMinWidth: CGFloat = 16
+    static let badgeMinHeight: CGFloat = 14
+    static let badgeOffset = CGSize(width: 6, height: -6)
+
+    static var badgeTopOutset: CGFloat {
+        max(0, -badgeOffset.height)
     }
 }
