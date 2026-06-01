@@ -160,11 +160,18 @@ final class ProjectsManager {
     /// mode. Invoke after mutating `config.worktrees.defaultOrdering` (or
     /// `setDefaultOrdering`) — otherwise the change only affects subsequent
     /// sort triggers (worktree add/remove, refresh), not the lists already
-    /// rendered.
-    func reapplyOrderingForAllProjects() {
+    /// rendered. Returns `true` if any project's persisted `worktreeOrder`
+    /// actually changed (e.g. orphan ids dropped during normalization), so
+    /// callers can decide whether to persist.
+    @discardableResult
+    func reapplyOrderingForAllProjects() -> Bool {
+        var changed = false
         for project in projects {
-            applyWorktreeOrdering(projectId: project.id)
+            if applyWorktreeOrdering(projectId: project.id) {
+                changed = true
+            }
         }
+        return changed
     }
 
     func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {

@@ -105,7 +105,9 @@ struct WorktreesPane: View {
             set: { newValue in
                 state.config.worktrees.defaultOrdering = newValue
                 state.saveConfig()
-                state.projectsManager.reapplyOrderingForAllProjects()
+                if state.projectsManager.reapplyOrderingForAllProjects() {
+                    state.saveProjects()
+                }
             }
         )
     }
