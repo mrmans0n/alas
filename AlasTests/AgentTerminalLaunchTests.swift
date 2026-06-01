@@ -194,6 +194,7 @@ struct AgentTerminalLaunchTests {
         var capturedIncludeUserStartupScript: Bool?
         var capturedEnvironmentOverrides: [String: String]?
         var capturedEnvironmentRemovals: Set<String>?
+        var capturedInheritParentEnv: Bool?
         let project = project(mode: .useGlobal, useBypass: false)
         let worktree = Worktree(
             id: "wt",
@@ -206,14 +207,16 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
+            terminalSessionOpener: { _, _, terminalConfig, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
                 capturedSuffix = startupScriptSuffix
+                capturedInheritParentEnv = terminalConfig.inheritParentEnv
                 capturedIncludeUserStartupScript = includeUserStartupScript
                 capturedEnvironmentOverrides = environmentOverrides
                 capturedEnvironmentRemovals = environmentRemovals
                 return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
         )
+        state.config.terminal.inheritParentEnv = false
         state.projectsManager = ProjectsManager(persistedProjects: [project])
 
         _ = try state.openACPAuthTerminalTab(
@@ -232,6 +235,7 @@ struct AgentTerminalLaunchTests {
             "exit \"$status\"",
         ].joined(separator: "\n"))
         #expect(capturedIncludeUserStartupScript == false)
+        #expect(capturedInheritParentEnv == true)
         #expect(capturedEnvironmentOverrides?["A"] == "two words")
         #expect(capturedEnvironmentOverrides?["TOKEN"] == "abc'123")
         #expect(capturedEnvironmentOverrides?["PATH"] != nil)
