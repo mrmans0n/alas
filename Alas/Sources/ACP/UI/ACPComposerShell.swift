@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum ACPComposerPlacement: Equatable {
+    case bottom
+    case raisedEmpty
+}
+
 /// Floating glass pill composer. Wraps the AppKit-backed `ACPInputField`
 /// in the design's chrome: heavy blur, model + mode pickers on the right,
 /// animated send button that mirrors `session.transcript.streamingState`.
@@ -14,6 +19,7 @@ struct ACPComposer: View {
     /// triggers under the current mapping.
     let sendOnEnter: Bool
     let focusRequest: Int
+    let placement: ACPComposerPlacement
     let onSubmit: ACPComposerSubmitHandler
 
     @Environment(\.theme) private var theme
@@ -29,6 +35,7 @@ struct ACPComposer: View {
         agentLookup: @escaping (String) -> AgentDefinition?,
         sendOnEnter: Bool,
         focusRequest: Int = 0,
+        placement: ACPComposerPlacement = .bottom,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self._session = ObservedObject(wrappedValue: session)
@@ -38,36 +45,63 @@ struct ACPComposer: View {
         self.agentLookup = agentLookup
         self.sendOnEnter = sendOnEnter
         self.focusRequest = focusRequest
+        self.placement = placement
         self.onSubmit = onSubmit
     }
 
     var body: some View {
+        Group {
+            switch placement {
+            case .bottom:
+                bottomBody
+            case .raisedEmpty:
+                raisedEmptyBody
+            }
+        }
+    }
+
+    private var bottomBody: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
-            HStack {
-                Spacer(minLength: 0)
-                pill.frame(maxWidth: 720)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 18)
-            .padding(.top, 28)
+            composerRow
+                .padding(.bottom, 18)
+                .padding(.top, 28)
         }
-        .background(
-            // Very gentle bottom shim — just enough that the pill doesn't
-            // sit on a hard edge of transcript text. The transcript itself
-            // has 240pt of bottom padding so most content stays above the
-            // pill; this gradient only touches the last ~80pt.
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0.0),
-                    .init(color: .clear, location: 0.55),
-                    .init(color: theme.color("bg-1").opacity(0.55), location: 1.0),
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-            .allowsHitTesting(false)
+        .background(bottomShim)
+    }
+
+    private var raisedEmptyBody: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            composerRow
+                .padding(.top, 320)
+            Spacer(minLength: 110)
+        }
+    }
+
+    private var composerRow: some View {
+        HStack {
+            Spacer(minLength: 0)
+            pill.frame(maxWidth: 720)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private var bottomShim: some View {
+        // Very gentle bottom shim — just enough that the pill doesn't
+        // sit on a hard edge of transcript text. The transcript itself
+        // has 240pt of bottom padding so most content stays above the
+        // pill; this gradient only touches the last ~80pt.
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0.0),
+                .init(color: .clear, location: 0.55),
+                .init(color: theme.color("bg-1").opacity(0.55), location: 1.0),
+            ],
+            startPoint: .top, endPoint: .bottom
         )
+        .allowsHitTesting(false)
     }
 
     private var pill: some View {
