@@ -211,7 +211,11 @@ struct AgentTerminalLaunchTests {
             onExit: {}
         )
 
-        #expect(capturedSuffix == "A='two words' TOKEN='abc'\\''123' '/Applications/Auth CLI/bin/node' '/opt/claude agent/acp' --cli")
+        #expect(capturedSuffix == [
+            "A='two words' TOKEN='abc'\\''123' '/Applications/Auth CLI/bin/node' '/opt/claude agent/acp' --cli",
+            "status=$?",
+            "exit \"$status\"",
+        ].joined(separator: "\n"))
     }
 
     @Test func acpAuthLaunchRejectsInvalidEnvKeyBeforeOpeningTerminal() {

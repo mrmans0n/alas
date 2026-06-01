@@ -663,7 +663,8 @@ final class AppState {
         let startupScriptSuffix = try Self.shellCommand(
             command: command.command,
             args: command.args,
-            env: command.env
+            env: command.env,
+            exitOnCompletion: true
         )
         let tab = try openTerminalTab(
             for: worktree,
@@ -689,7 +690,8 @@ final class AppState {
     nonisolated private static func shellCommand(
         command: String,
         args: [String],
-        env: [String: String]
+        env: [String: String],
+        exitOnCompletion: Bool = false
     ) throws -> String {
         for key in env.keys where !isValidShellAssignmentName(key) {
             throw ACPAuthTerminalLaunchError.invalidEnvKey(key)
@@ -697,7 +699,9 @@ final class AppState {
         let envPrefix = env
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\(shellQuote($0.value))" }
-        return (envPrefix + [shellQuote(command)] + args.map(shellQuote)).joined(separator: " ")
+        let commandLine = (envPrefix + [shellQuote(command)] + args.map(shellQuote)).joined(separator: " ")
+        guard exitOnCompletion else { return commandLine }
+        return "\(commandLine)\nstatus=$?\nexit \"$status\""
     }
 
     nonisolated private static func isValidShellAssignmentName(_ key: String) -> Bool {
