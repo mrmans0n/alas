@@ -359,6 +359,9 @@ final class AppState {
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
         }
+        if reconcileMissingSpaceProjects() {
+            saveSpaces()
+        }
         if let current = selectedWorktreeId, !afterIds.contains(current) {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
@@ -1986,6 +1989,19 @@ final class AppState {
 
     func resolvedSelectionForActiveSpaceForStartup() -> String? {
         resolvedSelectionForActiveSpace()
+    }
+
+    private func reconcileMissingSpaceProjects() -> Bool {
+        var changed = false
+        let validProjectIds = Set(projects.map(\.id))
+        if spacesManager.pruneMissingProjects(validProjectIds: validProjectIds) {
+            changed = true
+        }
+        for project in projects where spacesManager.membershipCount(forProject: project.id) == 0 {
+            spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
+            changed = true
+        }
+        return changed
     }
 
     var canFocusMainWorktreeForCurrentProject: Bool {
