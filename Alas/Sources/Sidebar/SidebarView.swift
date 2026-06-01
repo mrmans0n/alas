@@ -61,7 +61,10 @@ struct SidebarView: View {
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
                                 onRemoveProject: { onRemoveProject(project.id) },
-                                onResetSort: { state.projectsManager.resetWorktreeOrder(projectId: project.id) },
+                                onResetSort: {
+                                    state.projectsManager.resetWorktreeOrder(projectId: project.id)
+                                    state.saveProjects()
+                                },
                                 spaces: state.spacesManager.spaces,
                                 activeSpaceId: state.spacesManager.activeSpaceId,
                                 isProjectInSpace: { spaceId in
