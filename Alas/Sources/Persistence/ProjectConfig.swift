@@ -81,6 +81,11 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var addedAt: Date
     var hiddenWorktreePaths: [String] = []
     var worktreeOrder: [String] = []
+    /// Explicit signal that the user dragged worktrees into a custom order.
+    /// When `false`, the global default sort mode applies regardless of any
+    /// legacy `worktreeOrder` left on disk. Set to `true` by drag reorders;
+    /// cleared by "Reset Sort to Default".
+    var worktreeOrderIsManual: Bool = false
     var startupScripts: ProjectStartupScripts = .defaults
     /// Per-project "open after create" preference. `nil` = use global default (true).
     var worktreeOpenAfterCreate: Bool?
@@ -88,7 +93,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var worktreeDefaultLauncherMode: AppConfig.LauncherMode?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, path, color, addedAt, hiddenWorktreePaths, worktreeOrder, startupScripts,
+        case id, name, path, color, addedAt, hiddenWorktreePaths, worktreeOrder,
+             worktreeOrderIsManual, startupScripts,
              worktreeOpenAfterCreate, worktreeDefaultLauncherMode
     }
 
@@ -100,6 +106,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         addedAt: Date,
         hiddenWorktreePaths: [String] = [],
         worktreeOrder: [String] = [],
+        worktreeOrderIsManual: Bool = false,
         startupScripts: ProjectStartupScripts = .defaults,
         worktreeOpenAfterCreate: Bool? = nil,
         worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil
@@ -111,6 +118,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.addedAt = addedAt
         self.hiddenWorktreePaths = hiddenWorktreePaths
         self.worktreeOrder = worktreeOrder
+        self.worktreeOrderIsManual = worktreeOrderIsManual
         self.startupScripts = startupScripts
         self.worktreeOpenAfterCreate = worktreeOpenAfterCreate
         self.worktreeDefaultLauncherMode = worktreeDefaultLauncherMode
@@ -127,6 +135,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         addedAt = try c.decode(Date.self, forKey: .addedAt)
         hiddenWorktreePaths = (try? c.decode([String].self, forKey: .hiddenWorktreePaths)) ?? []
         worktreeOrder = (try? c.decode([String].self, forKey: .worktreeOrder)) ?? []
+        worktreeOrderIsManual = (try? c.decode(Bool.self, forKey: .worktreeOrderIsManual)) ?? false
         startupScripts = (try? c.decode(ProjectStartupScripts.self, forKey: .startupScripts))
             ?? .defaults
         worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)

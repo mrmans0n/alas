@@ -67,7 +67,7 @@ struct RepoGroupView: View {
             .contextMenu {
                 Button("Edit Project…", action: onEditProject)
                 Button("Reset Sort to Default", action: onResetSort)
-                    .disabled(project.worktreeOrder.isEmpty)
+                    .disabled(!project.worktreeOrderIsManual)
                 Menu("Spaces") {
                     ForEach(spaces) { space in
                         let isMember = isProjectInSpace(space.id)

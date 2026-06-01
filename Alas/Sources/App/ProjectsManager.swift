@@ -151,8 +151,10 @@ final class ProjectsManager {
 
     func resetWorktreeOrder(projectId: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        guard !projects[idx].worktreeOrder.isEmpty else { return }
+        let wasManual = projects[idx].worktreeOrderIsManual || !projects[idx].worktreeOrder.isEmpty
+        guard wasManual else { return }
         projects[idx].worktreeOrder = []
+        projects[idx].worktreeOrderIsManual = false
         applyWorktreeOrdering(projectId: projectId)
     }
 
@@ -191,6 +193,7 @@ final class ProjectsManager {
         rows.insert(moving, at: clampedDestination)
 
         worktreesByProject[projectId] = rows
+        projects[projectIndex].worktreeOrderIsManual = true
         projects[projectIndex].worktreeOrder = normalizedWorktreeOrder(
             rows.map(\.id),
             rows: rows,
@@ -374,7 +377,7 @@ final class ProjectsManager {
 
     private func sortedWorktrees(_ rows: [Worktree], project: ProjectConfig) -> [Worktree] {
         let effectiveMode: AppConfig.WorktreeSortMode =
-            project.worktreeOrder.isEmpty ? defaultOrderingSource() : .manual
+            project.worktreeOrderIsManual ? .manual : defaultOrderingSource()
 
         // Partition main first; main is always pinned at position 0.
         var main: [Worktree] = []
