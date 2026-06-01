@@ -345,6 +345,7 @@ struct CommitEditorTabView: View {
         let currentSha = tabState.currentSha
         let baseRef = tabState.baseRef
         let prompt = appState.config.changes.prompt
+        let ignoreUpstream = !appState.config.changes.trackUpstreamForCommits
 
         busy = true
         error = nil
@@ -356,7 +357,11 @@ struct CommitEditorTabView: View {
                 let branchRaw = try await gitStdout(["rev-parse", "--abbrev-ref", "HEAD"])
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let branch: String? = branchRaw == "HEAD" ? nil : branchRaw
-                let nearbyCommits = try await git.commitsAhead(at: worktreePath, baseBranch: baseRef).commits
+                let nearbyCommits = try await git.commitsAhead(
+                    at: worktreePath,
+                    baseBranch: baseRef,
+                    ignoreUpstream: ignoreUpstream
+                ).commits
                 let payload = CommitContextBuilder.buildForCommitEdit(
                     branch: branch,
                     base: baseRef,
