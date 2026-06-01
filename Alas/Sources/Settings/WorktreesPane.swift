@@ -22,6 +22,28 @@ struct WorktreesPane: View {
                         AlasField(text: bind(\.worktrees.pathTemplate), monospaced: true)
                     }
                 }
+                SettingsGroup(title: "Sorting") {
+                    SettingsRow(
+                        name: "Default ordering",
+                        desc: "How worktrees are listed in the sidebar. Main is always pinned first. Reordering a repo's worktrees manually overrides this for that repo."
+                    ) {
+                        Picker("", selection: Binding(
+                            get: { state.config.worktrees.defaultOrdering },
+                            set: { newValue in
+                                state.config.worktrees.defaultOrdering = newValue
+                                state.saveConfig()
+                                state.projectsManager.reapplyOrderingForAllProjects()
+                            }
+                        )) {
+                            Text("Last update time").tag(AppConfig.WorktreeSortMode.lastUpdateDesc)
+                            Text("Creation time").tag(AppConfig.WorktreeSortMode.creationDesc)
+                            Text("Branch name").tag(AppConfig.WorktreeSortMode.branchAsc)
+                            Text("Manual").tag(AppConfig.WorktreeSortMode.manual)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 240)
+                    }
+                }
                 SettingsGroup(title: "Branch defaults") {
                     SettingsRow(name: "Branch prefix",
                                 desc: "Default prefix when creating a new worktree.") {
