@@ -63,4 +63,16 @@ struct ReleaseCheckerTests {
             return
         }
     }
+
+    @Test func reportsFailedWhenTagUnparseable() async {
+        let data = Data("""
+        {"tag_name":"nightly","body":null,"html_url":"https://x.test","prerelease":false,"draft":false,"assets":[]}
+        """.utf8)
+        let result = await checker(returning: data)
+            .check(current: SemanticVersion(major: 0, minor: 5, patch: 1))
+        guard case .failed = result else {
+            Issue.record("expected failed, got \(result)")
+            return
+        }
+    }
 }
