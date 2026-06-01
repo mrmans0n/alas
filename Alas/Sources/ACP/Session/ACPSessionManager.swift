@@ -300,8 +300,23 @@ final class ACPSessionManager: ObservableObject {
 
         guard !olderWires.isEmpty else { return }
 
+        // Capture a stable handle the task body can compare against the
+        // current entry in `inFlightBackfills` before clearing it. Without
+        // this guard, a backfill that is cancelled and then immediately
+        // superseded (close + reopen, or a re-hydrate) would still run its
+        // cleanup when the cancelled task finally returns from its yield,
+        // clearing the slot that now holds the NEWER task. `awaitBackfill`
+        // would then observe no task and let `attach`/export proceed
+        // against the tail-only transcript — exactly the index-corruption
+        // path the gating exists to prevent.
+        final class TaskHandle { var task: Task<Void, Never>? }
+        let handle = TaskHandle()
         let task = Task { @MainActor [weak self, weak session] in
-            defer { self?.inFlightBackfills[sessionId] = nil }
+            defer {
+                if let me = handle.task, self?.inFlightBackfills[sessionId] == me {
+                    self?.inFlightBackfills[sessionId] = nil
+                }
+            }
             // Yield once so the tail paint reaches the screen before we
             // start allocating older messages on the main actor.
             await Task.yield()
@@ -327,6 +342,7 @@ final class ACPSessionManager: ObservableObject {
             else { return }
             session.prependTranscriptMessages(older)
         }
+        handle.task = task
         inFlightBackfills[sessionId] = task
     }
 
