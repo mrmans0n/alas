@@ -228,6 +228,48 @@ struct ACPSessionManagerHydrationTests {
         }
     }
 
+    @Test("contextRestoreWarning sees the full transcript even when only tail is in memory")
+    func contextRestoreWarningComputedFromFullWires() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        // Persist a row that's flagged as needing recovery — applyHydration
+        // will surface a contextRestoreWarning derived from the wire list.
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            titleSource: .placeholder,
+            remoteSessionId: "remote-old",
+            contextRecoveryPending: true,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seed a long transcript whose CONVERSATION lives entirely outside
+        // the tail window: a single user prompt at seq 0, then enough
+        // non-conversation messages (file edits) to push the tail past it.
+        let userMsg: ACPMessage = .user(id: UUID(), text: "kick off", attachments: [])
+        try store.appendMessage(sessionId: "s", id: "m0", kind: userMsg.kind,
+                                seq: 0, payload: try ACPMessageCodec.encode(userMsg), createdAt: 0)
+        let fillerStart = 1
+        let total = ACPTranscript.tailWindow * 2 + fillerStart
+        for i in fillerStart..<total {
+            let edit: ACPMessage = .fileEdit(id: UUID(), .init(
+                path: "f\(i).swift", added: 0, removed: 0))
+            try store.appendMessage(sessionId: "s", id: "m\(i)", kind: edit.kind,
+                                    seq: Int64(i), payload: try ACPMessageCodec.encode(edit),
+                                    createdAt: 0)
+        }
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+        await mgr.hydrateIfNeeded(id: "s")
+
+        // The in-memory tail is all file edits, so checking the live
+        // transcript here would return false. The warning must look at the
+        // full wire list and find the buried user prompt.
+        #expect(s.hasConversationTranscript == false)
+        let warning = try #require(s.contextRestoreWarning)
+        #expect(warning.canSendTranscript)
+    }
+
     @Test("hydrateIfNeeded for short transcripts skips backfill")
     func hydrateShortTranscriptHasNoBackfill() async throws {
         let path = tmpStorePath()

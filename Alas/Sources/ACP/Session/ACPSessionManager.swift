@@ -261,9 +261,16 @@ final class ACPSessionManager: ObservableObject {
             session.remoteSessionId = result.row.remoteSessionId
         }
         if result.row.contextRecoveryPending {
+            // Compute `canSendTranscript` against the FULL wire list rather
+            // than `session.hasConversationTranscript`. Tail-first hydration
+            // leaves only the last 30 messages in the in-memory transcript
+            // when this runs, so a long session whose tail is all tool
+            // calls / file edits would look conversation-less here and
+            // permanently disable the "Send transcript" action — the
+            // warning is set once and never recomputed after backfill.
             session.contextRestoreWarning = .init(
                 message: "Agent context could not be restored.",
-                canSendTranscript: session.hasConversationTranscript
+                canSendTranscript: Self.wireMessagesHaveConversation(result.wireMessages)
             )
         }
         session.autoRunEnabled = result.row.autoRun
@@ -275,6 +282,23 @@ final class ACPSessionManager: ObservableObject {
         self.recent = result.recent
         scheduleBackfillIfNeeded(olderWires: Array(wires.prefix(tailStart)),
                                  sessionId: session.id, session: session)
+    }
+
+    /// Mirror of `ACPSession.hasConversationTranscript` that operates on the
+    /// wire (Sendable) representation, so callers can ask the question
+    /// before the in-memory transcript has been fully reassembled — i.e.
+    /// during the tail-only window of tail-first hydration.
+    private static func wireMessagesHaveConversation(_ wires: [ACPMessageWire]) -> Bool {
+        wires.contains { wire in
+            switch wire {
+            case let .user(text, _):
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case let .agent(text):
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            default:
+                return false
+            }
+        }
     }
 
     /// Materialise the pre-tail messages on a follow-up task. The task
