@@ -31,8 +31,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             arguments: arguments,
             environment: environment,
             framing: .newline,
-            // ACPSessionManager.mergeEnv has already produced the full env
-            // with Claude-specific markers scrubbed. Tell the transport not
+            // ACPProcessEnvironment.sanitizedForACP has already produced the
+            // full env with Claude-specific markers scrubbed. Tell the transport not
             // to re-overlay against the parent process's env (which would
             // re-introduce CLAUDECODE).
             replaceEnv: true

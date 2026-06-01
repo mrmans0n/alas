@@ -71,6 +71,8 @@ final class TerminalService {
         forcedCwd: URL? = nil,
         startupScriptSuffix: String? = nil,
         includeUserStartupScript: Bool = true,
+        environmentOverrides: [String: String] = [:],
+        environmentRemovals: Set<String> = [],
         leafId: String = UUID().uuidString,
         allowLegacyAttach: Bool = false
     ) throws -> TerminalSession {
@@ -89,6 +91,12 @@ final class TerminalService {
             socketPath: perSessionSocket, inheritParent: cfg.inheritParentEnv,
             zmxDir: zmxClient.env.zmxDir?.path
         )
+        for key in environmentRemovals {
+            env.removeValue(forKey: key)
+        }
+        for (key, value) in environmentOverrides {
+            env[key] = value
+        }
         if perSessionSocket != nil {
             let binDir = try TerminalCLIInjection.installExecutables()
             env["PATH"] = TerminalCLIInjection.pathValue(

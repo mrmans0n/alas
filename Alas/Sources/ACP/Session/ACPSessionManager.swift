@@ -65,12 +65,12 @@ final class ACPSessionManager: ObservableObject {
                 client = try ACPStdioClient(
                     executable: URL(fileURLWithPath: spec.command),
                     arguments: spec.arguments,
-                    environment: Self.mergeEnv(extra: spec.extraEnv))
+                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
             } else {
                 client = try ACPStdioClient(
                     executable: URL(fileURLWithPath: "/usr/bin/env"),
                     arguments: [spec.command] + spec.arguments,
-                    environment: Self.mergeEnv(extra: spec.extraEnv))
+                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
             }
             try client.start()
             return ACPConnection(client: client)
@@ -588,7 +588,7 @@ extension ACPSessionManager {
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
                                           worktreePath: worktreePath,
-                                          agentEnv: Self.mergeEnv(extra: spec.extraEnv),
+                                          agentEnv: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv),
                                           suppressingLoadReplay: shouldSuppressLoadReplay,
                                           onDirtyCheck: onDirtyCheck,
                                           onLiveBufferRead: onLiveBufferRead,
@@ -876,24 +876,6 @@ extension ACPSessionManager {
         // now that state is `.idle` so a closed-while-attached session
         // doesn't keep its transcript + caches resident indefinitely.
         evictIfIdle(id: sessionId)
-    }
-
-    private static func mergeEnv(extra: [String: String]) -> [String: String] {
-        var env = ACPProcessEnvironment.augmented()
-        // Strip env vars that mark this process as running INSIDE a coding
-        // agent's session. Without this, `claude-code-acp` (and likely any
-        // other Anthropic-aware tool we spawn) refuses to start, reporting
-        // "Claude Code cannot be launched inside another Claude Code session"
-        // — which is exactly what happens when Alas is run from a terminal
-        // that's itself inside Claude Code.
-        for key in [
-            "CLAUDECODE", "CLAUDE_CODE", "CLAUDE_PROJECT_DIR",
-            "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
-        ] {
-            env.removeValue(forKey: key)
-        }
-        for (k, v) in extra { env[k] = v }
-        return env
     }
 }
 

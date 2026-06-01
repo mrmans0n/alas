@@ -34,7 +34,9 @@ final class AppState {
         Theme,
         URL?,
         String?,
-        Bool
+        Bool,
+        [String: String],
+        Set<String>
     ) throws -> OpenedTerminalSession
 
     @ObservationIgnored
@@ -670,12 +672,24 @@ final class AppState {
         let tab = try openTerminalTab(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
-            includeUserStartupScript: false
+            includeUserStartupScript: false,
+            environmentOverrides: Self.acpAuthTerminalEnvironmentOverrides(extra: command.env),
+            environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
         )
         if case .terminal(let terminal) = tab {
             acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
         }
         return tab
+    }
+
+    nonisolated private static func acpAuthTerminalEnvironmentOverrides(
+        extra: [String: String]
+    ) -> [String: String] {
+        var overrides = extra
+        if let path = ACPProcessEnvironment.augmented()["PATH"] {
+            overrides["PATH"] = path
+        }
+        return overrides
     }
 
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
@@ -1167,7 +1181,9 @@ final class AppState {
     func openTerminalTab(
         for worktree: Worktree,
         startupScriptSuffix: String? = nil,
-        includeUserStartupScript: Bool = true
+        includeUserStartupScript: Bool = true,
+        environmentOverrides: [String: String] = [:],
+        environmentRemovals: Set<String> = []
     ) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
@@ -1186,7 +1202,9 @@ final class AppState {
                 themeStore.current,
                 nil,
                 startupScriptSuffix,
-                includeUserStartupScript
+                includeUserStartupScript,
+                environmentOverrides,
+                environmentRemovals
             )
         } else {
             let session = try terminal.openSession(
@@ -1194,6 +1212,8 @@ final class AppState {
                 cfg: config.terminal, theme: themeStore.current,
                 startupScriptSuffix: startupScriptSuffix,
                 includeUserStartupScript: includeUserStartupScript,
+                environmentOverrides: environmentOverrides,
+                environmentRemovals: environmentRemovals,
                 leafId: leafId
             )
             opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in

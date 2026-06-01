@@ -145,6 +145,8 @@ struct AgentTerminalLaunchTests {
     @Test func manualLaunchAppendsTerminalTabWithStartupSuffix() throws {
         var capturedSuffix: String?
         var capturedIncludeUserStartupScript: Bool?
+        var capturedEnvironmentOverrides: [String: String]?
+        var capturedEnvironmentRemovals: Set<String>?
         let project = project(mode: .useGlobal, useBypass: false)
         let worktree = Worktree(
             id: "wt",
@@ -157,9 +159,11 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript in
+            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
                 capturedSuffix = startupScriptSuffix
                 capturedIncludeUserStartupScript = includeUserStartupScript
+                capturedEnvironmentOverrides = environmentOverrides
+                capturedEnvironmentRemovals = environmentRemovals
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
         )
@@ -175,6 +179,8 @@ struct AgentTerminalLaunchTests {
 
         #expect(capturedSuffix == "test-agent --skip")
         #expect(capturedIncludeUserStartupScript == true)
+        #expect(capturedEnvironmentOverrides == [:])
+        #expect(capturedEnvironmentRemovals == [])
         #expect(state.tabs.tabs(forWorktree: worktree.id) == [tab])
         if case .terminal(let terminal) = tab {
             #expect(terminal.root.firstLeaf().sessionId == "session-1")
@@ -186,6 +192,8 @@ struct AgentTerminalLaunchTests {
     @Test func acpAuthLaunchAppendsQuotedCommandAndEnvPrefix() throws {
         var capturedSuffix: String?
         var capturedIncludeUserStartupScript: Bool?
+        var capturedEnvironmentOverrides: [String: String]?
+        var capturedEnvironmentRemovals: Set<String>?
         let project = project(mode: .useGlobal, useBypass: false)
         let worktree = Worktree(
             id: "wt",
@@ -198,9 +206,11 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript in
+            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
                 capturedSuffix = startupScriptSuffix
                 capturedIncludeUserStartupScript = includeUserStartupScript
+                capturedEnvironmentOverrides = environmentOverrides
+                capturedEnvironmentRemovals = environmentRemovals
                 return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
         )
@@ -222,6 +232,10 @@ struct AgentTerminalLaunchTests {
             "exit \"$status\"",
         ].joined(separator: "\n"))
         #expect(capturedIncludeUserStartupScript == false)
+        #expect(capturedEnvironmentOverrides?["A"] == "two words")
+        #expect(capturedEnvironmentOverrides?["TOKEN"] == "abc'123")
+        #expect(capturedEnvironmentOverrides?["PATH"] != nil)
+        #expect(capturedEnvironmentRemovals == ACPProcessEnvironment.agentSessionMarkerKeys)
     }
 
     @Test func acpAuthLaunchRejectsInvalidEnvKeyBeforeOpeningTerminal() {
@@ -238,7 +252,7 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openerCalled = true
                 return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
@@ -274,7 +288,7 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
         )
@@ -307,7 +321,7 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
         )
@@ -344,7 +358,7 @@ struct AgentTerminalLaunchTests {
         var hookExistedBeforeOpen = false
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 hookExistedBeforeOpen = FileManager.default.fileExists(atPath: hookURL.path)
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
@@ -378,7 +392,7 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
         )
@@ -421,7 +435,7 @@ struct AgentTerminalLaunchTests {
             fileActionErrorHandler: { title, _ in
                 launchErrorTitle = title
             },
-            terminalSessionOpener: { _, _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openerCalled = true
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
