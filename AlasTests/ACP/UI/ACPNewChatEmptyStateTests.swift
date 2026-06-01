@@ -124,4 +124,33 @@ struct ACPNewChatEmptyStateTests {
 
         #expect(ACPNewChatEmptyStatePolicy.isVisible(for: session))
     }
+
+    @Test("starter prompt replaces an empty draft")
+    func starterPromptReplacesEmptyDraft() {
+        let draft = ACPStarterPrompt.reviewChanges.applying(to: .empty)
+
+        #expect(draft == ACPComposerDraft(segments: [
+            .text("Review the current changes in this worktree and suggest the next steps.")
+        ]))
+    }
+
+    @Test("starter prompt appends after non-empty text with a blank line")
+    func starterPromptAppendsAfterExistingText() {
+        let existing = ACPComposerDraft(segments: [.text("Existing note")])
+        let draft = ACPStarterPrompt.planFeature.applying(to: existing)
+
+        #expect(draft == ACPComposerDraft(segments: [
+            .text("Existing note\n\n"),
+            .text("Help me plan this feature. Ask clarifying questions first if the goal is ambiguous.")
+        ]))
+    }
+
+    @Test("starter prompts expose stable short labels")
+    func starterPromptLabelsAreStable() {
+        #expect(ACPStarterPrompt.allCases.map(\.label) == [
+            "Review current changes",
+            "Find a bug",
+            "Plan a feature",
+        ])
+    }
 }
