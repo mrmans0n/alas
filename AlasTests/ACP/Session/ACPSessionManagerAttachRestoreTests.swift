@@ -797,6 +797,59 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: nil) == false)
     }
 
+    @Test("attach waits for tail-first hydration backfill before runner setup")
+    func attachWaitsForBackfill() async throws {
+        // Persist enough messages that hydration splits into a tail-first
+        // apply + background backfill — otherwise the bug being guarded
+        // against (runner constructed against a partial transcript) can't
+        // even materialise.
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let total = ACPTranscript.tailWindow * 3
+        for i in 0..<total {
+            try appendMessage(
+                .user(id: UUID(), text: "m\(i)", attachments: []),
+                to: store, seq: Int64(i))
+        }
+
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-restored")
+
+        // Capture the in-memory transcript length at the moment attach decides
+        // setup is ready. With the fix in place, attach awaits backfill first,
+        // so the captured count matches the full persisted length. Without
+        // the fix, only the tail window has been applied.
+        final class Captured { var count: Int = -1 }
+        let captured = Captured()
+        let mgrBox: UnsafeMutablePointer<ACPSessionManager?> = .allocate(capacity: 1)
+        mgrBox.initialize(to: nil)
+        defer { mgrBox.deinitialize(count: 1)
+        mgrBox.deallocate() }
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in
+                captured.count = mgrBox.pointee?.sessions["local"]?.transcript.messages.count ?? -2
+                return .ready
+            },
+            connectionFactory: { _ in ACPConnection(client: client) }
+        )
+        mgrBox.pointee = manager
+
+        _ = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        // Sanity check: hydrateIfNeeded returned with only the tail applied.
+        #expect(manager.sessions["local"]?.transcript.messages.count == ACPTranscript.tailWindow)
+
+        await manager.attach(to: "local", freshlyCreated: false)
+
+        #expect(captured.count == total,
+                "setup evaluator must observe the fully-materialised transcript")
+        #expect(manager.sessions["local"]?.transcript.messages.count == total)
+    }
+
     private func tmpStorePath() -> String {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("mgr-attach-restore-\(UUID()).sqlite").path

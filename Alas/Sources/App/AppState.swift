@@ -1912,6 +1912,12 @@ final class AppState {
         mgr.retainSession(id: tabState.sessionId)
         defer { mgr.releaseSession(id: tabState.sessionId) }
         await mgr.hydrateIfNeeded(id: tabState.sessionId)
+        // Hydration applies the tail synchronously and backfills older
+        // messages on a follow-up task. Exporters need the FULL transcript,
+        // so block until backfill is done before handing the session to
+        // `body` — otherwise a long conversation would serialize as just
+        // its last 30 entries.
+        await mgr.awaitBackfill(id: tabState.sessionId)
         guard let session = mgr.sessions[tabState.sessionId] else { return }
         body(session)
     }
