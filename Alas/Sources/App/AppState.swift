@@ -33,7 +33,8 @@ final class AppState {
         AppConfig.Terminal,
         Theme,
         URL?,
-        String?
+        String?,
+        Bool
     ) throws -> OpenedTerminalSession
 
     @ObservationIgnored
@@ -668,7 +669,8 @@ final class AppState {
         )
         let tab = try openTerminalTab(
             for: worktree,
-            startupScriptSuffix: startupScriptSuffix
+            startupScriptSuffix: startupScriptSuffix,
+            includeUserStartupScript: false
         )
         if case .terminal(let terminal) = tab {
             acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
@@ -1164,7 +1166,8 @@ final class AppState {
     @discardableResult
     func openTerminalTab(
         for worktree: Worktree,
-        startupScriptSuffix: String? = nil
+        startupScriptSuffix: String? = nil,
+        includeUserStartupScript: Bool = true
     ) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
@@ -1182,13 +1185,15 @@ final class AppState {
                 config.terminal,
                 themeStore.current,
                 nil,
-                startupScriptSuffix
+                startupScriptSuffix,
+                includeUserStartupScript
             )
         } else {
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
                 startupScriptSuffix: startupScriptSuffix,
+                includeUserStartupScript: includeUserStartupScript,
                 leafId: leafId
             )
             opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in

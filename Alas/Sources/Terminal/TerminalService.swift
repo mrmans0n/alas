@@ -60,6 +60,8 @@ final class TerminalService {
     /// used by worktree-create's auto-launch-agent path to put the agent
     /// CLI directly into the new terminal session (visible, with a TTY,
     /// not a hidden detached process).
+    /// Auth-only terminals can set `includeUserStartupScript` false so a
+    /// long-running session-open script does not block the login command.
     @discardableResult
     func openSession(
         worktree: Worktree,
@@ -68,6 +70,7 @@ final class TerminalService {
         theme: Theme,
         forcedCwd: URL? = nil,
         startupScriptSuffix: String? = nil,
+        includeUserStartupScript: Bool = true,
         leafId: String = UUID().uuidString,
         allowLegacyAttach: Bool = false
     ) throws -> TerminalSession {
@@ -93,10 +96,9 @@ final class TerminalService {
                 to: env["PATH"]
             )
         }
-        let baseScript = StartupScriptResolver.sessionOpenScript(
-            global: cfg,
-            project: project
-        )
+        let baseScript = includeUserStartupScript
+            ? StartupScriptResolver.sessionOpenScript(global: cfg, project: project)
+            : ""
         let effectiveScript = Self.composeStartupScript(
             userStartupScript: baseScript,
             startupScriptSuffix: startupScriptSuffix
