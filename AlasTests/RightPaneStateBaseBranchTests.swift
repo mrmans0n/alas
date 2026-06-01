@@ -178,6 +178,21 @@ struct RightPaneStateBaseBranchTests {
         #expect(state.comparisonRef == "origin/feature")
     }
 
+    @Test func storeRefreshesWhenTrackUpstreamForCommitsToggles() async throws {
+        let (repo, root) = try await createTestRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let wt = makeWorktree(at: repo, branch: "feature")
+        let store = RightPaneStore()
+        let state = store.state(for: wt, baseBranch: "master", trackUpstreamForCommits: true)
+        try await waitUntil { state.comparisonRef == "origin/feature" }
+        #expect(state.comparisonRef == "origin/feature")
+
+        _ = store.state(for: wt, baseBranch: "master", trackUpstreamForCommits: false)
+        try await waitUntil { state.comparisonRef == "master" }
+        #expect(state.comparisonRef == "master")
+        #expect(state.trackUpstreamForCommits == false)
+    }
+
     @Test func commitEditorComparisonRefReturnsOnlyResolvedRef() async throws {
         let tmp = try await createTestRepoWithBranches()
         defer { try? FileManager.default.removeItem(at: tmp) }
