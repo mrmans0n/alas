@@ -26,6 +26,10 @@ struct AppStateSpacesTests {
         ProjectConfig(id: id, name: id, path: "/tmp/\(id)", color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0))
     }
 
+    private func project(_ id: String, path: String) -> ProjectConfig {
+        ProjectConfig(id: id, name: id, path: path, color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0))
+    }
+
     private func worktree(_ id: String, projectId: String) -> Worktree {
         Worktree(
             id: id,
@@ -36,6 +40,30 @@ struct AppStateSpacesTests {
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: 0)
         )
+    }
+
+    private func makeRepo(name: String) async throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-spaces-\(name)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: dir)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: dir)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        return dir
+    }
+
+    private func waitForOperationToClear(
+        _ manager: ProjectsManager,
+        id: String,
+        timeoutSeconds: Double = 10
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if manager.operationState(for: id) == nil { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        Issue.record("Timed out waiting for operationState to clear for id \(id)")
     }
 
     @Test func migratesSpacesWhenMissingSpacesFile() {
@@ -469,5 +497,45 @@ struct AppStateSpacesTests {
 
         #expect(state.spacesManager.activeSpaceId == "s2")
         #expect(state.selectedWorktreeId == "wt2")
+    }
+
+    @Test func createWorktreeFromInactiveSpaceSwitchesBeforeSelectingOptimisticRow() async throws {
+        let repo = try await makeRepo(name: "create-inactive-space")
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("wt-space-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: destination)
+        }
+        let p1 = project("p1")
+        let p2 = project("p2", path: repo.path)
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Work", emoji: "💼", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date()),
+                SpaceConfig(id: "s2", name: "Home", emoji: "🏠", projectIds: ["p2"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
+        state.config.worktrees.fetchRemoteBeforeCreate = false
+
+        let id = state.createWorktree(
+            projectId: "p2",
+            base: "main",
+            branch: "space-create",
+            destination: destination,
+            runStartup: false,
+            launchSurface: .none
+        )
+
+        #expect(!id.isEmpty)
+        #expect(state.spacesManager.activeSpaceId == "s2")
+        #expect(state.selectedWorktreeId == id)
+        #expect(state.spacesManager.space(id: "s1")?.lastSelectedWorktreeId == nil)
+        #expect(state.spacesManager.space(id: "s2")?.lastSelectedWorktreeId == id)
+        #expect(state.activeSpaceProjects.map(\.id) == ["p2"])
+
+        try await waitForOperationToClear(state.projectsManager, id: id)
     }
 }

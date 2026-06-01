@@ -648,6 +648,10 @@ final class AppState {
             status: .clean,
             lastActivity: Date()
         )
+        if let containing = spacesManager.containingSpaceId(forProjectId: projectId),
+           containing != spacesManager.activeSpaceId {
+            _ = switchToSpace(id: containing)
+        }
         projectsManager.insertOptimisticWorktree(optimistic)
         projectsManager.setOperationState(id: optimistic.id, state: .creating)
         selectWorktree(id: optimistic.id)
