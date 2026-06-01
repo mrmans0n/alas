@@ -20,6 +20,11 @@ final class ACPTranscript: ObservableObject {
     /// stableId + StreamingText identity equality keep the ForEach row
     /// tree stable across ticks.
     @Published var streamingTick: UInt32 = 0
+    /// True while post-hydration tail-first backfill is materialising older
+    /// persisted rows. This is separate from `visibleHead`: a non-zero head
+    /// means older rows are available behind the render window, not that an
+    /// async load is still running.
+    @Published var isBackfillingOlderMessages: Bool = false
 
     /// Render window: `ACPMessageList` draws `messages[visibleHead...]`.
     /// Reset to `max(0, messages.count - tailWindow)` after hydration so
