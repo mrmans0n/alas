@@ -66,6 +66,10 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Published var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// Auth methods learned from ACP `initialize`.
+    /// Runtime-only: re-learned on each attach and used when an agent asks
+    /// the client to authenticate before ACP can continue.
+    @Published var authMethods: [ACPInitializeResult.ACPAuthMethod] = []
 
     var imageInputSupported: Bool { promptCapabilities.image }
     var embeddedContextSupported: Bool { promptCapabilities.embeddedContext }
@@ -138,6 +142,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case checking
         case ready
         case needsSetup(reason: String)
+        case needsAuth(methods: [ACPInitializeResult.ACPAuthMethod], reason: String?)
     }
     struct PendingPermission: Identifiable, Equatable {
         let id: JSONRPCID

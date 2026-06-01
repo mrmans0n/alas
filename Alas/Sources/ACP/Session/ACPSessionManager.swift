@@ -580,6 +580,7 @@ extension ACPSessionManager {
         do {
             let initialized = try await connection.initialize()
             session.promptCapabilities = initialized.promptCapabilities
+            session.authMethods = initialized.authMethods
             let shouldSuppressLoadReplay = !freshlyCreated
                 && session.hydrationState == .ready
                 && session.hasConversationTranscript
@@ -617,6 +618,9 @@ extension ACPSessionManager {
                     runner.finishSuppressingLoadReplay(
                         throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                     )
+                    if ACPAuthFailure.message(from: error) != nil {
+                        throw error
+                    }
                     result = try await connection.newSession(cwd: worktreePath)
                     if session.hasConversationTranscript {
                         shouldHoldQueueForRecovery = true
@@ -665,10 +669,17 @@ extension ACPSessionManager {
             try? await Task.sleep(nanoseconds: 200_000_000)
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
-            let base = "ACP initialize/new failed: \(error.localizedDescription)"
+            let authReason = ACPAuthFailure.message(from: error)
+            let baseMessage = authReason ?? error.localizedDescription
+            let base = "ACP initialize/new failed: \(baseMessage)"
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
-            session.agentState = .failed(full)
+            if let authReason {
+                session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
+                session.agentState = .failed(authReason)
+            } else {
+                session.agentState = .failed(full)
+            }
             startedRunner?.stop()
             await connection.shutdown()
         }

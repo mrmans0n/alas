@@ -225,6 +225,64 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(row.contextRecoveryPending)
     }
 
+    @Test("new auth failure enters needsAuth with initialized auth method")
+    func newAuthFailureEntersNeedsAuthWithInitializedAuthMethod() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        client.script(method: "session/new") { _ in
+            throw JSONRPCError(code: -32000, message: "Internal error: 401 Unauthorized", data: nil)
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(session.authMethods == [method])
+        #expect(session.setupState == .needsAuth(methods: [method], reason: "401 Unauthorized"))
+        #expect(session.lastError?.contains("401 Unauthorized") == true)
+        #expect(manager.runners[session.id] == nil)
+        if case .failed(let message) = session.agentState {
+            #expect(message == "401 Unauthorized")
+        } else {
+            Issue.record("Expected failed agent state")
+        }
+    }
+
+    @Test("load auth failure does not fall back to session new")
+    func loadAuthFailureDoesNotFallBackToSessionNew() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32000, message: "auth_required: 401", data: nil)
+        }
+        client.script(method: "session/new") { _ in
+            Issue.record("session/new should not be called after auth-related session/load failure")
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
+        #expect(session.remoteSessionId == "remote-old")
+        #expect(session.authMethods == [method])
+        #expect(session.setupState == .needsAuth(methods: [method], reason: "auth_required: 401"))
+        #expect(session.lastError?.contains("auth_required: 401") == true)
+        if case .failed(let message) = session.agentState {
+            #expect(message == "auth_required: 401")
+        } else {
+            Issue.record("Expected failed agent state")
+        }
+    }
+
     @Test("pending queued prompt waits for transcript recovery after load fallback")
     func queuedPromptWaitsForTranscriptRecoveryAfterLoadFallback() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -686,14 +744,25 @@ struct ACPSessionManagerAttachRestoreTests {
         )
     }
 
-    private func scriptInitialize(_ client: ACPMockClient) {
+    private func scriptInitialize(
+        _ client: ACPMockClient,
+        authMethods: [ACPInitializeResult.ACPAuthMethod] = []
+    ) {
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
                 protocolVersion: 1,
                 agentCapabilities: nil,
-                authMethods: []
+                authMethods: authMethods
             ))
         }
+    }
+
+    private func terminalAuthMethod() -> ACPInitializeResult.ACPAuthMethod {
+        ACPInitializeResult.ACPAuthMethod(
+            id: "claude-login",
+            name: "Claude Login",
+            kind: .terminal
+        )
     }
 
     private func scriptSessionResult(_ client: ACPMockClient, method: String, sessionId: String) {
