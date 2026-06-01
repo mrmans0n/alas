@@ -16,7 +16,7 @@ struct SettingsSectionTests {
         let labels = SettingsSection.allCases.map(\.label)
 
         #expect(!labels.contains("Markdown"))
-        #expect(!labels.contains("General"))
+        #expect(labels.contains("General"))
         #expect(labels.contains("Appearance"))
     }
 

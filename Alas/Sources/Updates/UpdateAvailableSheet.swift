@@ -1,0 +1,69 @@
+import AppKit
+import SwiftUI
+
+/// Themed sheet shown when a newer release exists. Renders release notes plus an
+/// install-source-tailored action. Pure view over `ReleaseInfo` + `InstallSource`.
+struct UpdateAvailableSheet: View {
+    let info: ReleaseInfo
+    let source: InstallSource
+    let onDismiss: () -> Void
+    @Environment(\.theme) var theme
+
+    private let brewCommand = "brew upgrade --cask alas"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Update available")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(theme.color("fg"))
+                Text("Alas \(info.version.description) is available.")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 6)
+
+            ScrollView {
+                Text(info.releaseNotes.isEmpty ? "No release notes provided." : info.releaseNotes)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(height: 220)
+            .padding(.horizontal, 22).padding(.vertical, 12)
+
+            actionRow
+        }
+        .frame(width: 480)
+        .background(theme.color("bg-1"))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder private var actionRow: some View {
+        HStack(spacing: 8) {
+            switch source {
+            case .homebrew:
+                Text(brewCommand)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundColor(theme.color("fg"))
+                    .textSelection(.enabled)
+                AlasButton(title: "Copy", style: .subtle) { Clipboard.copy(brewCommand) }
+                Spacer()
+                AlasButton(title: "View Release", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
+                AlasButton(title: "Later", style: .primary, action: onDismiss)
+            case .direct:
+                AlasButton(title: "View Release Notes", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
+                Spacer()
+                AlasButton(title: "Later", style: .subtle, action: onDismiss)
+                AlasButton(title: "Download", style: .primary) {
+                    NSWorkspace.shared.open(info.dmgURL ?? info.htmlURL)
+                }
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 12)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.5), alignment: .top)
+    }
+}

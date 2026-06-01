@@ -170,6 +170,20 @@ struct RootView: View {
                 Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
             }
         )
+        .onAppear {
+            state.updates.checkOnLaunch()
+        }
+        .sheet(item: Binding(
+            get: { state.updates.presentedUpdate },
+            set: { state.updates.presentedUpdate = $0 }
+        )) { info in
+            UpdateAvailableSheet(
+                info: info,
+                source: state.updates.source,
+                onDismiss: { state.updates.presentedUpdate = nil }
+            )
+            .environment(\.theme, state.themeStore.current)
+        }
         .task {
             state.startHarness()
             if await state.projectsManager.refreshAll() {

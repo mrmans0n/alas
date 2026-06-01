@@ -132,11 +132,18 @@ struct AlasApp: App {
             }
             .disabled(!state.hasActiveEditorTab)
         }
-        CommandGroup(replacing: .appSettings) {
-            Button("Settings…") {
-                NotificationCenter.default.post(name: .alasOpenSettings, object: nil)
+        Group {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    NotificationCenter.default.post(name: .alasOpenSettings, object: nil)
+                }
+                .keyboardShortcut(",", modifiers: .command)
             }
-            .keyboardShortcut(",", modifiers: .command)
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    state.updates.checkManually()
+                }
+            }
         }
         CommandMenu("Spaces") {
             Button("Select Space 1") {
