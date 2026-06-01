@@ -10,23 +10,60 @@ struct FilesTabView: View {
     let showIgnored: Bool
     let revealPath: String?
     let revealTick: Int
+    let onClearReveal: () -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Self.filteredNodes(nodes, showIgnored: showIgnored)) { node in
-                        renderNode(node, depth: 0)
+            VStack(spacing: 0) {
+                revealBar
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Self.filteredNodes(nodes, showIgnored: showIgnored)) { node in
+                            renderNode(node, depth: 0)
+                        }
                     }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
+                .onChange(of: revealTick) { _, _ in
+                    guard let path = revealPath else { return }
+                    proxy.scrollTo("file:\(path)", anchor: .top)
+                    proxy.scrollTo("dir:\(path)", anchor: .top)
+                }
             }
-            .onChange(of: revealTick) { _, _ in
-                guard let path = revealPath else { return }
-                proxy.scrollTo("file:\(path)", anchor: .top)
-                proxy.scrollTo("dir:\(path)", anchor: .top)
+        }
+    }
+
+    @ViewBuilder
+    private var revealBar: some View {
+        if let revealPath {
+            HStack(spacing: 6) {
+                Icon(name: "target", size: 12, color: theme.color("accent"))
+                    .frame(width: 14, height: 14)
+                Text(Self.revealDisplayName(for: revealPath))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Button(action: onClearReveal) {
+                    Icon(name: "x", size: 10, color: theme.color("fg-dim"))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Clear focused file highlight")
+                .help("Clear focused file highlight")
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .padding(.vertical, 5)
+            .background(theme.color("bg-3").opacity(0.92))
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(theme.color("line").opacity(0.7))
+                    .frame(height: 1)
             }
         }
     }
@@ -199,6 +236,10 @@ struct FilesTabView: View {
             }
             return copy
         }
+    }
+
+    nonisolated static func revealDisplayName(for path: String) -> String {
+        path.split(separator: "/").last.map(String.init) ?? path
     }
 
     private func isOffGit(_ node: FileTreeNode) -> Bool {

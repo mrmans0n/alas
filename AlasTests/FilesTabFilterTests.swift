@@ -109,4 +109,9 @@ struct FilesTabFilterTests {
         #expect(result.map(\.path) == ["Sources"])
         #expect(result.first?.children?.isEmpty == true)
     }
+
+    @Test func revealDisplayNameUsesLastPathComponent() {
+        #expect(FilesTabView.revealDisplayName(for: "Sources/Center/App.swift") == "App.swift")
+        #expect(FilesTabView.revealDisplayName(for: "README.md") == "README.md")
+    }
 }

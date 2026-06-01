@@ -390,6 +390,20 @@ struct RightPaneStateRevealTests {
         #expect(state.revealTick == before + 1)
     }
 
+    @Test func clearRevealRemovesRevealPathWithoutChangingNavigationState() {
+        let state = makeTestState()
+        state.reveal(path: "Sources/Center/App.swift")
+        let tick = state.revealTick
+
+        state.clearReveal()
+
+        #expect(state.revealPath == nil)
+        #expect(state.revealTick == tick)
+        #expect(state.activeTab == .files)
+        #expect(state.openPaths.contains("Sources"))
+        #expect(state.openPaths.contains("Sources/Center"))
+    }
+
     @Test func revealForDirectoryDoesNotIncludeSelfInAncestors() {
         let state = makeTestState()
         state.reveal(path: "Sources/Center")
