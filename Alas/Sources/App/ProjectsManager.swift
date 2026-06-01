@@ -37,6 +37,10 @@ final class ProjectsManager {
         self.defaultOrderingSource = defaultOrdering
     }
 
+    /// Replace the live source of the global default sort mode. Callers must
+    /// also invoke `reapplyOrderingForAllProjects()` after a config change to
+    /// propagate the new mode to already-sorted lists — `setDefaultOrdering`
+    /// alone does not trigger a re-sort.
     func setDefaultOrdering(_ source: @escaping () -> AppConfig.WorktreeSortMode) {
         self.defaultOrderingSource = source
     }
@@ -141,6 +145,19 @@ final class ProjectsManager {
     func visibleMainWorktree(projectId: String) -> Worktree? {
         guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
         return visibleWorktrees(projectId: projectId).first { isMainWorktree($0, project: project) }
+    }
+
+    func resetWorktreeOrder(projectId: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        guard !projects[idx].worktreeOrder.isEmpty else { return }
+        projects[idx].worktreeOrder = []
+        applyWorktreeOrdering(projectId: projectId)
+    }
+
+    func reapplyOrderingForAllProjects() {
+        for project in projects {
+            applyWorktreeOrdering(projectId: project.id)
+        }
     }
 
     func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {

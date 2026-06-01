@@ -387,6 +387,79 @@ struct ProjectsManagerWorktreeOrderingTests {
         #expect(trees.map(\.branch) == ["main", "a", "b"])
     }
 
+    // MARK: - reset
+
+    @Test func resetWorktreeOrderClearsManualAndRevertsToGlobalSort() {
+        let main = wt(path: "/repo", branch: "main")
+        let now = Date()
+        let feat = wt(path: "/repo/wts/feat", branch: "feat", lastActivity: now)
+        let fix = wt(path: "/repo/wts/fix", branch: "fix",
+                     lastActivity: now.addingTimeInterval(-3600))
+        let project = ProjectConfig(
+            id: "p1", name: "p1", path: "/repo", color: "blue", addedAt: Date(),
+            worktreeOrder: [fix.id, feat.id]   // manually placed fix above feat
+        )
+        let mgr = ProjectsManager(
+            persistedProjects: [project],
+            defaultOrdering: { .lastUpdateDesc }
+        )
+        seed(mgr, projectId: project.id, [fix, main, feat])
+
+        // Sanity: manual order applies first.
+        #expect(mgr.worktrees(projectId: project.id).map(\.branch) == ["main", "fix", "feat"])
+
+        mgr.resetWorktreeOrder(projectId: project.id)
+
+        // After reset: empty worktreeOrder + global mode = lastUpdate desc.
+        #expect(mgr.projects[0].worktreeOrder == [])
+        #expect(mgr.worktrees(projectId: project.id).map(\.branch) == ["main", "feat", "fix"])
+    }
+
+    @Test func resetWorktreeOrderIsNoOpWhenAlreadyEmpty() {
+        let (mgr, project) = makeManager(defaultOrdering: .lastUpdateDesc)
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo", branch: "main"),
+            wt(path: "/repo/wts/feat", branch: "feat"),
+        ])
+        mgr.resetWorktreeOrder(projectId: project.id)
+        // No crash, no spurious mutation.
+        #expect(mgr.projects[0].worktreeOrder == [])
+    }
+
+    @Test func reapplyOrderingForAllProjectsPicksUpModeChange() {
+        // Use a mutable holder the closure captures, so we can change the mode
+        // between calls without rebuilding the manager.
+        final class ModeHolder { var mode: AppConfig.WorktreeSortMode = .branchAsc }
+        let holder = ModeHolder()
+
+        let project = ProjectConfig(
+            id: "p1", name: "p1", path: "/repo", color: "blue", addedAt: Date()
+        )
+        let mgr = ProjectsManager(
+            persistedProjects: [project],
+            defaultOrdering: { holder.mode }
+        )
+        let now = Date()
+        // Timestamps chosen so the two modes produce different orders:
+        //   branchAsc       → [main, alpha, zeta]
+        //   lastUpdateDesc  → [main, zeta, alpha] (zeta is newer)
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo", branch: "main", lastActivity: now),
+            wt(path: "/repo/wts/zeta", branch: "zeta",
+               lastActivity: now.addingTimeInterval(-60)),
+            wt(path: "/repo/wts/alpha", branch: "alpha",
+               lastActivity: now.addingTimeInterval(-3600)),
+        ])
+
+        // Initial mode: branchAsc.
+        #expect(mgr.worktrees(projectId: project.id).map(\.branch) == ["main", "alpha", "zeta"])
+
+        // Flip to lastUpdateDesc and reapply.
+        holder.mode = .lastUpdateDesc
+        mgr.reapplyOrderingForAllProjects()
+        #expect(mgr.worktrees(projectId: project.id).map(\.branch) == ["main", "zeta", "alpha"])
+    }
+
     @Test func roundTripPreservesWorktreeOrder() throws {
         let project = ProjectConfig(
             id: "abc", name: "alpha", path: "/tmp/alpha",
