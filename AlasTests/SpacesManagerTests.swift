@@ -132,19 +132,24 @@ struct SpacesManagerTests {
         var manager = SpacesManager.migrating(projects: [project("p1"), project("p2"), project("p3")], now: date)
         let second = manager.addSpace(name: "Other", emoji: "🧪", now: date)
         manager.addProject("p1", toSpace: second)
+        manager.addProject("p3", toSpace: second)
         manager.addProject("p2", toSpace: second)
 
         manager.reorderProjectInActiveSpace(movingId: "p3", destinationId: "p1")
 
         #expect(manager.activeSpace?.projectIds == ["p3", "p1", "p2"])
-        #expect(manager.space(id: second)?.projectIds == ["p1", "p2"])
+        #expect(manager.space(id: second)?.projectIds == ["p1", "p3", "p2"])
     }
 
     @Test func moveProjectToEndAffectsOnlyActiveSpace() {
         var manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
+        let second = manager.addSpace(name: "Other", emoji: "🧪", now: date)
+        manager.addProject("p1", toSpace: second)
+        manager.addProject("p2", toSpace: second)
 
         manager.moveProjectToEndInActiveSpace(id: "p1")
 
         #expect(manager.activeSpace?.projectIds == ["p2", "p1"])
+        #expect(manager.space(id: second)?.projectIds == ["p1", "p2"])
     }
 }
