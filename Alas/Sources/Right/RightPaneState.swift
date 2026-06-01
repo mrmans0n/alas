@@ -500,6 +500,10 @@ final class RightPaneState {
         revealTick += 1
     }
 
+    func clearReveal() {
+        revealPath = nil
+    }
+
     /// Paths to discard for the given file path. Expands staged renames into
     /// both new and original paths so the deletion of the old side is also
     /// restored. Returns `[]` if the path is not in `changes` (stale request).

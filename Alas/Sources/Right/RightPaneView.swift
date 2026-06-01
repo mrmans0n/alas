@@ -65,7 +65,8 @@ struct RightPaneView: View {
                         onLoadChildren: { rps.loadFileTreeChildren(path: $0) },
                         showIgnored: state.config.files.showIgnored,
                         revealPath: rps.revealPath,
-                        revealTick: rps.revealTick
+                        revealTick: rps.revealTick,
+                        onClearReveal: { rps.clearReveal() }
                     )
                 }
             }
