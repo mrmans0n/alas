@@ -16,10 +16,11 @@ final class RightPaneStore {
     /// retain the app.
     weak var appState: AppState?
 
-    func state(for worktree: Worktree, baseBranch: String) -> RightPaneState {
+    func state(for worktree: Worktree, baseBranch: String, trackUpstreamForCommits: Bool) -> RightPaneState {
         let id = worktree.id
         let result: RightPaneState
         if let existing = states[id] {
+            let trackUpstreamChanged = existing.trackUpstreamForCommits != trackUpstreamForCommits
             // If the global config base branch changed (Settings → Worktrees),
             // honor the new value and clear the user override. If it didn't
             // change, leave the state's baseBranch alone so a user-picked
@@ -42,10 +43,15 @@ final class RightPaneStore {
                     }
                 }
             }
+            if trackUpstreamChanged {
+                existing.trackUpstreamForCommits = trackUpstreamForCommits
+                Task { @MainActor in await existing.refresh() }
+            }
             result = existing
         } else {
             let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
             new.lastConfigBaseBranch = baseBranch
+            new.trackUpstreamForCommits = trackUpstreamForCommits
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
                 let pathSet = Set(paths)

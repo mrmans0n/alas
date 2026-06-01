@@ -251,9 +251,16 @@ struct AppConfig: Codable, Equatable {
         /// appended verbatim by `MergeAgent`. `{filePath}` and
         /// `{language}` are substituted; anything else passes through.
         var mergeSingleResolvePrompt: String
+        /// When true, the Commits section uses the branch's upstream
+        /// tracking ref (`@{u}`) as the comparison base once one exists,
+        /// matching git's own "ahead/behind" semantics. When false
+        /// (default), it always compares against `worktrees.baseBranch`,
+        /// so the list stays stable across pushes.
+        var trackUpstreamForCommits: Bool
 
         enum CodingKeys: String, CodingKey {
-            case aiToolId, prompt, mergeBulkResolvePrompt, mergeSingleResolvePrompt
+            case aiToolId, prompt, mergeBulkResolvePrompt, mergeSingleResolvePrompt,
+                 trackUpstreamForCommits
         }
     }
 
@@ -350,7 +357,8 @@ struct AppConfig: Codable, Equatable {
             aiToolId: "none",
             prompt: AppConfig.defaultCommitPrompt,
             mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
-            mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt
+            mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
+            trackUpstreamForCommits: false
         ),
         agents: Agents(
             builtinState: [:],
@@ -550,18 +558,21 @@ extension AppConfig {
                 ?? AppConfig.defaultMergeBulkResolvePrompt
             let singleResolve = (try? changesContainer.decode(String.self, forKey: .mergeSingleResolvePrompt))
                 ?? AppConfig.defaultMergeSingleResolvePrompt
+            let trackUpstream = (try? changesContainer.decode(Bool.self, forKey: .trackUpstreamForCommits)) ?? false
             changes = Changes(
                 aiToolId: toolId,
                 prompt: prompt,
                 mergeBulkResolvePrompt: bulkResolve,
-                mergeSingleResolvePrompt: singleResolve
+                mergeSingleResolvePrompt: singleResolve,
+                trackUpstreamForCommits: trackUpstream
             )
         } else {
             changes = Changes(
                 aiToolId: "none",
                 prompt: AppConfig.defaultCommitPrompt,
                 mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
-                mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt
+                mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
+                trackUpstreamForCommits: false
             )
         }
         if let agentsContainer = try? c.nestedContainer(

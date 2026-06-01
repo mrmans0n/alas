@@ -13,6 +13,15 @@ struct ChangesPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
+                SettingsGroup(title: "Commits section") {
+                    SettingsRow(
+                        name: "Track upstream branch",
+                        desc: "When on, the Commits section compares against your branch's remote tracking ref once you push, so it only lists unpushed commits. When off, it always compares against the base branch — you'll see every commit on this branch since it diverged from main."
+                    ) {
+                        AlasToggle(on: state.bind(\.changes.trackUpstreamForCommits))
+                    }
+                }
+
                 SettingsGroup(title: "Commit message") {
                     SettingsRow(name: "Agent",
                                 desc: "Used by the sparkle button in the draft commit tab.") {

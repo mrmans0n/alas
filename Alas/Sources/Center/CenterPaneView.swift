@@ -161,7 +161,8 @@ struct CenterPaneView: View {
                         )
                         let rps = state.rightPaneStore.state(
                             for: worktree,
-                            baseBranch: state.config.worktrees.baseBranch
+                            baseBranch: state.config.worktrees.baseBranch,
+                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
                         )
                         DiffTabView(
                             worktreePath: worktree.path,
@@ -195,7 +196,8 @@ struct CenterPaneView: View {
                     case .draftCommit(let draftState):
                         let _ = state.rightPaneStore.state(
                             for: worktree,
-                            baseBranch: state.config.worktrees.baseBranch
+                            baseBranch: state.config.worktrees.baseBranch,
+                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
                         )
                         DraftCommitTabView(
                             worktreePath: worktree.path,

@@ -87,6 +87,13 @@ final class RightPaneState {
     /// (new config value) from a normal render (same config value).
     var lastConfigBaseBranch: String = ""
 
+    /// Mirrors `AppConfig.changes.trackUpstreamForCommits`. Synced by
+    /// `RightPaneStore` on every `state(for:)` call. When false (the
+    /// default) — or when `userOverrodeBaseBranch` is true — `refresh()`
+    /// passes `ignoreUpstream: true` to `commitsAhead`, so the Commits
+    /// section compares HEAD against the base branch instead of `@{u}`.
+    var trackUpstreamForCommits: Bool = false
+
     var pendingDiscard: PendingDiscard? = nil
 
     /// True while the workspace-level agent invocation is running.
@@ -239,8 +246,13 @@ final class RightPaneState {
             self.olderCommits = []
             self.hasMoreOlder = true
             self.isLoadingOlder = false
+            let ignoreUpstream = userOverrodeBaseBranch || !trackUpstreamForCommits
             async let s = git.status(worktreePath: worktree.path)
-            async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch, ignoreUpstream: userOverrodeBaseBranch)
+            async let c = git.commitsAhead(
+                at: worktree.path,
+                baseBranch: baseBranch,
+                ignoreUpstream: ignoreUpstream
+            )
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
