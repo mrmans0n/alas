@@ -508,7 +508,11 @@ struct ProjectsManagerWorktreeOrderingTests {
                    lastActivity: now.addingTimeInterval(-3600))
         let b = wt(path: "/repo/wts/b", branch: "b",
                    lastActivity: now.addingTimeInterval(-7200))
-        // Seed in persisted-order to preserve manual order during partial state.
+        // Seed in persisted-order ([b, main, a] mirrors the worktreeOrder [b, a]
+        // with main inserted in the middle). insertOptimisticWorktree re-runs
+        // applyWorktreeOrdering after each insert, and the manual-mode normalizer
+        // drops ids that aren't in `rows` yet — so seeding `a` before `b` would
+        // temporarily strip `b` from worktreeOrder and break the persisted order.
         seed(mgr, projectId: "p1", [b, main, a])
 
         let trees = mgr.worktrees(projectId: "p1")

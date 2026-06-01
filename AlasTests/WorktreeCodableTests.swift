@@ -23,10 +23,9 @@ import Foundation
         let decoder = JSONDecoder()
         let decoded = try decoder.decode(Worktree.self, from: data)
 
+        // Worktree.Equatable covers every stored property, so `decoded == original`
+        // is sufficient. createdAt and the diff counters (addedLines/deletedLines)
+        // are the fields this test specifically guards (Task 2 follow-up).
         #expect(decoded == original)
-        #expect(decoded.createdAt == original.createdAt)
-        #expect(decoded.addedLines == 12)
-        #expect(decoded.deletedLines == 3)
-        #expect(decoded.status == .dirty)
     }
 }
