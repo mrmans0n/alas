@@ -12,8 +12,8 @@ final class ACPConnection: @unchecked Sendable {
 
     init(client: ACPClient) { self.client = client }
 
-    /// Returns the prompt capabilities advertised by the agent, defaulting
-    /// missing capability fields to false.
+    /// Returns the initialize outcome advertised by the agent, defaulting
+    /// missing prompt capability fields to false and missing auth methods to empty.
     @discardableResult
     func initialize() async throws -> ACPInitializeOutcome {
         let req = ACPRequest(method: "initialize",

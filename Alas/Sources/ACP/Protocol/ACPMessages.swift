@@ -81,9 +81,9 @@ struct ACPClientCapabilities: Codable, Equatable {
         fs = try c.decode(ACPFsCapabilities.self, forKey: .fs)
         terminal = try c.decode(Bool.self, forKey: .terminal)
         auth = try c.decodeIfPresent(ACPAuthCapabilities.self, forKey: .auth)
-            ?? .init(terminal: true)
+            ?? .init(terminal: false)
         meta = try c.decodeIfPresent(ACPClientCapabilitiesMeta.self, forKey: .meta)
-            ?? .terminalAuth
+            ?? .init(terminalAuth: false)
     }
 
     struct ACPFsCapabilities: Codable, Equatable {
@@ -94,6 +94,15 @@ struct ACPClientCapabilities: Codable, Equatable {
 
 struct ACPAuthCapabilities: Codable, Equatable {
     let terminal: Bool
+
+    init(terminal: Bool) {
+        self.terminal = terminal
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
+    }
 }
 
 struct ACPClientCapabilitiesMeta: Codable, Equatable {
@@ -101,8 +110,17 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
 
     let terminalAuth: Bool
 
+    init(terminalAuth: Bool) {
+        self.terminalAuth = terminalAuth
+    }
+
     enum CodingKeys: String, CodingKey {
         case terminalAuth = "terminal-auth"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        terminalAuth = try c.decodeIfPresent(Bool.self, forKey: .terminalAuth) ?? false
     }
 }
 
@@ -110,6 +128,27 @@ struct ACPInitializeResult: Codable, Equatable {
     let protocolVersion: Int
     let agentCapabilities: ACPAgentCapabilities?
     let authMethods: [ACPAuthMethod]
+
+    init(
+        protocolVersion: Int,
+        agentCapabilities: ACPAgentCapabilities?,
+        authMethods: [ACPAuthMethod]
+    ) {
+        self.protocolVersion = protocolVersion
+        self.agentCapabilities = agentCapabilities
+        self.authMethods = authMethods
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion, agentCapabilities, authMethods
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try c.decode(Int.self, forKey: .protocolVersion)
+        agentCapabilities = try c.decodeIfPresent(ACPAgentCapabilities.self, forKey: .agentCapabilities)
+        authMethods = try c.decodeIfPresent([ACPAuthMethod].self, forKey: .authMethods) ?? []
+    }
 
     struct ACPAgentCapabilities: Codable, Equatable {
         let promptCapabilities: ACPPromptCapabilities?

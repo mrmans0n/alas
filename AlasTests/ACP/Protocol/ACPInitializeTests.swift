@@ -16,6 +16,29 @@ struct ACPInitializeTests {
         #expect(env.params?.clientCapabilities.terminal == true)
     }
 
+    @Test("decoding legacy initialize request does not imply terminal auth")
+    func decodeLegacyRequestWithoutAuthCapability() throws {
+        let data = Data("""
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "initialize",
+          "params": {
+            "protocolVersion": 1,
+            "clientCapabilities": {
+              "fs": { "readTextFile": true, "writeTextFile": true },
+              "terminal": true
+            }
+          }
+        }
+        """.utf8)
+
+        let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPInitializeParams>.self, from: data)
+
+        #expect(env.params?.clientCapabilities.auth.terminal == false)
+        #expect(env.params?.clientCapabilities.meta.terminalAuth == false)
+    }
+
     @Test("initialize request advertises terminal auth capabilities")
     func initializeRequestAdvertisesAuth() throws {
         let params = ACPInitializeParams(
@@ -52,6 +75,25 @@ struct ACPInitializeTests {
         let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPInitializeResult>.self, from: data)
         #expect(env.result?.protocolVersion == 1)
         #expect(env.result?.authMethods.isEmpty == true)
+    }
+
+    @Test("decodes initialize response without authMethods")
+    func decodeResponseWithoutAuthMethods() throws {
+        let data = Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": {
+            "promptCapabilities": {
+              "embeddedContext": true
+            }
+          }
+        }
+        """.utf8)
+
+        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: data)
+
+        #expect(result.authMethods.isEmpty)
+        #expect(result.agentCapabilities?.promptCapabilities?.embeddedContext == true)
     }
 
     @Test("decodes terminal auth method metadata")
