@@ -283,6 +283,74 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("prompt auth failure removes runner and blocks queue retry on failed connection")
+    func promptAuthFailureRemovesRunnerAndBlocksQueueRetryOnFailedConnection() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.script(method: "session/prompt") { _ in
+            throw JSONRPCError(code: -32000, message: "login required", data: nil)
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let runner = try #require(manager.runners[session.id])
+        session.enqueue(blocks: [.text("queued")])
+        runner.persistQueue()
+
+        runner.flushQueueIfIdle()
+        try await waitUntil {
+            manager.runners[session.id] == nil
+                && session.setupState == .needsAuth(methods: [method], reason: "login required")
+        }
+
+        #expect(client.shutdownCount == 1)
+        #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].lastError == "login required")
+
+        session.queue[0].lastError = nil
+        manager.persistQueue(for: session)
+        manager.runners[session.id]?.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
+    }
+
+    @Test("submit while needsAuth rejects prompt and preserves draft")
+    func submitWhileNeedsAuthRejectsPromptAndPreservesDraft() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let manager = manager(store: store, client: ACPMockClient())
+        let session = manager.createSession(agentId: "claude")
+        let method = terminalAuthMethod()
+        let draft = ACPComposerDraft(segments: [.text("do not clear me")])
+        session.authMethods = [method]
+        session.setupState = .needsAuth(methods: [method], reason: "login required")
+        session.agentState = .failed("login required")
+        session.replaceComposerDraft(draft)
+        var completed: Bool?
+
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "do not clear me",
+            attachments: [],
+            intent: .auto,
+            draft: draft
+        ) { succeeded in
+            completed = succeeded
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(accepted == false)
+        #expect(completed == nil)
+        #expect(session.queue.isEmpty)
+        #expect(session.composerDraft == draft)
+        #expect(session.setupState == .needsAuth(methods: [method], reason: "login required"))
+    }
+
     @Test("pending queued prompt waits for transcript recovery after load fallback")
     func queuedPromptWaitsForTranscriptRecoveryAfterLoadFallback() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

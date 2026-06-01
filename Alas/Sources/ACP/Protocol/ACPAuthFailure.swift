@@ -7,15 +7,34 @@ enum ACPAuthFailure {
         let markers = [
             "auth_required",
             "auth required",
+            "authentication required",
             "failed to authenticate",
             "invalid authentication credentials",
+            "not authenticated",
+            "login required",
             "unauthorized",
-            "401"
+            "token expired",
+            "expired token"
         ]
-        guard markers.contains(where: { lowercased.contains($0) }) else {
+        guard markers.contains(where: { lowercased.contains($0) })
+            || containsAuthStatus401(lowercased)
+        else {
             return nil
         }
         return message
+    }
+
+    private static func containsAuthStatus401(_ message: String) -> Bool {
+        guard message.contains("401") else { return false }
+        let statusMarkers = [
+            "http 401",
+            "status 401",
+            "401 unauthorized",
+            "401 unauthorised",
+            "401 auth",
+            "401 authentication"
+        ]
+        return statusMarkers.contains { message.contains($0) }
     }
 
     private static func normalizedMessage(from error: any Error) -> String {

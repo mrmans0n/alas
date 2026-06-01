@@ -591,7 +591,13 @@ extension ACPSessionManager {
                                           agentEnv: Self.mergeEnv(extra: spec.extraEnv),
                                           suppressingLoadReplay: shouldSuppressLoadReplay,
                                           onDirtyCheck: onDirtyCheck,
-                                          onLiveBufferRead: onLiveBufferRead)
+                                          onLiveBufferRead: onLiveBufferRead,
+                                          onAuthRequired: { [weak self] runner, _ in
+                                              await self?.handleAuthRequiredRunner(
+                                                runner,
+                                                sessionId: sessionId
+                                              )
+                                          })
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }
@@ -774,6 +780,9 @@ extension ACPSessionManager {
         onCompleted: @escaping @MainActor (Bool) -> Void
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
+        if case .needsAuth = session.setupState {
+            return false
+        }
 
         switch session.agentState {
         case .ready:
@@ -815,6 +824,17 @@ extension ACPSessionManager {
             Task { @MainActor in await reattach(to: sessionId) }
             return true
         }
+    }
+
+    private func handleAuthRequiredRunner(
+        _ runner: ACPSessionRunner,
+        sessionId: ACPSession.ID
+    ) async {
+        guard runners[sessionId] === runner else { return }
+        runner.invalidateActivePrompt()
+        runner.stop()
+        runners[sessionId] = nil
+        await runner.connection.shutdown()
     }
 
     func detach(sessionId: ACPSession.ID) async {

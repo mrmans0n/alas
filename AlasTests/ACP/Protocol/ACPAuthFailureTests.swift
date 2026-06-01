@@ -14,6 +14,11 @@ struct ACPAuthFailureTests {
                 message: "failed to authenticate with provider",
                 data: nil
             )), "failed to authenticate with provider"),
+            (JSONRPCError(code: -32000, message: "authentication required", data: nil), "authentication required"),
+            (JSONRPCError(code: -32000, message: "not authenticated", data: nil), "not authenticated"),
+            (JSONRPCError(code: -32000, message: "login required", data: nil), "login required"),
+            (JSONRPCError(code: -32000, message: "access token expired", data: nil), "access token expired"),
+            (JSONRPCError(code: -32000, message: "HTTP 401 Unauthorized", data: nil), "HTTP 401 Unauthorized"),
             (NSError(
                 domain: "ACP",
                 code: 1,
@@ -39,5 +44,10 @@ struct ACPAuthFailureTests {
             data: nil
         )) == nil)
         #expect(ACPAuthFailure.message(from: ACPClientError.noScript(method: "session/new")) == nil)
+        #expect(ACPAuthFailure.message(from: JSONRPCError(
+            code: -32000,
+            message: "read file 401.md failed",
+            data: nil
+        )) == nil)
     }
 }

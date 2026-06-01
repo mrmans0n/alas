@@ -36,6 +36,7 @@ final class ACPSessionRunner {
     /// CLAUDECODE/CLAUDE_SESSION_ID markers that would otherwise leak
     /// back in via a re-augment from `ProcessInfo`.
     private let agentEnv: [String: String]
+    private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
@@ -69,7 +70,8 @@ final class ACPSessionRunner {
          agentEnv: [String: String] = ProcessInfo.processInfo.environment,
          suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
-         onLiveBufferRead: ((String) -> String?)? = nil)
+         onLiveBufferRead: ((String) -> String?)? = nil,
+         onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil)
     {
         self.session = session
         self.connection = connection
@@ -77,6 +79,7 @@ final class ACPSessionRunner {
         self.sessionId = sessionId
         self.worktreePath = worktreePath
         self.agentEnv = agentEnv
+        self.onAuthRequired = onAuthRequired
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
@@ -906,6 +909,9 @@ extension ACPSessionRunner {
                                 reason: authReason
                             )
                             self.session.agentState = .failed(authReason)
+                            Task { @MainActor in
+                                await self.onAuthRequired?(self, authReason)
+                            }
                         }
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
