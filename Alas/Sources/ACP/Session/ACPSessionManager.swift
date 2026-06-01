@@ -581,6 +581,18 @@ extension ACPSessionManager {
             let initialized = try await connection.initialize()
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
+            if let pendingAuthMethodId = session.pendingAuthMethodId {
+                do {
+                    try await connection.authenticate(methodId: pendingAuthMethodId)
+                    session.pendingAuthMethodId = nil
+                } catch {
+                    let reason = ACPAuthFailure.message(from: error) ?? error.localizedDescription
+                    session.setupState = .needsAuth(methods: initialized.authMethods, reason: reason)
+                    session.agentState = .failed(reason)
+                    await connection.shutdown()
+                    return
+                }
+            }
             let shouldSuppressLoadReplay = !freshlyCreated
                 && session.hydrationState == .ready
                 && session.hasConversationTranscript

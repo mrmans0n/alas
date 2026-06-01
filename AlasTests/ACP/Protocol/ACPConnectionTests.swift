@@ -84,6 +84,20 @@ struct ACPConnectionTests {
         #expect(params.mcpServers.isEmpty)
     }
 
+    @Test("authenticate sends method id")
+    func authenticateRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "authenticate") { _ in Data() }
+
+        let conn = ACPConnection(client: mock)
+        try await conn.authenticate(methodId: "claude-login")
+
+        let req = try #require(mock.sent.last)
+        #expect(req.method == "authenticate")
+        let params = try #require(req.params as? ACPAuthenticateParams)
+        #expect(params.methodId == "claude-login")
+    }
+
     @Test("setConfigOption sends session/set_config_option with sessionId, configId, value")
     func setConfigOptionRPC() async throws {
         let mock = ACPMockClient()

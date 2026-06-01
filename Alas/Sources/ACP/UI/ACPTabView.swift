@@ -417,6 +417,7 @@ private struct ACPSessionView: View {
         do {
             _ = try state.openACPAuthTerminalTab(for: worktree, command: command) {
                 Task { @MainActor in
+                    session.pendingAuthMethodId = method.id
                     await reattachAndRefreshAdapterUpdateState()
                 }
             }

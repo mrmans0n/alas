@@ -124,6 +124,12 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
     }
 }
 
+// MARK: - authenticate
+
+struct ACPAuthenticateParams: Codable, Equatable {
+    let methodId: String
+}
+
 struct ACPInitializeResult: Codable, Equatable {
     let protocolVersion: Int
     let agentCapabilities: ACPAgentCapabilities?

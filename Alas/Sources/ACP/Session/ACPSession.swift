@@ -70,6 +70,10 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach and used when an agent asks
     /// the client to authenticate before ACP can continue.
     @Published var authMethods: [ACPInitializeResult.ACPAuthMethod] = []
+    /// Runtime-only auth method selected by the user in the sign-in banner.
+    /// The next attach consumes it by calling ACP `authenticate` after
+    /// initialize and before session creation/loading.
+    var pendingAuthMethodId: String?
 
     var imageInputSupported: Bool { promptCapabilities.image }
     var embeddedContextSupported: Bool { promptCapabilities.embeddedContext }

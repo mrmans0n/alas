@@ -283,6 +283,29 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("pending auth method authenticates before creating session")
+    func pendingAuthMethodAuthenticatesBeforeSessionCreate() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        client.script(method: "authenticate") { req in
+            let params = try #require(req.params as? ACPAuthenticateParams)
+            #expect(params.methodId == method.id)
+            return Data()
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+        session.pendingAuthMethodId = method.id
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "authenticate", "session/new"])
+        #expect(session.pendingAuthMethodId == nil)
+        #expect(session.agentState == .ready)
+    }
+
     @Test("prompt auth failure removes runner and blocks queue retry on failed connection")
     func promptAuthFailureRemovesRunnerAndBlocksQueueRetryOnFailedConnection() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

@@ -37,6 +37,13 @@ final class ACPConnection: @unchecked Sendable {
         return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
     }
 
+    func authenticate(methodId: String) async throws {
+        _ = try await client.send(ACPRequest(
+            method: "authenticate",
+            params: ACPAuthenticateParams(methodId: methodId)
+        ))
+    }
+
     func loadSession(cwd: String, sessionId: String) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/load",
                              params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: []))
