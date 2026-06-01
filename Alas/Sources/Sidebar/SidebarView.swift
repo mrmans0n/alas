@@ -143,11 +143,11 @@ struct SidebarView: View {
                                     state.saveProjects()
                                 },
                                 onDropProject: { draggedId, destinationId in
-                                    state.projectsManager.reorderProject(
+                                    state.spacesManager.reorderProjectInActiveSpace(
                                         movingId: draggedId,
                                         destinationId: destinationId
                                     )
-                                    state.saveProjects()
+                                    state.saveSpaces()
                                 }
                             )
                         }
@@ -156,8 +156,8 @@ struct SidebarView: View {
                             .contentShape(Rectangle())
                             .dropDestination(for: ProjectDragId.self) { items, _ in
                                 guard let draggedId = items.first?.id else { return false }
-                                state.projectsManager.moveProjectToEnd(id: draggedId)
-                                state.saveProjects()
+                                state.spacesManager.moveProjectToEndInActiveSpace(id: draggedId)
+                                state.saveSpaces()
                                 return true
                             }
                     }
