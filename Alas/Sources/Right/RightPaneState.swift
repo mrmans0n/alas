@@ -87,6 +87,13 @@ final class RightPaneState {
     /// (new config value) from a normal render (same config value).
     var lastConfigBaseBranch: String = ""
 
+    /// Mirrors `AppConfig.changes.trackUpstreamForCommits`. Synced by
+    /// `RightPaneStore` on every `state(for:)` call. When false (the
+    /// default), `refresh()` passes `ignoreUpstream: true` to
+    /// `commitsAhead`, so the Commits section compares HEAD against the
+    /// base branch instead of `@{u}`.
+    var trackUpstreamForCommits: Bool = false
+
     var pendingDiscard: PendingDiscard? = nil
 
     /// True while the workspace-level agent invocation is running.

@@ -1945,7 +1945,11 @@ final class AppState {
         guard let worktree = worktree(withId: worktreeId) else { return }
         config.rightPaneVisible = true
         _ = saveConfig()
-        let rps = rightPaneStore.state(for: worktree, baseBranch: config.worktrees.baseBranch)
+        let rps = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            trackUpstreamForCommits: config.changes.trackUpstreamForCommits
+        )
         rps.reveal(path: path)
     }
 

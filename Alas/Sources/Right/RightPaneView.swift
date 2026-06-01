@@ -10,7 +10,11 @@ struct RightPaneView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        let rps = state.rightPaneStore.state(for: worktree, baseBranch: state.config.worktrees.baseBranch)
+        let rps = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: state.config.worktrees.baseBranch,
+            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
+        )
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
             SidebarMaterialBackground(
