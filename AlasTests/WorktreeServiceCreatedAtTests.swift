@@ -111,6 +111,33 @@ import Foundation
         #expect(WorktreeService.lastActivity(forWorktreeAt: tmp) == target)
     }
 
+    @Test func lastActivityResolvesRelativeGitdirPath() throws {
+        // Submodule layout: ".git" file contains a *relative* gitdir path.
+        //   parent/sub/.git           ← "gitdir: ../.git/modules/sub"
+        //   parent/.git/modules/sub/  ← actual gitdir
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("alas-act-relgit-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: tmp) }
+        let parent = tmp.appendingPathComponent("parent")
+        let sub = parent.appendingPathComponent("sub")
+        let modulesGit = parent.appendingPathComponent(".git/modules/sub")
+        let refsDir = modulesGit.appendingPathComponent("refs/heads")
+        try fm.createDirectory(at: refsDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: sub, withIntermediateDirectories: true)
+
+        fm.createFile(atPath: modulesGit.appendingPathComponent("HEAD").path,
+                      contents: Data("ref: refs/heads/main\n".utf8))
+        fm.createFile(atPath: sub.appendingPathComponent(".git").path,
+                      contents: Data("gitdir: ../.git/modules/sub\n".utf8))
+
+        let refPath = refsDir.appendingPathComponent("main").path
+        fm.createFile(atPath: refPath, contents: Data("0000000000000000000000000000000000000000\n".utf8))
+        let target = Date(timeIntervalSince1970: 1_740_000_000)
+        try fm.setAttributes([.modificationDate: target], ofItemAtPath: refPath)
+
+        #expect(WorktreeService.lastActivity(forWorktreeAt: sub) == target)
+    }
+
     @Test func decodingOlderWorktreeWithoutCreatedAtFallsBackToLastActivity() throws {
         let ts = Date(timeIntervalSince1970: 1_700_000_000)
         let json = """

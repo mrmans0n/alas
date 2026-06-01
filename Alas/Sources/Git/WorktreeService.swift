@@ -60,9 +60,14 @@ struct WorktreeService {
            let contents = try? String(contentsOfFile: dotGit, encoding: .utf8),
            let line = contents.split(separator: "\n", omittingEmptySubsequences: true)
                .first(where: { $0.hasPrefix("gitdir: ") }) {
-            // Linked worktree: ".git" file points to the gitdir.
-            gitdir = String(line.dropFirst("gitdir: ".count))
+            // Linked worktree (or submodule): ".git" file points to the gitdir.
+            // Git writes relative paths for submodules (e.g. "gitdir: ../.git/modules/sub")
+            // so resolve against the worktree directory before further use.
+            let raw = String(line.dropFirst("gitdir: ".count))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            gitdir = raw.hasPrefix("/")
+                ? raw
+                : path.appendingPathComponent(raw).standardizedFileURL.path
         } else if let attrs = try? fm.attributesOfItem(atPath: dotGit),
                   (attrs[.type] as? FileAttributeType) == .typeDirectory {
             // Main worktree: ".git" is the gitdir.
