@@ -27,7 +27,7 @@ final class ProjectsManager {
     /// Source of the global default sort mode. `AppState` rebinds this after
     /// its stored properties are initialized so it can capture `self` weakly;
     /// tests inject a fixed value via the convenience `defaultOrdering:` init.
-    private(set) var defaultOrderingSource: () -> AppConfig.WorktreeSortMode = { .manual }
+    private var defaultOrderingSource: () -> AppConfig.WorktreeSortMode = { .manual }
 
     init(
         persistedProjects: [ProjectConfig],
