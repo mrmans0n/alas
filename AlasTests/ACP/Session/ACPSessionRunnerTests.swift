@@ -20,6 +20,39 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
+    @Test("auth prompt failure enters needsAuth while preserving direct prompt error")
+    func authPromptFailureEntersNeedsAuth() async throws {
+        let (runner, mock) = try makeRunner()
+        let method = ACPInitializeResult.ACPAuthMethod(
+            id: "claude-login",
+            name: "Claude Login",
+            kind: .terminal
+        )
+        runner.session.authMethods = [method]
+        mock.script(method: "session/prompt") { _ in
+            throw JSONRPCError(
+                code: -32000,
+                message: "Internal error: invalid authentication credentials",
+                data: nil
+            )
+        }
+
+        let succeeded = await withCheckedContinuation { continuation in
+            runner.send(text: "hello", attachments: []) { succeeded in
+                continuation.resume(returning: succeeded)
+            }
+        }
+
+        #expect(succeeded == false)
+        #expect(runner.session.setupState == .needsAuth(
+            methods: [method],
+            reason: "invalid authentication credentials"
+        ))
+        #expect(runner.session.agentState == .failed("invalid authentication credentials"))
+        #expect(runner.session.lastError?.contains("invalid authentication credentials") == true)
+        #expect(runner.session.transcript.streamingState == .idle)
+    }
+
     @Test("send reports successful completion when session prompt succeeds")
     func sendReportsSuccessfulCompletionWhenPromptSucceeds() async throws {
         let (runner, mock) = try makeRunner()
@@ -46,6 +79,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
@@ -93,6 +127,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
@@ -315,6 +350,7 @@ struct ACPSessionRunnerTests {
 
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
@@ -344,6 +380,7 @@ struct ACPSessionRunnerTests {
 
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),

@@ -135,6 +135,7 @@ private struct ACPSessionView: View {
         if session.hydrationState == .loading { return true }
         guard manager.runners[sessionId] == nil else { return false }
         if case .needsSetup = session.setupState { return false }
+        if case .needsAuth = session.setupState { return false }
         if session.lastError != nil { return false }
         if session.agentState == .disconnected { return false }
         return session.transcript.messages.isEmpty
@@ -303,39 +304,51 @@ private struct ACPSessionView: View {
 
     @ViewBuilder
     private func adapterBanner() -> some View {
-        let dismissedSetup = state.config.harness.dismissedACPSetupNudges.contains(session.agentId)
-        let decision = ACPAdapterUpdateBannerDecider.decide(
-            setupState: session.setupState,
-            updateState: updateState,
-            dismissedLatest: dismissedLatest)
+        if case .needsAuth(let methods, let reason) = session.setupState {
+            ACPAuthNudgeBanner(
+                agentDisplayName: state.agent(id: session.agentId)?.displayName
+                    ?? AgentBuiltins.entry(id: session.agentId)?.displayName
+                    ?? session.agentId,
+                methods: methods,
+                reason: reason,
+                onSignIn: { method in launchAuth(method) },
+                onReconnect: { Task { await reattachAndRefreshAdapterUpdateState() } }
+            )
+        } else {
+            let dismissedSetup = state.config.harness.dismissedACPSetupNudges.contains(session.agentId)
+            let decision = ACPAdapterUpdateBannerDecider.decide(
+                setupState: session.setupState,
+                updateState: updateState,
+                dismissedLatest: dismissedLatest)
 
-        switch decision {
-        case .showInstall where !dismissedSetup:
-            if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
-                ACPSetupNudgeBanner(
-                    agentID: session.agentId,
-                    agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
-                    installer: installer,
-                    mode: .install,
-                    onDismiss: { dismissNudge() },
-                    onInstalled: { await reattach() }
-                )
-            } else if case .needsSetup(let reason) = session.setupState {
-                setupReasonBanner(reason: reason)
+            switch decision {
+            case .showInstall where !dismissedSetup:
+                if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
+                    ACPSetupNudgeBanner(
+                        agentID: session.agentId,
+                        agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+                        installer: installer,
+                        mode: .install,
+                        onDismiss: { dismissNudge() },
+                        onInstalled: { await reattach() }
+                    )
+                } else if case .needsSetup(let reason) = session.setupState {
+                    setupReasonBanner(reason: reason)
+                }
+            case .showUpdate(let current, let latest):
+                if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
+                    ACPSetupNudgeBanner(
+                        agentID: session.agentId,
+                        agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+                        installer: installer,
+                        mode: .update(current: current, latest: latest),
+                        onDismiss: { dismissUpdate(latest: latest) },
+                        onInstalled: { await reattachAfterUpdate() }
+                    )
+                }
+            default:
+                EmptyView()
             }
-        case .showUpdate(let current, let latest):
-            if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
-                ACPSetupNudgeBanner(
-                    agentID: session.agentId,
-                    agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
-                    installer: installer,
-                    mode: .update(current: current, latest: latest),
-                    onDismiss: { dismissUpdate(latest: latest) },
-                    onInstalled: { await reattachAfterUpdate() }
-                )
-            }
-        default:
-            EmptyView()
         }
     }
 
@@ -391,6 +404,28 @@ private struct ACPSessionView: View {
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
     }
 
+    private func launchAuth(_ method: ACPInitializeResult.ACPAuthMethod) {
+        guard let spec = ACPLaunchCatalog.spec(for: session.agentId),
+              let command = ACPAuthTerminalCommand.resolve(
+                method: method,
+                launchSpec: spec
+              )
+        else {
+            session.lastError = "Failed to launch auth terminal: unsupported sign-in method."
+            return
+        }
+        do {
+            _ = try state.openACPAuthTerminalTab(for: worktree, command: command) {
+                Task { @MainActor in
+                    session.pendingAuthMethodId = method.id
+                    await reattachAndRefreshAdapterUpdateState()
+                }
+            }
+        } catch {
+            session.lastError = "Failed to launch auth terminal: \(error.localizedDescription)"
+        }
+    }
+
     private func dismissNudge() {
         var dismissed = state.config.harness.dismissedACPSetupNudges
         if !dismissed.contains(session.agentId) {
@@ -413,6 +448,11 @@ private struct ACPSessionView: View {
             updateState = nil
             dismissedLatest = nil
         }
+        await reattach()
+        await refreshAdapterUpdateState()
+    }
+
+    private func reattachAndRefreshAdapterUpdateState() async {
         await reattach()
         await refreshAdapterUpdateState()
     }

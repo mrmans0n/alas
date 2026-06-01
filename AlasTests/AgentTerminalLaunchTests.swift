@@ -144,6 +144,9 @@ struct AgentTerminalLaunchTests {
 
     @Test func manualLaunchAppendsTerminalTabWithStartupSuffix() throws {
         var capturedSuffix: String?
+        var capturedIncludeUserStartupScript: Bool?
+        var capturedEnvironmentOverrides: [String: String]?
+        var capturedEnvironmentRemovals: Set<String>?
         let project = project(mode: .useGlobal, useBypass: false)
         let worktree = Worktree(
             id: "wt",
@@ -156,8 +159,11 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix in
+            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
                 capturedSuffix = startupScriptSuffix
+                capturedIncludeUserStartupScript = includeUserStartupScript
+                capturedEnvironmentOverrides = environmentOverrides
+                capturedEnvironmentRemovals = environmentRemovals
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
         )
@@ -172,12 +178,166 @@ struct AgentTerminalLaunchTests {
         let tab = try state.openAgentTerminalTab(for: worktree, agentId: "test-agent")
 
         #expect(capturedSuffix == "test-agent --skip")
+        #expect(capturedIncludeUserStartupScript == true)
+        #expect(capturedEnvironmentOverrides == [:])
+        #expect(capturedEnvironmentRemovals == [])
         #expect(state.tabs.tabs(forWorktree: worktree.id) == [tab])
         if case .terminal(let terminal) = tab {
             #expect(terminal.root.firstLeaf().sessionId == "session-1")
         } else {
             Issue.record("Expected a terminal tab")
         }
+    }
+
+    @Test func acpAuthLaunchAppendsQuotedCommandAndEnvPrefix() throws {
+        var capturedSuffix: String?
+        var capturedIncludeUserStartupScript: Bool?
+        var capturedEnvironmentOverrides: [String: String]?
+        var capturedEnvironmentRemovals: Set<String>?
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
+                capturedSuffix = startupScriptSuffix
+                capturedIncludeUserStartupScript = includeUserStartupScript
+                capturedEnvironmentOverrides = environmentOverrides
+                capturedEnvironmentRemovals = environmentRemovals
+                return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        _ = try state.openACPAuthTerminalTab(
+            for: worktree,
+            command: ACPAuthTerminalCommand(
+                command: "/Applications/Auth CLI/bin/node",
+                args: ["/opt/claude agent/acp", "--cli"],
+                env: ["TOKEN": "abc'123", "A": "two words"]
+            ),
+            onExit: {}
+        )
+
+        #expect(capturedSuffix == [
+            "A='two words' TOKEN='abc'\\''123' '/Applications/Auth CLI/bin/node' '/opt/claude agent/acp' --cli",
+            "status=$?",
+            "exit \"$status\"",
+        ].joined(separator: "\n"))
+        #expect(capturedIncludeUserStartupScript == false)
+        #expect(capturedEnvironmentOverrides?["A"] == "two words")
+        #expect(capturedEnvironmentOverrides?["TOKEN"] == "abc'123")
+        #expect(capturedEnvironmentOverrides?["PATH"] != nil)
+        #expect(capturedEnvironmentRemovals == ACPProcessEnvironment.agentSessionMarkerKeys)
+    }
+
+    @Test func acpAuthLaunchRejectsInvalidEnvKeyBeforeOpeningTerminal() {
+        var openerCalled = false
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openerCalled = true
+                return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        #expect(throws: AppState.ACPAuthTerminalLaunchError.invalidEnvKey("BAD-NAME")) {
+            _ = try state.openACPAuthTerminalTab(
+                for: worktree,
+                command: ACPAuthTerminalCommand(
+                    command: "agent",
+                    args: ["login"],
+                    env: ["BAD-NAME": "x"]
+                ),
+                onExit: {}
+            )
+        }
+        #expect(!openerCalled)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+    }
+
+    @Test func acpAuthLaunchRunsExitCallbackWhenTerminalExits() throws {
+        var exitCount = 0
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        _ = try state.openACPAuthTerminalTab(
+            for: worktree,
+            command: ACPAuthTerminalCommand(command: "agent", args: ["login"], env: [:])
+        ) {
+            exitCount += 1
+        }
+
+        state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
+        state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
+
+        #expect(exitCount == 1)
+    }
+
+    @Test func acpAuthManualTerminalCloseRemovesExitCallbackWithoutInvoking() throws {
+        var exitCount = 0
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        _ = try state.openACPAuthTerminalTab(
+            for: worktree,
+            command: ACPAuthTerminalCommand(command: "agent", args: ["login"], env: [:])
+        ) {
+            exitCount += 1
+        }
+
+        state.closeFocusedPane(worktreeId: worktree.id)
+        state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
+
+        #expect(exitCount == 0)
     }
 
     @Test func launchingCopilotInstallsHookBeforeOpeningTerminal() throws {
@@ -198,7 +358,7 @@ struct AgentTerminalLaunchTests {
         var hookExistedBeforeOpen = false
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 hookExistedBeforeOpen = FileManager.default.fileExists(atPath: hookURL.path)
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
@@ -232,7 +392,7 @@ struct AgentTerminalLaunchTests {
         )
         let state = AppState(
             store: MemoryStore(),
-            terminalSessionOpener: { _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
         )
@@ -275,7 +435,7 @@ struct AgentTerminalLaunchTests {
             fileActionErrorHandler: { title, _ in
                 launchErrorTitle = title
             },
-            terminalSessionOpener: { _, _, _, _, _, _ in
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openerCalled = true
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }

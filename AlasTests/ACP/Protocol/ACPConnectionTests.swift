@@ -32,25 +32,30 @@ struct ACPConnectionTests {
     func initializeReturnsPromptCapabilities() async throws {
         let mock = ACPMockClient()
         mock.script(method: "initialize") { _ in
-            try JSONEncoder().encode(ACPInitializeResult(
-                protocolVersion: 1,
-                agentCapabilities: .init(
-                    promptCapabilities: .init(
-                        image: true,
-                        audio: false,
-                        embeddedContext: true
-                    )
-                ),
-                authMethods: []
-            ))
+            """
+            {
+              "protocolVersion": 1,
+              "agentCapabilities": {
+                "promptCapabilities": {
+                  "image": true,
+                  "audio": false,
+                  "embeddedContext": true
+                }
+              },
+              "authMethods": [
+                { "id": "claude-ai-login", "name": "Claude Subscription", "type": "terminal" }
+              ]
+            }
+            """.data(using: .utf8)!
         }
 
         let conn = ACPConnection(client: mock)
-        let capabilities = try await conn.initialize()
+        let initialized = try await conn.initialize()
 
-        #expect(capabilities.image == true)
-        #expect(capabilities.audio == false)
-        #expect(capabilities.embeddedContext == true)
+        #expect(initialized.promptCapabilities.image == true)
+        #expect(initialized.promptCapabilities.audio == false)
+        #expect(initialized.promptCapabilities.embeddedContext == true)
+        #expect(initialized.authMethods.map(\.id) == ["claude-ai-login"])
     }
 
     @Test("loadSession sends session/load with cwd and remote session id")
@@ -77,6 +82,20 @@ struct ACPConnectionTests {
         #expect(params.cwd == "/tmp/wt")
         #expect(params.sessionId == "remote-old")
         #expect(params.mcpServers.isEmpty)
+    }
+
+    @Test("authenticate sends method id")
+    func authenticateRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "authenticate") { _ in Data() }
+
+        let conn = ACPConnection(client: mock)
+        try await conn.authenticate(methodId: "claude-login")
+
+        let req = try #require(mock.sent.last)
+        #expect(req.method == "authenticate")
+        let params = try #require(req.params as? ACPAuthenticateParams)
+        #expect(params.methodId == "claude-login")
     }
 
     @Test("setConfigOption sends session/set_config_option with sessionId, configId, value")

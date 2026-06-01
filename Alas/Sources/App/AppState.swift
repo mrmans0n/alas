@@ -34,11 +34,16 @@ final class AppState {
         AppConfig.Terminal,
         Theme,
         URL?,
-        String?
+        String?,
+        Bool,
+        [String: String],
+        Set<String>
     ) throws -> OpenedTerminalSession
 
     @ObservationIgnored
     private let terminalSessionOpener: TerminalSessionOpener?
+    @ObservationIgnored
+    private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
@@ -767,6 +772,17 @@ final class AppState {
         }
     }
 
+    enum ACPAuthTerminalLaunchError: LocalizedError, Equatable {
+        case invalidEnvKey(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidEnvKey(let key):
+                return "Invalid auth environment variable name: \(key)"
+            }
+        }
+    }
+
     @discardableResult
     func openAgentTerminalTab(for worktree: Worktree, agentId: String) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -789,6 +805,41 @@ final class AppState {
         }
     }
 
+    @discardableResult
+    func openACPAuthTerminalTab(
+        for worktree: Worktree,
+        command: ACPAuthTerminalCommand,
+        onExit: @escaping () -> Void
+    ) throws -> Tab {
+        let startupScriptSuffix = try Self.shellCommand(
+            command: command.command,
+            args: command.args,
+            env: command.env,
+            exitOnCompletion: true
+        )
+        let tab = try openTerminalTab(
+            for: worktree,
+            startupScriptSuffix: startupScriptSuffix,
+            includeUserStartupScript: false,
+            environmentOverrides: Self.acpAuthTerminalEnvironmentOverrides(extra: command.env),
+            environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
+        )
+        if case .terminal(let terminal) = tab {
+            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
+        }
+        return tab
+    }
+
+    nonisolated private static func acpAuthTerminalEnvironmentOverrides(
+        extra: [String: String]
+    ) -> [String: String] {
+        var overrides = extra
+        if let path = ACPProcessEnvironment.augmented()["PATH"] {
+            overrides["PATH"] = path
+        }
+        return overrides
+    }
+
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
         switch project.startupScripts.worktreeAgentMode {
         case .disabled:
@@ -798,6 +849,30 @@ final class AppState {
         case .overrideGlobal, .appendToGlobal:
             return project.startupScripts.worktreeAgentUseBypassPermissions
         }
+    }
+
+    nonisolated private static func shellCommand(
+        command: String,
+        args: [String],
+        env: [String: String],
+        exitOnCompletion: Bool = false
+    ) throws -> String {
+        for key in env.keys where !isValidShellAssignmentName(key) {
+            throw ACPAuthTerminalLaunchError.invalidEnvKey(key)
+        }
+        let envPrefix = env
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(shellQuote($0.value))" }
+        let commandLine = (envPrefix + [shellQuote(command)] + args.map(shellQuote)).joined(separator: " ")
+        guard exitOnCompletion else { return commandLine }
+        return "\(commandLine)\nstatus=$?\nexit \"$status\""
+    }
+
+    nonisolated private static func isValidShellAssignmentName(_ key: String) -> Bool {
+        key.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_]*$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     nonisolated private static func shellQuote(_ s: String) -> String {
@@ -1111,8 +1186,11 @@ final class AppState {
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
         terminal.onSessionProcessExited = { [weak self] leafId, worktreeId, processAlive in
-            guard !processAlive else { return }
-            self?.closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
+            self?.handleTerminalProcessExited(
+                worktreeId: worktreeId,
+                leafId: leafId,
+                processAlive: processAlive
+            )
         }
         harness.socketServer.onCLIRequest = { [weak self] request in
             await MainActor.run {
@@ -1255,7 +1333,10 @@ final class AppState {
     @discardableResult
     func openTerminalTab(
         for worktree: Worktree,
-        startupScriptSuffix: String? = nil
+        startupScriptSuffix: String? = nil,
+        includeUserStartupScript: Bool = true,
+        environmentOverrides: [String: String] = [:],
+        environmentRemovals: Set<String> = []
     ) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
@@ -1273,13 +1354,19 @@ final class AppState {
                 config.terminal,
                 themeStore.current,
                 nil,
-                startupScriptSuffix
+                startupScriptSuffix,
+                includeUserStartupScript,
+                environmentOverrides,
+                environmentRemovals
             )
         } else {
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
                 startupScriptSuffix: startupScriptSuffix,
+                includeUserStartupScript: includeUserStartupScript,
+                environmentOverrides: environmentOverrides,
+                environmentRemovals: environmentRemovals,
                 leafId: leafId
             )
             opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in
@@ -1354,6 +1441,13 @@ final class AppState {
     /// dead session and lets the sibling collapse take over the freed space.
     /// Idempotent: if the leaf is no longer in any tab (manual close raced
     /// ahead), returns without side effects.
+    func handleTerminalProcessExited(worktreeId: String, leafId: String, processAlive: Bool) {
+        guard !processAlive else { return }
+        let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
+        closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
+        authExitHandler?()
+    }
+
     func closePaneForProcessExit(worktreeId: String, leafId: String) {
         let owningTabId = tabs.tabs(forWorktree: worktreeId).first { tab in
             guard case .terminal(let state) = tab else { return false }
@@ -1367,14 +1461,19 @@ final class AppState {
         case .tabRemoved:
             closeTab(worktreeId: worktreeId, tabId: tabId)
         case .leafRemoved:
-            terminal.closeSession(
+            closeTerminalSession(
                 id: leafId,
                 worktreeId: worktreeId,
                 projectPath: projectPath(forWorktreeId: worktreeId)
             )
-            harness.detector.unregister(sessionId: leafId)
-            harness.forgetSession(leafId)
         }
+    }
+
+    private func closeTerminalSession(id: String, worktreeId: String, projectPath: String?) {
+        acpAuthTerminalExitHandlers.removeValue(forKey: id)
+        harness.detector.unregister(sessionId: id)
+        harness.forgetSession(id)
+        terminal.closeSession(id: id, worktreeId: worktreeId, projectPath: projectPath)
     }
 
     /// Close the focused pane. If it was the last leaf, also closes the tab
@@ -1389,13 +1488,11 @@ final class AppState {
             closeTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
-            terminal.closeSession(
+            closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
                 projectPath: projectPath(forWorktreeId: worktreeId)
             )
-            harness.detector.unregister(sessionId: closedLeafId)
-            harness.forgetSession(closedLeafId)
         }
     }
 
@@ -1819,9 +1916,7 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    harness.detector.unregister(sessionId: leaf.id)
-                    harness.forgetSession(leaf.id)
-                    terminal.closeSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }
             if case .editor = tab {
@@ -1840,9 +1935,7 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    harness.detector.unregister(sessionId: leaf.id)
-                    harness.forgetSession(leaf.id)
-                    terminal.closeSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }
         }

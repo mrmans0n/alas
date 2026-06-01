@@ -56,6 +56,35 @@ struct ACPClientCapabilities: Codable, Equatable {
     /// Agents must check `clientCapabilities.terminal` during initialize
     /// and only invoke `terminal/*` methods when it is true (ACP spec).
     let terminal: Bool
+    let auth: ACPAuthCapabilities
+    let meta: ACPClientCapabilitiesMeta
+
+    init(
+        fs: ACPFsCapabilities,
+        terminal: Bool,
+        auth: ACPAuthCapabilities = .init(terminal: true),
+        meta: ACPClientCapabilitiesMeta = .terminalAuth
+    ) {
+        self.fs = fs
+        self.terminal = terminal
+        self.auth = auth
+        self.meta = meta
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fs, terminal, auth
+        case meta = "_meta"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fs = try c.decode(ACPFsCapabilities.self, forKey: .fs)
+        terminal = try c.decode(Bool.self, forKey: .terminal)
+        auth = try c.decodeIfPresent(ACPAuthCapabilities.self, forKey: .auth)
+            ?? .init(terminal: false)
+        meta = try c.decodeIfPresent(ACPClientCapabilitiesMeta.self, forKey: .meta)
+            ?? .init(terminalAuth: false)
+    }
 
     struct ACPFsCapabilities: Codable, Equatable {
         let readTextFile: Bool
@@ -63,10 +92,69 @@ struct ACPClientCapabilities: Codable, Equatable {
     }
 }
 
+struct ACPAuthCapabilities: Codable, Equatable {
+    let terminal: Bool
+
+    init(terminal: Bool) {
+        self.terminal = terminal
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
+    }
+}
+
+struct ACPClientCapabilitiesMeta: Codable, Equatable {
+    static let terminalAuth = ACPClientCapabilitiesMeta(terminalAuth: true)
+
+    let terminalAuth: Bool
+
+    init(terminalAuth: Bool) {
+        self.terminalAuth = terminalAuth
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case terminalAuth = "terminal-auth"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        terminalAuth = try c.decodeIfPresent(Bool.self, forKey: .terminalAuth) ?? false
+    }
+}
+
+// MARK: - authenticate
+
+struct ACPAuthenticateParams: Codable, Equatable {
+    let methodId: String
+}
+
 struct ACPInitializeResult: Codable, Equatable {
     let protocolVersion: Int
     let agentCapabilities: ACPAgentCapabilities?
     let authMethods: [ACPAuthMethod]
+
+    init(
+        protocolVersion: Int,
+        agentCapabilities: ACPAgentCapabilities?,
+        authMethods: [ACPAuthMethod]
+    ) {
+        self.protocolVersion = protocolVersion
+        self.agentCapabilities = agentCapabilities
+        self.authMethods = authMethods
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion, agentCapabilities, authMethods
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try c.decode(Int.self, forKey: .protocolVersion)
+        agentCapabilities = try c.decodeIfPresent(ACPAgentCapabilities.self, forKey: .agentCapabilities)
+        authMethods = try c.decodeIfPresent([ACPAuthMethod].self, forKey: .authMethods) ?? []
+    }
 
     struct ACPAgentCapabilities: Codable, Equatable {
         let promptCapabilities: ACPPromptCapabilities?
@@ -96,6 +184,112 @@ struct ACPInitializeResult: Codable, Equatable {
     struct ACPAuthMethod: Codable, Equatable {
         let id: String
         let name: String
+        let description: String?
+        let kind: Kind
+        let args: [String]?
+        let env: [String: String]?
+        let vars: [ACPAuthEnvVar]?
+        let meta: Meta?
+
+        var terminalAuth: TerminalAuthMeta? { meta?.terminalAuth }
+
+        init(
+            id: String,
+            name: String,
+            description: String? = nil,
+            kind: Kind = .agent,
+            args: [String]? = nil,
+            env: [String: String]? = nil,
+            vars: [ACPAuthEnvVar]? = nil,
+            meta: Meta? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.description = description
+            self.kind = kind
+            self.args = args
+            self.env = env
+            self.vars = vars
+            self.meta = meta
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, description, args, env, vars
+            case kind = "type"
+            case meta = "_meta"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            name = try c.decode(String.self, forKey: .name)
+            description = try c.decodeIfPresent(String.self, forKey: .description)
+            kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .agent
+            args = try c.decodeIfPresent([String].self, forKey: .args)
+            env = try c.decodeIfPresent([String: String].self, forKey: .env)
+            vars = try c.decodeIfPresent([ACPAuthEnvVar].self, forKey: .vars)
+            meta = try c.decodeIfPresent(Meta.self, forKey: .meta)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(name, forKey: .name)
+            try c.encodeIfPresent(description, forKey: .description)
+            try c.encode(kind, forKey: .kind)
+            try c.encodeIfPresent(args, forKey: .args)
+            try c.encodeIfPresent(env, forKey: .env)
+            try c.encodeIfPresent(vars, forKey: .vars)
+            try c.encodeIfPresent(meta, forKey: .meta)
+        }
+
+        enum Kind: Codable, Equatable {
+            case agent
+            case terminal
+            case envVar
+            case unknown(String)
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.singleValueContainer()
+                switch try c.decode(String.self) {
+                case "agent": self = .agent
+                case "terminal": self = .terminal
+                case "env_var": self = .envVar
+                case let value: self = .unknown(value)
+                }
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.singleValueContainer()
+                switch self {
+                case .agent: try c.encode("agent")
+                case .terminal: try c.encode("terminal")
+                case .envVar: try c.encode("env_var")
+                case .unknown(let value): try c.encode(value)
+                }
+            }
+        }
+
+        struct Meta: Codable, Equatable {
+            let terminalAuth: TerminalAuthMeta?
+
+            enum CodingKeys: String, CodingKey {
+                case terminalAuth = "terminal-auth"
+            }
+        }
+
+        struct TerminalAuthMeta: Codable, Equatable {
+            let command: String?
+            let args: [String]?
+            let label: String?
+        }
+
+        struct ACPAuthEnvVar: Codable, Equatable {
+            let name: String
+            let label: String?
+            let optional: Bool?
+            let secret: Bool?
+        }
     }
 }
 

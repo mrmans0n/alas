@@ -10,6 +10,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let updateCountLock = NSLock()
     private var _yieldedUpdateCount = 0
+    private(set) var shutdownCount = 0
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     var yieldedUpdateCount: Int {
@@ -87,6 +88,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     }
 
     func shutdown() async {
+        shutdownCount += 1
         updatesCont.finish()
         permsCont.finish()
         filesCont.finish()

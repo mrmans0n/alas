@@ -65,12 +65,12 @@ final class ACPSessionManager: ObservableObject {
                 client = try ACPStdioClient(
                     executable: URL(fileURLWithPath: spec.command),
                     arguments: spec.arguments,
-                    environment: Self.mergeEnv(extra: spec.extraEnv))
+                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
             } else {
                 client = try ACPStdioClient(
                     executable: URL(fileURLWithPath: "/usr/bin/env"),
                     arguments: [spec.command] + spec.arguments,
-                    environment: Self.mergeEnv(extra: spec.extraEnv))
+                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
             }
             try client.start()
             return ACPConnection(client: client)
@@ -578,7 +578,21 @@ extension ACPSessionManager {
         }
         var startedRunner: ACPSessionRunner?
         do {
-            session.promptCapabilities = (try await connection.initialize())
+            let initialized = try await connection.initialize()
+            session.promptCapabilities = initialized.promptCapabilities
+            session.authMethods = initialized.authMethods
+            if let pendingAuthMethodId = session.pendingAuthMethodId {
+                do {
+                    try await connection.authenticate(methodId: pendingAuthMethodId)
+                    session.pendingAuthMethodId = nil
+                } catch {
+                    let reason = ACPAuthFailure.message(from: error) ?? error.localizedDescription
+                    session.setupState = .needsAuth(methods: initialized.authMethods, reason: reason)
+                    session.agentState = .failed(reason)
+                    await connection.shutdown()
+                    return
+                }
+            }
             let shouldSuppressLoadReplay = !freshlyCreated
                 && session.hydrationState == .ready
                 && session.hasConversationTranscript
@@ -586,10 +600,16 @@ extension ACPSessionManager {
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
                                           worktreePath: worktreePath,
-                                          agentEnv: Self.mergeEnv(extra: spec.extraEnv),
+                                          agentEnv: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv),
                                           suppressingLoadReplay: shouldSuppressLoadReplay,
                                           onDirtyCheck: onDirtyCheck,
-                                          onLiveBufferRead: onLiveBufferRead)
+                                          onLiveBufferRead: onLiveBufferRead,
+                                          onAuthRequired: { [weak self] runner, _ in
+                                              await self?.handleAuthRequiredRunner(
+                                                runner,
+                                                sessionId: sessionId
+                                              )
+                                          })
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }
@@ -616,6 +636,9 @@ extension ACPSessionManager {
                     runner.finishSuppressingLoadReplay(
                         throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                     )
+                    if ACPAuthFailure.message(from: error) != nil {
+                        throw error
+                    }
                     result = try await connection.newSession(cwd: worktreePath)
                     if session.hasConversationTranscript {
                         shouldHoldQueueForRecovery = true
@@ -664,10 +687,17 @@ extension ACPSessionManager {
             try? await Task.sleep(nanoseconds: 200_000_000)
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
-            let base = "ACP initialize/new failed: \(error.localizedDescription)"
+            let authReason = ACPAuthFailure.message(from: error)
+            let baseMessage = authReason ?? error.localizedDescription
+            let base = "ACP initialize/new failed: \(baseMessage)"
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
-            session.agentState = .failed(full)
+            if let authReason {
+                session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
+                session.agentState = .failed(authReason)
+            } else {
+                session.agentState = .failed(full)
+            }
             startedRunner?.stop()
             await connection.shutdown()
         }
@@ -762,6 +792,9 @@ extension ACPSessionManager {
         onCompleted: @escaping @MainActor (Bool) -> Void
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
+        if case .needsAuth = session.setupState {
+            return false
+        }
 
         switch session.agentState {
         case .ready:
@@ -805,6 +838,21 @@ extension ACPSessionManager {
         }
     }
 
+    private func handleAuthRequiredRunner(
+        _ runner: ACPSessionRunner,
+        sessionId: ACPSession.ID
+    ) async {
+        guard runners[sessionId] === runner else { return }
+        runner.invalidateActivePrompt()
+        if let session = sessions[sessionId] {
+            session.transcript.streamingState = .idle
+            session.restoreQueue(session.queue)
+        }
+        runner.stop()
+        runners[sessionId] = nil
+        await runner.connection.shutdown()
+    }
+
     func detach(sessionId: ACPSession.ID) async {
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
@@ -844,24 +892,6 @@ extension ACPSessionManager {
         // now that state is `.idle` so a closed-while-attached session
         // doesn't keep its transcript + caches resident indefinitely.
         evictIfIdle(id: sessionId)
-    }
-
-    private static func mergeEnv(extra: [String: String]) -> [String: String] {
-        var env = ACPProcessEnvironment.augmented()
-        // Strip env vars that mark this process as running INSIDE a coding
-        // agent's session. Without this, `claude-code-acp` (and likely any
-        // other Anthropic-aware tool we spawn) refuses to start, reporting
-        // "Claude Code cannot be launched inside another Claude Code session"
-        // — which is exactly what happens when Alas is run from a terminal
-        // that's itself inside Claude Code.
-        for key in [
-            "CLAUDECODE", "CLAUDE_CODE", "CLAUDE_PROJECT_DIR",
-            "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
-        ] {
-            env.removeValue(forKey: key)
-        }
-        for (k, v) in extra { env[k] = v }
-        return env
     }
 }
 

@@ -16,6 +16,13 @@ enum ACPInstallError: LocalizedError {
 }
 
 enum ACPProcessEnvironment {
+    // Strip env vars that mark this process as running inside another coding
+    // agent. Claude-aware tools refuse to start when these leak through.
+    static let agentSessionMarkerKeys: Set<String> = [
+        "CLAUDECODE", "CLAUDE_CODE", "CLAUDE_PROJECT_DIR",
+        "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
+    ]
+
     static func augmented(
         _ environment: [String: String] = ProcessInfo.processInfo.environment,
         additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
@@ -24,6 +31,15 @@ enum ACPProcessEnvironment {
         env["PATH"] = AgentPath.augment(
             base: env["PATH"] ?? "",
             wellKnown: additionalPathDirectories)
+        return env
+    }
+
+    static func sanitizedForACP(extra: [String: String]) -> [String: String] {
+        var env = augmented()
+        for key in agentSessionMarkerKeys {
+            env.removeValue(forKey: key)
+        }
+        for (k, v) in extra { env[k] = v }
         return env
     }
 }

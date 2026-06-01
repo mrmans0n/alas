@@ -66,6 +66,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Published var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// Auth methods learned from ACP `initialize`.
+    /// Runtime-only: re-learned on each attach and used when an agent asks
+    /// the client to authenticate before ACP can continue.
+    @Published var authMethods: [ACPInitializeResult.ACPAuthMethod] = []
+    /// Runtime-only auth method selected by the user in the sign-in banner.
+    /// The next attach consumes it by calling ACP `authenticate` after
+    /// initialize and before session creation/loading.
+    var pendingAuthMethodId: String?
 
     var imageInputSupported: Bool { promptCapabilities.image }
     var embeddedContextSupported: Bool { promptCapabilities.embeddedContext }
@@ -138,6 +146,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case checking
         case ready
         case needsSetup(reason: String)
+        case needsAuth(methods: [ACPInitializeResult.ACPAuthMethod], reason: String?)
     }
     struct PendingPermission: Identifiable, Equatable {
         let id: JSONRPCID

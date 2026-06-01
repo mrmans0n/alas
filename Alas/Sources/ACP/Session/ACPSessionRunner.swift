@@ -36,6 +36,7 @@ final class ACPSessionRunner {
     /// CLAUDECODE/CLAUDE_SESSION_ID markers that would otherwise leak
     /// back in via a re-augment from `ProcessInfo`.
     private let agentEnv: [String: String]
+    private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
@@ -69,7 +70,8 @@ final class ACPSessionRunner {
          agentEnv: [String: String] = ProcessInfo.processInfo.environment,
          suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
-         onLiveBufferRead: ((String) -> String?)? = nil)
+         onLiveBufferRead: ((String) -> String?)? = nil,
+         onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil)
     {
         self.session = session
         self.connection = connection
@@ -77,6 +79,7 @@ final class ACPSessionRunner {
         self.sessionId = sessionId
         self.worktreePath = worktreePath
         self.agentEnv = agentEnv
+        self.onAuthRequired = onAuthRequired
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
@@ -672,21 +675,24 @@ extension ACPSessionRunner {
         try? store.upsertQueue(sessionId: sessionId, items: session.queue)
     }
 
-    /// Drain the queue head if (a) state is `.idle`, (b) the head is
-    /// `.pending`, and (c) the head has no `lastError`. Marks the head
-    /// `.sending`, persists, and dispatches `sendNow` with the head's
-    /// id so success can pop the right item and failure can flag the
-    /// right item without disturbing the rest of the queue.
+    /// Drain the queue head if the runner is still live, setup is not
+    /// blocked on auth, transcript state is `.idle`, the head is `.pending`,
+    /// and the head has no `lastError`. Marks the head `.sending`, persists,
+    /// and dispatches `sendNow` with the head's id so success can pop the
+    /// right item and failure can flag the right item without disturbing
+    /// the rest of the queue.
     ///
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
         guard !steerInProgress,
+              session.agentState == .ready,
               session.transcript.streamingState == .idle,
               let head = session.queue.first,
               head.status == .pending,
               head.lastError == nil
         else { return }
+        if case .needsAuth = session.setupState { return }
         session.markQueueHeadSending()
         persistQueue()
         sendNow(blocks: head.blocks, queuedItemId: head.id)
@@ -888,15 +894,30 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
-                        if queuedItemId != nil, !wasCancelled {
+                        let authReason = wasCancelled ? nil : ACPAuthFailure.message(from: error)
+                        let errorMessage = authReason ?? error.localizedDescription
+                        if queuedItemId != nil, !wasCancelled, authReason == nil {
                             // Queued send failed naturally — leave the item
                             // at the head with lastError so the bubble shows
                             // Retry. Cancelled queued sends had the item
                             // discarded elsewhere (steer) and don't surface.
-                            self.session.setQueueHeadError(error.localizedDescription)
+                            self.session.setQueueHeadError(errorMessage)
+                            self.persistQueue()
+                        } else if queuedItemId != nil, authReason != nil {
+                            self.session.restoreQueue(self.session.queue)
                             self.persistQueue()
                         } else if queuedItemId == nil, !wasCancelled {
-                            self.session.lastError = "prompt failed: \(error.localizedDescription)"
+                            self.session.lastError = "prompt failed: \(errorMessage)"
+                        }
+                        if let authReason {
+                            self.session.setupState = .needsAuth(
+                                methods: self.session.authMethods,
+                                reason: authReason
+                            )
+                            self.session.agentState = .failed(authReason)
+                            Task { @MainActor in
+                                await self.onAuthRequired?(self, authReason)
+                            }
                         }
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {

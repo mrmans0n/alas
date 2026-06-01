@@ -225,6 +225,192 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(row.contextRecoveryPending)
     }
 
+    @Test("new auth failure enters needsAuth with initialized auth method")
+    func newAuthFailureEntersNeedsAuthWithInitializedAuthMethod() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        client.script(method: "session/new") { _ in
+            throw JSONRPCError(code: -32000, message: "Internal error: 401 Unauthorized", data: nil)
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new"])
+        #expect(session.authMethods == [method])
+        #expect(session.setupState == .needsAuth(methods: [method], reason: "401 Unauthorized"))
+        #expect(session.lastError?.contains("401 Unauthorized") == true)
+        #expect(manager.runners[session.id] == nil)
+        if case .failed(let message) = session.agentState {
+            #expect(message == "401 Unauthorized")
+        } else {
+            Issue.record("Expected failed agent state")
+        }
+    }
+
+    @Test("load auth failure does not fall back to session new")
+    func loadAuthFailureDoesNotFallBackToSessionNew() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32000, message: "auth_required: 401", data: nil)
+        }
+        client.script(method: "session/new") { _ in
+            Issue.record("session/new should not be called after auth-related session/load failure")
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
+        #expect(session.remoteSessionId == "remote-old")
+        #expect(session.authMethods == [method])
+        #expect(session.setupState == .needsAuth(methods: [method], reason: "auth_required: 401"))
+        #expect(session.lastError?.contains("auth_required: 401") == true)
+        if case .failed(let message) = session.agentState {
+            #expect(message == "auth_required: 401")
+        } else {
+            Issue.record("Expected failed agent state")
+        }
+    }
+
+    @Test("pending auth method authenticates before creating session")
+    func pendingAuthMethodAuthenticatesBeforeSessionCreate() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        client.script(method: "authenticate") { req in
+            let params = try #require(req.params as? ACPAuthenticateParams)
+            #expect(params.methodId == method.id)
+            return Data()
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+        session.pendingAuthMethodId = method.id
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "authenticate", "session/new"])
+        #expect(session.pendingAuthMethodId == nil)
+        #expect(session.agentState == .ready)
+    }
+
+    @Test("prompt auth failure removes runner and blocks queue retry on failed connection")
+    func promptAuthFailureRemovesRunnerAndBlocksQueueRetryOnFailedConnection() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.script(method: "session/prompt") { _ in
+            throw JSONRPCError(code: -32000, message: "login required", data: nil)
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let runner = try #require(manager.runners[session.id])
+        session.enqueue(blocks: [.text("queued")])
+        runner.persistQueue()
+
+        runner.flushQueueIfIdle()
+        try await waitUntil {
+            manager.runners[session.id] == nil
+                && session.setupState == .needsAuth(methods: [method], reason: "login required")
+        }
+
+        #expect(client.shutdownCount == 1)
+        #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].status == .pending)
+        #expect(session.queue[0].lastError == nil)
+        #expect(session.transcript.streamingState == .idle)
+
+        session.queue[0].lastError = nil
+        manager.persistQueue(for: session)
+        manager.runners[session.id]?.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
+    }
+
+    @Test("direct auth failure leaves queued follow-up pending")
+    func directAuthFailureLeavesQueuedFollowUpPending() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let gate = AuthPromptFailureGate()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.scriptAsync(method: "session/prompt") { _ in
+            try await gate.handlePrompt()
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let runner = try #require(manager.runners[session.id])
+        runner.send(blocks: [.text("first")], intent: .auto)
+        try await waitUntilAsync { await gate.hasEntered }
+        runner.send(blocks: [.text("follow-up")], intent: .auto)
+
+        await gate.release()
+        try await waitUntil {
+            manager.runners[session.id] == nil
+                && session.setupState == .needsAuth(methods: [method], reason: "login required")
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].status == .pending)
+        #expect(session.queue[0].lastError == nil)
+        #expect(session.queue[0].blocks == [.text("follow-up")])
+        #expect(session.transcript.streamingState == .idle)
+    }
+
+    @Test("submit while needsAuth rejects prompt and preserves draft")
+    func submitWhileNeedsAuthRejectsPromptAndPreservesDraft() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let manager = manager(store: store, client: ACPMockClient())
+        let session = manager.createSession(agentId: "claude")
+        let method = terminalAuthMethod()
+        let draft = ACPComposerDraft(segments: [.text("do not clear me")])
+        session.authMethods = [method]
+        session.setupState = .needsAuth(methods: [method], reason: "login required")
+        session.agentState = .failed("login required")
+        session.replaceComposerDraft(draft)
+        var completed: Bool?
+
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "do not clear me",
+            attachments: [],
+            intent: .auto,
+            draft: draft
+        ) { succeeded in
+            completed = succeeded
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(accepted == false)
+        #expect(completed == nil)
+        #expect(session.queue.isEmpty)
+        #expect(session.composerDraft == draft)
+        #expect(session.setupState == .needsAuth(methods: [method], reason: "login required"))
+    }
+
     @Test("pending queued prompt waits for transcript recovery after load fallback")
     func queuedPromptWaitsForTranscriptRecoveryAfterLoadFallback() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -686,14 +872,25 @@ struct ACPSessionManagerAttachRestoreTests {
         )
     }
 
-    private func scriptInitialize(_ client: ACPMockClient) {
+    private func scriptInitialize(
+        _ client: ACPMockClient,
+        authMethods: [ACPInitializeResult.ACPAuthMethod] = []
+    ) {
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
                 protocolVersion: 1,
                 agentCapabilities: nil,
-                authMethods: []
+                authMethods: authMethods
             ))
         }
+    }
+
+    private func terminalAuthMethod() -> ACPInitializeResult.ACPAuthMethod {
+        ACPInitializeResult.ACPAuthMethod(
+            id: "claude-login",
+            name: "Claude Login",
+            kind: .terminal
+        )
     }
 
     private func scriptSessionResult(_ client: ACPMockClient, method: String, sessionId: String) {
@@ -722,6 +919,35 @@ struct ACPSessionManagerAttachRestoreTests {
             await withCheckedContinuation { continuation in
                 self.continuation = continuation
             }
+        }
+
+        func release() {
+            released = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    private actor AuthPromptFailureGate {
+        private var entered = false
+        private var released = false
+        private var attempts = 0
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        var hasEntered: Bool { entered }
+
+        func handlePrompt() async throws -> Data {
+            attempts += 1
+            guard attempts == 1 else {
+                return Data("null".utf8)
+            }
+            if !released {
+                entered = true
+                await withCheckedContinuation { continuation in
+                    self.continuation = continuation
+                }
+            }
+            throw JSONRPCError(code: -32000, message: "login required", data: nil)
         }
 
         func release() {
