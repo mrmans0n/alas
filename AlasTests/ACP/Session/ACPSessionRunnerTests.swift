@@ -79,6 +79,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
@@ -126,6 +127,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
@@ -348,6 +350,7 @@ struct ACPSessionRunnerTests {
 
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
@@ -377,6 +380,7 @@ struct ACPSessionRunnerTests {
 
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),

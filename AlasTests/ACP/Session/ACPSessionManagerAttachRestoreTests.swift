@@ -320,6 +320,40 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
     }
 
+    @Test("direct auth failure leaves queued follow-up pending")
+    func directAuthFailureLeavesQueuedFollowUpPending() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let gate = AuthPromptFailureGate()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.scriptAsync(method: "session/prompt") { _ in
+            try await gate.handlePrompt()
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let runner = try #require(manager.runners[session.id])
+        runner.send(blocks: [.text("first")], intent: .auto)
+        try await waitUntilAsync { await gate.hasEntered }
+        runner.send(blocks: [.text("follow-up")], intent: .auto)
+
+        await gate.release()
+        try await waitUntil {
+            manager.runners[session.id] == nil
+                && session.setupState == .needsAuth(methods: [method], reason: "login required")
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].status == .pending)
+        #expect(session.queue[0].lastError == nil)
+        #expect(session.queue[0].blocks == [.text("follow-up")])
+    }
+
     @Test("submit while needsAuth rejects prompt and preserves draft")
     func submitWhileNeedsAuthRejectsPromptAndPreservesDraft() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -859,6 +893,35 @@ struct ACPSessionManagerAttachRestoreTests {
             await withCheckedContinuation { continuation in
                 self.continuation = continuation
             }
+        }
+
+        func release() {
+            released = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    private actor AuthPromptFailureGate {
+        private var entered = false
+        private var released = false
+        private var attempts = 0
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        var hasEntered: Bool { entered }
+
+        func handlePrompt() async throws -> Data {
+            attempts += 1
+            guard attempts == 1 else {
+                return Data("null".utf8)
+            }
+            if !released {
+                entered = true
+                await withCheckedContinuation { continuation in
+                    self.continuation = continuation
+                }
+            }
+            throw JSONRPCError(code: -32000, message: "login required", data: nil)
         }
 
         func release() {

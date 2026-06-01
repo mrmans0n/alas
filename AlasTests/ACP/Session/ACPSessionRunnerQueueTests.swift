@@ -14,6 +14,7 @@ struct ACPSessionRunnerQueueTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
@@ -463,6 +464,7 @@ struct ACPSessionRunnerQueueTests {
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: FileManager.default.temporaryDirectory.path, store: store)
         let session2 = mgr.placeholderSession(id: "rt")!
         await mgr.hydrateIfNeeded(id: "rt")
+        session2.agentState = .ready
         #expect(session2.queue.count == 2)
         // .sending was normalized to .pending on restore.
         #expect(session2.queue[0].status == .pending)

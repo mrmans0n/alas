@@ -675,21 +675,24 @@ extension ACPSessionRunner {
         try? store.upsertQueue(sessionId: sessionId, items: session.queue)
     }
 
-    /// Drain the queue head if (a) state is `.idle`, (b) the head is
-    /// `.pending`, and (c) the head has no `lastError`. Marks the head
-    /// `.sending`, persists, and dispatches `sendNow` with the head's
-    /// id so success can pop the right item and failure can flag the
-    /// right item without disturbing the rest of the queue.
+    /// Drain the queue head if the runner is still live, setup is not
+    /// blocked on auth, transcript state is `.idle`, the head is `.pending`,
+    /// and the head has no `lastError`. Marks the head `.sending`, persists,
+    /// and dispatches `sendNow` with the head's id so success can pop the
+    /// right item and failure can flag the right item without disturbing
+    /// the rest of the queue.
     ///
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
         guard !steerInProgress,
+              session.agentState == .ready,
               session.transcript.streamingState == .idle,
               let head = session.queue.first,
               head.status == .pending,
               head.lastError == nil
         else { return }
+        if case .needsAuth = session.setupState { return }
         session.markQueueHeadSending()
         persistQueue()
         sendNow(blocks: head.blocks, queuedItemId: head.id)
