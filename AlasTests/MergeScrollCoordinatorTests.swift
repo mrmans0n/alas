@@ -61,4 +61,38 @@ struct MergeScrollCoordinatorTests {
 
         #expect(resultObserved == [48.5])
     }
+
+    @Test func syncedPaneNotificationsDoNotClobberUserScrollOffset() {
+        let coord = MergeScrollCoordinator()
+        coord.rowHeight = 16
+        var localObserved: [CGFloat] = []
+        coord.onSyncLocal = { y in
+            localObserved.append(y)
+            // AppKit can emit a boundsDidChange notification while handling
+            // a programmatic sync scroll. If the target clamps slightly, that
+            // notification must not become the new source of truth and snap
+            // the pane the user actually scrolled back upward.
+            coord.applyPaneY(y - 24, source: .local)
+        }
+
+        coord.applyPaneY(120, source: .result)
+
+        #expect(localObserved == [120])
+        #expect(coord.scrollY == 120)
+        #expect(coord.logicalRow == 7)
+    }
+
+    @Test func scrollObserversAreNotifiedForUserAndProgrammaticScrolls() {
+        let coord = MergeScrollCoordinator()
+        coord.rowHeight = 10
+        var observed: [CGFloat] = []
+
+        let id = coord.addScrollObserver { observed.append($0) }
+        coord.applyPaneY(25, source: .result)
+        coord.setLogicalRow(4)
+        coord.removeScrollObserver(id)
+        coord.applyPaneY(60, source: .result)
+
+        #expect(observed == [25, 40])
+    }
 }

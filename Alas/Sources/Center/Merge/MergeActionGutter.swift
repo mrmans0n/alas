@@ -35,6 +35,7 @@ struct MergeActionGutter: NSViewRepresentable {
         view.side = side
         view.conflictRanges = conflictRanges
         view.coordinator = coordinator
+        view.observe(coordinator)
         view.onAccept = onAccept
         view.onReject = onReject
         view.needsDisplay = true
@@ -47,8 +48,22 @@ struct MergeActionGutter: NSViewRepresentable {
         var coordinator: MergeScrollCoordinator?
         var onAccept: ((Int) -> Void)?
         var onReject: ((Int) -> Void)?
+        private weak var observedCoordinator: MergeScrollCoordinator?
+        private var scrollObserverID: UUID?
 
         override var isFlipped: Bool { true }
+
+        func observe(_ coordinator: MergeScrollCoordinator) {
+            guard observedCoordinator !== coordinator else { return }
+            if let scrollObserverID, let observedCoordinator {
+                observedCoordinator.removeScrollObserver(scrollObserverID)
+            }
+            observedCoordinator = coordinator
+            scrollObserverID = coordinator.addScrollObserver { [weak self] _ in
+                self?.needsDisplay = true
+                self?.needsLayout = true
+            }
+        }
 
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
@@ -155,6 +170,14 @@ struct MergeActionGutter: NSViewRepresentable {
             let closure: () -> Void
             init(closure: @escaping () -> Void) { self.closure = closure }
             @objc func fire() { closure() }
+        }
+
+        deinit {
+            if let scrollObserverID, let observedCoordinator {
+                MainActor.assumeIsolated {
+                    observedCoordinator.removeScrollObserver(scrollObserverID)
+                }
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ import Observation
 @MainActor
 @Observable
 final class MergeScrollCoordinator {
-    enum Source: Equatable {
+    enum Source: Equatable, Hashable {
         case local, result, remote
     }
 
@@ -29,11 +29,20 @@ final class MergeScrollCoordinator {
     var onSyncResult: ((CGFloat) -> Void)?
     var onSyncRemote: ((CGFloat) -> Void)?
 
+    @ObservationIgnored
+    private var scrollObservers: [UUID: (CGFloat) -> Void] = [:]
+
+    /// Sources currently being moved by a coordinator-driven sync.
+    /// NSClipView posts boundsDidChange for programmatic scrolls too;
+    /// those callbacks must not be treated as a fresh user scroll.
+    private var syncingSources: Set<Source> = []
+
     /// Programmatic setter. Doesn't broadcast — the caller is
     /// presumed to be initialization or a non-scroll trigger.
     func setLogicalRow(_ row: Int) {
         logicalRow = max(0, row)
         scrollY = CGFloat(logicalRow) * rowHeight
+        notifyScrollObservers()
     }
 
     /// Returns the Y offset (points) corresponding to the current
@@ -47,6 +56,7 @@ final class MergeScrollCoordinator {
     /// `onSync`. The source pane is excluded from the broadcast so it
     /// doesn't bounce its own value back.
     func applyPaneY(_ y: CGFloat, source: Source) {
+        guard !syncingSources.contains(source) else { return }
         // floor() rather than rounded(): rounded() causes mid-row hysteresis
         // during slow trackpad scrolls (the value flickers between row N and
         // N+1 when y is near (N + 0.5) * rowHeight). floor matches the
@@ -57,12 +67,36 @@ final class MergeScrollCoordinator {
         scrollY = nextY
         let row = max(0, Int((nextY / max(rowHeight, 1)).rounded(.down)))
         logicalRow = row
+        notifyScrollObservers()
         for target in [Source.local, .result, .remote] where target != source {
-            switch target {
-            case .local:  onSyncLocal?(nextY)
-            case .result: onSyncResult?(nextY)
-            case .remote: onSyncRemote?(nextY)
-            }
+            sync(nextY, to: target)
+        }
+    }
+
+    @discardableResult
+    func addScrollObserver(_ observer: @escaping (CGFloat) -> Void) -> UUID {
+        let id = UUID()
+        scrollObservers[id] = observer
+        return id
+    }
+
+    func removeScrollObserver(_ id: UUID) {
+        scrollObservers.removeValue(forKey: id)
+    }
+
+    private func notifyScrollObservers() {
+        for observer in scrollObservers.values {
+            observer(scrollY)
+        }
+    }
+
+    private func sync(_ y: CGFloat, to target: Source) {
+        syncingSources.insert(target)
+        defer { syncingSources.remove(target) }
+        switch target {
+        case .local:  onSyncLocal?(y)
+        case .result: onSyncResult?(y)
+        case .remote: onSyncRemote?(y)
         }
     }
 }

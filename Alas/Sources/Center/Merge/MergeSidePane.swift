@@ -45,6 +45,9 @@ struct MergeSidePane: NSViewRepresentable {
         )
         textView.autoresizingMask = [.width]
         scroll.documentView = textView
+        scroll.hasVerticalRuler = true
+        scroll.rulersVisible = true
+        scroll.verticalRulerView = MergeSourceLineNumberRulerView(scrollView: scroll, theme: theme)
         context.coordinator.textView = textView
         // Forward scroll changes to the coordinator.
         context.coordinator.observeScroll(scroll, side: side, into: coordinator)
@@ -71,6 +74,14 @@ struct MergeSidePane: NSViewRepresentable {
             let attr = buildAttributedString(theme: theme)
             textView.textStorage?.setAttributedString(attr)
             context.coordinator.lastKey = key
+        }
+        if let ruler = scroll.verticalRulerView as? MergeSourceLineNumberRulerView {
+            ruler.update(
+                rows: rows,
+                rowHeight: lineHeight(),
+                contentTopInset: textView.textContainerInset.height,
+                theme: theme
+            )
         }
         textView.backgroundColor = bg
         context.coordinator.coordinator = coordinator
@@ -169,5 +180,110 @@ struct MergeSidePane: NSViewRepresentable {
             result.append(line)
         }
         return result
+    }
+}
+
+private final class MergeSourceLineNumberRulerView: NSRulerView {
+    private var rows: [MergeRegionVisualLayout.VisualRow] = []
+    private var theme: Theme
+    private var rowHeight: CGFloat = 16
+    private var contentTopInset: CGFloat = 6
+    private var boundsObserver: NSObjectProtocol?
+
+    private let minimumThickness: CGFloat = 34
+    private let horizontalPadding: CGFloat = 8
+
+    init(scrollView: NSScrollView, theme: Theme) {
+        self.theme = theme
+        super.init(scrollView: scrollView, orientation: .verticalRuler)
+        ruleThickness = minimumThickness
+        reservedThicknessForMarkers = 0
+        reservedThicknessForAccessoryView = 0
+        observe(scrollView: scrollView)
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    override var isFlipped: Bool { true }
+
+    func update(
+        rows: [MergeRegionVisualLayout.VisualRow],
+        rowHeight: CGFloat,
+        contentTopInset: CGFloat,
+        theme: Theme
+    ) {
+        self.rows = rows
+        self.rowHeight = rowHeight
+        self.contentTopInset = contentTopInset
+        self.theme = theme
+        updateThickness()
+        needsDisplay = true
+    }
+
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        NSColor(theme.color("bg-2")).setFill()
+        bounds.fill()
+
+        guard
+            let scrollView,
+            rowHeight > 0,
+            !rows.isEmpty
+        else { return }
+
+        let visible = scrollView.contentView.bounds
+        let firstRow = max(0, Int(floor((visible.minY - contentTopInset) / rowHeight)))
+        let lastRow = min(rows.count - 1, Int(ceil((visible.maxY - contentTopInset) / rowHeight)))
+        guard firstRow <= lastRow else { return }
+
+        let attributes = labelAttributes()
+        let textHeight = ("8" as NSString).size(withAttributes: attributes).height
+        for index in firstRow...lastRow {
+            guard let number = rows[index].sourceLineNumber else { continue }
+            let y = contentTopInset + CGFloat(index) * rowHeight - visible.minY
+            let drawRect = NSRect(
+                x: 0,
+                y: y + max((rowHeight - textHeight) / 2, 0),
+                width: ruleThickness - horizontalPadding,
+                height: textHeight
+            )
+            NSString(string: String(number)).draw(in: drawRect, withAttributes: attributes)
+        }
+    }
+
+    private func observe(scrollView: NSScrollView) {
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.needsDisplay = true
+        }
+    }
+
+    private func updateThickness() {
+        let maxLine = rows.compactMap(\.sourceLineNumber).max() ?? 1
+        let digits = String(maxLine).count
+        let sample = String(repeating: "8", count: digits) as NSString
+        let width = ceil(sample.size(withAttributes: labelAttributes()).width)
+        ruleThickness = max(minimumThickness, width + horizontalPadding * 2)
+    }
+
+    private func labelAttributes() -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .right
+        return [
+            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: NSColor(theme.color("fg-faint")),
+            .paragraphStyle: paragraph,
+        ]
+    }
+
+    deinit {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+        }
     }
 }
