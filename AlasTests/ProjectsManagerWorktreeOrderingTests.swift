@@ -475,4 +475,45 @@ struct ProjectsManagerWorktreeOrderingTests {
         let decoded = try decoder.decode(ProjectsFile.self, from: data)
         #expect(decoded.projects[0].worktreeOrder == ["/tmp/alpha/wt-feat", "/tmp/alpha/wt-fix"])
     }
+
+    @Test func migrationPreservesPreExistingManualOrder() throws {
+        // Simulate decoding a ProjectsFile that was saved before this feature shipped:
+        // worktreeOrder is non-empty.
+        let json = """
+        {
+          "version": 1,
+          "projects": [{
+            "id": "p1",
+            "name": "p1",
+            "path": "/repo",
+            "color": "#5fb7c4",
+            "addedAt": 0,
+            "worktreeOrder": ["/repo/wts/b", "/repo/wts/a"]
+          }]
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let file = try decoder.decode(ProjectsFile.self, from: json)
+
+        // Global default is .lastUpdateDesc, but the project has a manual order →
+        // manual must win.
+        let mgr = ProjectsManager(
+            persistedProjects: file.projects,
+            defaultOrdering: { .lastUpdateDesc }
+        )
+        let now = Date()
+        let main = wt(path: "/repo", branch: "main", lastActivity: now)
+        let a = wt(path: "/repo/wts/a", branch: "a",
+                   lastActivity: now.addingTimeInterval(-3600))
+        let b = wt(path: "/repo/wts/b", branch: "b",
+                   lastActivity: now.addingTimeInterval(-7200))
+        // Seed in persisted-order to preserve manual order during partial state.
+        seed(mgr, projectId: "p1", [b, main, a])
+
+        let trees = mgr.worktrees(projectId: "p1")
+        // Manual order is [b, a] → expect [main, b, a] despite a having more
+        // recent activity than b.
+        #expect(trees.map(\.branch) == ["main", "b", "a"])
+    }
 }
