@@ -44,9 +44,45 @@ struct TabActivityIconTintTests {
         #expect(withoutHarness == withHarness)
     }
 
+    @Test func acpTabAddsAgentLogoWhenAgentIsResolved() {
+        let tab = AppTab.acpSession(ACPSessionTabState(sessionId: "session-1", title: "Plan"))
+        let withoutAgent = tabBarWidth(tab: tab, activityState: nil)
+        let withAgent = tabBarWidth(
+            tab: tab,
+            activityState: nil,
+            acpAgentLookup: { _ in AgentBuiltins.entry(id: "codex") }
+        )
+        #expect(withAgent > withoutAgent)
+    }
+
+    @Test func nonAcpTabIgnoresAcpAgentLookup() {
+        let tab = AppTab.editor(EditorTabState(
+            id: "e2",
+            title: "hello.swift",
+            relativePath: "hello.swift",
+            revealLine: nil,
+            revealCharacter: nil,
+            externalAbsolutePath: nil,
+            originatingRelativePath: nil,
+            markdownViewMode: nil,
+            markdownSplitFraction: nil
+        ))
+        let withoutAgent = tabBarWidth(tab: tab, activityState: nil)
+        let withAgent = tabBarWidth(
+            tab: tab,
+            activityState: nil,
+            acpAgentLookup: { _ in AgentBuiltins.entry(id: "codex") }
+        )
+        #expect(withAgent == withoutAgent)
+    }
+
     // MARK: - Helpers
 
-    private func tabBarWidth(tab: AppTab, activityState: ActivityState?) -> CGFloat {
+    private func tabBarWidth(
+        tab: AppTab,
+        activityState: ActivityState?,
+        acpAgentLookup: @escaping (AppTabID) -> AgentDefinition? = { _ in nil }
+    ) -> CGFloat {
         let lookup: (AppTabID) -> (agent: AgentKind, state: ActivityState)? = { _ in
             guard let state = activityState else { return nil }
             return (agent: .codex, state: state)
@@ -79,7 +115,8 @@ struct TabActivityIconTintTests {
             sidebarHidden: false,
             onMove: { _, _ in },
             titleLookup: { _ in nil },
-            transcriptLookup: { _ in nil }
+            transcriptLookup: { _ in nil },
+            acpAgentLookup: acpAgentLookup
         )
         .environment(\.theme, currentTheme())
 

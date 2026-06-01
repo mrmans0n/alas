@@ -107,6 +107,14 @@ struct CenterPaneView: View {
                           let mgr = state.acpManager(for: worktree),
                           let session = mgr.placeholderSession(id: s.sessionId) else { return nil }
                     return session.transcript
+                },
+                acpAgentLookup: { id in
+                    guard let tab = tabs.first(where: { $0.id == id }),
+                          case .acpSession(let s) = tab,
+                          let mgr = state.acpManager(forWorktreeId: worktree.id),
+                          let session = mgr.sessions[s.sessionId] else { return nil }
+                    return state.agent(id: session.agentId)
+                        ?? AgentBuiltins.entry(id: session.agentId)
                 }
             )
             Group {
