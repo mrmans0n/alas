@@ -406,7 +406,68 @@ struct ACPComposerDraftBridgeTests {
         #expect(typingColor == NSColor.labelColor)
     }
 
+    @Test("plain paste insertion normalizes inherited rich text styling")
+    func plainPasteInsertionNormalizesRichTextStyling() throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let source = NSMutableAttributedString(
+            string: "before after",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        textView.textStorage?.setAttributedString(source)
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        textView.typingAttributes = [
+            .font: NSFont.systemFont(ofSize: 48),
+            .foregroundColor: NSColor.black,
+        ]
+
+        let inserted = textView.insertPlainText("RICH")
+
+        #expect(inserted)
+        #expect(textView.string == "before RICHafter")
+        let insertedRange = NSRange(location: 7, length: 4)
+        try assertComposerBaseStyle(in: textView.attributedString(), range: insertedRange)
+        #expect((textView.typingAttributes[.foregroundColor] as? NSColor) == NSColor.labelColor)
+        let typingFont = try #require(textView.typingAttributes[.font] as? NSFont)
+        #expect(typingFont.pointSize == 13)
+    }
+
+    @Test("plain paste insertion replaces selected text with normalized styling")
+    func plainPasteInsertionReplacesSelectionWithNormalizedStyling() throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        textView.textStorage?.setAttributedString(NSAttributedString(
+            string: "replace me",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        ))
+        textView.setSelectedRange(NSRange(location: 0, length: 7))
+
+        let inserted = textView.insertPlainText("keep")
+
+        #expect(inserted)
+        #expect(textView.string == "keep me")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
+        try assertComposerBaseStyle(in: textView.attributedString(), range: NSRange(location: 0, length: 4))
+    }
+
     // MARK: - Keyboard intent resolution (doCommandBy)
+
+    private func assertComposerBaseStyle(
+        in attributed: NSAttributedString,
+        range: NSRange,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        attributed.enumerateAttributes(in: range) { attrs, _, _ in
+            let font = attrs[.font] as? NSFont
+            let color = attrs[.foregroundColor] as? NSColor
+            #expect(font?.pointSize == 13, sourceLocation: sourceLocation)
+            #expect(color == NSColor.labelColor, sourceLocation: sourceLocation)
+        }
+    }
 
     private func makeCoordinator(
         sendOnEnter: Bool,

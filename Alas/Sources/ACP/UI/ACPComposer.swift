@@ -802,7 +802,28 @@ final class ACPNSTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         if insertImages(from: NSPasteboard.general) { return }
+        if let text = NSPasteboard.general.string(forType: .string) {
+            insertPlainText(text)
+            return
+        }
         super.paste(sender)
+    }
+
+    @discardableResult
+    func insertPlainText(_ text: String) -> Bool {
+        guard let textStorage else { return false }
+        let replacementRange = selectedRange()
+        let boundedRange = NSRange(
+            location: min(replacementRange.location, textStorage.length),
+            length: min(replacementRange.length, max(0, textStorage.length - replacementRange.location))
+        )
+        let attrs = Self.baseTypingAttributes
+        let attributed = NSAttributedString(string: text, attributes: attrs)
+        textStorage.replaceCharacters(in: boundedRange, with: attributed)
+        setSelectedRange(NSRange(location: boundedRange.location + attributed.length, length: 0))
+        typingAttributes = attrs
+        didChangeText()
+        return true
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
