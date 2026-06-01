@@ -45,6 +45,7 @@ struct RepoGroupViewLayoutTests {
             onNewWorktree: {},
             onEditProject: {},
             onRemoveProject: {},
+            onResetSort: {},
             spaces: [],
             activeSpaceId: "",
             isProjectInSpace: { _ in false },
