@@ -28,15 +28,49 @@ struct SpacesManagerTests {
         #expect(!manager.shouldShowSpaceAffordance)
     }
 
-    @Test func customizingDefaultShowsAffordance() {
+    @Test func singleSpaceStaysHiddenWhenCustomizedByDefault() {
         var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
 
         manager.renameSpace(id: manager.activeSpaceId, name: "Work")
-        #expect(manager.shouldShowSpaceAffordance)
+        #expect(!manager.shouldShowSpaceAffordance)
 
         manager.renameSpace(id: manager.activeSpaceId, name: SpaceConfig.defaultName)
         manager.setEmoji(spaceId: manager.activeSpaceId, emoji: "💼")
+        #expect(!manager.shouldShowSpaceAffordance)
+    }
+
+    @Test func optInShowsAffordanceForSingleSpace() {
+        var manager = SpacesManager.migrating(projects: [project("p1")], now: date)
+
+        manager.setShowSingleSpaceAffordance(true)
+
         #expect(manager.shouldShowSpaceAffordance)
+        #expect(manager.file.showSingleSpaceAffordance)
+    }
+
+    @Test func spacesFileDecodesMissingSingleSpaceAffordanceAsHidden() throws {
+        let json = """
+        {
+          "version": 1,
+          "activeSpaceId": "s1",
+          "spaces": [
+            {
+              "id": "s1",
+              "name": "Main",
+              "emoji": "🏠",
+              "projectIds": [],
+              "lastSelectedWorktreeId": null,
+              "createdAt": "2023-11-14T22:13:20Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let file = try decoder.decode(SpacesFile.self, from: json)
+
+        #expect(!file.showSingleSpaceAffordance)
     }
 
     @Test func addingSecondSpaceShowsAffordance() {

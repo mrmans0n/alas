@@ -167,13 +167,36 @@ struct SidebarView: View {
                     SpacePagerIndicator(
                         spaces: state.spacesManager.spaces,
                         activeSpaceId: state.spacesManager.activeSpaceId,
-                        titleVisible: spaceTitleVisible
+                        titleVisible: spaceTitleVisible,
+                        onSelectSpace: { spaceId in
+                            if state.switchToSpace(id: spaceId) {
+                                showTransientSpaceTitle()
+                            }
+                        },
+                        onEditSpaces: {
+                            state.pendingSettingsSection = .spaces
+                            onSettings()
+                        },
+                        onScrollPage: { offset in
+                            if state.switchToAdjacentSpace(offset: offset) {
+                                showTransientSpaceTitle()
+                            }
+                        }
                     )
                     .contentShape(Rectangle())
                     .gesture(spacePagingGesture)
                 }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
+            .background {
+                if state.spacesManager.shouldShowSpaceAffordance {
+                    SpacePagerScrollCaptureView { offset in
+                        if state.switchToAdjacentSpace(offset: offset) {
+                            showTransientSpaceTitle()
+                        }
+                    }
+                }
+            }
         }
         .onDisappear {
             hideTitleTask?.cancel()
@@ -196,7 +219,12 @@ struct SidebarView: View {
         hideTitleTask?.cancel()
         spaceTitleVisible = true
         hideTitleTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
             spaceTitleVisible = false
         }
     }

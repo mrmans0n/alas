@@ -410,7 +410,10 @@ private struct RootBaseHandlers: ViewModifier {
                 }
             }
         let n = m
-            .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .alasOpenSettings)) { notification in
+                if let section = notification.object as? SettingsSection {
+                    state.pendingSettingsSection = section
+                }
                 openSettings()
             }
         let o = n

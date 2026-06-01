@@ -150,6 +150,16 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpaceId == "s2")
     }
 
+    @Test func switchingToSpaceByNumberNoOpsWhenMissing() {
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1")])))
+        let activeSpaceId = state.spacesManager.activeSpaceId
+
+        let changed = state.switchToSpace(atOneBasedIndex: 2)
+
+        #expect(!changed)
+        #expect(state.spacesManager.activeSpaceId == activeSpaceId)
+    }
+
     @Test func deletingActiveSpaceSelectsFallbackAndPersistsOnce() {
         var spaceWriteCount = 0
         let p1 = project("p1")
@@ -265,6 +275,71 @@ struct AppStateSpacesTests {
 
         #expect(writeCount == 0)
         #expect(state.spacesManager.space(id: "s1")?.projectIds == ["p1"])
+    }
+
+    @Test func mainSpaceCanOmitProjectThatRemainsInAnotherSpace() {
+        let p1 = project("p1")
+        let p2 = project("p2")
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "main",
+            spaces: [
+                SpaceConfig(id: "main", name: "Main", emoji: "🏠", projectIds: ["p1", "p2"], lastSelectedWorktreeId: "wt1", createdAt: Date()),
+                SpaceConfig(id: "other", name: "Other", emoji: "✨", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt1", projectId: "p1"))
+        state.projectsManager.insertOptimisticWorktree(worktree("wt2", projectId: "p2"))
+        state.selectedWorktreeId = "wt1"
+
+        state.toggleProject(projectId: "p1", inSpace: "main")
+
+        #expect(state.spacesManager.space(id: "main")?.projectIds == ["p2"])
+        #expect(state.spacesManager.space(id: "other")?.projectIds == ["p1"])
+        #expect(state.activeSpaceProjects.map(\.id) == ["p2"])
+        #expect(state.selectedWorktreeId == "wt2")
+        #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt2")
+    }
+
+    @Test func updateSpaceRejectsPlainTextIcon() {
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Main", emoji: "🏠", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project("p1")]), spacesFile: spaces))
+
+        state.updateSpace(id: "s1", name: "Main", emoji: "work")
+
+        #expect(state.spacesManager.space(id: "s1")?.emoji == "🏠")
+    }
+
+    @Test func showSingleSpaceAffordanceSettingPersists() {
+        var persistedFile: SpacesFile?
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: "s1",
+            spaces: [
+                SpaceConfig(id: "s1", name: "Main", emoji: "🏠", projectIds: ["p1"], lastSelectedWorktreeId: nil, createdAt: Date())
+            ]
+        )
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [project("p1")]),
+            spacesFile: spaces,
+            writes: { value, url in
+                if url == Paths.spacesFile {
+                    persistedFile = value as? SpacesFile
+                }
+            }
+        ))
+
+        state.setShowSingleSpaceAffordance(true)
+
+        #expect(state.spacesManager.shouldShowSpaceAffordance)
+        #expect(persistedFile?.showSingleSpaceAffordance == true)
     }
 
     @Test func switchingSpacesFallsBackToFirstVisibleWorktreeWhenRememberedSelectionIsStale() {

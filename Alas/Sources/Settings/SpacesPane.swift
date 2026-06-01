@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SpacesPane: View {
     @Bindable var state: AppState
@@ -26,6 +27,12 @@ struct SpacesPane: View {
                         AlasButton(title: "New Space", icon: "plus", style: .normal) {
                             state.addSpace(name: "New Space", emoji: "✨")
                         }
+                    }
+                    SettingsRow(name: "Show single space", desc: "Keep the sidebar space indicator visible when only one space exists.") {
+                        AlasToggle(on: Binding(
+                            get: { state.spacesManager.showSingleSpaceAffordance },
+                            set: { state.setShowSingleSpaceAffordance($0) }
+                        ))
                     }
                 }
 
@@ -63,13 +70,15 @@ private struct SpaceSettingsRow: View {
                 AlasField(text: $nameDraft, onSubmit: applyChanges)
                     .frame(width: 180)
                     .accessibilityLabel("Space name for \(space.name)")
-                AlasField(text: $emojiDraft, onSubmit: applyChanges)
-                    .frame(width: 48)
-                    .accessibilityLabel("Space emoji for \(space.name)")
-                AlasButton(title: "Apply", icon: "checkmark", style: .normal, action: applyChanges)
+                SpaceIconPickerButton(selection: emojiDraft) { icon in
+                    emojiDraft = icon
+                    applyChanges()
+                }
+                .accessibilityLabel("Space icon for \(space.name)")
+                SpaceRowIconButton(icon: "checkmark", action: applyChanges)
                     .disabled(!hasDraftChanges)
                     .accessibilityLabel("Apply changes to \(space.name) space")
-                AlasButton(title: "Delete", icon: "trash", style: .normal) {
+                SpaceRowIconButton(icon: "trash") {
                     isConfirmingDelete = true
                 }
                 .disabled(!canDelete)
@@ -104,11 +113,122 @@ private struct SpaceSettingsRow: View {
     }
 
     private func applyChanges() {
-        let committedEmoji = String(emojiDraft.prefix(1))
+        let committedEmoji = SpaceIcon.sanitized(emojiDraft, fallback: space.emoji)
         state.updateSpace(id: space.id, name: nameDraft, emoji: committedEmoji)
         if let updated = state.spacesManager.space(id: space.id) {
             nameDraft = updated.name
             emojiDraft = updated.emoji
+        }
+    }
+}
+
+private struct SpaceRowIconButton: View {
+    let icon: String
+    let action: () -> Void
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        Button(action: action) {
+            Icon(name: icon, size: 11, color: theme.color("fg"))
+                .frame(width: 28, height: 28)
+                .background(theme.color("bg-3"))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SpaceIconPickerButton: View {
+    let selection: String
+    let onSelect: (String) -> Void
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        SpaceEmojiPickerControl(selection: selection, onSelect: onSelect)
+            .frame(width: 34, height: 28)
+            .background(theme.color("bg-1"))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .fixedSize()
+    }
+}
+
+private struct SpaceEmojiPickerControl: NSViewRepresentable {
+    let selection: String
+    let onSelect: (String) -> Void
+
+    func makeNSView(context: Context) -> BackingView {
+        let view = BackingView()
+        view.onSelect = onSelect
+        return view
+    }
+
+    func updateNSView(_ nsView: BackingView, context: Context) {
+        nsView.button.title = selection
+        nsView.onSelect = onSelect
+    }
+
+    final class BackingView: NSView, NSTextFieldDelegate {
+        var onSelect: ((String) -> Void)?
+        let button = NSButton()
+        private let input = NSTextField()
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+
+            button.isBordered = false
+            button.bezelStyle = .regularSquare
+            button.setButtonType(.momentaryPushIn)
+            button.font = NSFont.systemFont(ofSize: 15)
+            button.target = self
+            button.action = #selector(openCharacterPalette)
+            addSubview(button)
+
+            input.isBordered = false
+            input.isBezeled = false
+            input.drawsBackground = false
+            input.focusRingType = .none
+            input.alphaValue = 0.01
+            input.font = NSFont.systemFont(ofSize: 15)
+            input.delegate = self
+            addSubview(input)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func layout() {
+            super.layout()
+            button.frame = bounds
+            input.frame = NSRect(x: bounds.minX, y: bounds.minY, width: 1, height: 1)
+        }
+
+        @objc func openCharacterPalette() {
+            input.stringValue = ""
+            window?.makeFirstResponder(input)
+            NSApp.orderFrontCharacterPalette(nil)
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            commit(input.stringValue)
+        }
+
+        private func commit(_ rawValue: String) {
+            let icon = SpaceIcon.sanitized(rawValue, fallback: "")
+            guard !icon.isEmpty else { return }
+            input.stringValue = ""
+            onSelect?(icon)
+            window?.makeFirstResponder(button)
+            window?.makeKeyAndOrderFront(nil)
         }
     }
 }

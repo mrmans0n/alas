@@ -493,9 +493,16 @@ final class AppState {
         saveSpaces()
     }
 
-    func switchToSpace(id: String) {
+    @discardableResult
+    func switchToSpace(id: String) -> Bool {
+        let previousSpaceId = spacesManager.activeSpaceId
         spacesManager.switchToSpace(id: id)
-        selectWorktree(id: resolvedSelectionForActiveSpace())
+        guard spacesManager.activeSpaceId != previousSpaceId else { return false }
+        let selection = resolvedSelectionForActiveSpace()
+        selectedWorktreeId = selection
+        spacesManager.setLastSelectedWorktree(selection)
+        saveSpaces()
+        return true
     }
 
     @discardableResult
@@ -508,6 +515,13 @@ final class AppState {
         guard next != current else { return false }
         switchToSpace(id: spaces[next].id)
         return true
+    }
+
+    @discardableResult
+    func switchToSpace(atOneBasedIndex index: Int) -> Bool {
+        let zeroBasedIndex = index - 1
+        guard spacesManager.spaces.indices.contains(zeroBasedIndex) else { return false }
+        return switchToSpace(id: spacesManager.spaces[zeroBasedIndex].id)
     }
 
     func addSpace(name: String, emoji: String) {
@@ -539,6 +553,12 @@ final class AppState {
         saveSpaces()
     }
 
+    func setShowSingleSpaceAffordance(_ show: Bool) {
+        guard spacesManager.showSingleSpaceAffordance != show else { return }
+        spacesManager.setShowSingleSpaceAffordance(show)
+        saveSpaces()
+    }
+
     func deleteSpace(id: String) {
         let wasActiveSpace = spacesManager.activeSpaceId == id
         guard spacesManager.deleteSpace(id: id) else { return }
@@ -551,12 +571,22 @@ final class AppState {
     }
 
     func toggleProject(projectId: String, inSpace spaceId: String) {
+        let wasSelectedProject = selectedWorktreeId.map { selectedId in
+            projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
+        } ?? false
+        let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
+            && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
             guard spacesManager.removeProject(projectId, fromSpace: spaceId) else { return }
         } else {
             guard spacesManager.space(id: spaceId) != nil else { return }
             spacesManager.addProject(projectId, toSpace: spaceId)
             guard spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true else { return }
+        }
+        if removedFromActiveSpace, wasSelectedProject {
+            let selection = resolvedSelectionForActiveSpace()
+            selectedWorktreeId = selection
+            spacesManager.setLastSelectedWorktree(selection)
         }
         saveSpaces()
     }

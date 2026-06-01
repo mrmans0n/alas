@@ -6,6 +6,7 @@ import Observation
 final class SpacesManager {
     private(set) var spaces: [SpaceConfig]
     private(set) var activeSpaceId: String
+    private(set) var showSingleSpaceAffordance: Bool
 
     private var recentlyActiveSpaceIds: [String] = []
 
@@ -29,6 +30,7 @@ final class SpacesManager {
             }
 
         self.spaces = normalizedSpaces
+        self.showSingleSpaceAffordance = file.showSingleSpaceAffordance
         if normalizedSpaces.contains(where: { $0.id == file.activeSpaceId }) {
             activeSpaceId = file.activeSpaceId
         } else {
@@ -49,7 +51,7 @@ final class SpacesManager {
     }
 
     var file: SpacesFile {
-        SpacesFile(activeSpaceId: activeSpaceId, spaces: spaces)
+        SpacesFile(activeSpaceId: activeSpaceId, spaces: spaces, showSingleSpaceAffordance: showSingleSpaceAffordance)
     }
 
     var activeSpace: SpaceConfig? {
@@ -57,8 +59,7 @@ final class SpacesManager {
     }
 
     var shouldShowSpaceAffordance: Bool {
-        guard spaces.count == 1, let only = spaces.first else { return true }
-        return only.name != SpaceConfig.defaultName || only.emoji != SpaceConfig.defaultEmoji
+        spaces.count > 1 || showSingleSpaceAffordance
     }
 
     func space(id: String) -> SpaceConfig? {
@@ -76,7 +77,7 @@ final class SpacesManager {
         let space = SpaceConfig(
             id: id,
             name: normalizedName(name),
-            emoji: emoji,
+            emoji: SpaceIcon.sanitized(emoji),
             projectIds: [],
             lastSelectedWorktreeId: nil,
             createdAt: now
@@ -92,7 +93,11 @@ final class SpacesManager {
 
     func setEmoji(spaceId: String, emoji: String) {
         guard let index = spaces.firstIndex(where: { $0.id == spaceId }) else { return }
-        spaces[index].emoji = emoji
+        spaces[index].emoji = SpaceIcon.sanitized(emoji, fallback: spaces[index].emoji)
+    }
+
+    func setShowSingleSpaceAffordance(_ show: Bool) {
+        showSingleSpaceAffordance = show
     }
 
     func switchToSpace(id: String) {
