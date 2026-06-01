@@ -42,7 +42,7 @@ struct RepoSelectorModelTests {
             visibleWorktrees: { worktrees[$0] ?? [] },
             readRecents: { recentsBox },
             writeRecents: { recentsBox = $0 },
-            focusWorktree: { _ in },
+            focusWorktree: { _, _ in },
             openNewProject: { },
             openNewWorktree: { _ in },
             currentWorktreeId: { currentWorktreeId }
@@ -484,11 +484,11 @@ struct RepoSelectorModelTests {
     @Test func activateWorktreeFocusesClosesAndBumpsRecents() {
         let model = RepoSelectorModel()
         model.isOpen = true
-        var focused: String? = nil
+        var focused: (worktreeId: String, projectId: String)? = nil
         var writtenRecents: RepoSelectorRecents? = nil
         let w1 = worktree("w1", projectId: "p1")
         var e = env(projects: [project("p1")], worktrees: ["p1": [w1]])
-        e.focusWorktree = { focused = $0 }
+        e.focusWorktree = { focused = (worktreeId: $0, projectId: $1) }
         e.writeRecents = { writtenRecents = $0 }
 
         let rows = model.rows(environment: e)
@@ -503,7 +503,8 @@ struct RepoSelectorModelTests {
         let result = model.activate(rows: rows, environment: e)
 
         #expect(result == .focused(worktreeId: "w1"))
-        #expect(focused == "w1")
+        #expect(focused?.worktreeId == "w1")
+        #expect(focused?.projectId == "p1")
         #expect(model.isOpen == false)
         #expect(writtenRecents?.projectIds == ["p1"])
         #expect(writtenRecents?.worktreeIdsByProject["p1"] == ["w1"])

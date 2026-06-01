@@ -9,6 +9,7 @@ final class AppState {
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
+    var spacesManager: SpacesManager
     var selectedWorktreeId: String?
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
@@ -288,11 +289,23 @@ final class AppState {
         self.terminalSessionOpener = terminalSessionOpener
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
+        let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
         self.config = config
         // Publish the effective shortcut reservations so the terminal pane
         // can honor user overrides from the very first keystroke.
         ShortcutReservations.update(from: config)
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
+        let spacesManager = spacesFile.map(SpacesManager.init(file:))
+            ?? SpacesManager.migrating(projects: projectsFile.projects)
+        var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
+        for project in projectsFile.projects where spacesManager.membershipCount(forProject: project.id) == 0 {
+            spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
+            spacesChanged = true
+        }
+        if spacesChanged {
+            _ = try? store.write(spacesManager.file, to: Paths.spacesFile)
+        }
+        self.spacesManager = spacesManager
         let themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
         // Apply the persisted accent override so the picker's selection
         // survives relaunches; otherwise launches always show the theme's
@@ -346,8 +359,11 @@ final class AppState {
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
         }
+        if reconcileMissingSpaceProjects() {
+            saveSpaces()
+        }
         if let current = selectedWorktreeId, !afterIds.contains(current) {
-            selectedWorktreeId = firstVisibleWorktreeId()
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
     }
 
@@ -382,6 +398,10 @@ final class AppState {
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
+
+    var activeSpaceProjects: [ProjectConfig] {
+        spacesManager.activeProjects(from: projects)
+    }
 
     /// Build a `RepoSelectorEnvironment` that captures `self`. Used by
     /// `RepoSelectorDialog` to bind the model to the live app state.
@@ -421,8 +441,8 @@ final class AppState {
                 self.config.recentWorktreeRefs = r.recentWorktreeRefs
                 _ = self.saveConfig()
             },
-            focusWorktree: { [weak self] id in
-                self?.selectedWorktreeId = id
+            focusWorktree: { [weak self] id, projectId in
+                self?.focusGlobalWorktree(id: id, projectId: projectId)
             },
             openNewProject: openNewProject,
             openNewWorktree: openNewWorktree,
@@ -453,6 +473,130 @@ final class AppState {
             persistenceErrorHandler("Projects Save Failed", error.localizedDescription)
             return false
         }
+    }
+
+    @discardableResult
+    func saveSpaces() -> Bool {
+        do {
+            try store.write(spacesManager.file, to: Paths.spacesFile)
+            return true
+        } catch {
+            persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
+            return false
+        }
+    }
+
+    func selectWorktree(id: String?) {
+        guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
+        selectedWorktreeId = id
+        spacesManager.setLastSelectedWorktree(id)
+        saveSpaces()
+    }
+
+    @discardableResult
+    func switchToSpace(id: String) -> Bool {
+        let previousSpaceId = spacesManager.activeSpaceId
+        spacesManager.switchToSpace(id: id)
+        guard spacesManager.activeSpaceId != previousSpaceId else { return false }
+        let selection = resolvedSelectionForActiveSpace()
+        selectedWorktreeId = selection
+        spacesManager.setLastSelectedWorktree(selection)
+        saveSpaces()
+        return true
+    }
+
+    @discardableResult
+    func switchToAdjacentSpace(offset: Int) -> Bool {
+        let spaces = spacesManager.spaces
+        guard spaces.count > 1,
+              let current = spaces.firstIndex(where: { $0.id == spacesManager.activeSpaceId })
+        else { return false }
+        let next = (current + offset + spaces.count) % spaces.count
+        guard next != current else { return false }
+        switchToSpace(id: spaces[next].id)
+        return true
+    }
+
+    @discardableResult
+    func switchToSpace(atOneBasedIndex index: Int) -> Bool {
+        let zeroBasedIndex = index - 1
+        guard spacesManager.spaces.indices.contains(zeroBasedIndex) else { return false }
+        return switchToSpace(id: spacesManager.spaces[zeroBasedIndex].id)
+    }
+
+    func addSpace(name: String, emoji: String) {
+        _ = spacesManager.addSpace(name: name, emoji: emoji)
+        saveSpaces()
+    }
+
+    func renameSpace(id: String, name: String) {
+        let previous = spacesManager.space(id: id)?.name
+        spacesManager.renameSpace(id: id, name: name)
+        guard spacesManager.space(id: id)?.name != previous else { return }
+        saveSpaces()
+    }
+
+    func setSpaceEmoji(id: String, emoji: String) {
+        let previous = spacesManager.space(id: id)?.emoji
+        spacesManager.setEmoji(spaceId: id, emoji: emoji.isEmpty ? SpaceConfig.defaultEmoji : emoji)
+        guard spacesManager.space(id: id)?.emoji != previous else { return }
+        saveSpaces()
+    }
+
+    func updateSpace(id: String, name: String, emoji: String) {
+        guard let previous = spacesManager.space(id: id) else { return }
+        spacesManager.renameSpace(id: id, name: name)
+        spacesManager.setEmoji(spaceId: id, emoji: emoji.isEmpty ? SpaceConfig.defaultEmoji : emoji)
+        guard let updated = spacesManager.space(id: id),
+              updated.name != previous.name || updated.emoji != previous.emoji
+        else { return }
+        saveSpaces()
+    }
+
+    func setShowSingleSpaceAffordance(_ show: Bool) {
+        guard spacesManager.showSingleSpaceAffordance != show else { return }
+        spacesManager.setShowSingleSpaceAffordance(show)
+        saveSpaces()
+    }
+
+    func deleteSpace(id: String) {
+        let wasActiveSpace = spacesManager.activeSpaceId == id
+        guard spacesManager.deleteSpace(id: id) else { return }
+        if wasActiveSpace {
+            let fallbackSelection = resolvedSelectionForActiveSpaceForStartup()
+            selectedWorktreeId = fallbackSelection
+            spacesManager.setLastSelectedWorktree(fallbackSelection)
+        }
+        saveSpaces()
+    }
+
+    func toggleProject(projectId: String, inSpace spaceId: String) {
+        let wasSelectedProject = selectedWorktreeId.map { selectedId in
+            projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
+        } ?? false
+        let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
+            && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
+        if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
+            guard spacesManager.removeProject(projectId, fromSpace: spaceId) else { return }
+        } else {
+            guard spacesManager.space(id: spaceId) != nil else { return }
+            spacesManager.addProject(projectId, toSpace: spaceId)
+            guard spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true else { return }
+        }
+        if removedFromActiveSpace, wasSelectedProject {
+            let selection = resolvedSelectionForActiveSpace()
+            selectedWorktreeId = selection
+            spacesManager.setLastSelectedWorktree(selection)
+        }
+        saveSpaces()
+    }
+
+    func focusGlobalWorktree(id: String, projectId: String) {
+        if let containing = spacesManager.containingSpaceId(forProjectId: projectId),
+           containing != spacesManager.activeSpaceId {
+            spacesManager.switchToSpace(id: containing)
+        }
+        selectWorktree(id: id)
     }
 
     /// Optimistically insert a worktree row and run the git operation async.
@@ -504,9 +648,13 @@ final class AppState {
             status: .clean,
             lastActivity: Date()
         )
+        if let containing = spacesManager.containingSpaceId(forProjectId: projectId),
+           containing != spacesManager.activeSpaceId {
+            _ = switchToSpace(id: containing)
+        }
         projectsManager.insertOptimisticWorktree(optimistic)
         projectsManager.setOperationState(id: optimistic.id, state: .creating)
-        selectedWorktreeId = optimistic.id
+        selectWorktree(id: optimistic.id)
 
         let repoPath = URL(fileURLWithPath: project.path)
         let startupScript = StartupScriptResolver.worktreeCreateScript(
@@ -560,7 +708,7 @@ final class AppState {
                         saveProjects()
                     }
 
-                    selectedWorktreeId = newWorktree.id
+                    selectWorktree(id: newWorktree.id)
 
                     switch launchSurface {
                     case .none:
@@ -688,13 +836,15 @@ final class AppState {
         cleanupWorktreeState(worktreeId: id)
         projectsManager.removeOptimisticWorktree(id: id, projectId: projectId)
         if selectedWorktreeId == id {
-            selectedWorktreeId = firstVisibleWorktreeId()
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
     }
 
     func addProject(path: URL, displayName: String, color: String) async throws {
         let project = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
+        spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()
+        saveSpaces()
         if await projectsManager.refreshAll() {
             saveProjects()
         }
@@ -762,7 +912,9 @@ final class AppState {
         }
         stopProjectGitWatcher(projectId: id)
         projectsManager.removeProject(id: id)
+        spacesManager.removeProjectEverywhere(id)
         saveProjects()
+        saveSpaces()
         let removedIds = beforeIds.subtracting(allWorktreeIds())
         cleanupMissingWorktrees(beforeIds: beforeIds)
         for worktreeId in removedIds {
@@ -914,10 +1066,10 @@ final class AppState {
         saveProjects()
 
         if wasSelected {
-            selectedWorktreeId = selectionAfterRemoval(
+            selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,
                 removedAtIndex: removedIndex
-            )
+            ))
         }
     }
 
@@ -1053,8 +1205,9 @@ final class AppState {
                     revealCharacter: nil,
                     originatingRelativePath: nil
                 )
-                if self.selectedWorktreeId != worktreeId {
-                    self.selectedWorktreeId = worktreeId
+                if self.selectedWorktreeId != worktreeId,
+                   let worktree = self.worktree(withId: worktreeId) {
+                    self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
             },
             activateApp: {
@@ -1070,8 +1223,8 @@ final class AppState {
     /// focusing is needed. If the tab is no longer present (session was
     /// closed mid-flight) the worktree is still selected so the user lands
     /// somewhere sensible.
-    func activateHarnessSession(projectId _: String, worktreeId: String, sessionId: String) {
-        selectedWorktreeId = worktreeId
+    func activateHarnessSession(projectId: String, worktreeId: String, sessionId: String) {
+        focusGlobalWorktree(id: worktreeId, projectId: projectId)
         var matchedTabId: TabID?
         var matchedLeafId: String?
         for tab in tabs.tabs(forWorktree: worktreeId) {
@@ -1829,15 +1982,15 @@ final class AppState {
     /// Prefers the entry now occupying that index in the same project (i.e.
     /// what was the next sibling). Falls back to the new last entry if the
     /// removed worktree was the last one. If the project has no remaining
-    /// visible worktrees, picks the first visible worktree across all projects
-    /// in declaration order. Returns `nil` if nothing is left.
+    /// visible worktrees, picks the first visible worktree in the active space.
+    /// Returns `nil` if the active space has no visible worktrees.
     private func selectionAfterRemoval(removedFromProjectId: String, removedAtIndex: Int) -> String? {
         let siblings = projectsManager.visibleWorktrees(projectId: removedFromProjectId)
         if !siblings.isEmpty {
             let i = min(removedAtIndex, siblings.count - 1)
             return siblings[i].id
         }
-        for project in projects {
+        for project in activeSpaceProjects {
             if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
                 return first.id
             }
@@ -1846,6 +1999,10 @@ final class AppState {
     }
 
     func firstVisibleWorktreeId() -> String? {
+        firstVisibleWorktreeId(in: projects)
+    }
+
+    func firstVisibleWorktreeId(in projects: [ProjectConfig]) -> String? {
         for project in projects {
             if let first = projectsManager.visibleWorktrees(projectId: project.id).first {
                 return first.id
@@ -1854,13 +2011,40 @@ final class AppState {
         return nil
     }
 
+    private func resolvedSelectionForActiveSpace() -> String? {
+        if let remembered = spacesManager.activeSpace?.lastSelectedWorktreeId,
+           activeSpaceProjects.contains(where: { project in
+               projectsManager.visibleWorktrees(projectId: project.id).contains(where: { $0.id == remembered })
+           }) {
+            return remembered
+        }
+        return firstVisibleWorktreeId(in: activeSpaceProjects)
+    }
+
+    func resolvedSelectionForActiveSpaceForStartup() -> String? {
+        resolvedSelectionForActiveSpace()
+    }
+
+    private func reconcileMissingSpaceProjects() -> Bool {
+        var changed = false
+        let validProjectIds = Set(projects.map(\.id))
+        if spacesManager.pruneMissingProjects(validProjectIds: validProjectIds) {
+            changed = true
+        }
+        for project in projects where spacesManager.membershipCount(forProject: project.id) == 0 {
+            spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
+            changed = true
+        }
+        return changed
+    }
+
     var canFocusMainWorktreeForCurrentProject: Bool {
         mainWorktreeForCurrentProject() != nil
     }
 
     func focusMainWorktreeForCurrentProject() {
         guard let main = mainWorktreeForCurrentProject() else { return }
-        selectedWorktreeId = main.id
+        selectWorktree(id: main.id)
     }
 
     private func mainWorktreeForCurrentProject() -> Worktree? {
@@ -1926,7 +2110,9 @@ final class AppState {
         // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
-        if selectedWorktreeId != worktree.id { selectedWorktreeId = worktree.id }
+        if selectedWorktreeId != worktree.id {
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        }
 
         if ImageFileType.isSupported(relativePath: relativePath) {
             _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
@@ -2237,10 +2423,10 @@ final class AppState {
             saveProjects()
         }
         if selectedWorktreeId == worktree.id {
-            selectedWorktreeId = selectionAfterRemoval(
+            selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,
                 removedAtIndex: removedIndex
-            )
+            ))
         }
     }
 

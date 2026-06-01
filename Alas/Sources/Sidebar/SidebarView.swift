@@ -11,6 +11,8 @@ struct SidebarView: View {
     let onNewWorktree: (_ projectId: String?) -> Void
     let onHideSidebar: () -> Void
     @Environment(\.theme) var theme
+    @State private var spaceTitleVisible = false
+    @State private var hideTitleTask: Task<Void, Never>?
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -30,7 +32,7 @@ struct SidebarView: View {
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(state.projects) { project in
+                        ForEach(state.activeSpaceProjects) { project in
                             RepoGroupView(
                                 project: project,
                                 worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),
@@ -55,12 +57,23 @@ struct SidebarView: View {
                                     }
                                     return state.harness.summary(forSessionIds: ids)
                                 },
-                                onSelect: { wt in state.selectedWorktreeId = wt.id },
+                                onSelect: { wt in state.selectWorktree(id: wt.id) },
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
                                 onRemoveProject: { onRemoveProject(project.id) },
+                                spaces: state.spacesManager.spaces,
+                                activeSpaceId: state.spacesManager.activeSpaceId,
+                                isProjectInSpace: { spaceId in
+                                    state.spacesManager.space(id: spaceId)?.projectIds.contains(project.id) == true
+                                },
+                                canRemoveFromSpace: { _ in
+                                    state.spacesManager.membershipCount(forProject: project.id) > 1
+                                },
+                                onToggleSpaceMembership: { spaceId in
+                                    state.toggleProject(projectId: project.id, inSpace: spaceId)
+                                },
                                 onOpenTerminal: { wt in
-                                    state.selectedWorktreeId = wt.id
+                                    state.selectWorktree(id: wt.id)
                                     _ = try? state.openTerminalTab(for: wt)
                                 },
                                 onCopyPath: { wt in
@@ -130,11 +143,11 @@ struct SidebarView: View {
                                     state.saveProjects()
                                 },
                                 onDropProject: { draggedId, destinationId in
-                                    state.projectsManager.reorderProject(
+                                    state.spacesManager.reorderProjectInActiveSpace(
                                         movingId: draggedId,
                                         destinationId: destinationId
                                     )
-                                    state.saveProjects()
+                                    state.saveSpaces()
                                 }
                             )
                         }
@@ -143,15 +156,76 @@ struct SidebarView: View {
                             .contentShape(Rectangle())
                             .dropDestination(for: ProjectDragId.self) { items, _ in
                                 guard let draggedId = items.first?.id else { return false }
-                                state.projectsManager.moveProjectToEnd(id: draggedId)
-                                state.saveProjects()
+                                state.spacesManager.moveProjectToEndInActiveSpace(id: draggedId)
+                                state.saveSpaces()
                                 return true
                             }
                     }
                     .padding(.top, 8)
                 }
+                if state.spacesManager.shouldShowSpaceAffordance {
+                    SpacePagerIndicator(
+                        spaces: state.spacesManager.spaces,
+                        activeSpaceId: state.spacesManager.activeSpaceId,
+                        titleVisible: spaceTitleVisible,
+                        onSelectSpace: { spaceId in
+                            if state.switchToSpace(id: spaceId) {
+                                showTransientSpaceTitle()
+                            }
+                        },
+                        onEditSpaces: {
+                            state.pendingSettingsSection = .spaces
+                            onSettings()
+                        },
+                        onScrollPage: { offset in
+                            if state.switchToAdjacentSpace(offset: offset) {
+                                showTransientSpaceTitle()
+                            }
+                        }
+                    )
+                    .contentShape(Rectangle())
+                    .gesture(spacePagingGesture)
+                }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
+            .background {
+                if state.spacesManager.shouldShowSpaceAffordance {
+                    SpacePagerScrollCaptureView { offset in
+                        if state.switchToAdjacentSpace(offset: offset) {
+                            showTransientSpaceTitle()
+                        }
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            hideTitleTask?.cancel()
+            hideTitleTask = nil
+        }
+    }
+
+    private var spacePagingGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
+                let offset = value.translation.width < 0 ? 1 : -1
+                if state.switchToAdjacentSpace(offset: offset) {
+                    showTransientSpaceTitle()
+                }
+            }
+    }
+
+    private func showTransientSpaceTitle() {
+        hideTitleTask?.cancel()
+        spaceTitleVisible = true
+        hideTitleTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            spaceTitleVisible = false
         }
     }
 }
