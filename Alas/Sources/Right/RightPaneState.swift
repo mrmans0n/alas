@@ -89,9 +89,9 @@ final class RightPaneState {
 
     /// Mirrors `AppConfig.changes.trackUpstreamForCommits`. Synced by
     /// `RightPaneStore` on every `state(for:)` call. When false (the
-    /// default), `refresh()` passes `ignoreUpstream: true` to
-    /// `commitsAhead`, so the Commits section compares HEAD against the
-    /// base branch instead of `@{u}`.
+    /// default) — or when `userOverrodeBaseBranch` is true — `refresh()`
+    /// passes `ignoreUpstream: true` to `commitsAhead`, so the Commits
+    /// section compares HEAD against the base branch instead of `@{u}`.
     var trackUpstreamForCommits: Bool = false
 
     var pendingDiscard: PendingDiscard? = nil
