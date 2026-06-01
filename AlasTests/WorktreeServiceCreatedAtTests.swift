@@ -23,49 +23,92 @@ import Foundation
         #expect(wt.createdAt <= Date().addingTimeInterval(1))
     }
 
-    @Test func lastActivityUsesHeadMtimeForMainWorktree() throws {
+    @Test func lastActivityFollowsSymbolicHeadToBranchRefMain() throws {
         let fm = FileManager.default
-        let tmp = fm.temporaryDirectory.appendingPathComponent("alas-head-\(UUID().uuidString)")
+        let tmp = fm.temporaryDirectory.appendingPathComponent("alas-act-symref-main-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: tmp) }
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
-        // Simulate a main worktree: .git is a directory containing HEAD.
         let gitDir = tmp.appendingPathComponent(".git")
-        try fm.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        let refsDir = gitDir.appendingPathComponent("refs/heads")
+        try fm.createDirectory(at: refsDir, withIntermediateDirectories: true)
+
         let headPath = gitDir.appendingPathComponent("HEAD").path
         fm.createFile(atPath: headPath, contents: Data("ref: refs/heads/main\n".utf8))
 
-        // Set a known mtime on HEAD that's distinct from the dir mtime.
-        let target = Date(timeIntervalSince1970: 1_700_000_000)
-        try fm.setAttributes([.modificationDate: target], ofItemAtPath: headPath)
+        let refPath = refsDir.appendingPathComponent("main").path
+        fm.createFile(atPath: refPath, contents: Data("0000000000000000000000000000000000000000\n".utf8))
 
-        let result = WorktreeService.lastActivity(forWorktreeAt: tmp)
-        #expect(result == target)
+        let target = Date(timeIntervalSince1970: 1_700_000_000)
+        try fm.setAttributes([.modificationDate: target], ofItemAtPath: refPath)
+        // Set HEAD to a different mtime to prove we're not using HEAD.
+        try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: headPath)
+
+        #expect(WorktreeService.lastActivity(forWorktreeAt: tmp) == target)
     }
 
-    @Test func lastActivityResolvesGitdirFileForLinkedWorktree() throws {
+    @Test func lastActivityFollowsSymbolicHeadToBranchRefLinked() throws {
         let fm = FileManager.default
-        let tmp = fm.temporaryDirectory.appendingPathComponent("alas-head-linked-\(UUID().uuidString)")
+        let tmp = fm.temporaryDirectory.appendingPathComponent("alas-act-symref-linked-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: tmp) }
-
-        // Linked worktree layout:
-        //   tmp/main-repo/.git/worktrees/feat/HEAD   ← the real HEAD
-        //   tmp/wt-feat/.git                          ← file: "gitdir: <abs-path-to-above-dir>"
         let mainRepo = tmp.appendingPathComponent("main-repo")
-        let wtDir = tmp.appendingPathComponent("wt-feat")
-        let gitdir = mainRepo.appendingPathComponent(".git/worktrees/feat")
-        try fm.createDirectory(at: gitdir, withIntermediateDirectories: true)
-        try fm.createDirectory(at: wtDir, withIntermediateDirectories: true)
+        let wt = tmp.appendingPathComponent("wt-feat")
+        let mainGit = mainRepo.appendingPathComponent(".git")
+        let wtGitdir = mainGit.appendingPathComponent("worktrees/feat")
+        let refsDir = mainGit.appendingPathComponent("refs/heads")
+        try fm.createDirectory(at: wtGitdir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: refsDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: wt, withIntermediateDirectories: true)
 
-        let headPath = gitdir.appendingPathComponent("HEAD").path
-        fm.createFile(atPath: headPath, contents: Data("ref: refs/heads/feat\n".utf8))
-        let dotGitFile = wtDir.appendingPathComponent(".git").path
-        fm.createFile(atPath: dotGitFile, contents: Data("gitdir: \(gitdir.path)\n".utf8))
+        fm.createFile(atPath: wtGitdir.appendingPathComponent("HEAD").path,
+                      contents: Data("ref: refs/heads/feat\n".utf8))
+        // commondir points back to mainGit (relative).
+        fm.createFile(atPath: wtGitdir.appendingPathComponent("commondir").path,
+                      contents: Data("../..\n".utf8))
+        // .git file in the worktree points to gitdir.
+        fm.createFile(atPath: wt.appendingPathComponent(".git").path,
+                      contents: Data("gitdir: \(wtGitdir.path)\n".utf8))
 
+        let refPath = refsDir.appendingPathComponent("feat").path
+        fm.createFile(atPath: refPath, contents: Data("0000000000000000000000000000000000000000\n".utf8))
         let target = Date(timeIntervalSince1970: 1_710_000_000)
+        try fm.setAttributes([.modificationDate: target], ofItemAtPath: refPath)
+
+        #expect(WorktreeService.lastActivity(forWorktreeAt: wt) == target)
+    }
+
+    @Test func lastActivityUsesHeadMtimeForDetachedHead() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("alas-act-detached-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: tmp) }
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let gitDir = tmp.appendingPathComponent(".git")
+        try fm.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        let headPath = gitDir.appendingPathComponent("HEAD").path
+        // Detached: raw SHA, no "ref: " prefix.
+        fm.createFile(atPath: headPath, contents: Data("0000000000000000000000000000000000000000\n".utf8))
+        let target = Date(timeIntervalSince1970: 1_720_000_000)
         try fm.setAttributes([.modificationDate: target], ofItemAtPath: headPath)
 
-        let result = WorktreeService.lastActivity(forWorktreeAt: wtDir)
-        #expect(result == target)
+        #expect(WorktreeService.lastActivity(forWorktreeAt: tmp) == target)
+    }
+
+    @Test func lastActivityFallsBackToPackedRefsWhenLooseRefMissing() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("alas-act-packed-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: tmp) }
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let gitDir = tmp.appendingPathComponent(".git")
+        try fm.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        fm.createFile(atPath: gitDir.appendingPathComponent("HEAD").path,
+                      contents: Data("ref: refs/heads/packed\n".utf8))
+        // No loose ref file at refs/heads/packed.
+        let packedPath = gitDir.appendingPathComponent("packed-refs").path
+        fm.createFile(atPath: packedPath,
+                      contents: Data("# pack-refs with: peeled fully-peeled sorted\n0000000000000000000000000000000000000000 refs/heads/packed\n".utf8))
+        let target = Date(timeIntervalSince1970: 1_730_000_000)
+        try fm.setAttributes([.modificationDate: target], ofItemAtPath: packedPath)
+
+        #expect(WorktreeService.lastActivity(forWorktreeAt: tmp) == target)
     }
 
     @Test func decodingOlderWorktreeWithoutCreatedAtFallsBackToLastActivity() throws {

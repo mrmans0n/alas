@@ -39,38 +39,73 @@ struct WorktreeService {
     }
 
     /// Returns a best-effort "last activity" timestamp for the worktree at
-    /// `path`. Prefers the HEAD ref mtime (changes on commit/checkout/rebase),
-    /// falling back to the worktree directory mtime. macOS directory mtime
-    /// only changes on entry add/remove/rename, which misses file-content
-    /// edits and is a poor activity signal — HEAD mtime is much better as
-    /// the default sort key.
+    /// `path`. Resolves the worktree's HEAD ref through the symbolic-ref
+    /// indirection so commits actually update the timestamp:
+    ///   <worktree>/.git → gitdir → HEAD → (symbolic) refs/heads/<branch>
+    /// Falls back through packed-refs, HEAD's own mtime, and the worktree
+    /// directory mtime if any layer can't be resolved.
     static func lastActivity(forWorktreeAt path: URL) -> Date? {
         let fm = FileManager.default
-        let dotGit = path.appendingPathComponent(".git").path
-        if let attrs = try? fm.attributesOfItem(atPath: dotGit) {
-            let type = attrs[.type] as? FileAttributeType
-            let headPath: String?
-            if type == .typeRegular {
-                // Linked worktree: .git is a file with `gitdir: <abs-path>`.
-                if let contents = try? String(contentsOfFile: dotGit, encoding: .utf8),
-                   let line = contents.split(separator: "\n").first(where: { $0.hasPrefix("gitdir: ") }) {
-                    let gitdir = String(line.dropFirst("gitdir: ".count))
-                    headPath = (gitdir as NSString).appendingPathComponent("HEAD")
-                } else {
-                    headPath = nil
-                }
-            } else {
-                // Main worktree: .git is a directory containing HEAD.
-                headPath = (dotGit as NSString).appendingPathComponent("HEAD")
-            }
-            if let headPath,
-               let headAttrs = try? fm.attributesOfItem(atPath: headPath),
-               let mtime = headAttrs[.modificationDate] as? Date {
-                return mtime
-            }
+
+        func mtime(of pathStr: String) -> Date? {
+            (try? fm.attributesOfItem(atPath: pathStr)[.modificationDate]) as? Date
         }
-        // Fallback: directory mtime.
-        return (try? fm.attributesOfItem(atPath: path.path)[.modificationDate]) as? Date
+        func dirMtime() -> Date? { mtime(of: path.path) }
+
+        // 1. Resolve the gitdir.
+        let dotGit = path.appendingPathComponent(".git").path
+        let gitdir: String
+        if let attrs = try? fm.attributesOfItem(atPath: dotGit),
+           (attrs[.type] as? FileAttributeType) == .typeRegular,
+           let contents = try? String(contentsOfFile: dotGit, encoding: .utf8),
+           let line = contents.split(separator: "\n", omittingEmptySubsequences: true)
+               .first(where: { $0.hasPrefix("gitdir: ") }) {
+            // Linked worktree: ".git" file points to the gitdir.
+            gitdir = String(line.dropFirst("gitdir: ".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if let attrs = try? fm.attributesOfItem(atPath: dotGit),
+                  (attrs[.type] as? FileAttributeType) == .typeDirectory {
+            // Main worktree: ".git" is the gitdir.
+            gitdir = dotGit
+        } else {
+            return dirMtime()
+        }
+
+        // 2. Resolve the common dir (where shared refs live).
+        let commonDir: String = {
+            let commondirFile = (gitdir as NSString).appendingPathComponent("commondir")
+            if let raw = try? String(contentsOfFile: commondirFile, encoding: .utf8) {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("/") { return trimmed }
+                // Relative to gitdir.
+                return URL(fileURLWithPath: gitdir)
+                    .appendingPathComponent(trimmed)
+                    .standardizedFileURL.path
+            }
+            return gitdir
+        }()
+
+        // 3. Read HEAD.
+        let headPath = (gitdir as NSString).appendingPathComponent("HEAD")
+        guard let headContents = try? String(contentsOfFile: headPath, encoding: .utf8) else {
+            return dirMtime()
+        }
+        let head = headContents.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if head.hasPrefix("ref: ") {
+            // Symbolic ref — follow to the loose branch ref file.
+            let refRel = String(head.dropFirst("ref: ".count))
+                .trimmingCharacters(in: .whitespaces)
+            let refPath = (commonDir as NSString).appendingPathComponent(refRel)
+            if let m = mtime(of: refPath) { return m }
+            // Packed: fall through to packed-refs.
+            let packed = (commonDir as NSString).appendingPathComponent("packed-refs")
+            if let m = mtime(of: packed) { return m }
+        }
+        // Detached HEAD or unresolved symref — HEAD's own mtime is meaningful
+        // (it's rewritten on each detached commit/checkout).
+        if let m = mtime(of: headPath) { return m }
+        return dirMtime()
     }
 
     static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {
