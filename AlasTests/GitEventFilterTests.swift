@@ -65,7 +65,6 @@ struct GitEventFilterTests {
     @Test func ignoresUnrelatedPathsUnderGitDir() {
         let cases = [
             "/repo/.git/objects/pack/pack-abc.pack",
-            "/repo/.git/refs/heads/main",
             "/repo/.git/config",
             "/repo/.git/worktrees/feat/locked",
         ]
@@ -73,6 +72,36 @@ struct GitEventFilterTests {
             let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir, worktreeRoot: worktreeRoot)
             #expect(cat == .other, "expected .other for \(path), got \(cat)")
         }
+    }
+
+    @Test func branchRefUpdateIsTopology() {
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/refs/heads/main",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .topologyChange)
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/refs/heads/feature/foo",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .topologyChange)
+    }
+
+    @Test func packedRefsUpdateIsTopology() {
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/packed-refs",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .topologyChange)
+    }
+
+    @Test func refsTagsAreNotTopology() {
+        // Tag refs aren't activity signals for the worktree sort.
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/refs/tags/v1",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .other)
     }
 
     @Test func ignoresPathsOutsideGitDir() {
