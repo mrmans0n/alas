@@ -5,7 +5,10 @@ import Foundation
 @MainActor
 @Suite(.serialized)
 struct ProjectsManagerWorktreeOrderingTests {
-    private func makeManager(repoPath: String = "/repo") -> (ProjectsManager, ProjectConfig) {
+    private func makeManager(
+        repoPath: String = "/repo",
+        defaultOrdering: AppConfig.WorktreeSortMode = .manual
+    ) -> (ProjectsManager, ProjectConfig) {
         let project = ProjectConfig(
             id: "p1",
             name: "p1",
@@ -13,7 +16,7 @@ struct ProjectsManagerWorktreeOrderingTests {
             color: "blue",
             addedAt: Date()
         )
-        let mgr = ProjectsManager(persistedProjects: [project])
+        let mgr = ProjectsManager(persistedProjects: [project], defaultOrdering: { defaultOrdering })
         return (mgr, project)
     }
 
@@ -22,7 +25,13 @@ struct ProjectsManagerWorktreeOrderingTests {
         for wt in wts { mgr.setOperationState(id: wt.id, state: nil) }
     }
 
-    private func wt(path: String, branch: String, projectId: String = "p1") -> Worktree {
+    private func wt(
+        path: String,
+        branch: String,
+        projectId: String = "p1",
+        lastActivity: Date = Date(),
+        createdAt: Date? = nil
+    ) -> Worktree {
         let url = URL(fileURLWithPath: path)
         return Worktree(
             id: Worktree.makeId(path: url),
@@ -31,7 +40,8 @@ struct ProjectsManagerWorktreeOrderingTests {
             branch: branch,
             path: url,
             status: .clean,
-            lastActivity: Date()
+            lastActivity: lastActivity,
+            createdAt: createdAt ?? lastActivity
         )
     }
 
@@ -297,6 +307,84 @@ struct ProjectsManagerWorktreeOrderingTests {
         decoder.dateDecodingStrategy = .secondsSince1970
         let file = try decoder.decode(ProjectsFile.self, from: json)
         #expect(file.projects[0].worktreeOrder == [])
+    }
+
+    // MARK: - auto sort modes
+
+    @Test func lastUpdateDescSortsByActivityDescending() {
+        let (mgr, project) = makeManager(defaultOrdering: .lastUpdateDesc)
+        let now = Date()
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo/wts/old", branch: "old", lastActivity: now.addingTimeInterval(-3600)),
+            wt(path: "/repo", branch: "main", lastActivity: now),
+            wt(path: "/repo/wts/new", branch: "new", lastActivity: now.addingTimeInterval(-60)),
+            wt(path: "/repo/wts/mid", branch: "mid", lastActivity: now.addingTimeInterval(-600)),
+        ])
+
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.map(\.branch) == ["main", "new", "mid", "old"])
+    }
+
+    @Test func creationDescSortsByCreatedAtDescending() {
+        let (mgr, project) = makeManager(defaultOrdering: .creationDesc)
+        let now = Date()
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo/wts/old", branch: "old", createdAt: now.addingTimeInterval(-3600)),
+            wt(path: "/repo", branch: "main", createdAt: now.addingTimeInterval(-7200)),
+            wt(path: "/repo/wts/new", branch: "new", createdAt: now.addingTimeInterval(-60)),
+        ])
+
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.map(\.branch) == ["main", "new", "old"])
+    }
+
+    @Test func branchAscSortsAlphabetically() {
+        let (mgr, project) = makeManager(defaultOrdering: .branchAsc)
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo/wts/zeta", branch: "Zeta"),
+            wt(path: "/repo", branch: "main"),
+            wt(path: "/repo/wts/alpha", branch: "alpha"),
+            wt(path: "/repo/wts/beta", branch: "beta"),
+        ])
+
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.map(\.branch) == ["main", "alpha", "beta", "Zeta"])
+    }
+
+    @Test func manualOrderTrumpsGlobalDefault() {
+        // Project has a non-empty worktreeOrder. Global default is lastUpdateDesc.
+        // Manual order must win, and worktreeOrder must remain populated.
+        let main = wt(path: "/repo", branch: "main")
+        let feat = wt(path: "/repo/wts/feat", branch: "feat", lastActivity: Date())
+        let fix = wt(path: "/repo/wts/fix", branch: "fix",
+                     lastActivity: Date().addingTimeInterval(-3600))
+        let project = ProjectConfig(
+            id: "p1", name: "p1", path: "/repo", color: "blue", addedAt: Date(),
+            worktreeOrder: [fix.id, feat.id]
+        )
+        let mgr = ProjectsManager(persistedProjects: [project],
+                                  defaultOrdering: { .lastUpdateDesc })
+        // Seed in persisted-order so per-insert normalization keeps the manual
+        // order intact (each insert filters to currently-known ids).
+        seed(mgr, projectId: project.id, [fix, main, feat])
+
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.map(\.branch) == ["main", "fix", "feat"])
+        #expect(mgr.projects[0].worktreeOrder == [fix.id, feat.id])
+    }
+
+    @Test func sortIsStableByIdOnTimestampTie() {
+        let (mgr, project) = makeManager(defaultOrdering: .lastUpdateDesc)
+        let same = Date(timeIntervalSince1970: 1_000_000)
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo", branch: "main", lastActivity: same),
+            wt(path: "/repo/wts/b", branch: "b", lastActivity: same),
+            wt(path: "/repo/wts/a", branch: "a", lastActivity: same),
+        ])
+
+        let trees = mgr.worktrees(projectId: project.id)
+        // After main, tied lastActivity → id ascending tiebreaker → "/repo/wts/a" then "/repo/wts/b"
+        #expect(trees.map(\.branch) == ["main", "a", "b"])
     }
 
     @Test func roundTripPreservesWorktreeOrder() throws {

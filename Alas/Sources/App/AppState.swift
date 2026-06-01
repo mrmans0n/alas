@@ -322,6 +322,12 @@ final class AppState {
             themeStore.setMatchSystem(true)
         }
         self.themeStore = themeStore
+        // All stored properties are initialized; we can safely capture `self`.
+        // Wire the live default-ordering source so the manager reads the
+        // current `config.worktrees.defaultOrdering` on every sort.
+        self.projectsManager.setDefaultOrdering { [weak self] in
+            self?.config.worktrees.defaultOrdering ?? .lastUpdateDesc
+        }
         WindowAppearance.apply(darkMode: themeStore.current.darkMode)
         // Tabs can't be loaded here: worktrees haven't been refreshed yet (that
         // happens async in RootView.task), so worktreesByProject is empty and
