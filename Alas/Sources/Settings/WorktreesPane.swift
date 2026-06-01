@@ -22,6 +22,21 @@ struct WorktreesPane: View {
                         AlasField(text: bind(\.worktrees.pathTemplate), monospaced: true)
                     }
                 }
+                SettingsGroup(title: "Sorting") {
+                    SettingsRow(
+                        name: "Default ordering",
+                        desc: "Sort order for the worktrees sidebar list. Manual reordering of a repo overrides this for that repo."
+                    ) {
+                        Picker("", selection: defaultOrderingBinding) {
+                            Text("Last update time").tag(AppConfig.WorktreeSortMode.lastUpdateDesc)
+                            Text("Creation time").tag(AppConfig.WorktreeSortMode.creationDesc)
+                            Text("Branch name").tag(AppConfig.WorktreeSortMode.branchAsc)
+                            Text("Manual").tag(AppConfig.WorktreeSortMode.manual)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 240)
+                    }
+                }
                 SettingsGroup(title: "Branch defaults") {
                     SettingsRow(name: "Branch prefix",
                                 desc: "Default prefix when creating a new worktree.") {
@@ -81,6 +96,19 @@ struct WorktreesPane: View {
             get: { state.config[keyPath: kp] },
             set: { state.config[keyPath: kp] = $0
             state.saveConfig() }
+        )
+    }
+
+    private var defaultOrderingBinding: Binding<AppConfig.WorktreeSortMode> {
+        Binding(
+            get: { state.config.worktrees.defaultOrdering },
+            set: { newValue in
+                state.config.worktrees.defaultOrdering = newValue
+                state.saveConfig()
+                if state.projectsManager.reapplyOrderingForAllProjects() {
+                    state.saveProjects()
+                }
+            }
         )
     }
 

@@ -59,11 +59,13 @@ struct AppConfig: Codable, Equatable {
         var fetchIntervalMinutes: Int
         var pruneStale: Bool
         var fetchRemoteBeforeCreate: Bool
+        var defaultOrdering: WorktreeSortMode
 
         enum CodingKeys: String, CodingKey {
             case rootPath, pathTemplate, branchPrefix, baseBranch,
                  trackUpstream, deleteBranchOnRemove, autoFetch,
-                 fetchIntervalMinutes, pruneStale, fetchRemoteBeforeCreate
+                 fetchIntervalMinutes, pruneStale, fetchRemoteBeforeCreate,
+                 defaultOrdering
         }
 
         init(
@@ -76,7 +78,8 @@ struct AppConfig: Codable, Equatable {
             autoFetch: Bool,
             fetchIntervalMinutes: Int,
             pruneStale: Bool,
-            fetchRemoteBeforeCreate: Bool = false
+            fetchRemoteBeforeCreate: Bool = false,
+            defaultOrdering: WorktreeSortMode = .lastUpdateDesc
         ) {
             self.rootPath = rootPath
             self.pathTemplate = pathTemplate
@@ -88,6 +91,7 @@ struct AppConfig: Codable, Equatable {
             self.fetchIntervalMinutes = fetchIntervalMinutes
             self.pruneStale = pruneStale
             self.fetchRemoteBeforeCreate = fetchRemoteBeforeCreate
+            self.defaultOrdering = defaultOrdering
         }
 
         init(from decoder: Decoder) throws {
@@ -102,6 +106,7 @@ struct AppConfig: Codable, Equatable {
             fetchIntervalMinutes = try c.decode(Int.self, forKey: .fetchIntervalMinutes)
             pruneStale = try c.decode(Bool.self, forKey: .pruneStale)
             fetchRemoteBeforeCreate = (try? c.decode(Bool.self, forKey: .fetchRemoteBeforeCreate)) ?? false
+            defaultOrdering = (try? c.decode(WorktreeSortMode.self, forKey: .defaultOrdering)) ?? .lastUpdateDesc
         }
     }
 
@@ -283,6 +288,13 @@ struct AppConfig: Codable, Equatable {
         case terminal, acp
     }
 
+    enum WorktreeSortMode: String, Codable, Equatable, CaseIterable {
+        case manual
+        case creationDesc
+        case lastUpdateDesc
+        case branchAsc
+    }
+
     struct Files: Codable, Equatable {
         var showIgnored: Bool
 
@@ -325,7 +337,8 @@ struct AppConfig: Codable, Equatable {
             autoFetch: true,
             fetchIntervalMinutes: 5,
             pruneStale: false,
-            fetchRemoteBeforeCreate: false
+            fetchRemoteBeforeCreate: false,
+            defaultOrdering: .lastUpdateDesc
         ),
         terminal: Terminal(
             shell: "/bin/zsh",

@@ -19,6 +19,7 @@ struct RepoGroupView: View {
     let onNewWorktree: () -> Void
     let onEditProject: () -> Void
     let onRemoveProject: () -> Void
+    let onResetSort: () -> Void
     let spaces: [SpaceConfig]
     let activeSpaceId: String
     let isProjectInSpace: (_ spaceId: String) -> Bool
@@ -65,6 +66,8 @@ struct RepoGroupView: View {
             .onTapGesture { collapsed.toggle() }
             .contextMenu {
                 Button("Edit Project…", action: onEditProject)
+                Button("Reset Sort to Default", action: onResetSort)
+                    .disabled(!project.worktreeOrderIsManual)
                 Menu("Spaces") {
                     ForEach(spaces) { space in
                         let isMember = isProjectInSpace(space.id)

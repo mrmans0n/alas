@@ -24,8 +24,27 @@ final class ProjectsManager {
     private let git = GitService()
     private let worktreeSvc = WorktreeService()
 
-    init(persistedProjects: [ProjectConfig]) {
+    /// Source of the global default sort mode. `AppState` rebinds this after
+    /// its stored properties are initialized so it can capture `self` weakly;
+    /// tests inject a fixed value via the convenience `defaultOrdering:` init.
+    private var defaultOrderingSource: () -> AppConfig.WorktreeSortMode = { .manual }
+
+    init(
+        persistedProjects: [ProjectConfig],
+        defaultOrdering: @escaping () -> AppConfig.WorktreeSortMode = { .manual }
+    ) {
         self.projects = persistedProjects
+        self.defaultOrderingSource = defaultOrdering
+    }
+
+    /// Replace the live source of the global default sort mode. The closure is
+    /// evaluated lazily on every sort, so a single wire-up at app launch suffices
+    /// to keep ordering current as the user toggles the setting — but a *re-sort
+    /// of already-sorted lists* is therefore not implicit. Callers must invoke
+    /// `reapplyOrderingForAllProjects()` after a config change to propagate the
+    /// new mode to lists that were already sorted.
+    func setDefaultOrdering(_ source: @escaping () -> AppConfig.WorktreeSortMode) {
+        self.defaultOrderingSource = source
     }
 
     func addProject(path: URL, displayName: String, color: String) async throws -> ProjectConfig {
@@ -130,6 +149,33 @@ final class ProjectsManager {
         return visibleWorktrees(projectId: projectId).first { isMainWorktree($0, project: project) }
     }
 
+    func resetWorktreeOrder(projectId: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        let wasManual = projects[idx].worktreeOrderIsManual || !projects[idx].worktreeOrder.isEmpty
+        guard wasManual else { return }
+        projects[idx].worktreeOrder = []
+        projects[idx].worktreeOrderIsManual = false
+        applyWorktreeOrdering(projectId: projectId)
+    }
+
+    /// Re-sort every project's worktree list using the current effective sort
+    /// mode. Invoke after mutating `config.worktrees.defaultOrdering` (or
+    /// `setDefaultOrdering`) — otherwise the change only affects subsequent
+    /// sort triggers (worktree add/remove, refresh), not the lists already
+    /// rendered. Returns `true` if any project's persisted `worktreeOrder`
+    /// actually changed (e.g. orphan ids dropped during normalization), so
+    /// callers can decide whether to persist.
+    @discardableResult
+    func reapplyOrderingForAllProjects() -> Bool {
+        var changed = false
+        for project in projects {
+            if applyWorktreeOrdering(projectId: project.id) {
+                changed = true
+            }
+        }
+        return changed
+    }
+
     func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {
         guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
               var rows = worktreesByProject[projectId],
@@ -147,6 +193,7 @@ final class ProjectsManager {
         rows.insert(moving, at: clampedDestination)
 
         worktreesByProject[projectId] = rows
+        projects[projectIndex].worktreeOrderIsManual = true
         projects[projectIndex].worktreeOrder = normalizedWorktreeOrder(
             rows.map(\.id),
             rows: rows,
@@ -329,20 +376,49 @@ final class ProjectsManager {
     }
 
     private func sortedWorktrees(_ rows: [Worktree], project: ProjectConfig) -> [Worktree] {
-        let order = normalizedWorktreeOrder(project.worktreeOrder, rows: rows, project: project)
-        let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
-        return rows.sorted { lhs, rhs in
-            let lhsIsMain = isMainWorktree(lhs, project: project)
-            let rhsIsMain = isMainWorktree(rhs, project: project)
-            if lhsIsMain != rhsIsMain { return lhsIsMain }
+        let effectiveMode: AppConfig.WorktreeSortMode =
+            project.worktreeOrderIsManual ? .manual : defaultOrderingSource()
 
-            let lhsRank = rank[lhs.id]
-            let rhsRank = rank[rhs.id]
-            if let lhsRank, let rhsRank, lhsRank != rhsRank { return lhsRank < rhsRank }
-            if lhsRank != nil { return true }
-            if rhsRank != nil { return false }
-            return lhs.path.path < rhs.path.path
+        // Partition main first; main is always pinned at position 0.
+        var main: [Worktree] = []
+        var others: [Worktree] = []
+        for row in rows {
+            if isMainWorktree(row, project: project) { main.append(row) } else { others.append(row) }
         }
+
+        let sortedOthers: [Worktree]
+        switch effectiveMode {
+        case .manual:
+            let order = normalizedWorktreeOrder(project.worktreeOrder, rows: rows, project: project)
+            let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
+            sortedOthers = others.sorted { lhs, rhs in
+                let lhsRank = rank[lhs.id]
+                let rhsRank = rank[rhs.id]
+                if let lhsRank, let rhsRank, lhsRank != rhsRank { return lhsRank < rhsRank }
+                if lhsRank != nil { return true }
+                if rhsRank != nil { return false }
+                return lhs.id < rhs.id
+            }
+        case .creationDesc:
+            sortedOthers = others.sorted { lhs, rhs in
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+                return lhs.id < rhs.id
+            }
+        case .lastUpdateDesc:
+            sortedOthers = others.sorted { lhs, rhs in
+                if lhs.lastActivity != rhs.lastActivity { return lhs.lastActivity > rhs.lastActivity }
+                return lhs.id < rhs.id
+            }
+        case .branchAsc:
+            sortedOthers = others.sorted { lhs, rhs in
+                let lb = lhs.branch.localizedLowercase
+                let rb = rhs.branch.localizedLowercase
+                if lb != rb { return lb < rb }
+                return lhs.id < rhs.id
+            }
+        }
+
+        return main + sortedOthers
     }
 
     private func normalizedWorktreeOrder(
@@ -350,6 +426,10 @@ final class ProjectsManager {
         rows: [Worktree],
         project: ProjectConfig
     ) -> [String] {
+        // Empty input means "follow default" — keep it empty so callers can
+        // distinguish manual-mode (non-empty) from auto-mode (empty).
+        if order.isEmpty { return [] }
+
         let nonMainIds = Set(rows.filter { !isMainWorktree($0, project: project) }.map(\.id))
         var seen: Set<String> = []
         var normalized: [String] = []

@@ -43,26 +43,37 @@ enum GitEventFilter {
             return .headChange(worktreeRoot.standardizedFileURL)
         }
 
-        if rel.hasPrefix("worktrees/") == false {
-            if rel == "worktrees" { return .topologyChange }
+        if rel.hasPrefix("worktrees/") {
+            let parts = rel.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            if parts.count == 2 { return .topologyChange }
+            if parts.count == 3 && parts[2] == "HEAD" {
+                let name = parts[1]
+                let gitdirFile = gitDir
+                    .appendingPathComponent("worktrees")
+                    .appendingPathComponent(name)
+                    .appendingPathComponent("gitdir")
+                guard let contents = try? String(contentsOf: gitdirFile, encoding: .utf8) else {
+                    return .other
+                }
+                let gitlink = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+                let worktreeRoot = URL(fileURLWithPath: gitlink).deletingLastPathComponent()
+                return .headChange(worktreeRoot.standardizedFileURL)
+            }
             return .other
         }
 
-        let parts = rel.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        if parts.count == 2 { return .topologyChange }
-        if parts.count == 3 && parts[2] == "HEAD" {
-            let name = parts[1]
-            let gitdirFile = gitDir
-                .appendingPathComponent("worktrees")
-                .appendingPathComponent(name)
-                .appendingPathComponent("gitdir")
-            guard let contents = try? String(contentsOf: gitdirFile, encoding: .utf8) else {
-                return .other
-            }
-            let gitlink = contents.trimmingCharacters(in: .whitespacesAndNewlines)
-            let worktreeRoot = URL(fileURLWithPath: gitlink).deletingLastPathComponent()
-            return .headChange(worktreeRoot.standardizedFileURL)
+        if rel == "worktrees" { return .topologyChange }
+
+        // Branch ref updates: refs/heads/<...> and the consolidated packed-refs
+        // file both reflect commit/checkout/reset/pull activity. Route through
+        // the topology debouncer so refreshWorktrees re-reads lastActivity from
+        // the updated ref file mtimes and re-applies ordering. (For the linked
+        // worktree HEAD case we already short-circuit via `worktrees/<name>/HEAD`
+        // above; this branch covers the shared branch refs.)
+        if rel == "packed-refs" || rel.hasPrefix("refs/heads/") {
+            return .topologyChange
         }
+
         return .other
     }
 }

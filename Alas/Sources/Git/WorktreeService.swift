@@ -38,6 +38,81 @@ struct WorktreeService {
         return Self.parsePorcelain(result.stdout, projectId: projectId)
     }
 
+    /// Returns a best-effort "last activity" timestamp for the worktree at
+    /// `path`. Resolves the worktree's HEAD ref through the symbolic-ref
+    /// indirection so commits actually update the timestamp:
+    ///   <worktree>/.git → gitdir → HEAD → (symbolic) refs/heads/<branch>
+    /// Falls back through packed-refs, HEAD's own mtime, and the worktree
+    /// directory mtime if any layer can't be resolved.
+    static func lastActivity(forWorktreeAt path: URL) -> Date? {
+        let fm = FileManager.default
+
+        func mtime(of pathStr: String) -> Date? {
+            (try? fm.attributesOfItem(atPath: pathStr)[.modificationDate]) as? Date
+        }
+        func dirMtime() -> Date? { mtime(of: path.path) }
+
+        // 1. Resolve the gitdir.
+        let dotGit = path.appendingPathComponent(".git").path
+        let gitdir: String
+        if let attrs = try? fm.attributesOfItem(atPath: dotGit),
+           (attrs[.type] as? FileAttributeType) == .typeRegular,
+           let contents = try? String(contentsOfFile: dotGit, encoding: .utf8),
+           let line = contents.split(separator: "\n", omittingEmptySubsequences: true)
+               .first(where: { $0.hasPrefix("gitdir: ") }) {
+            // Linked worktree (or submodule): ".git" file points to the gitdir.
+            // Git writes relative paths for submodules (e.g. "gitdir: ../.git/modules/sub")
+            // so resolve against the worktree directory before further use.
+            let raw = String(line.dropFirst("gitdir: ".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            gitdir = raw.hasPrefix("/")
+                ? raw
+                : path.appendingPathComponent(raw).standardizedFileURL.path
+        } else if let attrs = try? fm.attributesOfItem(atPath: dotGit),
+                  (attrs[.type] as? FileAttributeType) == .typeDirectory {
+            // Main worktree: ".git" is the gitdir.
+            gitdir = dotGit
+        } else {
+            return dirMtime()
+        }
+
+        // 2. Resolve the common dir (where shared refs live).
+        let commonDir: String = {
+            let commondirFile = (gitdir as NSString).appendingPathComponent("commondir")
+            if let raw = try? String(contentsOfFile: commondirFile, encoding: .utf8) {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("/") { return trimmed }
+                // Relative to gitdir.
+                return URL(fileURLWithPath: gitdir)
+                    .appendingPathComponent(trimmed)
+                    .standardizedFileURL.path
+            }
+            return gitdir
+        }()
+
+        // 3. Read HEAD.
+        let headPath = (gitdir as NSString).appendingPathComponent("HEAD")
+        guard let headContents = try? String(contentsOfFile: headPath, encoding: .utf8) else {
+            return dirMtime()
+        }
+        let head = headContents.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if head.hasPrefix("ref: ") {
+            // Symbolic ref — follow to the loose branch ref file.
+            let refRel = String(head.dropFirst("ref: ".count))
+                .trimmingCharacters(in: .whitespaces)
+            let refPath = (commonDir as NSString).appendingPathComponent(refRel)
+            if let m = mtime(of: refPath) { return m }
+            // Packed: fall through to packed-refs.
+            let packed = (commonDir as NSString).appendingPathComponent("packed-refs")
+            if let m = mtime(of: packed) { return m }
+        }
+        // Detached HEAD or unresolved symref — HEAD's own mtime is meaningful
+        // (it's rewritten on each detached commit/checkout).
+        if let m = mtime(of: headPath) { return m }
+        return dirMtime()
+    }
+
     static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {
         var result: [Worktree] = []
         var currentPath: URL?
@@ -46,6 +121,10 @@ struct WorktreeService {
         func flush() {
             if let path = currentPath {
                 let branch = currentBranch ?? "(detached)"
+                let dirAttrs = try? FileManager.default.attributesOfItem(atPath: path.path)
+                let dirMtime = (dirAttrs?[.modificationDate] as? Date) ?? Date()
+                let lastActivity = WorktreeService.lastActivity(forWorktreeAt: path) ?? dirMtime
+                let ctime = (dirAttrs?[.creationDate] as? Date) ?? dirMtime
                 result.append(Worktree(
                     id: Worktree.makeId(path: path),
                     projectId: projectId,
@@ -53,7 +132,8 @@ struct WorktreeService {
                     branch: branch,
                     path: path,
                     status: .clean,
-                    lastActivity: (try? FileManager.default.attributesOfItem(atPath: path.path)[.modificationDate] as? Date) ?? Date()
+                    lastActivity: lastActivity,
+                    createdAt: ctime
                 ))
             }
             currentPath = nil
@@ -492,14 +572,16 @@ struct WorktreeService {
     }
 
     private func makeWorktree(destination: URL, branch: String, projectId: String) -> Worktree {
-        Worktree(
+        let now = Date()
+        return Worktree(
             id: Worktree.makeId(path: destination),
             projectId: projectId,
             name: branch,
             branch: branch,
             path: destination,
             status: .clean,
-            lastActivity: Date()
+            lastActivity: now,
+            createdAt: now
         )
     }
 }

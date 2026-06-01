@@ -12,8 +12,52 @@ struct Worktree: Identifiable, Equatable, Codable {
     var path: URL
     var status: WorktreeStatus
     var lastActivity: Date
+    var createdAt: Date
     var addedLines: Int = 0
     var deletedLines: Int = 0
+
+    enum CodingKeys: String, CodingKey {
+        case id, projectId, name, branch, path, status,
+             lastActivity, createdAt, addedLines, deletedLines
+    }
+
+    init(
+        id: String,
+        projectId: String,
+        name: String,
+        branch: String,
+        path: URL,
+        status: WorktreeStatus,
+        lastActivity: Date,
+        createdAt: Date? = nil,
+        addedLines: Int = 0,
+        deletedLines: Int = 0
+    ) {
+        self.id = id
+        self.projectId = projectId
+        self.name = name
+        self.branch = branch
+        self.path = path
+        self.status = status
+        self.lastActivity = lastActivity
+        self.createdAt = createdAt ?? lastActivity
+        self.addedLines = addedLines
+        self.deletedLines = deletedLines
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        projectId = try c.decode(String.self, forKey: .projectId)
+        name = try c.decode(String.self, forKey: .name)
+        branch = try c.decode(String.self, forKey: .branch)
+        path = try c.decode(URL.self, forKey: .path)
+        status = try c.decode(WorktreeStatus.self, forKey: .status)
+        lastActivity = try c.decode(Date.self, forKey: .lastActivity)
+        createdAt = (try? c.decode(Date.self, forKey: .createdAt)) ?? lastActivity
+        addedLines = (try? c.decode(Int.self, forKey: .addedLines)) ?? 0
+        deletedLines = (try? c.decode(Int.self, forKey: .deletedLines)) ?? 0
+    }
 
     static func makeId(path: URL) -> String {
         path.standardizedFileURL.path
