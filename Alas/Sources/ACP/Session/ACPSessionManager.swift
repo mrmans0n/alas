@@ -832,6 +832,10 @@ extension ACPSessionManager {
     ) async {
         guard runners[sessionId] === runner else { return }
         runner.invalidateActivePrompt()
+        if let session = sessions[sessionId] {
+            session.transcript.streamingState = .idle
+            session.restoreQueue(session.queue)
+        }
         runner.stop()
         runners[sessionId] = nil
         await runner.connection.shutdown()

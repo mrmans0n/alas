@@ -310,7 +310,9 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.shutdownCount == 1)
         #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
         #expect(session.queue.count == 1)
+        #expect(session.queue[0].status == .pending)
         #expect(session.queue[0].lastError == "login required")
+        #expect(session.transcript.streamingState == .idle)
 
         session.queue[0].lastError = nil
         manager.persistQueue(for: session)
@@ -352,6 +354,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.queue[0].status == .pending)
         #expect(session.queue[0].lastError == nil)
         #expect(session.queue[0].blocks == [.text("follow-up")])
+        #expect(session.transcript.streamingState == .idle)
     }
 
     @Test("submit while needsAuth rejects prompt and preserves draft")
