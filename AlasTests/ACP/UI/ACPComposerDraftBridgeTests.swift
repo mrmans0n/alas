@@ -17,6 +17,7 @@ struct ACPComposerDraftBridgeTests {
                 get: { focused },
                 set: { focused = $0 }
             ),
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { _ in },
             onDraftClear: {},
@@ -46,6 +47,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
@@ -81,6 +83,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
@@ -110,6 +113,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: {
                 #expect($0 == draft)
@@ -142,6 +146,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: {},
@@ -168,6 +173,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { _ in },
             onDraftClear: {},
@@ -204,6 +210,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
@@ -242,6 +249,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
@@ -275,6 +283,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: submittedDraft,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
@@ -300,6 +309,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: submittedDraft,
+            focusRequest: 0,
             sendOnEnter: true,
             onDraftChange: { changedDrafts.append($0) },
             onDraftClear: { clearCount += 1 },
@@ -329,6 +339,7 @@ struct ACPComposerDraftBridgeTests {
         let coordinator = ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: false,           // user inverted the setting
             onDraftChange: { _ in },
             onDraftClear: {},
@@ -519,6 +530,7 @@ struct ACPComposerDraftBridgeTests {
         ACPInputField.Coordinator(
             worktreeRoot: URL(fileURLWithPath: "/tmp"),
             initialDraft: .empty,
+            focusRequest: 0,
             sendOnEnter: sendOnEnter,
             onDraftChange: { _ in },
             onDraftClear: {},
