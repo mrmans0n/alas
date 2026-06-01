@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case agents, appearance, changes, code, shortcuts, spaces, terminal, worktrees, debug
+    case agents, appearance, changes, code, general, shortcuts, spaces, terminal, worktrees, debug
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -10,6 +10,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance: return "Appearance"
         case .changes:    return "Changes"
         case .code:       return "Code"
+        case .general:    return "General"
         case .shortcuts:  return "Shortcuts"
         case .spaces:     return "Spaces"
         case .terminal:   return "Terminal"
@@ -23,6 +24,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance: return "palette"
         case .changes:    return "diff"
         case .code:       return "code"
+        case .general:    return "gear"
         case .shortcuts:  return "keyboard"
         case .spaces:     return "rectangle.3.group"
         case .terminal:   return "terminal"
@@ -72,6 +74,8 @@ struct SettingsNavView: View {
         let visible = SettingsSection.allCases
             .filter { showsDebug || $0 != .debug }
             .sorted(by: {
+                if $0 == .general { return true }
+                if $1 == .general { return false }
                 if $0 == .debug { return false }
                 if $1 == .debug { return true }
                 return $0.label < $1.label

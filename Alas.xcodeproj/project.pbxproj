@@ -254,6 +254,7 @@
 		45B14EFA547AACAB5539504B /* ThreePaneSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC68B05B719B9235865027F /* ThreePaneSizing.swift */; };
 		45B3616A459480A78A5004E8 /* ImageDiffPair.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0934F7BB22E33263B63925B7 /* ImageDiffPair.swift */; };
 		45EEE2F32712FDEE392A9707 /* ZmxEnv.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E0BB32D1A3B26473464A0F /* ZmxEnv.swift */; };
+		466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0240C5961343C3042D865570 /* GeneralPane.swift */; };
 		467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F68A9692F85197ED9E16262 /* WorktreesPane.swift */; };
 		46E3CCB2AC426BD5F8CB55DC /* ACPImageBlocksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE0DA8D81AE8E0BFE54D279 /* ACPImageBlocksTests.swift */; };
 		474DF7FE50CB6146644B2450 /* ImageDiffEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 638E94907851A6D0B4AB8F52 /* ImageDiffEndToEndTests.swift */; };
@@ -881,6 +882,7 @@
 		02161104BA524379A359CB2D /* SidebarChromeTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarChromeTheme.swift; sourceTree = "<group>"; };
 		02347E4D2EA79A5CB8DF82DC /* session-update-current-model.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-current-model.json"; sourceTree = "<group>"; };
 		023D0843198D3386919147FF /* SQLiteError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteError.swift; sourceTree = "<group>"; };
+		0240C5961343C3042D865570 /* GeneralPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralPane.swift; sourceTree = "<group>"; };
 		028348C468E45161F567110A /* LSPInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPInstallerTests.swift; sourceTree = "<group>"; };
 		02FCDD45C23BAE141549D03F /* AlasGhostty.SurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.SurfaceView.swift; sourceTree = "<group>"; };
 		0307CFD55404D01F14A5B602 /* CenterTypography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterTypography.swift; sourceTree = "<group>"; };
@@ -2426,6 +2428,7 @@
 				BB6A90FAE1D410744D02A454 /* CommitPromptEditorWindow.swift */,
 				1A61DF43677282D4CA21769A /* CommitPromptStatus.swift */,
 				12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */,
+				0240C5961343C3042D865570 /* GeneralPane.swift */,
 				2379C3F8504AD2EE73130AC4 /* LSPInstallProgressSheet.swift */,
 				F61EB45499D244E44EB170BC /* MergeBulkResolvePromptEditorWindow.swift */,
 				749E3289E4C70DA7E4DD80E6 /* MergeSingleResolvePromptEditorWindow.swift */,
@@ -3681,6 +3684,7 @@
 				D5DD6DCD22D4984B296145EB /* GatekeeperAssessor.swift in Sources */,
 				1792FECCA58D7603BD4DBDE8 /* GatekeeperRemediator.swift in Sources */,
 				55A6D67E063518A3A757EE18 /* GeminiInstaller.swift in Sources */,
+				466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */,
 				41C3F07661CA9B2B4E2C7BB1 /* GhosttyConfigBuilder.swift in Sources */,
 				41C7E41360B2A443AE2A18B8 /* GhosttyHost.swift in Sources */,
 				7D75AEB67376431930CB37E3 /* GitEventFilter.swift in Sources */,
