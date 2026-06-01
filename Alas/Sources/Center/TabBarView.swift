@@ -29,6 +29,7 @@ struct TabBarView: View {
     let onMove: (TabID, TabID) -> Void
     let titleLookup: (TabID) -> String?
     let transcriptLookup: (TabID) -> ACPTranscript?
+    var acpAgentLookup: (TabID) -> AgentDefinition? = { _ in nil }
     @Environment(\.theme) var theme
 
     private var isTerminalActive: Bool {
@@ -55,6 +56,7 @@ struct TabBarView: View {
                     harnessInfo: harnessLookup(tab.id),
                     dirty: dirtyLookup(tab.id),
                     transcript: transcriptLookup(tab.id),
+                    acpAgent: acpAgentLookup(tab.id),
                     onActivate: { onActivate(tab.id) },
                     onClose: { onClose(tab.id) }
                 )
@@ -135,6 +137,7 @@ private struct TabButton: View {
     let harnessInfo: (agent: AgentKind, state: ActivityState)?
     let dirty: Bool
     let transcript: ACPTranscript?
+    let acpAgent: AgentDefinition?
     let onActivate: () -> Void
     let onClose: () -> Void
     @Environment(\.theme) var theme
@@ -142,9 +145,16 @@ private struct TabButton: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Icon(name: tab.iconName, size: 11,
-                 color: iconColor)
-                .modifier(TabActivityPulse(activityState: harnessInfo?.state))
+            HStack(spacing: 3) {
+                Icon(name: tab.iconName, size: 11,
+                     color: iconColor)
+                    .modifier(TabActivityPulse(activityState: harnessInfo?.state))
+                    .frame(width: 12, height: 12)
+                if case .acpSession = tab, let acpAgent {
+                    AgentLogoView(agent: acpAgent, size: 12)
+                        .frame(width: 12, height: 12)
+                }
+            }
             let displayTitle = titleLookup(tab.id) ?? tab.title
             Text(displayTitle)
                 .font(.system(size: 11.5))
