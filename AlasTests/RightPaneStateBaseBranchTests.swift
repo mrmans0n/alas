@@ -152,6 +152,7 @@ struct RightPaneStateBaseBranchTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let wt = makeWorktree(at: repo, branch: "feature")
         let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.trackUpstreamForCommits = true
 
         await state.refresh()
 
@@ -163,14 +164,14 @@ struct RightPaneStateBaseBranchTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let wt = makeWorktree(at: repo, branch: "feature")
         let store = RightPaneStore()
-        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: true)
 
         state.selectBaseBranch("develop")
         try await Task.sleep(for: .milliseconds(200))
         #expect(state.baseBranch == "develop")
         #expect(state.userOverrodeBaseBranch)
 
-        _ = store.state(for: wt, baseBranch: "develop", trackUpstreamForCommits: false)
+        _ = store.state(for: wt, baseBranch: "develop", trackUpstreamForCommits: true)
         try await Task.sleep(for: .milliseconds(600))
 
         #expect(!state.userOverrodeBaseBranch)

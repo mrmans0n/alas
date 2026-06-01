@@ -246,8 +246,13 @@ final class RightPaneState {
             self.olderCommits = []
             self.hasMoreOlder = true
             self.isLoadingOlder = false
+            let ignoreUpstream = userOverrodeBaseBranch || !trackUpstreamForCommits
             async let s = git.status(worktreePath: worktree.path)
-            async let c = git.commitsAhead(at: worktree.path, baseBranch: baseBranch, ignoreUpstream: userOverrodeBaseBranch)
+            async let c = git.commitsAhead(
+                at: worktree.path,
+                baseBranch: baseBranch,
+                ignoreUpstream: ignoreUpstream
+            )
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
