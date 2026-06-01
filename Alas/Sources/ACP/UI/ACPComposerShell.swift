@@ -3,6 +3,17 @@ import SwiftUI
 enum ACPComposerPlacement: Equatable {
     case bottom
     case raisedEmpty
+
+    static func bottomInset(for placement: ACPComposerPlacement, containerHeight: CGFloat) -> CGFloat {
+        switch placement {
+        case .bottom:
+            return 18
+        case .raisedEmpty:
+            let target = containerHeight * 0.34
+            let roomAwareMaximum = max(96, containerHeight - 260)
+            return min(max(target, 96), min(320, roomAwareMaximum))
+        }
+    }
 }
 
 /// Floating glass pill composer. Wraps the AppKit-backed `ACPInputField`
@@ -50,32 +61,13 @@ struct ACPComposer: View {
     }
 
     var body: some View {
-        Group {
-            switch placement {
-            case .bottom:
-                bottomBody
-            case .raisedEmpty:
-                raisedEmptyBody
-            }
-        }
-    }
-
-    private var bottomBody: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            composerRow
-                .padding(.bottom, 18)
-                .padding(.top, 28)
-        }
-        .background(bottomShim)
-    }
-
-    private var raisedEmptyBody: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            composerRow
-                .padding(.top, 320)
-            Spacer(minLength: 110)
+        GeometryReader { proxy in
+            composerLayout(
+                bottomInset: ACPComposerPlacement.bottomInset(
+                    for: placement,
+                    containerHeight: proxy.size.height
+                )
+            )
         }
     }
 
@@ -86,6 +78,17 @@ struct ACPComposer: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 24)
+    }
+
+    private func composerLayout(bottomInset: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            composerRow
+                .padding(.top, 28)
+                .padding(.bottom, bottomInset)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(bottomShim.opacity(placement == .bottom ? 1 : 0))
     }
 
     private var bottomShim: some View {

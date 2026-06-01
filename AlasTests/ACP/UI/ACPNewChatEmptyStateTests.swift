@@ -153,4 +153,17 @@ struct ACPNewChatEmptyStateTests {
             "Plan a feature",
         ])
     }
+
+    @Test("raised composer placement scales with available height")
+    func raisedComposerPlacementScalesWithAvailableHeight() {
+        let bottom = ACPComposerPlacement.bottomInset(for: .bottom, containerHeight: 800)
+        let shortRaised = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: 360)
+        let regularRaised = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: 720)
+        let tallRaised = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: 1_200)
+
+        #expect(bottom == 18)
+        #expect(shortRaised > bottom)
+        #expect(regularRaised > shortRaised)
+        #expect(tallRaised == 320)
+    }
 }

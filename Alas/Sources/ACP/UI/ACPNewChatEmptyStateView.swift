@@ -50,27 +50,46 @@ struct ACPNewChatEmptyStateView: View {
     }
 
     private var starterChips: some View {
+        ViewThatFits(in: .horizontal) {
+            starterChipRow
+            starterChipColumn
+        }
+    }
+
+    private var starterChipRow: some View {
         HStack(spacing: 8) {
             ForEach(ACPStarterPrompt.allCases) { prompt in
-                Button {
-                    onStarterPrompt(prompt)
-                } label: {
-                    Text(prompt.label)
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(theme.color("fg-muted"))
-                        .lineLimit(1)
-                        .padding(.horizontal, 10)
-                        .frame(height: 28)
-                        .background(theme.color("bg-2").opacity(0.58))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7)
-                                .strokeBorder(theme.color("line"), lineWidth: 0.6)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
-                }
-                .buttonStyle(.plain)
-                .help(prompt.promptText)
+                starterChip(prompt)
             }
         }
+    }
+
+    private var starterChipColumn: some View {
+        VStack(spacing: 8) {
+            ForEach(ACPStarterPrompt.allCases) { prompt in
+                starterChip(prompt)
+            }
+        }
+    }
+
+    private func starterChip(_ prompt: ACPStarterPrompt) -> some View {
+        Button {
+            onStarterPrompt(prompt)
+        } label: {
+            Text(prompt.label)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(theme.color("fg-muted"))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(theme.color("bg-2").opacity(0.58))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.6)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .help(prompt.promptText)
     }
 }
