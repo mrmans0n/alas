@@ -180,6 +180,73 @@ struct AgentTerminalLaunchTests {
         }
     }
 
+    @Test func acpAuthLaunchAppendsQuotedCommandAndEnvPrefix() throws {
+        var capturedSuffix: String?
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix in
+                capturedSuffix = startupScriptSuffix
+                return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        _ = try state.openACPAuthTerminalTab(
+            for: worktree,
+            command: ACPAuthTerminalCommand(
+                command: "/Applications/Auth CLI/bin/node",
+                args: ["/opt/claude agent/acp", "--cli"],
+                env: ["TOKEN": "abc'123", "A": "two words"]
+            ),
+            onExit: {}
+        )
+
+        #expect(capturedSuffix == "A='two words' TOKEN='abc'\\''123' '/Applications/Auth CLI/bin/node' '/opt/claude agent/acp' --cli")
+    }
+
+    @Test func acpAuthLaunchRunsExitCallbackWhenTerminalExits() throws {
+        var exitCount = 0
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _ in
+                AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        _ = try state.openACPAuthTerminalTab(
+            for: worktree,
+            command: ACPAuthTerminalCommand(command: "agent", args: ["login"], env: [:])
+        ) {
+            exitCount += 1
+        }
+
+        state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
+        state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
+
+        #expect(exitCount == 1)
+    }
+
     @Test func launchingCopilotInstallsHookBeforeOpeningTerminal() throws {
         let (dir, cleanup) = tmpDir()
         defer { cleanup() }

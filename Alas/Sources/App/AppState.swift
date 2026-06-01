@@ -38,6 +38,8 @@ final class AppState {
 
     @ObservationIgnored
     private let terminalSessionOpener: TerminalSessionOpener?
+    @ObservationIgnored
+    private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
@@ -641,6 +643,26 @@ final class AppState {
         }
     }
 
+    @discardableResult
+    func openACPAuthTerminalTab(
+        for worktree: Worktree,
+        command: ACPAuthTerminalCommand,
+        onExit: @escaping () -> Void
+    ) throws -> Tab {
+        let tab = try openTerminalTab(
+            for: worktree,
+            startupScriptSuffix: Self.shellCommand(
+                command: command.command,
+                args: command.args,
+                env: command.env
+            )
+        )
+        if case .terminal(let terminal) = tab {
+            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
+        }
+        return tab
+    }
+
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
         switch project.startupScripts.worktreeAgentMode {
         case .disabled:
@@ -650,6 +672,17 @@ final class AppState {
         case .overrideGlobal, .appendToGlobal:
             return project.startupScripts.worktreeAgentUseBypassPermissions
         }
+    }
+
+    nonisolated private static func shellCommand(
+        command: String,
+        args: [String],
+        env: [String: String]
+    ) -> String {
+        let envPrefix = env
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(shellQuote($0.value))" }
+        return (envPrefix + [shellQuote(command)] + args.map(shellQuote)).joined(separator: " ")
     }
 
     nonisolated private static func shellQuote(_ s: String) -> String {
@@ -959,8 +992,11 @@ final class AppState {
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
         terminal.onSessionProcessExited = { [weak self] leafId, worktreeId, processAlive in
-            guard !processAlive else { return }
-            self?.closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
+            self?.handleTerminalProcessExited(
+                worktreeId: worktreeId,
+                leafId: leafId,
+                processAlive: processAlive
+            )
         }
         harness.socketServer.onCLIRequest = { [weak self] request in
             await MainActor.run {
@@ -1201,6 +1237,14 @@ final class AppState {
     /// dead session and lets the sibling collapse take over the freed space.
     /// Idempotent: if the leaf is no longer in any tab (manual close raced
     /// ahead), returns without side effects.
+    func handleTerminalProcessExited(worktreeId: String, leafId: String, processAlive: Bool) {
+        guard !processAlive else { return }
+        closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
+        if let handler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId) {
+            handler()
+        }
+    }
+
     func closePaneForProcessExit(worktreeId: String, leafId: String) {
         let owningTabId = tabs.tabs(forWorktree: worktreeId).first { tab in
             guard case .terminal(let state) = tab else { return false }
