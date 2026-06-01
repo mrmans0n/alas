@@ -141,7 +141,7 @@ struct AlasApp: App {
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
-                    NotificationCenter.default.post(name: .alasCheckForUpdates, object: nil)
+                    state.updates.checkManually()
                 }
             }
         }

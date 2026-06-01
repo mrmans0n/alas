@@ -470,7 +470,7 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasTerminateAllTerminals)) { _ in
                 state.terminateAllTerminalSessions()
             }
-        let s = r
+        return r
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
@@ -482,10 +482,6 @@ private struct RootBaseHandlers: ViewModifier {
                 // HarnessService, which is one of the candidates for the
                 // permission-prompt avalanche reported on quit.
                 state.harness.stop()
-            }
-        return s
-            .onReceive(NotificationCenter.default.publisher(for: .alasCheckForUpdates)) { _ in
-                state.updates.checkManually()
             }
     }
 }
@@ -560,7 +556,6 @@ extension Notification.Name {
     static let alasResizePaneUp     = Notification.Name("AlasResizePaneUp")
     static let alasResizePaneDown   = Notification.Name("AlasResizePaneDown")
     static let alasTerminateAllTerminals = Notification.Name("AlasTerminateAllTerminals")
-    static let alasCheckForUpdates   = Notification.Name("AlasCheckForUpdates")
     static let alasShowFindReplace  = Notification.Name("AlasShowFindReplace")
     static let codeEditorDidAttach  = Notification.Name("CodeEditorDidAttach")
     static let codeEditorDidDetach  = Notification.Name("CodeEditorDidDetach")
