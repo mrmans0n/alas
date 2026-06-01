@@ -49,6 +49,9 @@ final class AppState {
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
     @ObservationIgnored
     private var lspManager: WorkspaceLSPManager?
+    @ObservationIgnored lazy var updates = UpdateController(
+        isEnabled: { [weak self] in self?.config.general.autoUpdate ?? true }
+    )
 
     var isSearchOpen: Bool = false
     var isRepoSelectorOpen: Bool = false
