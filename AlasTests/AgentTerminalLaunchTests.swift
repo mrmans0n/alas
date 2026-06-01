@@ -214,6 +214,42 @@ struct AgentTerminalLaunchTests {
         #expect(capturedSuffix == "A='two words' TOKEN='abc'\\''123' '/Applications/Auth CLI/bin/node' '/opt/claude agent/acp' --cli")
     }
 
+    @Test func acpAuthLaunchRejectsInvalidEnvKeyBeforeOpeningTerminal() {
+        var openerCalled = false
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _ in
+                openerCalled = true
+                return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        #expect(throws: AppState.ACPAuthTerminalLaunchError.invalidEnvKey("BAD-NAME")) {
+            _ = try state.openACPAuthTerminalTab(
+                for: worktree,
+                command: ACPAuthTerminalCommand(
+                    command: "agent",
+                    args: ["login"],
+                    env: ["BAD-NAME": "x"]
+                ),
+                onExit: {}
+            )
+        }
+        #expect(!openerCalled)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+    }
+
     @Test func acpAuthLaunchRunsExitCallbackWhenTerminalExits() throws {
         var exitCount = 0
         let project = project(mode: .useGlobal, useBypass: false)
@@ -245,6 +281,39 @@ struct AgentTerminalLaunchTests {
         state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
 
         #expect(exitCount == 1)
+    }
+
+    @Test func acpAuthManualTerminalCloseRemovesExitCallbackWithoutInvoking() throws {
+        var exitCount = 0
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _ in
+                AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        _ = try state.openACPAuthTerminalTab(
+            for: worktree,
+            command: ACPAuthTerminalCommand(command: "agent", args: ["login"], env: [:])
+        ) {
+            exitCount += 1
+        }
+
+        state.closeFocusedPane(worktreeId: worktree.id)
+        state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
+
+        #expect(exitCount == 0)
     }
 
     @Test func launchingCopilotInstallsHookBeforeOpeningTerminal() throws {

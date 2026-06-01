@@ -621,6 +621,17 @@ final class AppState {
         }
     }
 
+    enum ACPAuthTerminalLaunchError: LocalizedError, Equatable {
+        case invalidEnvKey(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidEnvKey(let key):
+                return "Invalid auth environment variable name: \(key)"
+            }
+        }
+    }
+
     @discardableResult
     func openAgentTerminalTab(for worktree: Worktree, agentId: String) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -649,13 +660,14 @@ final class AppState {
         command: ACPAuthTerminalCommand,
         onExit: @escaping () -> Void
     ) throws -> Tab {
+        let startupScriptSuffix = try Self.shellCommand(
+            command: command.command,
+            args: command.args,
+            env: command.env
+        )
         let tab = try openTerminalTab(
             for: worktree,
-            startupScriptSuffix: Self.shellCommand(
-                command: command.command,
-                args: command.args,
-                env: command.env
-            )
+            startupScriptSuffix: startupScriptSuffix
         )
         if case .terminal(let terminal) = tab {
             acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
@@ -678,11 +690,21 @@ final class AppState {
         command: String,
         args: [String],
         env: [String: String]
-    ) -> String {
+    ) throws -> String {
+        for key in env.keys where !isValidShellAssignmentName(key) {
+            throw ACPAuthTerminalLaunchError.invalidEnvKey(key)
+        }
         let envPrefix = env
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\(shellQuote($0.value))" }
         return (envPrefix + [shellQuote(command)] + args.map(shellQuote)).joined(separator: " ")
+    }
+
+    nonisolated private static func isValidShellAssignmentName(_ key: String) -> Bool {
+        key.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_]*$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     nonisolated private static func shellQuote(_ s: String) -> String {
@@ -1239,10 +1261,9 @@ final class AppState {
     /// ahead), returns without side effects.
     func handleTerminalProcessExited(worktreeId: String, leafId: String, processAlive: Bool) {
         guard !processAlive else { return }
+        let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
         closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
-        if let handler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId) {
-            handler()
-        }
+        authExitHandler?()
     }
 
     func closePaneForProcessExit(worktreeId: String, leafId: String) {
@@ -1258,14 +1279,19 @@ final class AppState {
         case .tabRemoved:
             closeTab(worktreeId: worktreeId, tabId: tabId)
         case .leafRemoved:
-            terminal.closeSession(
+            closeTerminalSession(
                 id: leafId,
                 worktreeId: worktreeId,
                 projectPath: projectPath(forWorktreeId: worktreeId)
             )
-            harness.detector.unregister(sessionId: leafId)
-            harness.forgetSession(leafId)
         }
+    }
+
+    private func closeTerminalSession(id: String, worktreeId: String, projectPath: String?) {
+        acpAuthTerminalExitHandlers.removeValue(forKey: id)
+        harness.detector.unregister(sessionId: id)
+        harness.forgetSession(id)
+        terminal.closeSession(id: id, worktreeId: worktreeId, projectPath: projectPath)
     }
 
     /// Close the focused pane. If it was the last leaf, also closes the tab
@@ -1280,13 +1306,11 @@ final class AppState {
             closeTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
-            terminal.closeSession(
+            closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
                 projectPath: projectPath(forWorktreeId: worktreeId)
             )
-            harness.detector.unregister(sessionId: closedLeafId)
-            harness.forgetSession(closedLeafId)
         }
     }
 
@@ -1710,9 +1734,7 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    harness.detector.unregister(sessionId: leaf.id)
-                    harness.forgetSession(leaf.id)
-                    terminal.closeSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }
             if case .editor = tab {
@@ -1731,9 +1753,7 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    harness.detector.unregister(sessionId: leaf.id)
-                    harness.forgetSession(leaf.id)
-                    terminal.closeSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }
         }

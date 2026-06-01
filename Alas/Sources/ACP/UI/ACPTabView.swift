@@ -312,7 +312,7 @@ private struct ACPSessionView: View {
                 methods: methods,
                 reason: reason,
                 onSignIn: { method in launchAuth(method) },
-                onReconnect: { Task { await reattach() } }
+                onReconnect: { Task { await reattachAndRefreshAdapterUpdateState() } }
             )
         } else {
             let dismissedSetup = state.config.harness.dismissedACPSetupNudges.contains(session.agentId)
@@ -417,7 +417,7 @@ private struct ACPSessionView: View {
         do {
             _ = try state.openACPAuthTerminalTab(for: worktree, command: command) {
                 Task { @MainActor in
-                    await reattach()
+                    await reattachAndRefreshAdapterUpdateState()
                 }
             }
         } catch {
@@ -447,6 +447,11 @@ private struct ACPSessionView: View {
             updateState = nil
             dismissedLatest = nil
         }
+        await reattach()
+        await refreshAdapterUpdateState()
+    }
+
+    private func reattachAndRefreshAdapterUpdateState() async {
         await reattach()
         await refreshAdapterUpdateState()
     }
