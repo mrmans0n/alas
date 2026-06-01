@@ -13,6 +13,7 @@ struct ACPComposer: View {
     /// `ACPInputField` so its placeholder reflects whichever action ⏎
     /// triggers under the current mapping.
     let sendOnEnter: Bool
+    let focusRequest: Int
     let onSubmit: ACPComposerSubmitHandler
 
     @Environment(\.theme) private var theme
@@ -27,6 +28,7 @@ struct ACPComposer: View {
         worktreeRoot: URL,
         agentLookup: @escaping (String) -> AgentDefinition?,
         sendOnEnter: Bool,
+        focusRequest: Int = 0,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self._session = ObservedObject(wrappedValue: session)
@@ -35,6 +37,7 @@ struct ACPComposer: View {
         self.worktreeRoot = worktreeRoot
         self.agentLookup = agentLookup
         self.sendOnEnter = sendOnEnter
+        self.focusRequest = focusRequest
         self.onSubmit = onSubmit
     }
 
@@ -82,6 +85,7 @@ struct ACPComposer: View {
                 worktreeRoot: worktreeRoot,
                 actions: actions,
                 isFocused: $inputFocused,
+                focusRequest: focusRequest,
                 sendOnEnter: sendOnEnter,
                 onDraftChange: { draft in
                     manager.persistComposerDraft(draft, for: session)

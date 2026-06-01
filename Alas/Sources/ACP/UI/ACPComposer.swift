@@ -17,6 +17,7 @@ struct ACPInputField: NSViewRepresentable {
     let worktreeRoot: URL
     let actions: ACPComposerActions
     @Binding var isFocused: Bool
+    let focusRequest: Int
     /// True when ⏎ should submit with `.auto` intent (the default mapping
     /// — queue while busy). False when the user inverted the setting so
     /// ⏎ steers; the placeholder reverses accordingly while busy.
@@ -82,6 +83,13 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.promptSuggestions = session.promptSuggestions
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
+        if context.coordinator.focusRequest != focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            if let tv = nsView.documentView as? ACPNSTextView,
+               let window = tv.window {
+                window.makeFirstResponder(tv)
+            }
+        }
         if let tv = nsView.documentView as? ACPNSTextView {
             tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
             tv.needsDisplay = true
@@ -114,6 +122,7 @@ struct ACPInputField: NSViewRepresentable {
             worktreeRoot: worktreeRoot,
             initialDraft: composer.draft,
             isFocused: $isFocused,
+            focusRequest: focusRequest,
             sendOnEnter: sendOnEnter,
             onDraftChange: onDraftChange,
             onDraftClear: onDraftClear,
@@ -125,6 +134,7 @@ struct ACPInputField: NSViewRepresentable {
         let worktreeRoot: URL
         let initialDraft: ACPComposerDraft
         var isFocused: Binding<Bool>
+        var focusRequest: Int
         /// Keyboard-only inversion flag. The coordinator resolves the
         /// raw modifier-derived intent (`.auto` for ⏎, `.steer` for ⌥⏎)
         /// against this and emits a FINAL intent to `onSubmit`. The
@@ -168,6 +178,7 @@ struct ACPInputField: NSViewRepresentable {
             worktreeRoot: URL,
             initialDraft: ACPComposerDraft,
             isFocused: Binding<Bool> = .constant(false),
+            focusRequest: Int,
             sendOnEnter: Bool,
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
@@ -176,6 +187,7 @@ struct ACPInputField: NSViewRepresentable {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
             self.isFocused = isFocused
+            self.focusRequest = focusRequest
             self.sendOnEnter = sendOnEnter
             self.lastSyncedDraft = initialDraft
             self.onDraftChange = onDraftChange
