@@ -46,6 +46,9 @@ struct WorktreeService {
         func flush() {
             if let path = currentPath {
                 let branch = currentBranch ?? "(detached)"
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path.path)
+                let mtime = (attrs?[.modificationDate] as? Date) ?? Date()
+                let ctime = (attrs?[.creationDate] as? Date) ?? mtime
                 result.append(Worktree(
                     id: Worktree.makeId(path: path),
                     projectId: projectId,
@@ -53,7 +56,8 @@ struct WorktreeService {
                     branch: branch,
                     path: path,
                     status: .clean,
-                    lastActivity: (try? FileManager.default.attributesOfItem(atPath: path.path)[.modificationDate] as? Date) ?? Date()
+                    lastActivity: mtime,
+                    createdAt: ctime
                 ))
             }
             currentPath = nil
@@ -492,14 +496,16 @@ struct WorktreeService {
     }
 
     private func makeWorktree(destination: URL, branch: String, projectId: String) -> Worktree {
-        Worktree(
+        let now = Date()
+        return Worktree(
             id: Worktree.makeId(path: destination),
             projectId: projectId,
             name: branch,
             branch: branch,
             path: destination,
             status: .clean,
-            lastActivity: Date()
+            lastActivity: now,
+            createdAt: now
         )
     }
 }
