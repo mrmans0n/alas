@@ -578,7 +578,8 @@ extension ACPSessionManager {
         }
         var startedRunner: ACPSessionRunner?
         do {
-            session.promptCapabilities = (try await connection.initialize())
+            let initialized = try await connection.initialize()
+            session.promptCapabilities = initialized.promptCapabilities
             let shouldSuppressLoadReplay = !freshlyCreated
                 && session.hydrationState == .ready
                 && session.hasConversationTranscript

@@ -16,12 +16,109 @@ struct ACPInitializeTests {
         #expect(env.params?.clientCapabilities.terminal == true)
     }
 
+    @Test("initialize request advertises terminal auth capabilities")
+    func initializeRequestAdvertisesAuth() throws {
+        let params = ACPInitializeParams(
+            protocolVersion: 1,
+            clientCapabilities: .init(
+                fs: .init(readTextFile: true, writeTextFile: true),
+                terminal: true
+            )
+        )
+        let envelope = JSONRPCEnvelope<ACPInitializeParams>(
+            id: .number(1),
+            method: "initialize",
+            params: params
+        )
+
+        let data = try JSONEncoder().encode(envelope)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let encodedParams = try #require(json["params"] as? [String: Any])
+        let capabilities = try #require(encodedParams["clientCapabilities"] as? [String: Any])
+        let auth = try #require(capabilities["auth"] as? [String: Any])
+        let meta = try #require(capabilities["_meta"] as? [String: Any])
+
+        #expect(auth["terminal"] as? Bool == true)
+        #expect(meta["terminal-auth"] as? Bool == true)
+        #expect(capabilities["terminal"] as? Bool == true)
+        let fs = try #require(capabilities["fs"] as? [String: Any])
+        #expect(fs["readTextFile"] as? Bool == true)
+        #expect(fs["writeTextFile"] as? Bool == true)
+    }
+
     @Test("decodes an initialize response")
     func decodeResponse() throws {
         let data = try fixture("initialize-response")
         let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPInitializeResult>.self, from: data)
         #expect(env.result?.protocolVersion == 1)
         #expect(env.result?.authMethods.isEmpty == true)
+    }
+
+    @Test("decodes terminal auth method metadata")
+    func decodesTerminalAuthMethod() throws {
+        let data = Data("""
+        {
+          "protocolVersion": 1,
+          "authMethods": [
+            {
+              "id": "claude-ai-login",
+              "name": "Claude Subscription",
+              "description": "Use Claude subscription",
+              "type": "terminal",
+              "args": ["--cli", "auth", "login"],
+              "env": { "A": "B" },
+              "vars": [
+                { "name": "ANTHROPIC_API_KEY", "label": "API key", "optional": false, "secret": true }
+              ],
+              "_meta": {
+                "terminal-auth": {
+                  "command": "/usr/bin/node",
+                  "args": ["/opt/claude-agent-acp", "--cli"],
+                  "label": "Claude Login"
+                }
+              }
+            }
+          ]
+        }
+        """.utf8)
+
+        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: data)
+        let method = try #require(result.authMethods.first)
+        #expect(method.id == "claude-ai-login")
+        #expect(method.name == "Claude Subscription")
+        #expect(method.description == "Use Claude subscription")
+        #expect(method.kind == .terminal)
+        #expect(method.args == ["--cli", "auth", "login"])
+        #expect(method.env == ["A": "B"])
+        #expect(method.vars?.first?.name == "ANTHROPIC_API_KEY")
+        #expect(method.vars?.first?.label == "API key")
+        #expect(method.vars?.first?.optional == false)
+        #expect(method.vars?.first?.secret == true)
+        #expect(method.terminalAuth?.command == "/usr/bin/node")
+        #expect(method.terminalAuth?.args == ["/opt/claude-agent-acp", "--cli"])
+        #expect(method.terminalAuth?.label == "Claude Login")
+    }
+
+    @Test("decodes auth method type variants")
+    func decodesAuthMethodTypeVariants() throws {
+        let data = Data("""
+        {
+          "protocolVersion": 1,
+          "authMethods": [
+            { "id": "agent-login", "name": "Agent Login" },
+            { "id": "env-login", "name": "Environment", "type": "env_var" },
+            { "id": "future-login", "name": "Future", "type": "browser" }
+          ]
+        }
+        """.utf8)
+
+        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: data)
+
+        #expect(result.authMethods.map(\.kind) == [
+            .agent,
+            .envVar,
+            .unknown("browser"),
+        ])
     }
 
     private func fixture(_ name: String) throws -> Data {

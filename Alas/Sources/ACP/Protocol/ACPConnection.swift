@@ -1,5 +1,10 @@
 import Foundation
 
+struct ACPInitializeOutcome: Equatable {
+    let promptCapabilities: ACPInitializeResult.ACPPromptCapabilities
+    let authMethods: [ACPInitializeResult.ACPAuthMethod]
+}
+
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
 /// methods for the messages we send.
 final class ACPConnection: @unchecked Sendable {
@@ -10,7 +15,7 @@ final class ACPConnection: @unchecked Sendable {
     /// Returns the prompt capabilities advertised by the agent, defaulting
     /// missing capability fields to false.
     @discardableResult
-    func initialize() async throws -> ACPInitializeResult.ACPPromptCapabilities {
+    func initialize() async throws -> ACPInitializeOutcome {
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
                                 protocolVersion: ACPProtocolVersion.current,
@@ -18,8 +23,11 @@ final class ACPConnection: @unchecked Sendable {
                                     fs: .init(readTextFile: true, writeTextFile: true),
                                     terminal: true)))
         let resp = try await client.send(req)
-        let result = try? JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
-        return result?.agentCapabilities?.promptCapabilities ?? .init()
+        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
+        return ACPInitializeOutcome(
+            promptCapabilities: result.agentCapabilities?.promptCapabilities ?? .init(),
+            authMethods: result.authMethods
+        )
     }
 
     func newSession(cwd: String) async throws -> ACPSessionNewResult {

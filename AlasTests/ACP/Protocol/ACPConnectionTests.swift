@@ -32,25 +32,30 @@ struct ACPConnectionTests {
     func initializeReturnsPromptCapabilities() async throws {
         let mock = ACPMockClient()
         mock.script(method: "initialize") { _ in
-            try JSONEncoder().encode(ACPInitializeResult(
-                protocolVersion: 1,
-                agentCapabilities: .init(
-                    promptCapabilities: .init(
-                        image: true,
-                        audio: false,
-                        embeddedContext: true
-                    )
-                ),
-                authMethods: []
-            ))
+            """
+            {
+              "protocolVersion": 1,
+              "agentCapabilities": {
+                "promptCapabilities": {
+                  "image": true,
+                  "audio": false,
+                  "embeddedContext": true
+                }
+              },
+              "authMethods": [
+                { "id": "claude-ai-login", "name": "Claude Subscription", "type": "terminal" }
+              ]
+            }
+            """.data(using: .utf8)!
         }
 
         let conn = ACPConnection(client: mock)
-        let capabilities = try await conn.initialize()
+        let initialized = try await conn.initialize()
 
-        #expect(capabilities.image == true)
-        #expect(capabilities.audio == false)
-        #expect(capabilities.embeddedContext == true)
+        #expect(initialized.promptCapabilities.image == true)
+        #expect(initialized.promptCapabilities.audio == false)
+        #expect(initialized.promptCapabilities.embeddedContext == true)
+        #expect(initialized.authMethods.map(\.id) == ["claude-ai-login"])
     }
 
     @Test("loadSession sends session/load with cwd and remote session id")
