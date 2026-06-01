@@ -454,6 +454,49 @@ struct ACPComposerDraftBridgeTests {
         try assertComposerBaseStyle(in: textView.attributedString(), range: NSRange(location: 0, length: 4))
     }
 
+    @Test("plain paste insertion goes through NSTextView editing hooks")
+    func plainPasteInsertionUsesTextViewEditingHooks() {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let window = NSWindow(contentRect: textView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        textView.allowsUndo = true
+        textView.string = "before after"
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        let delegate = EditingHookDelegate()
+        textView.delegate = delegate
+
+        let inserted = textView.insertPlainText("RICH")
+
+        #expect(inserted)
+        #expect(delegate.changes == [
+            EditingHookDelegate.Change(
+                range: NSRange(location: 7, length: 0),
+                replacement: "RICH"
+            )
+        ])
+        textView.undoManager?.undo()
+        #expect(textView.string == "before after")
+    }
+
+    private final class EditingHookDelegate: NSObject, NSTextViewDelegate {
+        struct Change: Equatable {
+            let range: NSRange
+            let replacement: String?
+        }
+
+        var changes: [Change] = []
+
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            changes.append(Change(range: affectedCharRange, replacement: replacementString))
+            return true
+        }
+    }
+
     // MARK: - Keyboard intent resolution (doCommandBy)
 
     private func assertComposerBaseStyle(

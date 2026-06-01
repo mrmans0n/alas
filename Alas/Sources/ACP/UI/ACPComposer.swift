@@ -818,11 +818,9 @@ final class ACPNSTextView: NSTextView {
             length: min(replacementRange.length, max(0, textStorage.length - replacementRange.location))
         )
         let attrs = Self.baseTypingAttributes
-        let attributed = NSAttributedString(string: text, attributes: attrs)
-        textStorage.replaceCharacters(in: boundedRange, with: attributed)
-        setSelectedRange(NSRange(location: boundedRange.location + attributed.length, length: 0))
         typingAttributes = attrs
-        didChangeText()
+        insertText(text, replacementRange: boundedRange)
+        typingAttributes = attrs
         return true
     }
 
