@@ -406,7 +406,111 @@ struct ACPComposerDraftBridgeTests {
         #expect(typingColor == NSColor.labelColor)
     }
 
+    @Test("plain paste insertion normalizes inherited rich text styling")
+    func plainPasteInsertionNormalizesRichTextStyling() throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let source = NSMutableAttributedString(
+            string: "before after",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        textView.textStorage?.setAttributedString(source)
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        textView.typingAttributes = [
+            .font: NSFont.systemFont(ofSize: 48),
+            .foregroundColor: NSColor.black,
+        ]
+
+        let inserted = textView.insertPlainText("RICH")
+
+        #expect(inserted)
+        #expect(textView.string == "before RICHafter")
+        let insertedRange = NSRange(location: 7, length: 4)
+        try assertComposerBaseStyle(in: textView.attributedString(), range: insertedRange)
+        #expect((textView.typingAttributes[.foregroundColor] as? NSColor) == NSColor.labelColor)
+        let typingFont = try #require(textView.typingAttributes[.font] as? NSFont)
+        #expect(typingFont.pointSize == 13)
+    }
+
+    @Test("plain paste insertion replaces selected text with normalized styling")
+    func plainPasteInsertionReplacesSelectionWithNormalizedStyling() throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        textView.textStorage?.setAttributedString(NSAttributedString(
+            string: "replace me",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        ))
+        textView.setSelectedRange(NSRange(location: 0, length: 7))
+
+        let inserted = textView.insertPlainText("keep")
+
+        #expect(inserted)
+        #expect(textView.string == "keep me")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
+        try assertComposerBaseStyle(in: textView.attributedString(), range: NSRange(location: 0, length: 4))
+    }
+
+    @Test("plain paste insertion goes through NSTextView editing hooks")
+    func plainPasteInsertionUsesTextViewEditingHooks() {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let window = NSWindow(contentRect: textView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = textView
+        window.makeFirstResponder(textView)
+        textView.allowsUndo = true
+        textView.string = "before after"
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        let delegate = EditingHookDelegate()
+        textView.delegate = delegate
+
+        let inserted = textView.insertPlainText("RICH")
+
+        #expect(inserted)
+        #expect(delegate.changes == [
+            EditingHookDelegate.Change(
+                range: NSRange(location: 7, length: 0),
+                replacement: "RICH"
+            )
+        ])
+        textView.undoManager?.undo()
+        #expect(textView.string == "before after")
+    }
+
+    private final class EditingHookDelegate: NSObject, NSTextViewDelegate {
+        struct Change: Equatable {
+            let range: NSRange
+            let replacement: String?
+        }
+
+        var changes: [Change] = []
+
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            changes.append(Change(range: affectedCharRange, replacement: replacementString))
+            return true
+        }
+    }
+
     // MARK: - Keyboard intent resolution (doCommandBy)
+
+    private func assertComposerBaseStyle(
+        in attributed: NSAttributedString,
+        range: NSRange,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        attributed.enumerateAttributes(in: range) { attrs, _, _ in
+            let font = attrs[.font] as? NSFont
+            let color = attrs[.foregroundColor] as? NSColor
+            #expect(font?.pointSize == 13, sourceLocation: sourceLocation)
+            #expect(color == NSColor.labelColor, sourceLocation: sourceLocation)
+        }
+    }
 
     private func makeCoordinator(
         sendOnEnter: Bool,
