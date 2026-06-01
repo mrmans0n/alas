@@ -624,6 +624,24 @@ extension ACPSessionManager {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed: break
         }
+        // Claim the spawn slot BEFORE awaiting backfill so a concurrent
+        // attach (e.g. retry button while the first attempt is still in the
+        // backfill wait) early-returns on the `.spawning` guard above
+        // instead of racing into a duplicate runner.
+        session.agentState = .spawning
+        // The runner persists transcript mutations under `msg-<sid>-<index>`,
+        // where `index` is the in-memory transcript position. Tail-first
+        // hydration leaves `transcript.messages` shorter than the persisted
+        // row count until backfill prepends the older entries, so any apply()
+        // that landed before that finished would overwrite the wrong stored
+        // row (or skip an append it should have made). Wait here so the
+        // in-memory and persisted indices line up before any runner work —
+        // including replayed load updates — touches the store. No-op once
+        // backfill is done.
+        await awaitBackfill(id: sessionId)
+        // Re-verify the session still exists; a close during the await above
+        // would have cleared it.
+        guard sessions[sessionId] === session else { return }
         // Drop any stale runner left over from a prior process (e.g. the
         // runner's stream-end branch flipped agentState to .disconnected
         // but did not unregister itself). The .ready/.spawning early-return
