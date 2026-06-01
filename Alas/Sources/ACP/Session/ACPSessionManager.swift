@@ -35,6 +35,10 @@ final class ACPSessionManager: ObservableObject {
     private let setupEvaluator: ACPSetupEvaluator
     private let connectionFactory: ACPConnectionFactory
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
+    /// Per-session task that prepends pre-tail messages after the initial
+    /// tail-only paint applied by `applyHydration`. Tracked so tests (and
+    /// teardown) can wait for it; production UI does not.
+    private var inFlightBackfills: [ACPSession.ID: Task<Void, Never>] = [:]
 
     /// Per-session UI refcount. When this drops to zero AND the session is
     /// not `attached`, the cached `ACPSession` is evicted from `sessions`.
@@ -112,6 +116,16 @@ final class ACPSessionManager: ObservableObject {
         session.remoteSessionId = row.remoteSessionId
         sessions[id] = session
         return session
+    }
+
+    /// Awaits any in-flight background backfill of older transcript messages
+    /// for `id`. After `hydrateIfNeeded` returns, only the tail window has
+    /// been applied to the transcript so the UI can paint immediately; the
+    /// rest is prepended on a separate task. Production callers rarely need
+    /// to wait for it (the UI is happy with the tail), but tests use this to
+    /// observe the fully-materialised transcript.
+    func awaitBackfill(id: ACPSession.ID) async {
+        if let task = inFlightBackfills[id] { await task.value }
     }
 
     /// Drives a session from `.loading` to `.ready` (or `.failed`). Safe to
@@ -205,10 +219,32 @@ final class ACPSessionManager: ObservableObject {
     }
 
     private func applyHydration(_ result: HydrationResult, to session: ACPSession) {
-        // Convert wire variants into full ACPMessages (allocates StreamingText
-        // for agent/thought) in one main-actor pass.
-        session.replaceTranscriptMessages(result.wireMessages.map { $0.toMessage() })
-        session.transcript.resetWindowToTail()
+        // Tail-first hydration: a long transcript would otherwise force an
+        // O(N) main-actor pass to wrap every wire message in `StreamingText`
+        // (a `@MainActor` class) before the first paint can land, freezing
+        // the UI on every tab switch into a session with hundreds of stored
+        // messages. We instead apply only the messages SwiftUI will draw on
+        // first paint — the tail window — and prepend the rest from a
+        // background task once the tab has painted.
+        //
+        // The visible window is intentionally placed at index 0 of the
+        // initial array (rather than the natural `count - tailWindow`
+        // offset) so the tail array IS the visible window. When backfill
+        // later prepends the older entries, `visibleHead` is shifted by
+        // the prepended count so the same tail messages stay on screen
+        // without a layout jump.
+        let wires = result.wireMessages
+        let total = wires.count
+        let tailWindow = ACPTranscript.tailWindow
+        let tailStart = max(0, total - tailWindow)
+
+        var tail: [ACPMessage] = []
+        tail.reserveCapacity(total - tailStart)
+        for i in tailStart..<total {
+            tail.append(wires[i].toMessage())
+        }
+        session.replaceTranscriptMessages(tail)
+        session.transcript.visibleHead = 0
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
@@ -237,6 +273,61 @@ final class ACPSessionManager: ObservableObject {
         // we captured before the user typed it.
         session.hydrationState = .ready
         self.recent = result.recent
+        scheduleBackfillIfNeeded(olderWires: Array(wires.prefix(tailStart)),
+                                 sessionId: session.id, session: session)
+    }
+
+    /// Materialise the pre-tail messages on a follow-up task. The task
+    /// converts wires to `ACPMessage`s in chunks, yielding between batches
+    /// so SwiftUI gets cycles to lay out the just-painted tail and respond
+    /// to user input. When the conversion is done it prepends them all in
+    /// one transcript mutation — incremental prepends would re-render the
+    /// list once per batch for no visible benefit (the older messages are
+    /// hidden behind `visibleHead`).
+    ///
+    /// Bail out if the cached session for `sessionId` no longer points at
+    /// the same instance: the user closed-then-reopened the tab and the
+    /// fresh placeholder will run its own hydration.
+    private func scheduleBackfillIfNeeded(
+        olderWires: [ACPMessageWire],
+        sessionId: ACPSession.ID,
+        session: ACPSession
+    ) {
+        // Replace any prior pending backfill for this id — a re-hydration
+        // (close + reopen) supersedes an older run.
+        inFlightBackfills[sessionId]?.cancel()
+        inFlightBackfills[sessionId] = nil
+
+        guard !olderWires.isEmpty else { return }
+
+        let task = Task { @MainActor [weak self, weak session] in
+            defer { self?.inFlightBackfills[sessionId] = nil }
+            // Yield once so the tail paint reaches the screen before we
+            // start allocating older messages on the main actor.
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+
+            var older: [ACPMessage] = []
+            older.reserveCapacity(olderWires.count)
+            let batchSize = 100
+            var index = 0
+            while index < olderWires.count {
+                let end = min(index + batchSize, olderWires.count)
+                for i in index..<end {
+                    older.append(olderWires[i].toMessage())
+                }
+                index = end
+                if index < olderWires.count {
+                    await Task.yield()
+                    if Task.isCancelled { return }
+                }
+            }
+            guard let self, let session,
+                  self.sessions[sessionId] === session
+            else { return }
+            session.prependTranscriptMessages(older)
+        }
+        inFlightBackfills[sessionId] = task
     }
 
     func closeSession(id: ACPSession.ID) {
@@ -244,6 +335,8 @@ final class ACPSessionManager: ObservableObject {
         // session reference — otherwise a tab-switch-while-typing
         // window can lose the last ~300ms of input.
         flushPendingDraftWrite(for: id)
+        inFlightBackfills[id]?.cancel()
+        inFlightBackfills[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
@@ -251,6 +344,8 @@ final class ACPSessionManager: ObservableObject {
 
     func deleteSession(id: ACPSession.ID) {
         cancelPendingDraftWrite(for: id)
+        inFlightBackfills[id]?.cancel()
+        inFlightBackfills[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
@@ -297,6 +392,8 @@ final class ACPSessionManager: ObservableObject {
         // session is evicted — the timer task fires on a nil `sessions[id]`
         // and silently returns.
         flushPendingDraftWrite(for: id)
+        inFlightBackfills[id]?.cancel()
+        inFlightBackfills[id] = nil
         session.transcript.resetMarkdownCaches()
         sessions[id] = nil
     }

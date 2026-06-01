@@ -295,6 +295,26 @@ final class ACPSession: ObservableObject, Identifiable {
         rebuildToolCallIndices()
     }
 
+    /// Insert `older` at the head of the transcript and shift `visibleHead`
+    /// forward by `older.count` so the visible tail window stays anchored to
+    /// the same messages. Used by the post-hydration backfill that prepends
+    /// pre-tail messages after the UI has already painted the tail.
+    func prependTranscriptMessages(_ older: [ACPMessage]) {
+        guard !older.isEmpty else { return }
+        transcript.messages.insert(contentsOf: older, at: 0)
+        // Rebuild tool-call indices because every prior entry's index just
+        // shifted by `older.count`. Cheaper than offsetting in place: the
+        // cache is dictionary-typed, so a full rebuild is O(N) and avoids
+        // any chance of drift if a streaming update lands mid-shift.
+        rebuildToolCallIndices()
+        // Keep the visible window anchored to the tail the user is already
+        // looking at. Bypass `setVisibleHead` — it strips markdown caches
+        // for messages below the new head, which is exactly what we want
+        // to *avoid* here (older messages weren't visible before the shift
+        // and never had caches; the tail's caches must survive untouched).
+        transcript.visibleHead = transcript.visibleHead + older.count
+    }
+
     func markCompletedOutputBoundary() {
         transcript.completedOutputBoundaryMessageIds.removeAll()
         for message in transcript.messages.reversed() {

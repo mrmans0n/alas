@@ -160,8 +160,97 @@ struct ACPSessionManagerHydrationTests {
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let s = try #require(mgr.placeholderSession(id: "s"))
         await mgr.hydrateIfNeeded(id: "s")
+        // Older messages backfill off the critical path; drain that task so
+        // the final transcript state is observable to the assertions below.
+        await mgr.awaitBackfill(id: "s")
         #expect(s.transcript.messages.count == 40)
         #expect(s.transcript.visibleHead == 10) // 40 - 30
+    }
+
+    @Test("hydrateIfNeeded applies tail-window first and backfills older messages")
+    func hydrateAppliesTailFirst() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        // Seed 100 messages: the last 30 are the tail window; the earlier 70
+        // must arrive via the background backfill task.
+        for i in 0..<100 {
+            let m: ACPMessage = .user(id: UUID(), text: "m\(i)", attachments: [])
+            let payload = try ACPMessageCodec.encode(m)
+            try store.appendMessage(sessionId: "s", id: "m\(i)", kind: "user",
+                                    seq: Int64(i), payload: payload, createdAt: 0)
+        }
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        // First paint: only the tail window is in the transcript and the entire
+        // array is visible (head at 0). This is what unblocks the UI — older
+        // messages are still in flight on a separate task.
+        #expect(s.hydrationState == .ready)
+        #expect(s.transcript.messages.count == ACPTranscript.tailWindow)
+        #expect(s.transcript.visibleHead == 0)
+        if case .user(_, let text, _) = s.transcript.messages.first {
+            #expect(text == "m70")
+        } else {
+            #expect(Bool(false), "expected first visible message to be .user m70")
+        }
+        if case .user(_, let text, _) = s.transcript.messages.last {
+            #expect(text == "m99")
+        } else {
+            #expect(Bool(false), "expected last visible message to be .user m99")
+        }
+
+        // Drain the backfill task — now every persisted message is present,
+        // ordered correctly, and visibleHead is anchored to the same tail.
+        await mgr.awaitBackfill(id: "s")
+        #expect(s.transcript.messages.count == 100)
+        #expect(s.transcript.visibleHead == 100 - ACPTranscript.tailWindow)
+        if case .user(_, let text, _) = s.transcript.messages.first {
+            #expect(text == "m0")
+        } else {
+            #expect(Bool(false), "expected first message to be .user m0 after backfill")
+        }
+        if case .user(_, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
+            #expect(text == "m70")
+        } else {
+            #expect(Bool(false), "expected message at visibleHead to be .user m70")
+        }
+        if case .user(_, let text, _) = s.transcript.messages.last {
+            #expect(text == "m99")
+        } else {
+            #expect(Bool(false), "expected last message to be .user m99 after backfill")
+        }
+    }
+
+    @Test("hydrateIfNeeded for short transcripts skips backfill")
+    func hydrateShortTranscriptHasNoBackfill() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        // Seed fewer messages than the tail window — one-pass hydration suffices.
+        for i in 0..<5 {
+            let m: ACPMessage = .user(id: UUID(), text: "m\(i)", attachments: [])
+            let payload = try ACPMessageCodec.encode(m)
+            try store.appendMessage(sessionId: "s", id: "m\(i)", kind: "user",
+                                    seq: Int64(i), payload: payload, createdAt: 0)
+        }
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+        await mgr.hydrateIfNeeded(id: "s")
+        await mgr.awaitBackfill(id: "s") // no-op for short transcripts
+
+        #expect(s.transcript.messages.count == 5)
+        #expect(s.transcript.visibleHead == 0)
     }
 
     @Test("concurrent hydrateIfNeeded calls coalesce")
