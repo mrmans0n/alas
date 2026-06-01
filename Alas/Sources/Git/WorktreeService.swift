@@ -38,6 +38,41 @@ struct WorktreeService {
         return Self.parsePorcelain(result.stdout, projectId: projectId)
     }
 
+    /// Returns a best-effort "last activity" timestamp for the worktree at
+    /// `path`. Prefers the HEAD ref mtime (changes on commit/checkout/rebase),
+    /// falling back to the worktree directory mtime. macOS directory mtime
+    /// only changes on entry add/remove/rename, which misses file-content
+    /// edits and is a poor activity signal — HEAD mtime is much better as
+    /// the default sort key.
+    static func lastActivity(forWorktreeAt path: URL) -> Date? {
+        let fm = FileManager.default
+        let dotGit = path.appendingPathComponent(".git").path
+        if let attrs = try? fm.attributesOfItem(atPath: dotGit) {
+            let type = attrs[.type] as? FileAttributeType
+            let headPath: String?
+            if type == .typeRegular {
+                // Linked worktree: .git is a file with `gitdir: <abs-path>`.
+                if let contents = try? String(contentsOfFile: dotGit, encoding: .utf8),
+                   let line = contents.split(separator: "\n").first(where: { $0.hasPrefix("gitdir: ") }) {
+                    let gitdir = String(line.dropFirst("gitdir: ".count))
+                    headPath = (gitdir as NSString).appendingPathComponent("HEAD")
+                } else {
+                    headPath = nil
+                }
+            } else {
+                // Main worktree: .git is a directory containing HEAD.
+                headPath = (dotGit as NSString).appendingPathComponent("HEAD")
+            }
+            if let headPath,
+               let headAttrs = try? fm.attributesOfItem(atPath: headPath),
+               let mtime = headAttrs[.modificationDate] as? Date {
+                return mtime
+            }
+        }
+        // Fallback: directory mtime.
+        return (try? fm.attributesOfItem(atPath: path.path)[.modificationDate]) as? Date
+    }
+
     static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {
         var result: [Worktree] = []
         var currentPath: URL?
@@ -46,9 +81,10 @@ struct WorktreeService {
         func flush() {
             if let path = currentPath {
                 let branch = currentBranch ?? "(detached)"
-                let attrs = try? FileManager.default.attributesOfItem(atPath: path.path)
-                let mtime = (attrs?[.modificationDate] as? Date) ?? Date()
-                let ctime = (attrs?[.creationDate] as? Date) ?? mtime
+                let dirAttrs = try? FileManager.default.attributesOfItem(atPath: path.path)
+                let dirMtime = (dirAttrs?[.modificationDate] as? Date) ?? Date()
+                let lastActivity = WorktreeService.lastActivity(forWorktreeAt: path) ?? dirMtime
+                let ctime = (dirAttrs?[.creationDate] as? Date) ?? dirMtime
                 result.append(Worktree(
                     id: Worktree.makeId(path: path),
                     projectId: projectId,
@@ -56,7 +92,7 @@ struct WorktreeService {
                     branch: branch,
                     path: path,
                     status: .clean,
-                    lastActivity: mtime,
+                    lastActivity: lastActivity,
                     createdAt: ctime
                 ))
             }
