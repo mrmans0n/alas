@@ -45,6 +45,11 @@ final class ACPSessionManager: ObservableObject {
     /// Re-opening through `placeholderSession` + `hydrateIfNeeded` recreates
     /// it cleanly from SQLite.
     private var sessionRefCounts: [ACPSession.ID: Int] = [:]
+    /// Runtime-only layout memory for the plan sidebar. This intentionally
+    /// lives on the manager rather than `ACPSession` so a tab switch can
+    /// evict and later recreate the session object without losing whether
+    /// the plan was last rendered inline or in the toolbar pill.
+    private var planSidebarVisibility: [ACPSession.ID: Bool] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
          hydratorPath: String? = nil,
@@ -382,6 +387,7 @@ final class ACPSessionManager: ObservableObject {
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
+        planSidebarVisibility.removeValue(forKey: id)
     }
 
     func deleteSession(id: ACPSession.ID) {
@@ -391,6 +397,7 @@ final class ACPSessionManager: ObservableObject {
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
+        planSidebarVisibility.removeValue(forKey: id)
         try? store.deleteSession(id: id)
         refreshRecent()
     }
@@ -416,6 +423,14 @@ final class ACPSessionManager: ObservableObject {
         } else {
             sessionRefCounts[id] = next
         }
+    }
+
+    func rememberedPlanSidebarVisibility(for id: ACPSession.ID) -> Bool? {
+        planSidebarVisibility[id]
+    }
+
+    func rememberPlanSidebarVisibility(_ visible: Bool, for id: ACPSession.ID) {
+        planSidebarVisibility[id] = visible
     }
 
     /// Drops the cached `ACPSession` when its refcount is zero AND no live

@@ -59,6 +59,7 @@ private struct ACPSessionView: View {
     @State private var dismissedLatest: String?
     @Environment(\.theme) private var theme
     @State private var showPlanSidebar: Bool = false
+    @State private var suppressRestoredPlanSidebarPlanChange: Bool = false
 
     /// Re-evaluated on every width / plan change. Pure call into the
     /// hysteresis reducer; the `.spring` wrap lives at the call site.
@@ -80,6 +81,21 @@ private struct ACPSessionView: View {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
                 showPlanSidebar = next
             }
+        }
+        manager.rememberPlanSidebarVisibility(next, for: sessionId)
+    }
+
+    /// Restore the last layout when SwiftUI reconstructs this tab. Without
+    /// this, a hidden toolbar plan can promote to the inline sidebar solely
+    /// because the pane is wide when the user returns to the tab.
+    private func restoreOrInitializePlanSidebar(paneWidth: CGFloat) {
+        if let remembered = manager.rememberedPlanSidebarVisibility(for: sessionId) {
+            showPlanSidebar = remembered
+            if session.hydrationState == .loading {
+                suppressRestoredPlanSidebarPlanChange = true
+            }
+        } else {
+            updatePlanSidebar(paneWidth: paneWidth)
         }
     }
 
@@ -289,11 +305,16 @@ private struct ACPSessionView: View {
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
-            .onAppear { updatePlanSidebar(paneWidth: proxy.size.width) }
+            .onAppear { restoreOrInitializePlanSidebar(paneWidth: proxy.size.width) }
             .onChange(of: proxy.size.width) { _, newWidth in
                 updatePlanSidebar(paneWidth: newWidth)
             }
             .onChange(of: session.transcript.latestPlan) { _, _ in
+                if suppressRestoredPlanSidebarPlanChange {
+                    suppressRestoredPlanSidebarPlanChange = false
+                    manager.rememberPlanSidebarVisibility(showPlanSidebar, for: sessionId)
+                    return
+                }
                 updatePlanSidebar(paneWidth: proxy.size.width)
             }
             .onChange(of: session.planSidebarMinimized) { _, _ in
