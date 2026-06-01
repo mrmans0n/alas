@@ -1,6 +1,7 @@
 import Testing
 @testable import Alas
 
+@MainActor
 struct BaseBranchSelectorTests {
     @Test func isSelectedUsesCurrentRefWhenAvailable() {
         #expect(BaseBranchSelector.isSelected(row: "origin/feature", baseBranch: "main", currentRef: "origin/feature"))
@@ -137,9 +138,9 @@ struct BaseBranchSelectorTests {
 
     @Test func branchListHeightMatchesVisibleRows() {
         let oneRow = BaseBranchSelector.branchListHeight(optionCount: 1)
-        #expect(BaseBranchSelector.branchListHeight(optionCount: 4) == oneRow * 4)
-        #expect(BaseBranchSelector.branchListHeight(optionCount: 5) == oneRow * 5)
-        #expect(BaseBranchSelector.branchListHeight(optionCount: 12) == oneRow * 5)
+        #expect(abs(BaseBranchSelector.branchListHeight(optionCount: 4) - oneRow * 4) < 0.001)
+        #expect(abs(BaseBranchSelector.branchListHeight(optionCount: 5) - oneRow * 5) < 0.001)
+        #expect(abs(BaseBranchSelector.branchListHeight(optionCount: 12) - oneRow * 5) < 0.001)
     }
 
     @Test func smartListIncludesCurrentRefWhenAbsentFromShortlist() {

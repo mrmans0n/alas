@@ -3,8 +3,6 @@ import SwiftUI
 
 /// Top-level coordinator view for the 3-way merge editor. Replaces
 /// the old `body3Columns` HStack. Composes:
-/// - Outer line-number gutters (LOCAL's source numbers + REMOTE's
-///   source numbers) on the far left and far right.
 /// - Three text panes: LOCAL (`MergeSidePane`), RESULT
 ///   (`MergeResultPane`), REMOTE (`MergeSidePane`).
 /// - Two action gutters (`MergeActionGutter`) between the panes.
@@ -71,8 +69,7 @@ struct MergeView3Way: View {
     var body: some View {
         let layout = self.layout
         let hunkPairs = model.allConflictBlocks().map { (local: $0.local, remote: $0.remote) }
-        HStack(spacing: 0) {
-            lineNumberGutter(rows: layout.local, alignment: .trailing)
+        MergeThreeWayLayout {
             MergeSidePane(
                 side: .local,
                 rows: layout.local,
@@ -81,7 +78,6 @@ struct MergeView3Way: View {
                 codeFontSize: codeFontSize,
                 coordinator: coordinator
             )
-            .frame(maxWidth: .infinity)
             MergeActionGutter(
                 side: .localToResult,
                 conflictRanges: layout.conflictRanges,
@@ -104,7 +100,6 @@ struct MergeView3Way: View {
                     model.applyEditedFullText(newText, showBase: showBase)
                 }
             )
-            .frame(maxWidth: .infinity)
             MergeActionGutter(
                 side: .resultToRemote,
                 conflictRanges: layout.conflictRanges,
@@ -121,15 +116,16 @@ struct MergeView3Way: View {
                 codeFontSize: codeFontSize,
                 coordinator: coordinator
             )
-            .frame(maxWidth: .infinity)
-            lineNumberGutter(rows: layout.remote, alignment: .leading)
             MergeConflictMinimap(
                 conflictCount: model.conflictCount,
                 resolvedCount: max(model.initialConflictCount - model.conflictCount, 0),
                 currentConflictIndex: model.currentConflictIndex,
                 onJump: onJumpToConflict
             )
+            .frame(width: 13)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .onChange(of: model.currentConflictIndex, initial: true) { _, _ in
             scrollToCurrentConflict()
         }
@@ -158,30 +154,49 @@ struct MergeView3Way: View {
         guard ordinal < blocks.count else { return }
         model.acceptRemote(for: blocks[ordinal])
     }
+}
 
-    private func lineNumberGutter(rows: [MergeRegionVisualLayout.VisualRow], alignment: HorizontalAlignment) -> some View {
-        // Wrapped in a top-aligned container that clips overflow and
-        // offset by -coordinator.paneY() so the numbers track the
-        // synchronized scroll position of the three text panes. The
-        // gutter rows are still all materialised; the clip + offset
-        // is the cheap way to align them without a NSScrollView for
-        // a read-only column.
-        VStack(alignment: alignment, spacing: 0) {
-            VStack(alignment: alignment, spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    Text(row.sourceLineNumber.map(String.init) ?? "")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(theme.color("fg-faint"))
-                        .frame(height: coordinator.rowHeight, alignment: alignment == .trailing ? .trailing : .leading)
-                        .padding(.horizontal, 4)
-                }
-            }
-            .padding(.top, coordinator.contentTopInset)
-            .offset(y: -coordinator.paneY())
-            Spacer(minLength: 0)
+private struct MergeThreeWayLayout: Layout {
+    private let actionGutterWidth: CGFloat = 28
+    private let minimapWidth: CGFloat = 13
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        CGSize(
+            width: proposal.width ?? 900,
+            height: proposal.height ?? 600
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard subviews.count == 6 else { return }
+        let fixedWidth = actionGutterWidth * 2 + minimapWidth
+        let paneWidth = max((bounds.width - fixedWidth) / 3, 0)
+        let widths = [
+            paneWidth,
+            actionGutterWidth,
+            paneWidth,
+            actionGutterWidth,
+            paneWidth,
+            minimapWidth,
+        ]
+
+        var x = bounds.minX
+        for (index, width) in widths.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: x, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: width, height: bounds.height)
+            )
+            x += width
         }
-        .frame(width: 28)
-        .background(theme.color("bg-2"))
-        .clipped()
     }
 }
