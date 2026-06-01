@@ -821,6 +821,7 @@ final class AppState {
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
             includeUserStartupScript: false,
+            forceInheritParentEnv: true,
             environmentOverrides: Self.acpAuthTerminalEnvironmentOverrides(extra: command.env),
             environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
         )
@@ -1335,6 +1336,7 @@ final class AppState {
         for worktree: Worktree,
         startupScriptSuffix: String? = nil,
         includeUserStartupScript: Bool = true,
+        forceInheritParentEnv: Bool = false,
         environmentOverrides: [String: String] = [:],
         environmentRemovals: Set<String> = []
     ) throws -> Tab {
@@ -1346,12 +1348,16 @@ final class AppState {
         // sessionId (mirrored to id on encode), and ALAS_SESSION_ID. Generated
         // here so every downstream call site receives the same value.
         let leafId = UUID().uuidString
+        var terminalConfig = config.terminal
+        if forceInheritParentEnv {
+            terminalConfig.inheritParentEnv = true
+        }
         let opened: OpenedTerminalSession
         if let terminalSessionOpener {
             opened = try terminalSessionOpener(
                 worktree,
                 project,
-                config.terminal,
+                terminalConfig,
                 themeStore.current,
                 nil,
                 startupScriptSuffix,
@@ -1362,7 +1368,7 @@ final class AppState {
         } else {
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
-                cfg: config.terminal, theme: themeStore.current,
+                cfg: terminalConfig, theme: themeStore.current,
                 startupScriptSuffix: startupScriptSuffix,
                 includeUserStartupScript: includeUserStartupScript,
                 environmentOverrides: environmentOverrides,
