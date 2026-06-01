@@ -408,7 +408,7 @@ private struct ACPSessionView: View {
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId),
               let command = ACPAuthTerminalCommand.resolve(
                 method: method,
-                fallbackCommand: spec.command
+                launchSpec: spec
               )
         else {
             session.lastError = "Failed to launch auth terminal: unsupported sign-in method."

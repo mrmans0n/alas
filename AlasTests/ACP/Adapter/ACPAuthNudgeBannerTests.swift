@@ -34,7 +34,14 @@ struct ACPAuthNudgeBannerTests {
             )
         )
 
-        let command = ACPAuthTerminalCommand.resolve(method: method, fallbackCommand: "claude-agent-acp")
+        let command = ACPAuthTerminalCommand.resolve(
+            method: method,
+            launchSpec: launchSpec(
+                command: "claude-agent-acp",
+                arguments: ["ignored-launch-arg"],
+                extraEnv: ["IGNORED": "1"]
+            )
+        )
 
         #expect(command == ACPAuthTerminalCommand(
             command: "/usr/bin/node",
@@ -43,20 +50,43 @@ struct ACPAuthNudgeBannerTests {
         ))
     }
 
-    @Test("command resolver falls back to adapter command and method args")
+    @Test("command resolver falls back to adapter launch vector and appends method args")
     func commandResolverFallsBackToAdapterCommand() {
         let method = authMethod(
             args: ["auth", "login"],
-            env: ["TOKEN": "1"],
+            env: ["TOKEN": "1", "SHARED": "method"],
             terminalAuth: nil
         )
 
-        let command = ACPAuthTerminalCommand.resolve(method: method, fallbackCommand: "agent")
+        let command = ACPAuthTerminalCommand.resolve(
+            method: method,
+            launchSpec: launchSpec(
+                command: "agent",
+                arguments: ["acp"],
+                extraEnv: ["PATH": "/bin", "SHARED": "spec"]
+            )
+        )
 
         #expect(command == ACPAuthTerminalCommand(
             command: "agent",
-            args: ["auth", "login"],
-            env: ["TOKEN": "1"]
+            args: ["acp", "auth", "login"],
+            env: ["PATH": "/bin", "SHARED": "method", "TOKEN": "1"]
+        ))
+    }
+
+    @Test("command resolver supports terminal auth without extra method args")
+    func commandResolverAllowsEmptyMethodArgs() {
+        let method = authMethod(terminalAuth: nil)
+
+        let command = ACPAuthTerminalCommand.resolve(
+            method: method,
+            launchSpec: launchSpec(command: "gemini", arguments: ["--experimental-acp"])
+        )
+
+        #expect(command == ACPAuthTerminalCommand(
+            command: "gemini",
+            args: ["--experimental-acp"],
+            env: [:]
         ))
     }
 
@@ -64,7 +94,7 @@ struct ACPAuthNudgeBannerTests {
     func commandResolverRequiresTerminalMethod() {
         let method = authMethod(kind: .envVar, args: ["auth", "login"])
 
-        #expect(ACPAuthTerminalCommand.resolve(method: method, fallbackCommand: "agent") == nil)
+        #expect(ACPAuthTerminalCommand.resolve(method: method, launchSpec: launchSpec(command: "agent")) == nil)
     }
 
     private func authMethod(
@@ -84,6 +114,22 @@ struct ACPAuthNudgeBannerTests {
             meta: terminalAuth.map {
                 ACPInitializeResult.ACPAuthMethod.Meta(terminalAuth: $0)
             }
+        )
+    }
+
+    private func launchSpec(
+        command: String,
+        arguments: [String] = [],
+        extraEnv: [String: String] = [:]
+    ) -> ACPLaunchSpec {
+        ACPLaunchSpec(
+            agentID: "test-agent",
+            command: command,
+            arguments: arguments,
+            extraEnv: extraEnv,
+            setupCheck: .binaryOnPath(name: command),
+            supportsModelSelection: false,
+            supportsModeSelection: false
         )
     }
 }

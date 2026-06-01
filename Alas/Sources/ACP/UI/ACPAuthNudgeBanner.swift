@@ -7,7 +7,7 @@ struct ACPAuthTerminalCommand: Equatable {
 
     static func resolve(
         method: ACPInitializeResult.ACPAuthMethod,
-        fallbackCommand: String
+        launchSpec: ACPLaunchSpec
     ) -> ACPAuthTerminalCommand? {
         guard method.kind == .terminal else { return nil }
         let env = method.env ?? [:]
@@ -19,11 +19,13 @@ struct ACPAuthTerminalCommand: Equatable {
                 env: env
             )
         }
-        let args = method.args ?? []
-        guard !fallbackCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !args.isEmpty
-        else { return nil }
-        return ACPAuthTerminalCommand(command: fallbackCommand, args: args, env: env)
+        let fallbackCommand = launchSpec.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fallbackCommand.isEmpty else { return nil }
+        return ACPAuthTerminalCommand(
+            command: fallbackCommand,
+            args: launchSpec.arguments + (method.args ?? []),
+            env: launchSpec.extraEnv.merging(env) { _, methodValue in methodValue }
+        )
     }
 }
 
