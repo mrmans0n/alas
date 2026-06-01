@@ -12,7 +12,6 @@ enum ACPAuthFailure {
             "invalid authentication credentials",
             "not authenticated",
             "login required",
-            "unauthorized",
             "token expired",
             "expired token"
         ]

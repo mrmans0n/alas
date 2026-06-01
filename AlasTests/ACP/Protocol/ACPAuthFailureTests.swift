@@ -49,5 +49,10 @@ struct ACPAuthFailureTests {
             message: "read file 401.md failed",
             data: nil
         )) == nil)
+        #expect(ACPAuthFailure.message(from: JSONRPCError(
+            code: -32000,
+            message: "tool call unauthorized by workspace policy",
+            data: nil
+        )) == nil)
     }
 }
