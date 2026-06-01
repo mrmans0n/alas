@@ -896,12 +896,15 @@ extension ACPSessionRunner {
                     if isActivePrompt {
                         let authReason = wasCancelled ? nil : ACPAuthFailure.message(from: error)
                         let errorMessage = authReason ?? error.localizedDescription
-                        if queuedItemId != nil, !wasCancelled {
+                        if queuedItemId != nil, !wasCancelled, authReason == nil {
                             // Queued send failed naturally — leave the item
                             // at the head with lastError so the bubble shows
                             // Retry. Cancelled queued sends had the item
                             // discarded elsewhere (steer) and don't surface.
                             self.session.setQueueHeadError(errorMessage)
+                            self.persistQueue()
+                        } else if queuedItemId != nil, authReason != nil {
+                            self.session.restoreQueue(self.session.queue)
                             self.persistQueue()
                         } else if queuedItemId == nil, !wasCancelled {
                             self.session.lastError = "prompt failed: \(errorMessage)"

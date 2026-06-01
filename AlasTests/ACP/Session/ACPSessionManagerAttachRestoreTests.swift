@@ -311,7 +311,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
         #expect(session.queue.count == 1)
         #expect(session.queue[0].status == .pending)
-        #expect(session.queue[0].lastError == "login required")
+        #expect(session.queue[0].lastError == nil)
         #expect(session.transcript.streamingState == .idle)
 
         session.queue[0].lastError = nil
