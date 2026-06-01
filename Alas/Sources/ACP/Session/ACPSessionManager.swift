@@ -323,6 +323,7 @@ final class ACPSessionManager: ObservableObject {
         inFlightBackfills[sessionId] = nil
 
         guard !olderWires.isEmpty else { return }
+        session.transcript.isBackfillingOlderMessages = true
 
         // Capture a stable handle the task body can compare against the
         // current entry in `inFlightBackfills` before clearing it. Without
@@ -338,6 +339,7 @@ final class ACPSessionManager: ObservableObject {
         let task = Task { @MainActor [weak self, weak session] in
             defer {
                 if let me = handle.task, self?.inFlightBackfills[sessionId] == me {
+                    session?.transcript.isBackfillingOlderMessages = false
                     self?.inFlightBackfills[sessionId] = nil
                 }
             }

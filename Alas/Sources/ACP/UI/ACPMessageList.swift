@@ -92,19 +92,20 @@ struct ACPMessageList: View {
             GeometryReader { viewport in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        if transcript.visibleHead > 0 {
-                            ProgressView()
-                                .controlSize(.small)
+                        switch Self.topPaginationIndicator(
+                            visibleHead: transcript.visibleHead,
+                            isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
+                        ) {
+                        case .hidden:
+                            EmptyView()
+                        case .sentinel:
+                            topPaginationSentinel
+                        case .spinner:
+                            Spinner(lineWidth: 1.5)
+                                .frame(width: 14, height: 14)
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.bottom, 4)
-                                .background(
-                                    GeometryReader { headGeom in
-                                        Color.clear.preference(
-                                            key: ACPHeadFramePreferenceKey.self,
-                                            value: headGeom.frame(in: .named(scrollSpaceName))
-                                        )
-                                    }
-                                )
+                                .background(topPaginationSentinel)
                         }
                         ForEach(visibleMessages, id: \.stableId) { message in
                             row(for: message)
@@ -245,6 +246,25 @@ struct ACPMessageList: View {
     private func setFollowsTranscriptTail(_ follows: Bool) {
         guard session.followsTranscriptTail != follows else { return }
         session.followsTranscriptTail = follows
+    }
+
+    private var topPaginationSentinel: some View {
+        GeometryReader { headGeom in
+            Color.clear.preference(
+                key: ACPHeadFramePreferenceKey.self,
+                value: headGeom.frame(in: .named(scrollSpaceName))
+            )
+        }
+        .frame(height: 1)
+    }
+
+    static func topPaginationIndicator(
+        visibleHead: Int,
+        isBackfillingOlderMessages: Bool
+    ) -> ACPTopPaginationIndicator {
+        if isBackfillingOlderMessages { return .spinner }
+        if visibleHead > 0 { return .sentinel }
+        return .hidden
     }
 
     /// Reveal older messages while keeping the viewport anchored to the
