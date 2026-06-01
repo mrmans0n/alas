@@ -333,6 +333,20 @@ struct ProjectsManagerWorktreeOrderingTests {
         #expect(trees.map(\.branch) == ["main", "new", "mid", "old"])
     }
 
+    @Test func lastUpdateAscSortsByActivityAscending() {
+        let (mgr, project) = makeManager(defaultOrdering: .lastUpdateAsc)
+        let now = Date()
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo/wts/old", branch: "old", lastActivity: now.addingTimeInterval(-3600)),
+            wt(path: "/repo", branch: "main", lastActivity: now),
+            wt(path: "/repo/wts/new", branch: "new", lastActivity: now.addingTimeInterval(-60)),
+            wt(path: "/repo/wts/mid", branch: "mid", lastActivity: now.addingTimeInterval(-600)),
+        ])
+
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.map(\.branch) == ["main", "old", "mid", "new"])
+    }
+
     @Test func creationDescSortsByCreatedAtDescending() {
         let (mgr, project) = makeManager(defaultOrdering: .creationDesc)
         let now = Date()
@@ -344,6 +358,19 @@ struct ProjectsManagerWorktreeOrderingTests {
 
         let trees = mgr.worktrees(projectId: project.id)
         #expect(trees.map(\.branch) == ["main", "new", "old"])
+    }
+
+    @Test func creationAscSortsByCreatedAtAscending() {
+        let (mgr, project) = makeManager(defaultOrdering: .creationAsc)
+        let now = Date()
+        seed(mgr, projectId: project.id, [
+            wt(path: "/repo/wts/old", branch: "old", createdAt: now.addingTimeInterval(-3600)),
+            wt(path: "/repo", branch: "main", createdAt: now.addingTimeInterval(-7200)),
+            wt(path: "/repo/wts/new", branch: "new", createdAt: now.addingTimeInterval(-60)),
+        ])
+
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.map(\.branch) == ["main", "old", "new"])
     }
 
     @Test func branchAscSortsAlphabetically() {

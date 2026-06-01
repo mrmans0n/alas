@@ -291,7 +291,9 @@ struct AppConfig: Codable, Equatable {
     enum WorktreeSortMode: String, Codable, Equatable, CaseIterable {
         case manual
         case creationDesc
+        case creationAsc
         case lastUpdateDesc
+        case lastUpdateAsc
         case branchAsc
     }
 

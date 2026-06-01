@@ -404,9 +404,19 @@ final class ProjectsManager {
                 if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
                 return lhs.id < rhs.id
             }
+        case .creationAsc:
+            sortedOthers = others.sorted { lhs, rhs in
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                return lhs.id < rhs.id
+            }
         case .lastUpdateDesc:
             sortedOthers = others.sorted { lhs, rhs in
                 if lhs.lastActivity != rhs.lastActivity { return lhs.lastActivity > rhs.lastActivity }
+                return lhs.id < rhs.id
+            }
+        case .lastUpdateAsc:
+            sortedOthers = others.sorted { lhs, rhs in
+                if lhs.lastActivity != rhs.lastActivity { return lhs.lastActivity < rhs.lastActivity }
                 return lhs.id < rhs.id
             }
         case .branchAsc:
