@@ -38,4 +38,35 @@ struct ACPComposerImageExtractTests {
             .text(" after")
         ])
     }
+
+    @Test("image chip frame centers on surrounding text")
+    func imageChipFrameCentersOnText() throws {
+        let font = NSFont.systemFont(ofSize: 13)
+        let url = URL(string: "file:///tmp/shot.png")!
+        let attachment = ACPImageChipAttachment(fileURL: url, mimeType: "image/png")
+        let storage = NSTextStorage(string: "x", attributes: [.font: font])
+        let chip = NSMutableAttributedString(attachment: attachment)
+        chip.addAttributes([.font: font], range: NSRange(location: 0, length: chip.length))
+        storage.append(chip)
+        storage.append(NSAttributedString(string: "y", attributes: [.font: font]))
+
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 200, height: 100))
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+
+        let chipIndex = 1
+        let baseline = NSPoint(x: 12, y: 30)
+        let frame = try #require(attachment.attachmentCell).cellFrame(
+            for: textContainer,
+            proposedLineFragment: NSRect(x: 0, y: 0, width: 200, height: 20),
+            glyphPosition: baseline,
+            characterIndex: chipIndex
+        )
+
+        let textCenter = (font.ascender + font.descender) / 2
+        #expect(abs(frame.midY - textCenter) < 0.001)
+        #expect(frame.minY < -5)
+        #expect(frame.minX == 0)
+    }
 }
