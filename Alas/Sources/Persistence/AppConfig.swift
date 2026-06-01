@@ -1,12 +1,5 @@
 import Foundation
 
-enum WorktreeSortMode: String, Codable, CaseIterable, Equatable {
-    case manual
-    case creationDesc
-    case lastUpdateDesc
-    case branchAsc
-}
-
 struct SidebarChromeOverride: Codable, Equatable {
     var backgroundOpacity: Double  // 0...1
     var textContrast: Double       // 0...1
@@ -286,6 +279,13 @@ struct AppConfig: Codable, Equatable {
 
     enum LauncherMode: String, Codable, Equatable, CaseIterable {
         case terminal, acp
+    }
+
+    enum WorktreeSortMode: String, Codable, Equatable, CaseIterable {
+        case manual
+        case creationDesc
+        case lastUpdateDesc
+        case branchAsc
     }
 
     struct Files: Codable, Equatable {
