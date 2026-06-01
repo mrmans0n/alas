@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-01
+
+### ✨ Features
+
+- Add sidebar spaces (#418).
+- Add a Changes setting to track upstream branches in the Commits section (#426).
+- Default repo worktree ordering to a stable, useful sort (#425).
+
+### 🐛 Fixes
+
+- Handle ACP auth failures with terminal sign-in and preserve user environment for ACP auth terminals (#419, #421).
+- Hydrate ACP chat transcripts tail-first and stop older-message pagination from looping forever (#420, #422).
+- Normalize ACP composer pasted rich-text styling (#423).
+- Fix large conflict merge editor layout behavior (#424).
+
 ## [0.4.11] - 2026-05-31
 
 ### 🐛 Fixes
