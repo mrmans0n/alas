@@ -156,6 +156,23 @@ jobs:
           path: .build/xcode/SourcePackages
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
+      - name: Stamp nightly build identity into source Info.plist
+        # Overwrite the stable-default Info.plist keys committed in the repo
+        # with the real track / SHA / build-date. Must run BEFORE the build
+        # so xcodebuild copies the stamped plist into the bundle and signing
+        # seals it. Stamping the built bundle's plist after signing would
+        # invalidate the signature on non-main dispatches (which build but
+        # skip the later Developer-ID signing step).
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          plist="Alas/Resources/Info.plist"
+          sha="$(git rev-parse HEAD)"
+          iso_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          plutil -replace AlasReleaseTrack -string "nightly" "$plist"
+          plutil -replace AlasGitSHA -string "$sha" "$plist"
+          plutil -replace AlasBuildDate -string "$iso_date" "$plist"
+          plutil -lint "$plist"
+
       - name: Build release app
         if: steps.skip-check.outputs.skip != 'true'
         run: |

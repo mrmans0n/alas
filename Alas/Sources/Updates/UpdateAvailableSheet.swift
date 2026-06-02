@@ -11,13 +11,40 @@ struct UpdateAvailableSheet: View {
 
     private let brewCommand = "brew upgrade --cask alas"
 
+    private var subtitleText: String {
+        switch info {
+        case .stable(let s):
+            return "Alas \(s.version.description) is available."
+        case .nightly(let n):
+            // Intentionally no timestamp: the release's `published_at` is
+            // unreliable for the rolling nightly (updated in place), so the
+            // tag's short SHA is the only trustworthy identifier the sheet
+            // can show.
+            return "Nightly \(n.shortSHA)"
+        }
+    }
+
+    private var titleText: String {
+        switch info {
+        case .stable: return "Update available"
+        case .nightly: return "New nightly available"
+        }
+    }
+
+    private var viewReleaseLabel: String {
+        switch info {
+        case .stable: return "View Release Notes"
+        case .nightly: return "View on GitHub"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Update available")
+                Text(titleText)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
-                Text("Alas \(info.version.description) is available.")
+                Text(subtitleText)
                     .font(.system(size: 12))
                     .foregroundColor(theme.color("fg-dim"))
             }
@@ -54,7 +81,7 @@ struct UpdateAvailableSheet: View {
                 AlasButton(title: "View Release", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
                 AlasButton(title: "Later", style: .primary, action: onDismiss)
             case .direct:
-                AlasButton(title: "View Release Notes", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
+                AlasButton(title: viewReleaseLabel, style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
                 Spacer()
                 AlasButton(title: "Later", style: .subtle, action: onDismiss)
                 AlasButton(title: "Download", style: .primary) {

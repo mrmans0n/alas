@@ -1,6 +1,6 @@
 import Foundation
 
-/// Queries GitHub for the latest stable release and produces a verdict.
+/// Queries GitHub for the release on the build's track and produces a verdict.
 /// Network access is injected via `fetch` so tests run offline.
 struct ReleaseChecker {
     enum CheckResult: Equatable {
@@ -11,33 +11,94 @@ struct ReleaseChecker {
 
     typealias Fetch = (URL) async throws -> Data
 
-    let latestReleaseURL: URL
+    let stableReleaseURL: URL
+    let nightlyReleaseURL: URL
+    let nightlyTagRefURL: URL
     let arch: String
     let fetch: Fetch
 
     init(
-        latestReleaseURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/latest")!,
+        stableReleaseURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/latest")!,
+        nightlyReleaseURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/tags/nightly")!,
+        nightlyTagRefURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/git/ref/tags/nightly")!,
         arch: String = HostArch.assetSlug,
         fetch: @escaping Fetch = ReleaseChecker.defaultFetch
     ) {
-        self.latestReleaseURL = latestReleaseURL
+        self.stableReleaseURL = stableReleaseURL
+        self.nightlyReleaseURL = nightlyReleaseURL
+        self.nightlyTagRefURL = nightlyTagRefURL
         self.arch = arch
         self.fetch = fetch
     }
 
-    func check(current: SemanticVersion) async -> CheckResult {
+    func check(identity: BuildIdentity) async -> CheckResult {
+        switch identity.track {
+        case .stable:
+            return await checkStable(identity: identity)
+        case .nightly:
+            return await checkNightly(identity: identity)
+        }
+    }
+
+    private func checkStable(identity: BuildIdentity) async -> CheckResult {
         do {
-            let data = try await fetch(latestReleaseURL)
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let release = try decoder.decode(GitHubRelease.self, from: data)
-            guard let info = ReleaseInfo.make(from: release, arch: arch) else {
+            let release = try await fetchRelease(at: stableReleaseURL)
+            guard let info = ReleaseInfo.makeStable(from: release, arch: arch) else {
                 return .failed("The latest release could not be read.")
             }
-            return info.version > current ? .updateAvailable(info) : .upToDate
+            guard case let .stable(stable) = info else {
+                return .failed("The latest release could not be read.")
+            }
+            return stable.version > identity.version ? .updateAvailable(info) : .upToDate
         } catch {
             return .failed(error.localizedDescription)
         }
+    }
+
+    private func checkNightly(identity: BuildIdentity) async -> CheckResult {
+        do {
+            let release = try await fetchRelease(at: nightlyReleaseURL)
+            // The release's `target_commitish` is unreliable for the rolling
+            // nightly tag (GitHub leaves it at the original branch name when
+            // the tag already exists), so resolve the tag's true SHA via the
+            // git refs API.
+            let tagSHA = try await fetchTagSHA(at: nightlyTagRefURL)
+            guard let info = ReleaseInfo.makeNightly(from: release, tagSHA: tagSHA) else {
+                return .failed("The latest nightly could not be read.")
+            }
+            guard case let .nightly(nightly) = info else {
+                return .failed("The latest nightly could not be read.")
+            }
+
+            // SHA-only comparison: the release's `published_at` is unreliable
+            // because `softprops/action-gh-release` updates the existing
+            // `nightly` release in place, leaving the original publish time.
+            // The tag SHA is the source of truth — if it differs from what
+            // this build was stamped with, a newer build exists.
+            //
+            // No local SHA (e.g. a hand-built nightly): we cannot compare,
+            // so report up-to-date rather than pester with spurious updates.
+            guard let localSHA = identity.gitSHA else { return .upToDate }
+            return nightly.fullSHA != localSHA ? .updateAvailable(info) : .upToDate
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func fetchRelease(at url: URL) async throws -> GitHubRelease {
+        let data = try await fetch(url)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(GitHubRelease.self, from: data)
+    }
+
+    private func fetchTagSHA(at url: URL) async throws -> String {
+        let data = try await fetch(url)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let ref = try decoder.decode(GitRef.self, from: data)
+        return ref.object.sha
     }
 
     static func defaultFetch(_ url: URL) async throws -> Data {

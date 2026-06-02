@@ -10,7 +10,7 @@ final class UpdateController {
     /// Non-nil when an update sheet should be presented.
     var presentedUpdate: ReleaseInfo?
 
-    private let currentVersion: SemanticVersion
+    private let identity: BuildIdentity
     private let checker: ReleaseChecker
     private let installSource: InstallSource
     private let defaults: UserDefaults
@@ -19,26 +19,25 @@ final class UpdateController {
     private let lastCheckedKey = "io.nlopez.alas.updates.lastCheckedAt"
 
     init(
-        currentVersion: SemanticVersion = UpdateController.bundleVersion(),
+        identity: BuildIdentity = BuildIdentity.current(),
         checker: ReleaseChecker = ReleaseChecker(),
         installSource: InstallSource = .detect(),
         defaults: UserDefaults = .standard,
         isEnabled: @escaping () -> Bool
     ) {
-        self.currentVersion = currentVersion
+        self.identity = identity
         self.checker = checker
         self.installSource = installSource
         self.defaults = defaults
         self.isEnabled = isEnabled
     }
 
-    static func bundleVersion() -> SemanticVersion {
-        let raw = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        return SemanticVersion(parsing: raw) ?? SemanticVersion(major: 0, minor: 0, patch: 0)
-    }
-
     /// Where this copy was installed — used by the sheet to tailor the action.
     var source: InstallSource { installSource }
+
+    /// Which release track this build belongs to. Surfaced for the sheet so
+    /// the nightly variant can force the direct action row.
+    var track: ReleaseTrack { identity.track }
 
     /// Throttled, silent-on-no-update check intended for app launch.
     func checkOnLaunch() {
@@ -53,7 +52,7 @@ final class UpdateController {
     }
 
     private func runCheck(announceNoUpdate: Bool) async {
-        let result = await checker.check(current: currentVersion)
+        let result = await checker.check(identity: identity)
         switch result {
         case .updateAvailable(let info):
             // Stamp only on a successful fetch — a failed check must not consume
@@ -63,9 +62,24 @@ final class UpdateController {
             presentedUpdate = info
         case .upToDate:
             defaults.set(Date(), forKey: lastCheckedKey)
-            if announceNoUpdate { presentInfo(title: "You're up to date", message: "Alas \(currentVersion) is the latest version.") }
+            if announceNoUpdate {
+                presentInfo(title: "You're up to date", message: upToDateMessage())
+            }
         case .failed(let message):
             if announceNoUpdate { presentInfo(title: "Couldn't check for updates", message: message) }
+        }
+    }
+
+    private func upToDateMessage() -> String {
+        switch identity.track {
+        case .stable:
+            return "Alas \(identity.version) is the latest version."
+        case .nightly:
+            if let sha = identity.gitSHA {
+                return "Nightly \(sha.prefix(7)) is current."
+            } else {
+                return "This nightly build is current."
+            }
         }
     }
 
