@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct EmptyTabView: View {
+    static let emptyIcon = "🥺"
+
     let onNewTerminal: () -> Void
     let onNewAgentTerminal: () -> Void
     let onNewAgentChat: () -> Void
@@ -16,9 +18,11 @@ struct EmptyTabView: View {
                                startPoint: .topLeading, endPoint: .bottomTrailing)
                     .frame(width: 80, height: 80)
                     .clipShape(RoundedRectangle(cornerRadius: 22))
-                Image(systemName: "airplane")
-                    .font(.system(size: 30))
-                    .foregroundColor(theme.color("accent"))
+                    .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                Text(Self.emptyIcon)
+                    .font(.system(size: 34))
+                    .shadow(color: theme.color("accent").opacity(0.2), radius: 8, y: 3)
+                    .accessibilityLabel("No tabs icon")
             }
             VStack(spacing: 5) {
                 Text("No tabs open")
