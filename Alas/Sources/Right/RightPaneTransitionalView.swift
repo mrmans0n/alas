@@ -21,7 +21,6 @@ struct RightPaneTransitionalView: View {
     let kind: Kind
 
     @State private var activeTab: RightPaneTab = .changes
-    @Environment(\.theme) private var theme
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -62,7 +61,7 @@ struct RightPaneTransitionalView: View {
         case .createFailed:
             CompactStateLabel(
                 systemIcon: "exclamationmark.triangle",
-                text: "Create failed",
+                text: "Create failed — \(worktree.branch)",
                 tone: .warning
             )
         }
