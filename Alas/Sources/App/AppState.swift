@@ -258,7 +258,7 @@ final class AppState {
     @ObservationIgnored
     lazy var search: SearchModel = SearchModel(environment: makeSearchEnvironment())
     @ObservationIgnored
-    private let fileIndex = FileIndex()
+    let fileIndex = FileIndex()
     @ObservationIgnored
     private let statusCache = GitStatusCache()
 
