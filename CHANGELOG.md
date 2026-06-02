@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-02
+
+### ✨ Features
+
+- Match worktrees by project name in the selector (#438).
+- Add optional close-tab confirmations (#439).
+- Synthesize Thinking chips for cursor-agent model variants (#443).
+- Add a nightly release track for update checks (#444).
+
+### 🐛 Fixes
+
+- Dismiss ACP slash autocomplete reliably (#442).
+- Move file mention picker ranking off the main thread using FileIndex (#441).
+- Prevent Settings window chrome from showing semaphore buttons twice (#440).
+
 ## [0.5.1] - 2026-06-02
 
 ### ✨ Features
