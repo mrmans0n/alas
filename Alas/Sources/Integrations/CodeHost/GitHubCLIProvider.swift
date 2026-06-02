@@ -89,6 +89,9 @@ struct GitHubCLIProvider: CodeHostProvider {
             ],
             cwd: cwd
         )
+        if result.exitCode == 1, Self.isNoChecksReported(result) {
+            return []
+        }
         guard result.exitCode == 0 || result.exitCode == 8 else {
             throw CodeHostProviderError.commandFailed(command: "gh pr checks", stderr: result.stderr)
         }
@@ -192,6 +195,11 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("gh pr create returned an invalid URL")
         }
         return url
+    }
+
+    private static func isNoChecksReported(_ result: ProcessResult) -> Bool {
+        let output = "\(result.stdout)\n\(result.stderr)".lowercased()
+        return output.contains("no checks reported")
     }
 
     static func parseLatestRunID(_ json: String) throws -> Int? {

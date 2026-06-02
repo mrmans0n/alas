@@ -196,6 +196,25 @@ struct GitHubCLIProviderTests {
         #expect(checks[0].bucket == .pending)
     }
 
+    @Test func checksTreatNoChecksReportedAsEmptyChecks() async throws {
+        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
+        let runner = FakeRunner(results: [
+            ProcessResult(
+                exitCode: 1,
+                stdout: "",
+                stderr: "no checks reported on the 'feature/github-provider' branch"
+            ),
+        ])
+
+        let checks = try await GitHubCLIProvider(runner: runner).checks(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(checks.isEmpty)
+    }
+
     @Test func rerunFailedChecksIssuesRerunForFailedRuns() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: #"[{ "databaseId": 111 }, { "databaseId": 222 }]"#, stderr: ""),
