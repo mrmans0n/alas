@@ -70,40 +70,30 @@ extension CursorModelVariants {
             return Derived(model: nil, thinking: nil)
         }
 
-        // Which attr key represents "thinking" within the current base group?
-        // Prefer `effort`; fall back to `thinking`.
+        // The "thinking" axis can be expressed two ways within the same base
+        // group: `effort=low|medium|high` for graded thinking, and
+        // `thinking=true|false` for on/off. A real-world Cursor variant set
+        // can mix them — e.g. `[thinking=false]` (off, no effort attr) plus
+        // `[thinking=true,effort=high]` (on, graded). We pick a per-variant
+        // label that takes effort when present and falls back to the thinking
+        // value, so both dimensions stay reachable in the chip.
         let currentGroup = parsed.filter { $0.variant.base == currentVariant.base }
-        let thinkingKey: String? = {
-            if currentGroup.contains(where: { $0.variant.attrs.contains(where: { $0.key == "effort" }) }) {
-                return "effort"
-            }
-            if currentGroup.contains(where: { $0.variant.attrs.contains(where: { $0.key == "thinking" }) }) {
-                return "thinking"
-            }
-            return nil
-        }()
-
-        let currentThinkingValue = thinkingKey.flatMap { key in
-            currentVariant.attrs.first(where: { $0.key == key })?.value
-        }
+        let currentThinkingLabel = thinkingLabel(of: currentVariant)
 
         // Model chip: one item per distinct base, ordered by first appearance.
-        // For each base, prefer the variant whose thinking value matches the
+        // For each base, prefer the variant whose thinking label matches the
         // current selection AND whose other attrs (context, fast, …) best
         // match the current variant — picking the first match would silently
         // change hidden dimensions like context when the user only meant to
-        // switch the model.
+        // switch the model. Fall back to any variant of that base when no
+        // candidate carries the current thinking label.
         var seenBases = Set<String>()
         var modelItems: [ChipSpec.Item] = []
         for (info, variant) in parsed where seenBases.insert(variant.base).inserted {
-            let candidates = parsed.filter { p in
-                p.variant.base == variant.base
-                    && (thinkingKey.map { key in
-                        p.variant.attrs.first(where: { $0.key == key })?.value == currentThinkingValue
-                    } ?? true)
-            }
-            let preferred = bestMatch(in: candidates, against: currentVariant,
-                                       ignoring: thinkingKey) ?? (info, variant)
+            let sameBase = parsed.filter { $0.variant.base == variant.base }
+            let matching = sameBase.filter { thinkingLabel(of: $0.variant) == currentThinkingLabel }
+            let pool = matching.isEmpty ? sameBase : matching
+            let preferred = bestMatch(in: pool, against: currentVariant) ?? (info, variant)
             modelItems.append(ChipSpec.Item(
                 id: preferred.info.id,
                 name: preferred.info.name,
@@ -113,31 +103,37 @@ extension CursorModelVariants {
             ? ChipSpec(source: .model, options: modelItems, currentId: currentModel)
             : nil
 
-        // Thinking chip: one item per distinct thinking value within the
-        // current base, ordered by first appearance. For each value, pick
+        // Thinking chip: one item per distinct thinking label within the
+        // current base, ordered by first appearance. For each label, pick
         // the variant id whose non-thinking attrs best match the current
-        // variant — same reason as above.
-        let thinking: ChipSpec? = {
-            guard let thinkingKey else { return nil }
-            var seenValues = Set<String>()
-            var thinkingItems: [ChipSpec.Item] = []
-            for (_, variant) in currentGroup {
-                guard let value = variant.attrs.first(where: { $0.key == thinkingKey })?.value,
-                      seenValues.insert(value).inserted
-                else { continue }
-                let candidates = currentGroup.filter { p in
-                    p.variant.attrs.first(where: { $0.key == thinkingKey })?.value == value
-                }
-                guard let pick = bestMatch(in: candidates, against: currentVariant,
-                                           ignoring: thinkingKey) else { continue }
-                thinkingItems.append(ChipSpec.Item(
-                    id: pick.info.id, name: value, description: pick.info.description))
-            }
-            guard !thinkingItems.isEmpty else { return nil }
-            return ChipSpec(source: .model, options: thinkingItems, currentId: currentModel)
-        }()
+        // variant. A variant with no thinking/effort attr at all has no
+        // label and is skipped.
+        var seenLabels = Set<String>()
+        var thinkingItems: [ChipSpec.Item] = []
+        for (_, variant) in currentGroup {
+            guard let label = thinkingLabel(of: variant),
+                  seenLabels.insert(label).inserted
+            else { continue }
+            let candidates = currentGroup.filter { thinkingLabel(of: $0.variant) == label }
+            guard let pick = bestMatch(in: candidates, against: currentVariant) else { continue }
+            thinkingItems.append(ChipSpec.Item(
+                id: pick.info.id, name: label, description: pick.info.description))
+        }
+        let thinking = !thinkingItems.isEmpty
+            ? ChipSpec(source: .model, options: thinkingItems, currentId: currentModel)
+            : nil
 
         return Derived(model: model, thinking: thinking)
+    }
+
+    /// The label representing this variant's thinking axis. Cursor uses two
+    /// conventions: `effort=…` for graded thinking and `thinking=…` for
+    /// on/off. Effort wins when both are present on the same variant.
+    /// Returns nil when neither attr is set.
+    private static func thinkingLabel(of variant: Variant) -> String? {
+        if let v = variant.attrs.first(where: { $0.key == "effort" })?.value { return v }
+        if let v = variant.attrs.first(where: { $0.key == "thinking" })?.value { return v }
+        return nil
     }
 
     /// Pick the candidate whose non-thinking attrs best match `reference`.
@@ -145,24 +141,23 @@ extension CursorModelVariants {
     /// nil only when `candidates` is empty.
     private static func bestMatch(
         in candidates: [(info: ACPModelInfo, variant: Variant)],
-        against reference: Variant,
-        ignoring thinkingKey: String?
+        against reference: Variant
     ) -> (info: ACPModelInfo, variant: Variant)? {
         candidates.max { a, b in
-            attrMatchScore(a.variant, against: reference, ignoring: thinkingKey)
-                < attrMatchScore(b.variant, against: reference, ignoring: thinkingKey)
+            attrMatchScore(a.variant, against: reference)
+                < attrMatchScore(b.variant, against: reference)
         }
     }
 
     /// Count attrs in `candidate` whose `(key, value)` also appears in
-    /// `reference`, skipping the thinking key itself.
+    /// `reference`, ignoring both thinking-axis keys.
     private static func attrMatchScore(
         _ candidate: Variant,
-        against reference: Variant,
-        ignoring thinkingKey: String?
+        against reference: Variant
     ) -> Int {
-        candidate.attrs.reduce(0) { acc, attr in
-            if let thinkingKey, attr.key == thinkingKey { return acc }
+        let thinkingKeys: Set<String> = ["effort", "thinking"]
+        return candidate.attrs.reduce(0) { acc, attr in
+            if thinkingKeys.contains(attr.key) { return acc }
             let refValue = reference.attrs.first(where: { $0.key == attr.key })?.value
             return acc + (refValue == attr.value ? 1 : 0)
         }

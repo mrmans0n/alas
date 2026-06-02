@@ -154,4 +154,24 @@ struct CursorModelVariantsDeriveTests {
         let b = d.model?.options.first { $0.name == "B" }
         #expect(b?.id == "b[effort=high,context=1m]")
     }
+
+    @Test("Thinking chip exposes both `thinking=false` and effort levels when mixed")
+    func mixedThinkingAndEffort() {
+        // Real Cursor shape: a "thinking off" variant has no effort attr,
+        // while "thinking on" variants carry effort=low/medium/high.
+        let models = [
+            model("m[thinking=false]",              "M"),
+            model("m[thinking=true,effort=high]",   "M"),
+            model("m[thinking=true,effort=medium]", "M"),
+            model("m[thinking=true,effort=low]",    "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[thinking=false]")
+        // The off option must remain reachable; effort levels are alongside it.
+        #expect(d.thinking?.options.map { $0.name } == ["false", "high", "medium", "low"])
+        #expect(d.thinking?.options.first { $0.name == "false" }?.id == "m[thinking=false]")
+        #expect(d.thinking?.options.first { $0.name == "high" }?.id == "m[thinking=true,effort=high]")
+        #expect(d.thinking?.currentId == "m[thinking=false]")
+    }
 }
