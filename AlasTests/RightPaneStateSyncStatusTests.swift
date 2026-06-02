@@ -328,4 +328,23 @@ struct RightPaneStateSyncStatusTests {
         try await Task.sleep(nanoseconds: 500_000_000)
         #expect(state.behindBase?.count == 0, "after rebase feature should be in sync with origin/main")
     }
+
+    // MARK: - BehindChip rendering
+
+    @Test func behindChipDisplayTextComposesArrowCountLabel() {
+        #expect(BehindChip.displayText(count: 3, label: "main") == "↓3 main")
+        #expect(BehindChip.displayText(count: 2, label: "remote") == "↓2 remote")
+    }
+
+    @Test func behindChipDisplayTextHandlesLongBaseName() {
+        #expect(BehindChip.displayText(count: 12, label: "release/v1") == "↓12 release/v1")
+    }
+
+    @Test func behindChipBaseRoleUsesAccentToken() {
+        #expect(BehindChip.Role.base.colorToken == "accent")
+    }
+
+    @Test func behindChipUpstreamRoleUsesCautionToken() {
+        #expect(BehindChip.Role.upstream.colorToken == "caution")
+    }
 }

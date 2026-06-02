@@ -1,20 +1,44 @@
 import SwiftUI
 
 /// Small pill shown in the Commits section header trailing slot when the
-/// worktree is behind a tracked ref (base trunk or its own upstream).
-/// Purely informative.
+/// worktree is behind a tracked ref. Purely informative. The `role` selects
+/// a distinct theme color so the "behind base" and "behind upstream" chips
+/// read as different things at a glance; the `label` names the target.
 struct BehindChip: View {
-    let text: String
+    /// Which "behind" signal this chip represents. Drives the color.
+    enum Role {
+        case base       // behind the trunk you compare against (e.g. main)
+        case upstream   // behind your branch's own remote tracking ref
+
+        /// Theme color token for this role.
+        var colorToken: String {
+            switch self {
+            case .base: return "accent"
+            case .upstream: return "caution"
+            }
+        }
+    }
+
+    let count: Int
+    let label: String
+    let role: Role
 
     @Environment(\.theme) private var theme
 
+    /// Pure text composition: `↓N label` (e.g. "↓3 main"). `↓` reads as
+    /// "commits to pull in."
+    static func displayText(count: Int, label: String) -> String {
+        "↓\(count) \(label)"
+    }
+
     var body: some View {
-        Text(text)
+        let tint = theme.color(role.colorToken)
+        return Text(Self.displayText(count: count, label: label))
             .font(.system(size: 9.5, weight: .semibold))
-            .foregroundColor(theme.color("accent"))
+            .foregroundColor(tint)
             .lineLimit(1)
             .padding(.horizontal, 6).padding(.vertical, 1)
-            .background(theme.color("accent").opacity(0.12))
+            .background(tint.opacity(0.12))
             .clipShape(Capsule())
     }
 }
@@ -56,11 +80,11 @@ struct CommitsSectionView: View {
             ) {
                 HStack(spacing: 6) {
                     if let s = behindBase {
-                        BehindChip(text: "\(s.count) behind")
+                        BehindChip(count: s.count, label: baseBranch, role: .base)
                             .help("\(s.count) behind \(s.ref)")
                     }
                     if let s = behindUpstream {
-                        BehindChip(text: "\(s.count) behind")
+                        BehindChip(count: s.count, label: "remote", role: .upstream)
                             .help("\(s.count) behind \(s.ref)")
                     }
                     BaseBranchSelector(
