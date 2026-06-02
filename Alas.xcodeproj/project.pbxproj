@@ -45,6 +45,7 @@
 		0BA997A903C1DC2A41D64E22 /* AgentRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A919B8770029DBE7FCFF0EE2 /* AgentRunner.swift */; };
 		0BBFEE487AF71AD858B19EC5 /* ACPPermissionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BCD93747BF71CB256038314 /* ACPPermissionPrompt.swift */; };
 		0C54356D0ACEDD5275FFB6EB /* CodeLanguageDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A727D24652E45B98C10917F8 /* CodeLanguageDetailView.swift */; };
+		0C6B4043280C0787CC9F8DFC /* BuildIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CBEF21062CAD30127BEB2AA /* BuildIdentityTests.swift */; };
 		0CF488290CC525EA7C11A43C /* DiffParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE26221DC8E8837FFEB87474 /* DiffParserTests.swift */; };
 		0D17211026C6790B96CC6578 /* CopyFeedbackState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C8BF1EC24E449A302A1E25C /* CopyFeedbackState.swift */; };
 		0D65F2B699E6B0CF0915D25D /* ImageDiffMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09007B6E90DE89B7215A5D44 /* ImageDiffMode.swift */; };
@@ -615,6 +616,7 @@
 		B40B75555598C42713157C5C /* TreeSitterCSS in Frameworks */ = {isa = PBXBuildFile; productRef = 3F76DFBA5D1CB707989C86AB /* TreeSitterCSS */; };
 		B472D692A8D8D1C664EAC467 /* ACPSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1281A3235F08DC8A95D015A9 /* ACPSessionTests.swift */; };
 		B4C4E13CFE986FC20DC12808 /* ACPFileWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CA51D49B1AE4C4E10D450C6 /* ACPFileWriterTests.swift */; };
+		B50266FAD595DBF626CA199F /* BuildIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0904F152CCD7A9C7116A9E6A /* BuildIdentity.swift */; };
 		B54B0BFA87B2566DB59C3D59 /* ConflictMarkerParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */; };
 		B574D2D5DF3129E326DCFCCF /* ShellEnvResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09246CDA0F77D86F05727407 /* ShellEnvResolverTests.swift */; };
 		B58BF89C3A788A31CBED2067 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = B3568F495249430FBBE2FCCF /* TreeSitterJavaScript */; };
@@ -915,6 +917,7 @@
 		08ACB3B79B74153668DA29D8 /* LSPTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPTransportTests.swift; sourceTree = "<group>"; };
 		08F7B16F39935718801DAA95 /* AppStateCLIRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCLIRoutingTests.swift; sourceTree = "<group>"; };
 		09007B6E90DE89B7215A5D44 /* ImageDiffMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffMode.swift; sourceTree = "<group>"; };
+		0904F152CCD7A9C7116A9E6A /* BuildIdentity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BuildIdentity.swift; sourceTree = "<group>"; };
 		0914F0E19514D1DF89C74B41 /* MergeConflictResolvedEmptyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictResolvedEmptyView.swift; sourceTree = "<group>"; };
 		09246CDA0F77D86F05727407 /* ShellEnvResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellEnvResolverTests.swift; sourceTree = "<group>"; };
 		0934F7BB22E33263B63925B7 /* ImageDiffPair.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffPair.swift; sourceTree = "<group>"; };
@@ -1251,6 +1254,7 @@
 		6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeService.swift; sourceTree = "<group>"; };
 		6CA51D49B1AE4C4E10D450C6 /* ACPFileWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFileWriterTests.swift; sourceTree = "<group>"; };
 		6CB9643BE01E416D3D2F4454 /* BaseBranchSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseBranchSelectorTests.swift; sourceTree = "<group>"; };
+		6CBEF21062CAD30127BEB2AA /* BuildIdentityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BuildIdentityTests.swift; sourceTree = "<group>"; };
 		6D1AAAE396590865426C592A /* ACPSessionManagerRetentionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManagerRetentionTests.swift; sourceTree = "<group>"; };
 		6D46BDE72E52818061452ECB /* CommitRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitRowTests.swift; sourceTree = "<group>"; };
 		6D788808DF3BE405143F91F7 /* ReleaseInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseInfoTests.swift; sourceTree = "<group>"; };
@@ -2091,6 +2095,7 @@
 				EAD92DAB367A7F31FF1223D1 /* Diagnostics */,
 				08BD96F4379A0D250DE4303C /* JSONRPC */,
 				5FA3F5C4A99F2C74080DA0EF /* SQLiteKit */,
+				6CBEF21062CAD30127BEB2AA /* BuildIdentityTests.swift */,
 			);
 			path = AlasTests;
 			sourceTree = "<group>";
@@ -2735,6 +2740,7 @@
 				0CC074B85082A8BB30EEAFA5 /* UpdateAvailableSheet.swift */,
 				2763F93ADFDCDF6B31D16475 /* UpdateController.swift */,
 				FE09B83A747269494B206F23 /* UpdateThrottle.swift */,
+				0904F152CCD7A9C7116A9E6A /* BuildIdentity.swift */,
 			);
 			path = Updates;
 			sourceTree = "<group>";
@@ -3278,8 +3284,6 @@
 				5EEBBAEE60D2DB007AD92314 /* PBXTargetDependency */,
 			);
 			name = AlasTests;
-			packageProductDependencies = (
-			);
 			productName = AlasTests;
 			productReference = B65018D176CD2E52A3999CF0 /* AlasTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -3372,12 +3376,12 @@
 				7019D0C134F78A3B7F4CF4BB /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
 				A38DA0B05C2E29601ED4C8A9 /* XCRemoteSwiftPackageReference "tree-sitter-toml" */,
 				E32CC6F3745BD894D495E254 /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */,
-				503F42153BDDB65CB9EC8A18 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterCSS" */,
-				A2F1DF8F186FB086DEE6461B /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterHCL" */,
-				85BE587B3304F8D1B3C2A9E0 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterJavaScript" */,
-				BF2BE955FBC2F9CE5DA291C5 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterLua" */,
-				5844843C71BA73C8F5B45D8A /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterPython" */,
-				C9290CC4BA5D8FCABCC18EFD /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterYAML" */,
+				503F42153BDDB65CB9EC8A18 /* XCLocalSwiftPackageReference "TreeSitterCSS" */,
+				A2F1DF8F186FB086DEE6461B /* XCLocalSwiftPackageReference "TreeSitterHCL" */,
+				85BE587B3304F8D1B3C2A9E0 /* XCLocalSwiftPackageReference "TreeSitterJavaScript" */,
+				BF2BE955FBC2F9CE5DA291C5 /* XCLocalSwiftPackageReference "TreeSitterLua" */,
+				5844843C71BA73C8F5B45D8A /* XCLocalSwiftPackageReference "TreeSitterPython" */,
+				C9290CC4BA5D8FCABCC18EFD /* XCLocalSwiftPackageReference "TreeSitterYAML" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C86FE0D59F990939C552C7E2 /* Products */;
@@ -3948,6 +3952,7 @@
 				45EEE2F32712FDEE392A9707 /* ZmxEnv.swift in Sources */,
 				2E952C4C62784847AF4B7870 /* ZmxSessionName.swift in Sources */,
 				99711AA1B0FB450D32770415 /* ZmxSunPathBudget.swift in Sources */,
+				B50266FAD595DBF626CA199F /* BuildIdentity.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -4308,6 +4313,7 @@
 				397FADBCCF3211504DAEDC35 /* ZmxEnvTests.swift in Sources */,
 				89A3BEAA64625C766E73F58E /* ZmxSessionNameTests.swift in Sources */,
 				F6C5274BCA0B3068C6C2D36A /* ZmxSunPathBudgetTests.swift in Sources */,
+				0C6B4043280C0787CC9F8DFC /* BuildIdentityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -4467,7 +4473,10 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = "$(inherited) -lc++";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas;
 				PRODUCT_NAME = Alas;
 				SDKROOT = macosx;
@@ -4509,7 +4518,10 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = "$(inherited) -lc++";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas;
 				PRODUCT_NAME = Alas;
 				SDKROOT = macosx;
@@ -4566,27 +4578,27 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		503F42153BDDB65CB9EC8A18 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterCSS" */ = {
+		503F42153BDDB65CB9EC8A18 /* XCLocalSwiftPackageReference "TreeSitterCSS" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ThirdParty/TreeSitterCSS;
 		};
-		5844843C71BA73C8F5B45D8A /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterPython" */ = {
+		5844843C71BA73C8F5B45D8A /* XCLocalSwiftPackageReference "TreeSitterPython" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ThirdParty/TreeSitterPython;
 		};
-		85BE587B3304F8D1B3C2A9E0 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterJavaScript" */ = {
+		85BE587B3304F8D1B3C2A9E0 /* XCLocalSwiftPackageReference "TreeSitterJavaScript" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ThirdParty/TreeSitterJavaScript;
 		};
-		A2F1DF8F186FB086DEE6461B /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterHCL" */ = {
+		A2F1DF8F186FB086DEE6461B /* XCLocalSwiftPackageReference "TreeSitterHCL" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ThirdParty/TreeSitterHCL;
 		};
-		BF2BE955FBC2F9CE5DA291C5 /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterLua" */ = {
+		BF2BE955FBC2F9CE5DA291C5 /* XCLocalSwiftPackageReference "TreeSitterLua" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ThirdParty/TreeSitterLua;
 		};
-		C9290CC4BA5D8FCABCC18EFD /* XCLocalSwiftPackageReference "ThirdParty/TreeSitterYAML" */ = {
+		C9290CC4BA5D8FCABCC18EFD /* XCLocalSwiftPackageReference "TreeSitterYAML" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ThirdParty/TreeSitterYAML;
 		};
