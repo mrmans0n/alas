@@ -223,13 +223,55 @@ private struct SpaceEmojiPickerControl: NSViewRepresentable {
         }
 
         private func commit(_ rawValue: String) {
-            let icon = SpaceIcon.sanitized(rawValue, fallback: "")
-            guard !icon.isEmpty else { return }
+            guard SpaceEmojiPickerSelection.commit(
+                rawValue,
+                onSelect: { [weak self] icon in
+                    self?.input.stringValue = ""
+                    self?.onSelect?(icon)
+                },
+                dismissPicker: { [weak self] in
+                    SpaceEmojiPickerWindowDismissal.dismiss(excluding: self?.window)
+                }
+            ) else { return }
             input.stringValue = ""
-            onSelect?(icon)
             window?.makeFirstResponder(button)
             window?.makeKeyAndOrderFront(nil)
         }
+    }
+}
+
+enum SpaceEmojiPickerSelection {
+    @discardableResult
+    static func commit(
+        _ rawValue: String,
+        onSelect: (String) -> Void,
+        dismissPicker: () -> Void
+    ) -> Bool {
+        let icon = SpaceIcon.sanitized(rawValue, fallback: "")
+        guard !icon.isEmpty else { return false }
+
+        onSelect(icon)
+        dismissPicker()
+        return true
+    }
+}
+
+enum SpaceEmojiPickerWindowDismissal {
+    @MainActor
+    static func dismiss(excluding ownerWindow: NSWindow?) {
+        for window in NSApp.windows where window !== ownerWindow && window.isVisible && isCharacterPalette(window) {
+            window.orderOut(nil)
+        }
+    }
+
+    private static func isCharacterPalette(_ window: NSWindow) -> Bool {
+        let className = String(describing: type(of: window)).lowercased()
+        let title = window.title.lowercased()
+
+        return className.contains("character")
+            || className.contains("emoji")
+            || title.contains("character")
+            || title.contains("emoji")
     }
 }
 
