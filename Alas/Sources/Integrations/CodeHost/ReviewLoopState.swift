@@ -59,6 +59,7 @@ final class ReviewLoopState {
                 reviewRequest: snapshot?.reviewRequest,
                 providerAvailable: snapshot?.providerAvailable ?? false,
                 providerAuthenticated: snapshot?.providerAuthenticated ?? false,
+                providerCapabilities: snapshot?.providerCapabilities ?? .readOnly,
                 errorMessage: snapshot?.errorMessage
             )
             primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
@@ -117,6 +118,7 @@ final class ReviewLoopState {
                 reviewRequest: nil,
                 providerAvailable: false,
                 providerAuthenticated: false,
+                providerCapabilities: .readOnly,
                 errorMessage: message
             )
             primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: false)
@@ -157,6 +159,7 @@ final class ReviewLoopState {
                 reviewRequest: nil,
                 providerAvailable: false,
                 providerAuthenticated: false,
+                providerCapabilities: .readOnly,
                 errorMessage: nil
             )
             primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
@@ -171,6 +174,7 @@ final class ReviewLoopState {
                 reviewRequest: nil,
                 providerAvailable: false,
                 providerAuthenticated: false,
+                providerCapabilities: .readOnly,
                 errorMessage: nil
             )
             primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
@@ -186,6 +190,7 @@ final class ReviewLoopState {
                 reviewRequest: nil,
                 providerAvailable: false,
                 providerAuthenticated: false,
+                providerCapabilities: .readOnly,
                 errorMessage: nil
             )
             primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
@@ -201,6 +206,7 @@ final class ReviewLoopState {
                 reviewRequest: nil,
                 providerAvailable: true,
                 providerAuthenticated: false,
+                providerCapabilities: .readOnly,
                 errorMessage: nil
             )
             primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
@@ -243,18 +249,21 @@ final class ReviewLoopState {
                 reviewRequest: loadedRequest,
                 providerAvailable: true,
                 providerAuthenticated: true,
+                providerCapabilities: provider.capabilities,
                 errorMessage: nil
             )
         } catch {
             guard isCurrentRefresh(generation) else { return }
             let message = Self.describe(error)
             lastError = message
+            let preservedRequest = preservedReviewRequestForError(local: local, remote: remote)
             snapshot = ReviewLoopSnapshot(
                 local: local,
                 remote: remote,
-                reviewRequest: nil,
+                reviewRequest: preservedRequest,
                 providerAvailable: true,
                 providerAuthenticated: true,
+                providerCapabilities: provider.capabilities,
                 errorMessage: message
             )
         }
@@ -313,6 +322,27 @@ final class ReviewLoopState {
         generation == refreshGeneration
     }
 
+    private func preservedReviewRequestForError(
+        local: ReviewLoopLocalState,
+        remote: CodeHostRemote
+    ) -> ReviewRequest? {
+        guard let snapshot,
+              snapshot.local.branchName == local.branchName,
+              Self.sameRepository(snapshot.remote, remote)
+        else {
+            return nil
+        }
+        return snapshot.reviewRequest
+    }
+
+    private static func sameRepository(_ lhs: CodeHostRemote?, _ rhs: CodeHostRemote) -> Bool {
+        guard let lhs else { return false }
+        return lhs.kind == rhs.kind
+            && lhs.host == rhs.host
+            && lhs.owner == rhs.owner
+            && lhs.repository == rhs.repository
+    }
+
     private static func describe(_ error: Error) -> String {
         let description = (error as NSError).localizedDescription
         if !description.isEmpty {
@@ -341,6 +371,7 @@ extension ReviewLoopState {
                 reviewRequest: snapshot?.reviewRequest,
                 providerAvailable: snapshot?.providerAvailable ?? false,
                 providerAuthenticated: snapshot?.providerAuthenticated ?? false,
+                providerCapabilities: snapshot?.providerCapabilities ?? .readOnly,
                 errorMessage: snapshot?.errorMessage
             )
         }

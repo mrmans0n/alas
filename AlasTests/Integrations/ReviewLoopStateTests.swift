@@ -118,6 +118,40 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.reviewRequest?.checks == [check])
     }
 
+    @Test func providerErrorPreservesPreviousRequestFactsForSameBranchAndRemote() async throws {
+        let remote = Self.makeRemote()
+        let request = Self.makeReviewRequest(remote: remote, checks: [])
+        let check = ReviewCheck(
+            id: "ci-build",
+            name: "Build",
+            workflow: "CI",
+            bucket: .pass,
+            detailURL: nil,
+            completedAt: nil
+        )
+        let provider = FakeCodeHostProvider(
+            kind: .github,
+            request: request,
+            checks: [check]
+        )
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        let local = Self.makeLocal(needsPush: false)
+
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+        provider.checksError = StubError(message: "checks failed")
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+
+        #expect(state.lastError?.contains("checks failed") == true)
+        #expect(state.snapshot?.errorMessage?.contains("checks failed") == true)
+        #expect(state.snapshot?.reviewRequest?.number == request.number)
+        #expect(state.snapshot?.reviewRequest?.title == request.title)
+        #expect(state.snapshot?.reviewRequest?.checks == [check])
+    }
+
     @Test func providerErrorSetsBlockedActionAndErrorDetail() async throws {
         let provider = FakeCodeHostProvider(
             kind: .github,

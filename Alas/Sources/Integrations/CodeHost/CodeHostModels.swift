@@ -167,6 +167,7 @@ struct ReviewLoopSnapshot: Equatable, Sendable {
     let reviewRequest: ReviewRequest?
     let providerAvailable: Bool
     let providerAuthenticated: Bool
+    let providerCapabilities: CodeHostProviderCapabilities
     let errorMessage: String?
 }
 

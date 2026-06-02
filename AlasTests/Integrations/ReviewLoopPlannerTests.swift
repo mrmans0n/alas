@@ -202,6 +202,7 @@ struct ReviewLoopPlannerTests {
             reviewRequest: reviewRequest,
             providerAvailable: providerAvailable,
             providerAuthenticated: providerAuthenticated,
+            providerCapabilities: remote == nil ? .readOnly : .githubCLI,
             errorMessage: errorMessage
         )
     }

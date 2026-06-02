@@ -148,6 +148,7 @@ struct ReviewLoopHandoffBuilderTests {
             reviewRequest: request,
             providerAvailable: true,
             providerAuthenticated: true,
+            providerCapabilities: .githubCLI,
             errorMessage: nil
         )
     }
