@@ -27,8 +27,17 @@ struct ChangesTabView: View {
     }
 
     var body: some View {
-        ScrollView {
-            scrollContent
+        VStack(spacing: 0) {
+            ScrollView {
+                scrollContent
+            }
+            ReviewLoopDrawer(
+                state: rps.reviewLoop,
+                onPrimaryAction: { rps.handleReviewLoopPrimaryAction(appState: appState) },
+                onOpenProvider: { rps.openReviewLoopProviderPage() },
+                onRefresh: { Task { @MainActor in await rps.refresh() } },
+                canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState)
+            )
         }
     }
 

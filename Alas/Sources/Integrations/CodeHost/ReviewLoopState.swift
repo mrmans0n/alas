@@ -1,0 +1,360 @@
+import Foundation
+import Observation
+
+struct ReviewLoopRefreshAttempt: Equatable, Sendable {
+    let local: ReviewLoopLocalState?
+    fileprivate let generation: Int
+}
+
+@Observable
+@MainActor
+final class ReviewLoopState {
+    private let worktreePath: URL
+    private var baseBranch: String
+    private let providerRegistry: CodeHostProviderRegistry
+    private let planner: ReviewLoopPlanner
+    private var approvedBranchName: String?
+    private var refreshGeneration: Int = 0
+
+    private(set) var snapshot: ReviewLoopSnapshot?
+    private(set) var primaryAction: ReviewLoopAction
+    private(set) var sessionApproved: Bool = false
+    private(set) var isRefreshing: Bool = false
+    private(set) var isExpanded: Bool = false
+    private(set) var lastError: String?
+
+    init(
+        worktreePath: URL,
+        baseBranch: String,
+        providerRegistry: CodeHostProviderRegistry = .live(),
+        planner: ReviewLoopPlanner = ReviewLoopPlanner()
+    ) {
+        self.worktreePath = worktreePath
+        self.baseBranch = baseBranch
+        self.providerRegistry = providerRegistry
+        self.planner = planner
+        self.primaryAction = planner.nextAction(snapshot: nil, sessionApproved: false)
+    }
+
+    func setExpanded(_ expanded: Bool) {
+        isExpanded = expanded
+    }
+
+    func updateBaseBranch(_ branch: String) {
+        baseBranch = branch
+        if let current = snapshot?.local {
+            let local = ReviewLoopLocalState(
+                branchName: current.branchName,
+                headSHA: current.headSHA,
+                baseBranch: branch,
+                hasWorkingTreeChanges: current.hasWorkingTreeChanges,
+                hasStagedChanges: current.hasStagedChanges,
+                aheadCommitCount: current.aheadCommitCount,
+                hasUpstream: current.hasUpstream,
+                needsPush: current.needsPush
+            )
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: snapshot?.remote,
+                reviewRequest: snapshot?.reviewRequest,
+                providerAvailable: snapshot?.providerAvailable ?? false,
+                providerAuthenticated: snapshot?.providerAuthenticated ?? false,
+                errorMessage: snapshot?.errorMessage
+            )
+            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+        }
+    }
+
+    func approveSession(branchName: String) {
+        if let approvedBranchName, approvedBranchName != branchName {
+            resetSessionApproval()
+            return
+        }
+        approvedBranchName = branchName
+        sessionApproved = true
+        primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+    }
+
+    func resetSessionApproval() {
+        approvedBranchName = nil
+        sessionApproved = false
+        primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+    }
+
+    func beginLocalInspection() -> ReviewLoopRefreshAttempt {
+        beginRefresh(local: nil)
+    }
+
+    func beginLocalRefresh(local: ReviewLoopLocalState) -> ReviewLoopRefreshAttempt {
+        beginRefresh(local: local)
+    }
+
+    private func beginRefresh(local: ReviewLoopLocalState?) -> ReviewLoopRefreshAttempt {
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        if let local, let approvedBranchName, approvedBranchName != local.branchName {
+            resetSessionApproval()
+        }
+
+        isRefreshing = true
+        lastError = nil
+        return ReviewLoopRefreshAttempt(local: local, generation: generation)
+    }
+
+    func failLocalRefresh(_ attempt: ReviewLoopRefreshAttempt, error: Error) {
+        guard isCurrentRefresh(attempt.generation) else { return }
+
+        let message = Self.describe(error)
+        lastError = message
+        refreshGeneration += 1
+        approvedBranchName = nil
+        sessionApproved = false
+        isRefreshing = false
+        if let local = attempt.local {
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: nil,
+                reviewRequest: nil,
+                providerAvailable: false,
+                providerAuthenticated: false,
+                errorMessage: message
+            )
+            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: false)
+        } else {
+            snapshot = nil
+            primaryAction = ReviewLoopAction(
+                kind: .blocked,
+                title: "Review state unavailable",
+                detail: "Could not inspect local review state: \(message)"
+            )
+        }
+    }
+
+    func refresh(local: ReviewLoopLocalState, remotes: [GitRemote]) async {
+        let attempt = beginLocalRefresh(local: local)
+        await refresh(attempt, remotes: remotes)
+    }
+
+    func refresh(_ attempt: ReviewLoopRefreshAttempt, remotes: [GitRemote]) async {
+        guard isCurrentRefresh(attempt.generation) else { return }
+        guard let local = attempt.local else {
+            isRefreshing = false
+            return
+        }
+        let generation = attempt.generation
+
+        defer {
+            if isCurrentRefresh(generation) {
+                isRefreshing = false
+            }
+        }
+
+        guard let remote = CodeHostRemoteDetector.detect(from: remotes) else {
+            guard isCurrentRefresh(generation) else { return }
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: nil,
+                reviewRequest: nil,
+                providerAvailable: false,
+                providerAuthenticated: false,
+                errorMessage: nil
+            )
+            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+            return
+        }
+
+        guard let provider = providerRegistry.provider(for: remote.kind) else {
+            guard isCurrentRefresh(generation) else { return }
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: remote,
+                reviewRequest: nil,
+                providerAvailable: false,
+                providerAuthenticated: false,
+                errorMessage: nil
+            )
+            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+            return
+        }
+
+        let providerAvailable = await provider.isAvailable()
+        guard isCurrentRefresh(generation) else { return }
+        guard providerAvailable else {
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: remote,
+                reviewRequest: nil,
+                providerAvailable: false,
+                providerAuthenticated: false,
+                errorMessage: nil
+            )
+            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+            return
+        }
+
+        let providerAuthenticated = await provider.isAuthenticated(remote: remote, cwd: worktreePath)
+        guard isCurrentRefresh(generation) else { return }
+        guard providerAuthenticated else {
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: remote,
+                reviewRequest: nil,
+                providerAvailable: true,
+                providerAuthenticated: false,
+                errorMessage: nil
+            )
+            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+            return
+        }
+
+        do {
+            let request = try await provider.currentReviewRequest(
+                remote: remote,
+                branch: local.branchName,
+                cwd: worktreePath
+            )
+            guard isCurrentRefresh(generation) else { return }
+            let loadedRequest: ReviewRequest?
+            if let request {
+                let checks = try await provider.checks(remote: remote, request: request, cwd: worktreePath)
+                guard isCurrentRefresh(generation) else { return }
+                loadedRequest = ReviewRequest(
+                    remote: request.remote,
+                    number: request.number,
+                    title: request.title,
+                    url: request.url,
+                    state: request.state,
+                    isDraft: request.isDraft,
+                    headRefName: request.headRefName,
+                    baseRefName: request.baseRefName,
+                    reviewDecision: request.reviewDecision,
+                    mergeState: request.mergeState,
+                    checks: checks,
+                    threads: request.threads
+                )
+            } else {
+                loadedRequest = nil
+            }
+
+            guard isCurrentRefresh(generation) else { return }
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: remote,
+                reviewRequest: loadedRequest,
+                providerAvailable: true,
+                providerAuthenticated: true,
+                errorMessage: nil
+            )
+        } catch {
+            guard isCurrentRefresh(generation) else { return }
+            let message = Self.describe(error)
+            lastError = message
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: remote,
+                reviewRequest: nil,
+                providerAvailable: true,
+                providerAuthenticated: true,
+                errorMessage: message
+            )
+        }
+
+        primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
+    }
+
+    func runPrimaryAction() async -> Bool {
+        guard let snapshot else { return false }
+        return await run(
+            action: primaryAction,
+            snapshot: snapshot,
+            sessionApproved: sessionApproved
+        )
+    }
+
+    func run(
+        action: ReviewLoopAction,
+        snapshot: ReviewLoopSnapshot,
+        sessionApproved: Bool
+    ) async -> Bool {
+        guard let remote = snapshot.remote,
+              let provider = providerRegistry.provider(for: remote.kind)
+        else { return false }
+        guard !action.requiresSessionApproval || sessionApproved else { return false }
+
+        lastError = nil
+        do {
+            switch action.kind {
+            case .createReviewRequest:
+                _ = try await provider.createReviewRequest(
+                    remote: remote,
+                    branch: snapshot.local.branchName,
+                    baseBranch: snapshot.local.baseBranch,
+                    title: snapshot.local.branchName,
+                    body: "Created from Alas.",
+                    cwd: worktreePath
+                )
+            case .rerunFailedChecks:
+                try await provider.rerunFailedChecks(
+                    remote: remote,
+                    branch: snapshot.local.branchName,
+                    cwd: worktreePath
+                )
+            default:
+                break
+            }
+            return true
+        } catch {
+            lastError = Self.describe(error)
+            return false
+        }
+    }
+
+    private func isCurrentRefresh(_ generation: Int) -> Bool {
+        generation == refreshGeneration
+    }
+
+    private static func describe(_ error: Error) -> String {
+        let description = (error as NSError).localizedDescription
+        if !description.isEmpty {
+            return description
+        }
+        return String(describing: error)
+    }
+}
+
+#if DEBUG
+extension ReviewLoopState {
+    func updateLocalBranchForTests(_ branchName: String) {
+        if let current = snapshot?.local {
+            snapshot = ReviewLoopSnapshot(
+                local: ReviewLoopLocalState(
+                    branchName: branchName,
+                    headSHA: current.headSHA,
+                    baseBranch: current.baseBranch,
+                    hasWorkingTreeChanges: current.hasWorkingTreeChanges,
+                    hasStagedChanges: current.hasStagedChanges,
+                    aheadCommitCount: current.aheadCommitCount,
+                    hasUpstream: current.hasUpstream,
+                    needsPush: current.needsPush
+                ),
+                remote: snapshot?.remote,
+                reviewRequest: snapshot?.reviewRequest,
+                providerAvailable: snapshot?.providerAvailable ?? false,
+                providerAuthenticated: snapshot?.providerAuthenticated ?? false,
+                errorMessage: snapshot?.errorMessage
+            )
+        }
+        if let approvedBranchName, approvedBranchName != branchName {
+            resetSessionApproval()
+        }
+    }
+
+    func refreshForTests(local: ReviewLoopLocalState) async {
+        await refresh(local: local, remotes: [])
+    }
+
+    func setPrimaryActionForTests(_ action: ReviewLoopAction) {
+        primaryAction = action
+    }
+}
+#endif

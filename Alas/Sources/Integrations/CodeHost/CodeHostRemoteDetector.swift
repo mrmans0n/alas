@@ -1,0 +1,108 @@
+import Foundation
+
+struct GitRemote: Equatable, Sendable {
+    let name: String
+    let url: String
+}
+
+enum CodeHostRemoteDetector {
+    static func detect(from remotes: [GitRemote]) -> CodeHostRemote? {
+        remotes
+            .sorted { lhs, rhs in
+                switch (lhs.name == "origin", rhs.name == "origin") {
+                case (true, false):
+                    true
+                case (false, true):
+                    false
+                default:
+                    lhs.name < rhs.name
+                }
+            }
+            .lazy
+            .compactMap(parse(remote:))
+            .first
+    }
+
+    private static func parse(remote: GitRemote) -> CodeHostRemote? {
+        guard let components = parseComponents(from: remote.url),
+              let kind = kind(for: components.host)
+        else {
+            return nil
+        }
+
+        let pathParts = components.pathParts
+        guard pathParts.count >= 2 else { return nil }
+
+        let repository = stripGitSuffix(from: pathParts.last ?? "")
+        let ownerParts = pathParts.dropLast()
+        let owner = ownerParts.joined(separator: "/")
+        guard !owner.isEmpty, !repository.isEmpty else { return nil }
+
+        guard let webURL = URL(string: "https://\(components.host)/\(owner)/\(repository)") else {
+            return nil
+        }
+
+        return CodeHostRemote(
+            kind: kind,
+            host: components.host,
+            owner: owner,
+            repository: repository,
+            remoteName: remote.name,
+            webURL: webURL
+        )
+    }
+
+    private static func parseComponents(from remoteURL: String) -> RemoteComponents? {
+        if let url = URLComponents(string: remoteURL),
+           let scheme = url.scheme?.lowercased(),
+           ["http", "https", "ssh"].contains(scheme),
+           let host = url.host?.lowercased()
+        {
+            return RemoteComponents(host: host, pathParts: splitPath(url.path))
+        }
+
+        let parts = remoteURL.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+
+        let hostPrefix = parts[0]
+        let host: String
+        if let atIndex = hostPrefix.lastIndex(of: "@") {
+            guard atIndex < hostPrefix.index(before: hostPrefix.endIndex) else { return nil }
+            let hostStart = hostPrefix.index(after: atIndex)
+            host = String(hostPrefix[hostStart...]).lowercased()
+        } else {
+            host = String(hostPrefix).lowercased()
+        }
+        guard !host.isEmpty else { return nil }
+
+        return RemoteComponents(host: host, pathParts: splitPath(String(parts[1])))
+    }
+
+    private static func splitPath(_ path: String) -> [String] {
+        path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+    }
+
+    private static func kind(for host: String) -> CodeHostKind? {
+        if host == "github.com" {
+            return .github
+        }
+
+        if host == "gitlab.com" || host.split(separator: ".").first == "gitlab" {
+            return .gitlab
+        }
+
+        return nil
+    }
+
+    private static func stripGitSuffix(from repository: String) -> String {
+        guard repository.hasSuffix(".git") else { return repository }
+        return String(repository.dropLast(4))
+    }
+
+    private struct RemoteComponents {
+        let host: String
+        let pathParts: [String]
+    }
+}

@@ -9,6 +9,7 @@ enum RightPaneTab: String { case changes, files }
 @MainActor
 final class RightPaneState {
     let worktree: Worktree
+    let reviewLoop: ReviewLoopState
     var changes: [ChangedFile] = []
     /// Fingerprint of the staged index contents (concatenated blob SHAs of
     /// staged files). Changes whenever any staged file's contents change,
@@ -170,6 +171,7 @@ final class RightPaneState {
         self.worktree = worktree
         self.baseBranch = baseBranch
         self.currentBranch = worktree.branch
+        self.reviewLoop = ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
         self.mergeOp = MergeOperationState(worktreePath: worktree.path, gitService: GitService())
         self.watcher = WorktreeWatcher(path: worktree.path)
         watcher.onChange = { [weak self] in
@@ -204,6 +206,7 @@ final class RightPaneState {
     /// Update the base branch, record it in the recent list, and refresh.
     func selectBaseBranch(_ branch: String) {
         baseBranch = branch
+        reviewLoop.updateBaseBranch(branch)
         userOverrodeBaseBranch = true
         behindBase = nil
         recentBaseBranches.removeAll { $0 == branch }
@@ -234,8 +237,74 @@ final class RightPaneState {
         }
     }
 
+    func handleReviewLoopPrimaryAction(appState: AppState) {
+        switch reviewLoop.primaryAction.kind {
+        case .startSession:
+            reviewLoop.approveSession(branchName: reviewLoop.snapshot?.local.branchName ?? currentBranch)
+        case .prepareCheckFailureHandoff, .prepareReviewHandoff:
+            guard canOpenReviewLoopHandoff(appState: appState) else { return }
+            appState.openReviewLoopHandoff(from: reviewLoop)
+        case .pushBranch:
+            guard reviewLoop.sessionApproved, let snapshot = reviewLoop.snapshot else { return }
+            Task { @MainActor in
+                do {
+                    let result = try await Process.git(
+                        ["push", "-u", snapshot.remote?.remoteName ?? "origin", snapshot.local.branchName],
+                        cwd: worktree.path
+                    )
+                    guard result.exitCode == 0 else {
+                        sidebarError = Self.reviewLoopPushFailureMessage(result)
+                        return
+                    }
+                    await refresh()
+                } catch {
+                    sidebarError = error.localizedDescription
+                }
+            }
+        case .createReviewRequest, .rerunFailedChecks:
+            guard reviewLoop.sessionApproved, let snapshot = reviewLoop.snapshot else { return }
+            let action = reviewLoop.primaryAction
+            let sessionApproved = reviewLoop.sessionApproved
+            Task { @MainActor in
+                if await reviewLoop.run(
+                    action: action,
+                    snapshot: snapshot,
+                    sessionApproved: sessionApproved
+                ) {
+                    await refresh()
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    func canOpenReviewLoopHandoff(appState: AppState) -> Bool {
+        switch reviewLoop.primaryAction.kind {
+        case .prepareCheckFailureHandoff, .prepareReviewHandoff:
+            let agentID = appState.config.changes.aiToolId
+            return reviewLoop.snapshot != nil && agentID != "none" && appState.agent(id: agentID) != nil
+        default:
+            return false
+        }
+    }
+
+    func openReviewLoopProviderPage() {
+        guard let url = reviewLoop.snapshot?.reviewRequest?.url else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    nonisolated static func reviewLoopPushFailureMessage(_ result: ProcessResult) -> String {
+        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !stderr.isEmpty { return stderr }
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !stdout.isEmpty { return stdout }
+        return "git push failed with exit code \(result.exitCode)."
+    }
+
     @MainActor
     func refresh() async {
+        let reviewLoopInspection = reviewLoop.beginLocalInspection()
         loading = true
         defer { loading = false }
         invalidateFileTreeChildLoadsForRefresh()
@@ -254,10 +323,12 @@ final class RightPaneState {
                 ignoreUpstream: ignoreUpstream
             )
             async let br = git.currentBranch(worktreePath: worktree.path)
+            async let upstream = git.resolveUpstreamRef(worktreePath: worktree.path)
             async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
+            self.upstreamRef = (try? await upstream)?.ref
             _ = await mergeRefresh
             self.changes = entries
             if let lsResult = try? await Process.git(
@@ -303,12 +374,41 @@ final class RightPaneState {
                 }
                 didInitDefaultTab = true
             }
+            await refreshReviewLoop(changes: entries, commits: commits, headSHA: headSHA)
         } catch {
+            reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
             // Surface failures via os.Logger so they're visible in Console.app
             // and the unified log. The previous `print` here silently kept
             // `self.changes` at its last successful value, which presented as
             // an empty Changes pane when the very first refresh failed.
             logger.error("refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func refreshReviewLoop(
+        changes: [ChangedFile],
+        commits: [CommitInfo],
+        headSHA: String
+    ) async {
+        let needsPush = (try? await git.needsPush(worktreePath: worktree.path)) ?? true
+        let local = ReviewLoopLocalState(
+            branchName: currentBranch,
+            headSHA: headSHA,
+            baseBranch: baseBranch,
+            hasWorkingTreeChanges: !changes.isEmpty,
+            hasStagedChanges: changes.contains { $0.stage == .staged },
+            aheadCommitCount: commits.count,
+            hasUpstream: upstreamRef != nil,
+            needsPush: needsPush
+        )
+
+        let attempt = reviewLoop.beginLocalRefresh(local: local)
+        do {
+            let remotes = try await git.remotes(worktreePath: worktree.path)
+            await reviewLoop.refresh(attempt, remotes: remotes)
+        } catch {
+            reviewLoop.failLocalRefresh(attempt, error: error)
+            logger.error("review loop refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 
