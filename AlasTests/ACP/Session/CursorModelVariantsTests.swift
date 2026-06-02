@@ -155,6 +155,24 @@ struct CursorModelVariantsDeriveTests {
         #expect(b?.id == "b[effort=high,context=1m]")
     }
 
+    @Test("`thinking=false` wins over `effort` so off stays distinct")
+    func thinkingFalseWinsOverEffort() {
+        // Cursor sometimes ships the "off" variant with a default effort
+        // attr that mirrors the most common "on" effort level. Without an
+        // override the label-by-effort logic would collapse off + medium.
+        let models = [
+            model("m[thinking=false,effort=medium]", "M"),
+            model("m[thinking=true,effort=medium]",  "M"),
+            model("m[thinking=true,effort=high]",    "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[thinking=false,effort=medium]")
+        #expect(d.thinking?.options.map { $0.name } == ["false", "medium", "high"])
+        #expect(d.thinking?.options.first { $0.name == "false" }?.id == "m[thinking=false,effort=medium]")
+        #expect(d.thinking?.options.first { $0.name == "medium" }?.id == "m[thinking=true,effort=medium]")
+    }
+
     @Test("currentModel shares a base but is not exactly advertised -> nil chips")
     func currentModelNotExactlyAdvertised() {
         // A stale `currentModel` whose base matches an advertised variant

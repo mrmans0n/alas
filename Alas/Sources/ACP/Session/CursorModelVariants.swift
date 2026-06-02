@@ -131,12 +131,15 @@ extension CursorModelVariants {
 
     /// The label representing this variant's thinking axis. Cursor uses two
     /// conventions: `effort=…` for graded thinking and `thinking=…` for
-    /// on/off. Effort wins when both are present on the same variant.
-    /// Returns nil when neither attr is set.
+    /// on/off. An explicit `thinking=false` always wins so an "off" variant
+    /// that ships with a default `effort=…` does not collapse into an
+    /// on-thinking option. Otherwise effort wins, then thinking. Returns
+    /// nil when neither attr is set.
     private static func thinkingLabel(of variant: Variant) -> String? {
-        if let v = variant.attrs.first(where: { $0.key == "effort" })?.value { return v }
-        if let v = variant.attrs.first(where: { $0.key == "thinking" })?.value { return v }
-        return nil
+        let thinking = variant.attrs.first(where: { $0.key == "thinking" })?.value
+        if thinking == "false" { return "false" }
+        if let effort = variant.attrs.first(where: { $0.key == "effort" })?.value { return effort }
+        return thinking
     }
 
     /// Pick the candidate whose non-thinking attrs best match `reference`.
