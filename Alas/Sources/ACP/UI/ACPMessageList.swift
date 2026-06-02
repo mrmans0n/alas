@@ -149,7 +149,7 @@ struct ACPMessageList: View {
                             .id("__composer_spacer__")
                     }
                     .frame(maxWidth: 720, alignment: .leading)
-                    .padding(.horizontal, 28)
+                    .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
                     .padding(.top, 24)
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -302,9 +302,13 @@ struct ACPMessageList: View {
     private func row(for m: ACPMessage) -> some View {
         switch m {
         case .user(_, let text, let attachments):
-            UserMessageRow(text: text, attachments: attachments)
+            ACPMessageGutter(markdown: { text }) {
+                UserMessageRow(text: text, attachments: attachments)
+            }
         case .agent(let id, let buf):
-            AgentMessageRow(messageId: id.uuidString, transcript: transcript, buffer: buf)
+            ACPMessageGutter(markdown: { buf.value }) {
+                AgentMessageRow(messageId: id.uuidString, transcript: transcript, buffer: buf)
+            }
         case .thought(_, let buf):
             ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
@@ -491,35 +495,6 @@ enum ACPUserScrollEvent {
     }
 }
 
-// MARK: - Hover copy button
-
-/// Hover-revealed affordance that copies a message's raw Markdown to the
-/// pasteboard as plain text. The caller passes exactly the text
-/// `ACPTranscriptMarkdown.messageBody` would return for this row.
-private struct ACPHoverCopyButton: View {
-    let markdown: String
-    var onHoverChange: ((Bool) -> Void)? = nil
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(markdown, forType: .string)
-        } label: {
-            Image(systemName: "doc.on.doc")
-                .font(.system(size: 10.5))
-                .foregroundStyle(theme.color("fg-muted"))
-                .padding(4)
-                .background(theme.color("bg-3").opacity(0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-        .onHover { onHoverChange?($0) }
-        .help("Copy message as Markdown")
-    }
-}
-
 @MainActor
 final class ACPDelayedHoverVisibility: ObservableObject {
     @Published private(set) var isVisible = false
@@ -561,8 +536,6 @@ private struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
     @Environment(\.theme) private var theme
-    @State private var hovering = false
-
     var body: some View {
         HStack {
             Spacer(minLength: 40)
@@ -616,12 +589,6 @@ private struct UserMessageRow: View {
                     .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
             }
             .frame(maxWidth: 540, alignment: .trailing)
-            .overlay(alignment: .topLeading) {
-                if hovering {
-                    ACPHoverCopyButton(markdown: text).offset(x: -6, y: -6)
-                }
-            }
-            .onHover { hovering = $0 }
         }
         .frame(maxWidth: .infinity)
     }
@@ -633,29 +600,9 @@ private struct AgentMessageRow: View {
     let messageId: String
     let transcript: ACPTranscript
     @ObservedObject var buffer: StreamingText
-    @StateObject private var hoverVisibility = ACPDelayedHoverVisibility()
     var body: some View {
         ACPMarkdownText(raw: buffer.value, cache: transcript.markdownCache(forMessage: messageId))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .topTrailing) {
-                if hoverVisibility.isVisible {
-                    ACPHoverCopyButton(markdown: buffer.value) { hovering in
-                        if hovering {
-                            hoverVisibility.enter()
-                        } else {
-                            hoverVisibility.leave()
-                        }
-                    }
-                    .offset(x: -2, y: -6)
-                }
-            }
-            .onHover { hovering in
-                if hovering {
-                    hoverVisibility.enter()
-                } else {
-                    hoverVisibility.leave()
-                }
-            }
     }
 }
 

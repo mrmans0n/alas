@@ -38,8 +38,19 @@ struct ACPMessageGutter<Content: View>: View {
                     // Sit flush with the right edge of the reserved lane: the
                     // button's own visible padding is 4pt each side (8pt total),
                     // so net inset is laneWidth - 8. y: -2 nudges it into optical
-                    // alignment with the top of the message content.
+                    // alignment with the top of the message content. The offset
+                    // intentionally escapes the content view's bounds into the
+                    // lane reserved by the container; this relies on no ancestor
+                    // applying `clipped()` (SwiftUI does not clip overlays by
+                    // default), which also keeps the button hit-testable.
                     .offset(x: ACPMessageGutterLayout.laneWidth - 8, y: -2)
+                    // The button sits in the lane, outside `content`'s hover
+                    // region, so it must keep itself alive while hovered —
+                    // otherwise pointing at it past the hide delay would fade
+                    // and disable it mid-aim. Mirrors the old copy button.
+                    .onHover { inside in
+                        if inside { hover.enter() } else { hover.leave() }
+                    }
             }
             .onHover { inside in
                 if inside { hover.enter() } else { hover.leave() }
