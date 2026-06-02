@@ -33,11 +33,8 @@ struct ChangesTabView: View {
             }
             ReviewLoopDrawer(
                 state: rps.reviewLoop,
-                action: rps.reviewLoopPrimaryAction,
-                onPrimaryAction: { rps.handleReviewLoopPrimaryAction(appState: appState) },
-                onOpenProvider: { rps.openReviewLoopProviderPage() },
-                onRefresh: { Task { @MainActor in await rps.refresh() } },
-                canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState)
+                canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
+                onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
             )
         }
     }

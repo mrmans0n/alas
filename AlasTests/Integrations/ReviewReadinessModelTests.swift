@@ -25,6 +25,7 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Unpushed"])
         #expect(model.actions.contains(Action(kind: .pushBranch, title: "Push", isEnabled: true)))
+        #expect(!model.actions.map(\.kind).contains(.createReviewRequest))
     }
 
     @Test func noGitHubRequestExposesCreatePR() {

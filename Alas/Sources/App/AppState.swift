@@ -2976,15 +2976,30 @@ final class AppState {
         tabs.append(acpSession: state, to: worktree.id)
     }
 
-    func openReviewLoopHandoff(from reviewLoop: ReviewLoopState, action: ReviewLoopAction) {
+    func openReviewLoopHandoff(from reviewLoop: ReviewLoopState, actionKind: ReviewReadinessActionKind) {
         guard let snapshot = reviewLoop.snapshot else { return }
+        guard actionKind == .openAgentHandoff else { return }
         let agentID = config.changes.aiToolId
         guard agentID != "none", agent(id: agentID) != nil else { return }
         let prompt = ReviewLoopHandoffBuilder.build(
             snapshot: snapshot,
-            action: action
+            action: ReviewLoopAction(
+                kind: Self.reviewLoopHandoffActionKind(for: snapshot.reviewRequest),
+                title: "Open in Agent",
+                detail: "Prepare a focused agent handoff."
+            )
         )
         openNewACPSession(agentID: agentID, initialPrompt: prompt)
+    }
+
+    nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
+        if request?.worstCheckBucket == .fail {
+            return .prepareCheckFailureHandoff
+        }
+        if request?.hasActionableFeedback == true {
+            return .prepareReviewHandoff
+        }
+        return .prepareCheckFailureHandoff
     }
 
     /// Reopen a persisted ACP session as a center-pane tab. If a tab

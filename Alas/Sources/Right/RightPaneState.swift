@@ -167,10 +167,6 @@ final class RightPaneState {
         return true
     }
 
-    var reviewLoopPrimaryAction: ReviewLoopAction {
-        ReviewLoopPlanner().nextAction(snapshot: reviewLoop.snapshot, sessionApproved: true)
-    }
-
     init(worktree: Worktree, baseBranch: String) {
         self.worktree = worktree
         self.baseBranch = baseBranch
@@ -241,14 +237,15 @@ final class RightPaneState {
         }
     }
 
-    func handleReviewLoopPrimaryAction(appState: AppState) {
-        let action = reviewLoopPrimaryAction
-        switch action.kind {
-        case .startSession:
-            break
-        case .prepareCheckFailureHandoff, .prepareReviewHandoff:
+    func handleReviewReadinessAction(_ action: ReviewReadinessActionKind, appState: AppState) {
+        switch action {
+        case .refresh:
+            Task { @MainActor in await refresh() }
+        case .openReviewRequest:
+            openReviewLoopProviderPage()
+        case .openAgentHandoff:
             guard canOpenReviewLoopHandoff(appState: appState) else { return }
-            appState.openReviewLoopHandoff(from: reviewLoop, action: action)
+            appState.openReviewLoopHandoff(from: reviewLoop, actionKind: action)
         case .pushBranch:
             guard let snapshot = reviewLoop.snapshot else { return }
             Task { @MainActor in
@@ -280,19 +277,16 @@ final class RightPaneState {
                     await refresh()
                 }
             }
-        default:
+        case .merge:
             break
         }
     }
 
     func canOpenReviewLoopHandoff(appState: AppState) -> Bool {
-        switch reviewLoopPrimaryAction.kind {
-        case .prepareCheckFailureHandoff, .prepareReviewHandoff:
-            let agentID = appState.config.changes.aiToolId
-            return reviewLoop.snapshot != nil && agentID != "none" && appState.agent(id: agentID) != nil
-        default:
-            return false
-        }
+        guard let request = reviewLoop.snapshot?.reviewRequest else { return false }
+        guard request.worstCheckBucket == .fail || request.hasActionableFeedback else { return false }
+        let agentID = appState.config.changes.aiToolId
+        return agentID != "none" && appState.agent(id: agentID) != nil
     }
 
     func openReviewLoopProviderPage() {

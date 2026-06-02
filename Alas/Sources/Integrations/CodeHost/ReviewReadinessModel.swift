@@ -131,8 +131,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
         }
         if snapshot.local.needsPush {
             actions.append(Action(kind: .pushBranch, title: "Push", isEnabled: true))
-        }
-        if let request = snapshot.reviewRequest {
+        } else if let request = snapshot.reviewRequest {
             if snapshot.providerCapabilities.canOpenReviewRequest {
                 actions.append(Action(kind: .openReviewRequest, title: request.provider.openReviewRequestTitle, isEnabled: true))
             }

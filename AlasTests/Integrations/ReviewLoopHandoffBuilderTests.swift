@@ -33,6 +33,43 @@ struct ReviewLoopHandoffBuilderTests {
         #expect(prompt.count < 5_000)
     }
 
+    @Test func failedChecksWinOverReviewFeedbackWhenChoosingHandoffPromptKind() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .changesRequested,
+            checks: [
+                ReviewCheck(
+                    id: "ci-tests",
+                    name: "Tests",
+                    workflow: "CI",
+                    bucket: .fail,
+                    detailURL: nil,
+                    completedAt: nil
+                ),
+            ]
+        )
+
+        #expect(AppState.reviewLoopHandoffActionKind(for: request) == .prepareCheckFailureHandoff)
+    }
+
+    @Test func gitlabPromptUsesMRLabel() {
+        let remote = Self.makeRemote(kind: .gitlab)
+        let request = Self.makeReviewRequest(
+            remote: remote,
+            url: URL(string: "https://gitlab.com/mrmans0n/alas/merge_requests/428")!
+        )
+        let prompt = ReviewLoopHandoffBuilder.build(
+            snapshot: Self.makeSnapshot(request: request),
+            action: ReviewLoopAction(
+                kind: .prepareReviewHandoff,
+                title: "Ask agent",
+                detail: "Review feedback"
+            )
+        )
+
+        #expect(prompt.contains("GitLab MR: https://gitlab.com/mrmans0n/alas/merge_requests/428"))
+        #expect(!prompt.contains("GitLab PR:"))
+    }
+
     @Test func reviewPromptIncludesOnlyActionableThreadSummaries() {
         let request = Self.makeReviewRequest(
             reviewDecision: .changesRequested,
@@ -154,17 +191,18 @@ struct ReviewLoopHandoffBuilderTests {
     }
 
     private static func makeReviewRequest(
+        remote: CodeHostRemote = makeRemote(),
         title: String = "Review loop",
+        url: URL? = nil,
         reviewDecision: ReviewDecision = .reviewRequired,
         checks: [ReviewCheck] = [],
         threads: [ReviewThreadSummary] = []
     ) -> ReviewRequest {
-        let remote = Self.makeRemote()
         return ReviewRequest(
             remote: remote,
             number: 428,
             title: title,
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/428")!,
+            url: url ?? URL(string: "https://github.com/mrmans0n/alas/pull/428")!,
             state: .open,
             isDraft: false,
             headRefName: "feature/review-loop",
@@ -176,14 +214,14 @@ struct ReviewLoopHandoffBuilderTests {
         )
     }
 
-    private static func makeRemote() -> CodeHostRemote {
+    private static func makeRemote(kind: CodeHostKind = .github) -> CodeHostRemote {
         CodeHostRemote(
-            kind: .github,
-            host: "github.com",
+            kind: kind,
+            host: "\(kind.rawValue).com",
             owner: "mrmans0n",
             repository: "alas",
             remoteName: "origin",
-            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+            webURL: URL(string: "https://\(kind.rawValue).com/mrmans0n/alas")!
         )
     }
 }

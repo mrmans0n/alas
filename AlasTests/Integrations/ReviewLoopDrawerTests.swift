@@ -3,118 +3,136 @@ import Testing
 @testable import Alas
 
 struct ReviewLoopDrawerTests {
-    @Test func statusTextShowsNoPRForCreateAction() {
-        let action = ReviewLoopAction(
-            kind: .createReviewRequest,
-            title: "Create PR",
-            detail: "Open a PR"
-        )
-
-        let text = ReviewLoopDrawerModel.statusText(request: nil, action: action)
-
-        #expect(text == "No PR")
-    }
-
-    @Test func statusTextShowsFailedChecks() {
-        let action = ReviewLoopAction(
-            kind: .prepareCheckFailureHandoff,
-            title: "Ask agent",
-            detail: "CI failed"
-        )
-
-        let text = ReviewLoopDrawerModel.statusText(request: nil, action: action)
-
-        #expect(text == "CI failed")
-    }
-
-    @Test func collapsedIdentityFallsBackToProvider() {
-        #expect(ReviewLoopDrawerModel.identityText(request: nil, remoteKind: .github) == "GitHub")
-    }
-
-    @Test func collapsedHeaderTextIsUppercase() {
-        #expect(ReviewLoopDrawerModel.headerText(request: nil, remoteKind: .github) == "GITHUB")
-    }
-
-    @Test func collapsedIdentityUsesReviewRequestWhenPresent() {
+    @Test func readinessIdentityUsesGitHubRequestWhenPresent() {
         let request = Self.makeReviewRequest()
-
-        #expect(ReviewLoopDrawerModel.identityText(request: request, remoteKind: .gitlab) == "GitHub #42")
-    }
-
-    @Test func primaryButtonTitleMatchesActionKind() {
-        #expect(ReviewLoopDrawerModel.primaryButtonTitle(for: .startSession) == "Start")
-        #expect(ReviewLoopDrawerModel.primaryButtonTitle(for: .prepareReviewHandoff) == "Open in agent")
-        #expect(ReviewLoopDrawerModel.primaryButtonTitle(for: .authenticateProvider) == "How to auth")
-        #expect(ReviewLoopDrawerModel.primaryButtonTitle(for: .readyToMerge) == "Merge")
-    }
-
-    @Test func detailTextPrefersLastError() {
-        let action = ReviewLoopAction(
-            kind: .createReviewRequest,
-            title: "Create review request",
-            detail: "Open a review request"
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: true
         )
 
-        #expect(ReviewLoopDrawerModel.detailText(action: action, lastError: nil) == "Open a review request")
-        #expect(ReviewLoopDrawerModel.detailText(action: action, lastError: "create failed") == "create failed")
+        #expect(model.identity == "GitHub #42")
     }
 
-    @Test func waitActionsDisablePrimaryButton() {
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.waitForChecks) == false)
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.waitForReview) == false)
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.none) == false)
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.startSession))
-    }
-
-    @Test func approvedRemoteActionsAreEnabled() {
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.pushBranch))
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.createReviewRequest))
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.rerunFailedChecks))
-    }
-
-    @Test func handoffPrimaryActionsAreEnabled() {
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.prepareCheckFailureHandoff))
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.prepareReviewHandoff))
-    }
-
-    @Test func handoffPrimaryActionsRequireAvailableAgent() {
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(
-            .prepareCheckFailureHandoff,
+    @Test func githubSnapshotWithoutRequestExposesCreatePR() {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: nil),
+            lastError: nil,
             canOpenAgentHandoff: false
-        ) == false)
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(
-            .prepareReviewHandoff,
+        )
+
+        #expect(model.actions.contains(Action(kind: .createReviewRequest, title: "Create PR", isEnabled: true)))
+    }
+
+    @Test func gitlabSnapshotWithoutRequestExposesCreateMR() {
+        let remote = Self.makeRemote(kind: .gitlab)
+        let capabilities = CodeHostProviderCapabilities(
+            canCreateReviewRequest: true,
+            canRerunFailedChecks: false,
+            canOpenReviewRequest: true
+        )
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(remote: remote, reviewRequest: nil, providerCapabilities: capabilities),
+            lastError: nil,
             canOpenAgentHandoff: false
-        ) == false)
+        )
+
+        #expect(model.actions.contains(Action(kind: .createReviewRequest, title: "Create MR", isEnabled: true)))
     }
 
-    @Test func unimplementedPrimaryActionsAreDisabled() {
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.blocked) == false)
-        #expect(ReviewLoopDrawerModel.isPrimaryActionEnabled(.readyToMerge) == false)
+    @Test func agentHandoffActionIsHiddenWhenUnavailable() {
+        let request = Self.makeReviewRequest(checks: [Self.makeCheck(bucket: .fail)])
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    private static func makeReviewRequest() -> ReviewRequest {
-        let remote = CodeHostRemote(
-            kind: .github,
-            host: "github.com",
+    @Test func readinessActionsDoNotExposeStartNarrative() {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.title != "Start " + "review session")
+        #expect(!model.actions.map(\.title).contains("Start"))
+    }
+
+    private typealias Action = ReviewReadinessModel.Action
+
+    private static func makeLocal(needsPush: Bool = false) -> ReviewLoopLocalState {
+        ReviewLoopLocalState(
+            branchName: "feature/review-readiness",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: needsPush ? 1 : 0,
+            hasUpstream: true,
+            needsPush: needsPush
+        )
+    }
+
+    private static func makeSnapshot(
+        local: ReviewLoopLocalState = makeLocal(),
+        remote: CodeHostRemote? = makeRemote(),
+        reviewRequest: ReviewRequest? = makeReviewRequest(),
+        providerCapabilities: CodeHostProviderCapabilities = .githubCLI
+    ) -> ReviewLoopSnapshot {
+        ReviewLoopSnapshot(
+            local: local,
+            remote: remote,
+            reviewRequest: reviewRequest,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: providerCapabilities,
+            errorMessage: nil
+        )
+    }
+
+    private static func makeRemote(kind: CodeHostKind = .github) -> CodeHostRemote {
+        CodeHostRemote(
+            kind: kind,
+            host: "\(kind.rawValue).com",
             owner: "mrmans0n",
             repository: "alas",
             remoteName: "origin",
-            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+            webURL: URL(string: "https://\(kind.rawValue).com/mrmans0n/alas")!
         )
-        return ReviewRequest(
+    }
+
+    private static func makeReviewRequest(
+        remote: CodeHostRemote = makeRemote(),
+        checks: [ReviewCheck] = []
+    ) -> ReviewRequest {
+        ReviewRequest(
             remote: remote,
             number: 42,
-            title: "Review loop",
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+            title: "Review readiness",
+            url: remote.webURL.appending(path: remote.kind == .github ? "pull/42" : "merge_requests/42"),
             state: .open,
             isDraft: false,
-            headRefName: "feature/review-loop",
+            headRefName: "feature/review-readiness",
             baseRefName: "main",
             reviewDecision: .reviewRequired,
-            mergeState: .clean,
-            checks: [],
+            mergeState: .blocked,
+            checks: checks,
             threads: []
+        )
+    }
+
+    private static func makeCheck(bucket: ReviewCheckBucket) -> ReviewCheck {
+        ReviewCheck(
+            id: "ci-tests",
+            name: "Tests",
+            workflow: "CI",
+            bucket: bucket,
+            detailURL: nil,
+            completedAt: nil
         )
     }
 }

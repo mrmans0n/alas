@@ -1,119 +1,43 @@
 import SwiftUI
 
-enum ReviewLoopDrawerModel {
-    static func identityText(request: ReviewRequest?, remoteKind: CodeHostKind?) -> String {
-        if let request { return request.displayIdentity }
-        return remoteKind?.displayName ?? "Review loop"
-    }
-
-    static func headerText(request: ReviewRequest?, remoteKind: CodeHostKind?) -> String {
-        identityText(request: request, remoteKind: remoteKind).uppercased()
-    }
-
-    static func statusText(request _: ReviewRequest?, action: ReviewLoopAction) -> String {
-        switch action.kind {
-        case .prepareCheckFailureHandoff:
-            "CI failed"
-        case .prepareReviewHandoff:
-            "Review feedback"
-        case .waitForChecks:
-            "Checks running"
-        case .waitForReview:
-            "Review pending"
-        case .readyToMerge:
-            "Ready"
-        case .pushBranch:
-            "Needs push"
-        case .createReviewRequest:
-            "No PR"
-        case .installProviderCLI:
-            "Missing CLI"
-        case .authenticateProvider:
-            "Auth needed"
-        case .rerunFailedChecks:
-            "Rerun checks"
-        case .blocked:
-            "Blocked"
-        default:
-            action.title
-        }
-    }
-
-    static func primaryButtonTitle(for kind: ReviewLoopActionKind) -> String {
-        switch kind {
-        case .startSession:
-            "Start"
-        case .prepareCheckFailureHandoff, .prepareReviewHandoff:
-            "Open in agent"
-        case .installProviderCLI:
-            "How to install"
-        case .authenticateProvider:
-            "How to auth"
-        case .readyToMerge:
-            "Merge"
-        case .rerunFailedChecks:
-            "Rerun"
-        default:
-            "Run"
-        }
-    }
-
-    static func isPrimaryActionEnabled(
-        _ kind: ReviewLoopActionKind,
-        canOpenAgentHandoff: Bool = true
-    ) -> Bool {
-        switch kind {
-        case .startSession, .pushBranch, .createReviewRequest, .rerunFailedChecks:
-            true
-        case .prepareCheckFailureHandoff, .prepareReviewHandoff:
-            canOpenAgentHandoff
-        default:
-            false
-        }
-    }
-
-    static func detailText(action: ReviewLoopAction, lastError: String?) -> String {
-        if let lastError, !lastError.isEmpty {
-            return lastError
-        }
-        return action.detail
-    }
-}
-
 struct ReviewLoopDrawer: View {
     @Bindable var state: ReviewLoopState
-    let action: ReviewLoopAction
-    let onPrimaryAction: () -> Void
-    let onOpenProvider: () -> Void
-    let onRefresh: () -> Void
     let canOpenAgentHandoff: Bool
+    let onAction: (ReviewReadinessActionKind) -> Void
 
     @Environment(\.theme) private var theme
 
+    private var model: ReviewReadinessModel {
+        ReviewReadinessModel(
+            snapshot: state.snapshot,
+            lastError: state.lastError,
+            canOpenAgentHandoff: canOpenAgentHandoff
+        )
+    }
+
     var body: some View {
-        let request = state.snapshot?.reviewRequest
-        let remoteKind = state.snapshot?.remote?.kind
+        let model = model
         VStack(spacing: 0) {
             Divider().opacity(0.45)
             Button {
                 state.setExpanded(!state.isExpanded)
             } label: {
-                collapsedRow(request: request, remoteKind: remoteKind)
+                collapsedRow(model: model)
             }
             .buttonStyle(.plain)
 
             if state.isExpanded {
-                expandedBody(request: request)
+                expandedBody(model: model)
             }
         }
         .background(theme.color("bg-1").opacity(0.96))
     }
 
-    private func collapsedRow(request: ReviewRequest?, remoteKind: CodeHostKind?) -> some View {
+    private func collapsedRow(model: ReviewReadinessModel) -> some View {
         HStack(spacing: 7) {
             NerdFontGlyphView(symbol: "\u{EA84}", hex: "7A8089")
                 .frame(width: 13, height: 13)
-            Text(ReviewLoopDrawerModel.headerText(request: request, remoteKind: remoteKind))
+            Text(model.identity.uppercased())
                 .font(.system(size: 10.5, weight: .semibold))
                 .tracking(0.5)
                 .foregroundColor(theme.color("fg-muted"))
@@ -127,11 +51,15 @@ struct ReviewLoopDrawer: View {
 
             Spacer(minLength: 6)
 
-            Text(ReviewLoopDrawerModel.statusText(request: request, action: action))
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundColor(theme.color("fg-dim"))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            HStack(spacing: 5) {
+                ForEach(model.chips) { chip in
+                    Text(chip.title)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
             Icon(name: state.isExpanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
         }
         .padding(.horizontal, 10)
@@ -139,73 +67,63 @@ struct ReviewLoopDrawer: View {
         .contentShape(Rectangle())
     }
 
-    private func expandedBody(request: ReviewRequest?) -> some View {
+    private func expandedBody(model: ReviewReadinessModel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(action.title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(theme.color("fg"))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text(ReviewLoopDrawerModel.detailText(
-                action: action,
-                lastError: state.lastError
-            ))
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-dim"))
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 8) {
-                AlasButton(
-                    title: ReviewLoopDrawerModel.primaryButtonTitle(for: action.kind),
-                    style: .normal,
-                    action: onPrimaryAction
-                )
-                .disabled(!ReviewLoopDrawerModel.isPrimaryActionEnabled(
-                    action.kind,
-                    canOpenAgentHandoff: canOpenAgentHandoff
-                ))
-
-                Menu {
-                    Button("Refresh", action: onRefresh)
-                    Button("Open in Browser", action: onOpenProvider)
-                        .disabled(request == nil)
-                } label: {
-                    Icon(name: "menu", size: 11, color: theme.color("fg-faint"))
-                        .frame(width: 24, height: 24)
-                        .background(theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
+            if let title = model.title {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let request {
-                requestFacts(request)
+            if let blockingText = model.blockingText {
+                Text(blockingText)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !model.actions.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(model.actions) { action in
+                            AlasButton(
+                                title: action.title,
+                                style: .normal,
+                                action: { onAction(action.kind) }
+                            )
+                            .disabled(!action.isEnabled)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+
+            if !model.facts.isEmpty {
+                facts(model.facts)
             }
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
     }
 
-    private func requestFacts(_ request: ReviewRequest) -> some View {
+    private func facts(_ facts: [ReviewReadinessModel.Fact]) -> some View {
         VStack(spacing: 4) {
-            fact("Branch", request.headRefName)
-            fact("Checks", request.worstCheckBucket?.rawValue ?? "none")
-            fact("Reviews", request.reviewDecision.rawValue)
-            fact("Merge", request.mergeState.rawValue)
+            ForEach(facts) { fact in
+                factRow(fact)
+            }
         }
         .font(.system(size: 10.5))
         .foregroundColor(theme.color("fg-dim"))
     }
 
-    private func fact(_ label: String, _ value: String) -> some View {
+    private func factRow(_ fact: ReviewReadinessModel.Fact) -> some View {
         HStack(spacing: 8) {
-            Text(label)
+            Text(fact.label)
             Spacer(minLength: 8)
-            Text(value)
+            Text(fact.value)
                 .fontWeight(.semibold)
                 .lineLimit(1)
                 .truncationMode(.middle)

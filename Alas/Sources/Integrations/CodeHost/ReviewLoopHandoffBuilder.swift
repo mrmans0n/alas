@@ -19,7 +19,7 @@ enum ReviewLoopHandoffBuilder {
         var lines: [String] = [
             "Investigate this review-loop item for Alas.",
             "",
-            "\(request.provider.displayName) PR: \(request.url.absoluteString)",
+            "\(request.provider.displayName) \(request.provider.reviewRequestLabel): \(request.url.absoluteString)",
             "Title: \(request.title)",
             "Branch: \(snapshot.local.branchName)",
             "Base: \(request.baseRefName)",
