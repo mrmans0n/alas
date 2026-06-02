@@ -227,24 +227,32 @@ final class RepoSelectorModel {
     ) -> [RepoSelectorRow] {
         struct Scored {
             let worktree: Worktree
-            let result: FuzzyMatch.Result
+            let indices: [Int]
+            let score: Double
         }
         let currentId = env.currentWorktreeId()
         var scored: [Scored] = []
         for project in projects {
             for w in env.visibleWorktrees(project.id) {
                 if let r = FuzzyMatch.score(query: query, target: w.branch) {
-                    scored.append(Scored(worktree: w, result: r))
+                    scored.append(Scored(worktree: w, indices: r.indices, score: r.score))
+                } else if let r = FuzzyMatch.score(query: query, target: "\(project.name) \(w.branch)") {
+                    let branchStart = project.name.count + 1
+                    let branchIndices = r.indices.compactMap { index -> Int? in
+                        guard index >= branchStart else { return nil }
+                        return index - branchStart
+                    }
+                    scored.append(Scored(worktree: w, indices: branchIndices, score: r.score - 1))
                 }
             }
         }
         return scored
             .sorted { a, b in
-                if a.result.score != b.result.score { return a.result.score > b.result.score }
+                if a.score != b.score { return a.score > b.score }
                 return a.worktree.branch.localizedCaseInsensitiveCompare(b.worktree.branch)
                     == .orderedAscending
             }
-            .map { .worktree($0.worktree, indices: $0.result.indices, isCurrent: $0.worktree.id == currentId) }
+            .map { .worktree($0.worktree, indices: $0.indices, isCurrent: $0.worktree.id == currentId) }
     }
 
     // MARK: - Activation
