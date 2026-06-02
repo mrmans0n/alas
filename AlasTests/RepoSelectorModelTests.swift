@@ -399,6 +399,66 @@ struct RepoSelectorModelTests {
         #expect(indices == [0, 1])
     }
 
+    @Test func filterModeMatchesProjectNameAndBranchTogether() {
+        let model = RepoSelectorModel()
+        let alas = project("p-alas", name: "alas")
+        let acme = project("p-acme", name: "acme")
+        let alasWorktree = worktree("alas-blabla", projectId: "p-alas", branch: "blabla")
+        let acmeWorktree = worktree("acme-blabla", projectId: "p-acme", branch: "blabla")
+        let e = env(
+            projects: [alas, acme],
+            worktrees: [
+                "p-alas": [alasWorktree],
+                "p-acme": [acmeWorktree]
+            ]
+        )
+        model.query = "alas blabla"
+
+        let rows = model.rows(environment: e)
+        let worktrees: [Worktree] = rows.compactMap {
+            if case .worktree(let w, _, _) = $0 { return w } else { return nil }
+        }
+        #expect(worktrees == [alasWorktree])
+    }
+
+    @Test func filterModeMatchesProjectNameOnly() {
+        let model = RepoSelectorModel()
+        let alas = project("p-alas", name: "alas")
+        let acme = project("p-acme", name: "acme")
+        let main = worktree("alas-main", projectId: "p-alas", branch: "main")
+        let feature = worktree("alas-feature", projectId: "p-alas", branch: "feature")
+        let other = worktree("acme-main", projectId: "p-acme", branch: "main")
+        let e = env(
+            projects: [alas, acme],
+            worktrees: [
+                "p-alas": [main, feature],
+                "p-acme": [other]
+            ]
+        )
+        model.query = "alas"
+
+        let rows = model.rows(environment: e)
+        let worktreeIds: [String] = rows.compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
+        }
+        #expect(Set(worktreeIds) == ["alas-main", "alas-feature"])
+    }
+
+    @Test func filterModeMapsScopedMatchIndicesToBranch() {
+        let model = RepoSelectorModel()
+        let alas = project("p-alas", name: "alas")
+        let worktree = worktree("alas-blabla", projectId: "p-alas", branch: "blabla")
+        let e = env(projects: [alas], worktrees: ["p-alas": [worktree]])
+        model.query = "alas bla"
+
+        let rows = model.rows(environment: e)
+        guard case .worktree(_, let indices, _) = rows.first else {
+            Issue.record("expected first row to be a worktree")
+            return
+        }
+        #expect(indices == [0, 1, 2])
+    }
+
     @Test func filterModePropagatesCurrentFlag() {
         let model = RepoSelectorModel()
         let p1 = project("p1")
