@@ -64,7 +64,15 @@ struct RootView: View {
                             centerContent()
                         },
                         right: {
-                            if let wt = selectedWorktree() {
+                            let resolver = RightPaneSelectionStateResolver(
+                                selectedWorktreeId: state.selectedWorktreeId,
+                                projects: state.activeSpaceProjects,
+                                projectsManager: state.projectsManager
+                            )
+                            switch resolver.resolve() {
+                            case .empty:
+                                EmptyView()
+                            case .active(let wt):
                                 RightPaneView(
                                     state: state,
                                     worktree: wt,
@@ -81,8 +89,12 @@ struct RootView: View {
                                         openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
                                     }
                                 )
-                            } else {
-                                EmptyView()
+                            case .creating(let wt):
+                                RightPaneTransitionalView(state: state, worktree: wt, kind: .creating)
+                            case .deleting(let wt):
+                                RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting)
+                            case .createFailed(let wt):
+                                RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
                             }
                         }
                     )
@@ -231,21 +243,12 @@ struct RootView: View {
     }
 
     private func selectedWorktree() -> Worktree? {
-        guard let id = state.selectedWorktreeId else { return nil }
-        for project in state.activeSpaceProjects {
-            if let wt = state.projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
-                // Do not treat a creating/deleting/failed-create row as the active worktree.
-                if let op = state.projectsManager.operationState(for: wt.id) {
-                    switch op {
-                    case .creating, .deleting, .createFailed:
-                        return nil
-                    case .deleteFailed:
-                        break
-                    }
-                }
-                return wt
-            }
-        }
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.activeSpaceProjects,
+            projectsManager: state.projectsManager
+        )
+        if case .active(let wt) = resolver.resolve() { return wt }
         return nil
     }
 
