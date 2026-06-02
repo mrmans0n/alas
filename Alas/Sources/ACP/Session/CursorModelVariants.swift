@@ -65,10 +65,13 @@ extension CursorModelVariants {
         let parsed: [(info: ACPModelInfo, variant: Variant)] = availableModels.map {
             ($0, parse($0.id))
         }
-        let currentVariant = parse(currentModel)
-        guard parsed.contains(where: { $0.variant.base == currentVariant.base }) else {
+        // Require an exact match — a stale `currentModel` whose base happens
+        // to overlap with the advertised list would otherwise produce chips
+        // whose `currentId` is not one of their options.
+        guard parsed.contains(where: { $0.info.id == currentModel }) else {
             return Derived(model: nil, thinking: nil)
         }
+        let currentVariant = parse(currentModel)
 
         // The "thinking" axis can be expressed two ways within the same base
         // group: `effort=low|medium|high` for graded thinking, and

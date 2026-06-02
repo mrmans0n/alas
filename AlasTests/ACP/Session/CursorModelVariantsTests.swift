@@ -155,6 +155,22 @@ struct CursorModelVariantsDeriveTests {
         #expect(b?.id == "b[effort=high,context=1m]")
     }
 
+    @Test("currentModel shares a base but is not exactly advertised -> nil chips")
+    func currentModelNotExactlyAdvertised() {
+        // A stale `currentModel` whose base matches an advertised variant
+        // but whose exact id is not in the list would otherwise produce
+        // chips whose `currentId` isn't one of their options.
+        let models = [
+            model("m[effort=high,context=200k]", "M"),
+            model("m[effort=low,context=200k]",  "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[effort=high,context=1m]")
+        #expect(d.model == nil)
+        #expect(d.thinking == nil)
+    }
+
     @Test("Thinking chip exposes both `thinking=false` and effort levels when mixed")
     func mixedThinkingAndEffort() {
         // Real Cursor shape: a "thinking off" variant has no effort attr,
