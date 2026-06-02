@@ -191,7 +191,7 @@ struct RootView: View {
         )) { info in
             UpdateAvailableSheet(
                 info: info,
-                source: state.updates.source,
+                source: state.updates.track == .nightly ? .direct : state.updates.source,
                 onDismiss: { state.updates.presentedUpdate = nil }
             )
             .environment(\.theme, state.themeStore.current)

@@ -26,10 +26,24 @@ struct UpdateAvailableSheet: View {
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
+    private var titleText: String {
+        switch info {
+        case .stable: return "Update available"
+        case .nightly: return "New nightly available"
+        }
+    }
+
+    private var viewReleaseLabel: String {
+        switch info {
+        case .stable: return "View Release Notes"
+        case .nightly: return "View on GitHub"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Update available")
+                Text(titleText)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                 Text(subtitleText)
@@ -69,7 +83,7 @@ struct UpdateAvailableSheet: View {
                 AlasButton(title: "View Release", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
                 AlasButton(title: "Later", style: .primary, action: onDismiss)
             case .direct:
-                AlasButton(title: "View Release Notes", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
+                AlasButton(title: viewReleaseLabel, style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
                 Spacer()
                 AlasButton(title: "Later", style: .subtle, action: onDismiss)
                 AlasButton(title: "Download", style: .primary) {
