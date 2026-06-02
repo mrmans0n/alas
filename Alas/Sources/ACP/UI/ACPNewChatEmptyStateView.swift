@@ -28,25 +28,13 @@ struct ACPNewChatEmptyStateView: View {
     }
 
     private var mark: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            theme.color("accent-soft"),
-                            theme.color("bg-2").opacity(0.45),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(theme.color("accent").opacity(0.28), lineWidth: 0.75)
-            Image(systemName: "sparkle")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(theme.color("accent"))
-        }
-        .frame(width: 40, height: 40)
+        Image(systemName: ACPNewChatEmptyStateArtwork.systemImageName)
+            .font(.system(size: ACPNewChatEmptyStateArtwork.fontSize, weight: .semibold))
+            .foregroundStyle(theme.color("accent"))
+            .frame(
+                width: ACPNewChatEmptyStateArtwork.frameSize,
+                height: ACPNewChatEmptyStateArtwork.frameSize
+            )
     }
 
     private var starterChips: some View {
@@ -92,4 +80,10 @@ struct ACPNewChatEmptyStateView: View {
         .buttonStyle(.plain)
         .help(prompt.promptText)
     }
+}
+
+enum ACPNewChatEmptyStateArtwork {
+    static let systemImageName = "sparkles"
+    static let fontSize: CGFloat = 28
+    static let frameSize: CGFloat = 40
 }
