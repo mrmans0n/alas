@@ -6,6 +6,7 @@ struct ReleaseInfoTests {
     private func decode(_ json: String) throws -> GitHubRelease {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(GitHubRelease.self, from: Data(json.utf8))
     }
 
@@ -16,6 +17,8 @@ struct ReleaseInfoTests {
       "html_url": "https://github.com/mrmans0n/alas/releases/tag/v0.6.0",
       "prerelease": false,
       "draft": false,
+      "target_commitish": "abc1234567890abcdef1234567890abcdef12345",
+      "published_at": "2026-06-02T10:21:00Z",
       "assets": [
         {"name": "Alas-0.6.0-arm64.dmg", "browser_download_url": "https://example.com/arm64.dmg"},
         {"name": "Alas-0.6.0-x86_64.dmg", "browser_download_url": "https://example.com/x86_64.dmg"}
@@ -45,16 +48,23 @@ struct ReleaseInfoTests {
 
     @Test func mapFailsWhenTagUnparseable() throws {
         let bad = """
-        {"tag_name": "nightly", "body": null, "html_url": "https://x.test", "prerelease": false, "draft": false, "assets": []}
+        {"tag_name": "nightly", "body": null, "html_url": "https://x.test", "prerelease": false, "draft": false, "target_commitish": "abc1234", "published_at": "2026-06-02T10:21:00Z", "assets": []}
         """
         #expect(ReleaseInfo.make(from: try decode(bad), arch: "arm64") == nil)
     }
 
     @Test func handlesNullBody() throws {
         let noBody = """
-        {"tag_name": "v0.6.0", "body": null, "html_url": "https://x.test", "prerelease": false, "draft": false, "assets": []}
+        {"tag_name": "v0.6.0", "body": null, "html_url": "https://x.test", "prerelease": false, "draft": false, "target_commitish": "abc1234", "published_at": "2026-06-02T10:21:00Z", "assets": []}
         """
         let info = ReleaseInfo.make(from: try decode(noBody), arch: "arm64")
         #expect(info?.releaseNotes == "")
+    }
+
+    @Test func decodesTargetCommitishAndPublishedAt() throws {
+        let release = try decode(sample)
+        #expect(release.targetCommitish == "abc1234567890abcdef1234567890abcdef12345")
+        let formatter = ISO8601DateFormatter()
+        #expect(release.publishedAt == formatter.date(from: "2026-06-02T10:21:00Z"))
     }
 }

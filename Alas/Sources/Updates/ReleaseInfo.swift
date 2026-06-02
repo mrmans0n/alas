@@ -11,14 +11,18 @@ enum HostArch {
     }
 }
 
-/// Decoded subset of GitHub's `releases/latest` payload.
-/// Decode with `keyDecodingStrategy = .convertFromSnakeCase`.
+/// Decoded subset of GitHub's release payload (`releases/latest` and
+/// `releases/tags/{tag}` share the same shape).
+/// Decode with `keyDecodingStrategy = .convertFromSnakeCase` and
+/// `dateDecodingStrategy = .iso8601`.
 struct GitHubRelease: Decodable {
     let tagName: String
     let body: String?
     let htmlUrl: URL
     let prerelease: Bool
     let draft: Bool
+    let targetCommitish: String
+    let publishedAt: Date
     let assets: [Asset]
 
     struct Asset: Decodable {

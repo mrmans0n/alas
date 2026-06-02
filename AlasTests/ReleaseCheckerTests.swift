@@ -11,6 +11,8 @@ struct ReleaseCheckerTests {
           "html_url": "https://github.com/mrmans0n/alas/releases/tag/\(tag)",
           "prerelease": false,
           "draft": false,
+          "target_commitish": "abc1234567890abcdef1234567890abcdef12345",
+          "published_at": "2026-06-02T10:21:00Z",
           "assets": [
             {"name": "Alas-\(tag.replacingOccurrences(of: "v", with: ""))-arm64.dmg",
              "browser_download_url": "https://example.com/\(tag)-arm64.dmg"}
@@ -66,7 +68,7 @@ struct ReleaseCheckerTests {
 
     @Test func reportsFailedWhenTagUnparseable() async {
         let data = Data("""
-        {"tag_name":"nightly","body":null,"html_url":"https://x.test","prerelease":false,"draft":false,"assets":[]}
+        {"tag_name":"nightly","body":null,"html_url":"https://x.test","prerelease":false,"draft":false,"target_commitish":"abc1234","published_at":"2026-06-02T10:21:00Z","assets":[]}
         """.utf8)
         let result = await checker(returning: data)
             .check(current: SemanticVersion(major: 0, minor: 5, patch: 1))

@@ -30,6 +30,7 @@ struct ReleaseChecker {
             let data = try await fetch(latestReleaseURL)
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
+            decoder.dateDecodingStrategy = .iso8601
             let release = try decoder.decode(GitHubRelease.self, from: data)
             guard let info = ReleaseInfo.make(from: release, arch: arch) else {
                 return .failed("The latest release could not be read.")
