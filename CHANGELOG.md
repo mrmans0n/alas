@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-02
+
+### ✨ Features
+
+- Add reverse time ordering options for worktrees (#430).
+- Add update checks against GitHub releases (#431).
+- Add the ACP new chat empty state (#432).
+- Show agent icons in ACP pane tabs (#434).
+- Add per-message ACP gutter actions menu (#435).
+- Show transitional right-pane UI during worktree creating, deleting, and create-failed states (#436).
+
+### 🐛 Fixes
+
+- Clear focused file highlights correctly (#427).
+- Center ACP inline image chips (#428).
+- Preserve ACP plan sidebar layout (#429).
+- Keep the ACP queue badge visible (#433).
+- Close the Settings > Spaces emoji picker after selecting a space icon (#437).
+
 ## [0.5.0] - 2026-06-01
 
 ### ✨ Features
