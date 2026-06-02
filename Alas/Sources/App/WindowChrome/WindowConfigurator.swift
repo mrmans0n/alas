@@ -6,8 +6,8 @@ struct WindowConfigurator: NSViewRepresentable {
     /// (`isMovable = false`); regions that should still drag the window must
     /// be marked with `.windowDragHandle()`. The main workspace window needs
     /// this so the center pane's top tab bar isn't hijacked by the system
-    /// titlebar drag tracker. Secondary windows (e.g. Settings) keep the
-    /// default movable behavior so the system titlebar still drags them.
+    /// titlebar drag tracker. Secondary titleless windows keep the default
+    /// movable behavior so the system titlebar still drags them.
     var disablesSystemDrag: Bool = false
 
     func makeNSView(context: Context) -> NSView {
