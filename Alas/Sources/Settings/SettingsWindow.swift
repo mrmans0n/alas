@@ -14,11 +14,6 @@ struct SettingsWindow: View {
                     colors: [theme.color("bg-3"), theme.color("bg-2")],
                     startPoint: .top, endPoint: .bottom
                 )
-                HStack {
-                    TrafficLights()
-                    Spacer()
-                }
-                .padding(.leading, 16)
                 Text("Settings")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(theme.color("fg-muted"))
@@ -61,9 +56,7 @@ struct SettingsWindow: View {
         .frame(width: 880)
         .frame(maxHeight: .infinity)
         .background(theme.color("bg-1"))
-        .background(WindowConfigurator())
         .environment(\.theme, theme)
-        .ignoresSafeArea()
         .onAppear {
             showsDebug = AdvancedSettingsVisibility.isEnabled()
             consumePendingSettingsSection()
