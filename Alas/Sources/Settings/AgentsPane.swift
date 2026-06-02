@@ -77,6 +77,14 @@ struct AgentsPane: View {
                             state.saveConfig() }
                         ))
                     }
+                    SettingsRow(name: "Confirm before closing chat tabs",
+                                desc: "Ask before closing Chat tabs with Command-W or the tab close button.") {
+                        AlasToggle(on: Binding(
+                            get: { state.config.harness.confirmCloseChatTabs },
+                            set: { state.config.harness.confirmCloseChatTabs = $0
+                            state.saveConfig() }
+                        ))
+                    }
                 }
 
                 SettingsGroup(title: "Harness") {
