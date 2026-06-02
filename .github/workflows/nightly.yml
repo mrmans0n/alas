@@ -166,6 +166,20 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -quiet build
 
+      - name: Stamp nightly build identity into Info.plist
+        # Overwrite the stable-default Info.plist keys committed in the
+        # repo with the real track / SHA / build-date for this nightly.
+        # Must run BEFORE signing, since signing seals the bundle.
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          plist="build/Build/Products/Release/Alas.app/Contents/Info.plist"
+          sha="$(git rev-parse HEAD)"
+          iso_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          plutil -replace AlasReleaseTrack -string "nightly" "$plist"
+          plutil -replace AlasGitSHA -string "$sha" "$plist"
+          plutil -replace AlasBuildDate -string "$iso_date" "$plist"
+          plutil -lint "$plist"
+
       # Gate signing on main-built refs only — non-main workflow_dispatch
       # checks out (and runs scripts from) the dispatched ref, so handing
       # the Developer ID cert + notary credentials to that ref's scripts
