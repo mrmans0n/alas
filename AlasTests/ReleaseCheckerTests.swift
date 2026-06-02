@@ -178,19 +178,13 @@ struct ReleaseCheckerTests {
         #expect(result == .upToDate)
     }
 
-    @Test func nightlyReportsUpToDateWhenRemoteOlderEvenIfSHADiffers() async {
-        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-01T08:00:00Z")
+    @Test func nightlyReportsUpdateEvenWhenReleasePublishedAtIsOld() async {
+        // The rolling nightly release's `published_at` reflects the original
+        // creation time, not the latest update, so it must not gate the SHA
+        // comparison. A different tag SHA always means a new build.
+        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2020-01-01T00:00:00Z")
         let result = await checker.check(identity: nightlyIdentity(
             sha: "aaa1111aaa1111aaa1111aaa1111aaa1111aaa11",
-            buildDate: "2026-06-02T10:00:00Z"
-        ))
-        #expect(result == .upToDate)
-    }
-
-    @Test func nightlyFallsBackToDateCompareWhenLocalSHAMissing() async {
-        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-02T12:00:00Z")
-        let result = await checker.check(identity: nightlyIdentity(
-            sha: nil,
             buildDate: "2026-06-02T10:00:00Z"
         ))
         guard case .updateAvailable = result else {
@@ -199,8 +193,10 @@ struct ReleaseCheckerTests {
         }
     }
 
-    @Test func nightlyFallbackReportsUpToDateWhenDatesAreEqual() async {
-        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-02T10:00:00Z")
+    @Test func nightlyReportsUpToDateWhenLocalSHAMissing() async {
+        // Hand-built nightlies (no stamped SHA) can't be compared. Don't
+        // pester with updates we can't verify.
+        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-02T12:00:00Z")
         let result = await checker.check(identity: nightlyIdentity(
             sha: nil,
             buildDate: "2026-06-02T10:00:00Z"

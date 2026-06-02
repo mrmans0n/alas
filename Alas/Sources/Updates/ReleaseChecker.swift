@@ -70,17 +70,16 @@ struct ReleaseChecker {
                 return .failed("The latest nightly could not be read.")
             }
 
-            // SHA + publishedAt pairing: a re-tag to the same SHA must not
-            // look like an update, and a force-pushed older SHA must not.
-            if let localSHA = identity.gitSHA {
-                let shaChanged = nightly.fullSHA != localSHA
-                let publishedNewer = identity.buildDate.map { nightly.publishedAt > $0 } ?? true
-                return (shaChanged && publishedNewer) ? .updateAvailable(info) : .upToDate
-            } else {
-                // No local SHA stamped — fall back to date-only compare.
-                let publishedNewer = identity.buildDate.map { nightly.publishedAt > $0 } ?? true
-                return publishedNewer ? .updateAvailable(info) : .upToDate
-            }
+            // SHA-only comparison: the release's `published_at` is unreliable
+            // because `softprops/action-gh-release` updates the existing
+            // `nightly` release in place, leaving the original publish time.
+            // The tag SHA is the source of truth — if it differs from what
+            // this build was stamped with, a newer build exists.
+            //
+            // No local SHA (e.g. a hand-built nightly): we cannot compare,
+            // so report up-to-date rather than pester with spurious updates.
+            guard let localSHA = identity.gitSHA else { return .upToDate }
+            return nightly.fullSHA != localSHA ? .updateAvailable(info) : .upToDate
         } catch {
             return .failed(error.localizedDescription)
         }
