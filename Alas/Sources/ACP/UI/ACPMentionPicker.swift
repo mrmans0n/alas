@@ -8,20 +8,19 @@ struct ACPMentionPickerView: View {
     let worktreeRoot: URL
     let onPick: (URL) -> Void
     let onCancel: () -> Void
+    let filesProvider: (@Sendable () async -> [URL])?
 
     @Environment(\.theme) private var theme
     @State private var query: String = ""
     @State private var highlight: Int = 0
     @FocusState private var searchFocused: Bool
     @State private var allFiles: [URL] = []
+    @State private var ranked: [URL] = []
+    @State private var isIndexing: Bool = true
+    @State private var rankTask: Task<Void, Never>?
+    @State private var rankGeneration: Int = 0
 
-    private var ranked: [URL] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if q.isEmpty {
-            return Array(allFiles.prefix(80))
-        }
-        return MentionFuzzy.rank(files: allFiles, query: q, limit: 80)
-    }
+    private let maxDisplay = 80
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,7 +50,10 @@ struct ACPMentionPickerView: View {
                 .font(.system(size: 12, design: .monospaced))
                 .focused($searchFocused)
                 .onAppear { searchFocused = true }
-                .onChange(of: query) { _, _ in highlight = 0 }
+                .onChange(of: query) { _, _ in
+                    highlight = 0
+                    rescheduleRank()
+                }
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -69,7 +71,7 @@ struct ACPMentionPickerView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     if ranked.isEmpty {
-                        Text(allFiles.isEmpty ? "Indexing worktree…" : "No matches")
+                        Text(isIndexing ? "Indexing worktree…" : "No matches")
                             .font(.system(size: 11))
                             .foregroundStyle(theme.color("fg-faint"))
                             .padding(.horizontal, 10).padding(.vertical, 10)
@@ -144,11 +146,42 @@ struct ACPMentionPickerView: View {
     }
 
     private func populateFiles() {
-        // Walk the worktree in the background and post results once.
-        let root = worktreeRoot
-        Task.detached(priority: .userInitiated) {
-            let result = MentionFuzzy.collectFiles(under: root, limit: 5000)
-            await MainActor.run { allFiles = result }
+        Task { @MainActor in
+            isIndexing = true
+            let files: [URL]
+            if let provider = filesProvider {
+                files = await provider()
+            } else {
+                let root = worktreeRoot
+                files = await Task.detached(priority: .userInitiated) {
+                    MentionFuzzy.collectFiles(under: root, limit: 5000)
+                }.value
+            }
+            allFiles = files
+            isIndexing = false
+            rescheduleRank()
+        }
+    }
+
+    private func rescheduleRank() {
+        rankTask?.cancel()
+        rankGeneration &+= 1
+        let gen = rankGeneration
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let files = allFiles
+        rankTask = Task.detached(priority: .userInitiated) {
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            if Task.isCancelled { return }
+            let result: [URL]
+            if q.isEmpty {
+                result = Array(files.prefix(maxDisplay))
+            } else {
+                result = MentionFuzzy.rank(files: files, query: q, limit: maxDisplay)
+            }
+            if Task.isCancelled { return }
+            await MainActor.run {
+                if rankGeneration == gen { ranked = result }
+            }
         }
     }
 }
@@ -156,9 +189,6 @@ struct ACPMentionPickerView: View {
 // MARK: - Fuzzy matching
 
 enum MentionFuzzy {
-    /// Walk the worktree, returning regular files (skipping .git, build,
-    /// node_modules, DerivedData, etc.) up to `limit`. Sorted by basename
-    /// for stable empty-query display.
     static func collectFiles(under root: URL, limit: Int) -> [URL] {
         var out: [URL] = []
         let skipDirs: Set<String> = [
@@ -191,11 +221,6 @@ enum MentionFuzzy {
         return out
     }
 
-    /// Rank files for a query. Score blends:
-    ///   - basename prefix match (highest)
-    ///   - basename subsequence (chars in order)
-    ///   - path substring
-    /// Higher score = better match. Ties broken by shorter relative path.
     static func rank(files: [URL], query: String, limit: Int) -> [URL] {
         let q = query.lowercased()
         var scored: [(URL, Int)] = []
@@ -222,9 +247,6 @@ enum MentionFuzzy {
         return Array(scored.prefix(limit).map(\.0))
     }
 
-    /// Returns the sum of inter-match gaps for a fuzzy subsequence match,
-    /// or nil if `query`'s chars don't appear in `haystack` in order.
-    /// Lower = tighter match.
     private static func subsequenceScore(in haystack: String, query: String) -> Int? {
         var gap = 0, total = 0
         var qIdx = query.startIndex

@@ -33,6 +33,9 @@ struct ACPInputField: NSViewRepresentable {
     /// Called when image staging fails so the chrome can show a transient
     /// notice. Receives the specific error that caused the failure.
     let onImageError: (ACPImageStaging.StagingError) -> Void
+    /// Async file list provider for the @-mention picker. When nil,
+    /// falls back to a synchronous `FileManager` enumerator.
+    let filesProvider: (@Sendable () async -> [URL])?
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -126,7 +129,8 @@ struct ACPInputField: NSViewRepresentable {
             sendOnEnter: sendOnEnter,
             onDraftChange: onDraftChange,
             onDraftClear: onDraftClear,
-            onSubmit: onSubmit
+            onSubmit: onSubmit,
+            filesProvider: filesProvider
         )
     }
 
@@ -146,6 +150,7 @@ struct ACPInputField: NSViewRepresentable {
         let onDraftChange: (ACPComposerDraft) -> Void
         let onDraftClear: () -> Void
         let onSubmit: ACPComposerSubmitHandler
+        let filesProvider: (@Sendable () async -> [URL])?
         var promptSuggestions: [ACPPromptSuggestion] = []
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
@@ -182,7 +187,8 @@ struct ACPInputField: NSViewRepresentable {
             sendOnEnter: Bool,
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
-            onSubmit: @escaping ACPComposerSubmitHandler
+            onSubmit: @escaping ACPComposerSubmitHandler,
+            filesProvider: (@Sendable () async -> [URL])? = nil
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
@@ -193,6 +199,7 @@ struct ACPInputField: NSViewRepresentable {
             self.onDraftChange = onDraftChange
             self.onDraftClear = onDraftClear
             self.onSubmit = onSubmit
+            self.filesProvider = filesProvider
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -595,6 +602,7 @@ final class ACPNSTextView: NSTextView {
         closeMentionPanel()
         let panel = ACPMentionPanel(
             worktreeRoot: coord.worktreeRoot,
+            filesProvider: coord.filesProvider,
             onPick: { [weak self] file in
                 self?.insertMention(file)
             },
@@ -949,7 +957,10 @@ final class ACPNSTextView: NSTextView {
 /// Glass NSPanel hosting the SwiftUI fuzzy file picker. Floats above
 /// the composer when the user types '@'.
 final class ACPMentionPanel: NSPanel {
-    init(worktreeRoot: URL, onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void = {}) {
+    init(worktreeRoot: URL,
+         filesProvider: (@Sendable () async -> [URL])?,
+         onPick: @escaping (URL) -> Void,
+         onCancel: @escaping () -> Void = {}) {
         super.init(
             contentRect: .init(x: 0, y: 0, width: 360, height: 280),
             styleMask: [.borderless, .nonactivatingPanel, .titled, .fullSizeContentView],
@@ -973,7 +984,8 @@ final class ACPMentionPanel: NSPanel {
             onCancel: { [weak self] in
                 self?.close()
                 onCancel()
-            }
+            },
+            filesProvider: filesProvider
         ))
         host.frame = contentView?.bounds ?? .init(x: 0, y: 0, width: 360, height: 280)
         host.autoresizingMask = [.width, .height]

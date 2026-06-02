@@ -265,7 +265,25 @@ private struct ACPSessionView: View {
                         agentLookup: { state.agent(id: $0) },
                         sendOnEnter: state.config.harness.acpSendOnEnter,
                         focusRequest: composerFocusRequest,
-                        placement: composerPlacement
+                        placement: composerPlacement,
+                        filesProvider: { [state, worktree] in
+                            await state.fileIndex.invalidate(forWorktreePath: worktree.path)
+                            async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)
+                            guard let entries = await entries else { return [] }
+                            let root = worktree.path
+                            var result: [URL] = []
+                            for entry in entries {
+                                let url = root.appendingPathComponent(entry.relativePath)
+                                guard (try? url.checkResourceIsReachable()) ?? false else { continue }
+                                if let isDir = try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory, isDir {
+                                    let sub = MentionFuzzy.collectFiles(under: url, limit: 5000)
+                                    result.append(contentsOf: sub)
+                                } else {
+                                    result.append(url)
+                                }
+                            }
+                            return result
+                        }
                     ) { text, attachments, intent, draft, onPromptFinished -> Bool in
                         // `intent` is already resolved by the composer for keyboard
                         // submits; the toolbar send button bypasses the keyboard

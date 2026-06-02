@@ -32,6 +32,7 @@ struct ACPComposer: View {
     let focusRequest: Int
     let placement: ACPComposerPlacement
     let onSubmit: ACPComposerSubmitHandler
+    let filesProvider: (@Sendable () async -> [URL])?
 
     @Environment(\.theme) private var theme
     @State private var inputFocused = false
@@ -47,6 +48,7 @@ struct ACPComposer: View {
         sendOnEnter: Bool,
         focusRequest: Int = 0,
         placement: ACPComposerPlacement = .bottom,
+        filesProvider: (@Sendable () async -> [URL])? = nil,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self._session = ObservedObject(wrappedValue: session)
@@ -57,6 +59,7 @@ struct ACPComposer: View {
         self.sendOnEnter = sendOnEnter
         self.focusRequest = focusRequest
         self.placement = placement
+        self.filesProvider = filesProvider
         self.onSubmit = onSubmit
     }
 
@@ -135,7 +138,8 @@ struct ACPComposer: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         if imageNotice == error.userMessage { imageNotice = nil }
                     }
-                }
+                },
+                filesProvider: filesProvider
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
