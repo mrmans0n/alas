@@ -108,8 +108,6 @@ struct ReleaseInfoTests {
         #expect(nightly.fullSHA == "abc1234567890abcdef1234567890abcdef12345")
         #expect(nightly.dmgURL?.absoluteString == "https://example.com/nightly.dmg")
         #expect(nightly.releaseNotes == "## Changes\n- nightly bits")
-        let formatter = ISO8601DateFormatter()
-        #expect(nightly.publishedAt == formatter.date(from: "2026-06-02T10:21:00Z"))
     }
 
     @Test func makeNightlyReturnsNilWhenTagSHAEmpty() throws {

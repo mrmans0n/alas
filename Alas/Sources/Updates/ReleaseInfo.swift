@@ -104,7 +104,6 @@ enum ReleaseInfo: Equatable, Identifiable {
         return .nightly(NightlyReleaseInfo(
             shortSHA: shortSHA,
             fullSHA: tagSHA,
-            publishedAt: release.publishedAt,
             releaseNotes: release.body ?? "",
             htmlURL: release.htmlUrl,
             dmgURL: dmg
@@ -122,7 +121,6 @@ struct StableReleaseInfo: Equatable {
 struct NightlyReleaseInfo: Equatable {
     let shortSHA: String
     let fullSHA: String
-    let publishedAt: Date
     let releaseNotes: String
     let htmlURL: URL
     let dmgURL: URL?

@@ -16,14 +16,12 @@ struct UpdateAvailableSheet: View {
         case .stable(let s):
             return "Alas \(s.version.description) is available."
         case .nightly(let n):
-            return "Nightly \(n.shortSHA) · \(relativeTime(from: n.publishedAt))"
+            // Intentionally no timestamp: the release's `published_at` is
+            // unreliable for the rolling nightly (updated in place), so the
+            // tag's short SHA is the only trustworthy identifier the sheet
+            // can show.
+            return "Nightly \(n.shortSHA)"
         }
-    }
-
-    private func relativeTime(from date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private var titleText: String {
