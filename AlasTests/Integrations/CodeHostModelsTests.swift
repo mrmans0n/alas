@@ -93,33 +93,6 @@ struct CodeHostModelsTests {
         #expect(gitlabRequest.provider == .gitlab)
     }
 
-    @Test func actionMetadataIsHumanReadable() {
-        let action = ReviewLoopAction(kind: .prepareCheckFailureHandoff, title: "Ask agent", detail: "CI failed")
-        #expect(action.requiresSessionApproval == false)
-        #expect(action.requiresExplicitConfirmation == false)
-        #expect(action.title == "Ask agent")
-    }
-
-    @Test func mutatingRemoteActionsRequireSessionApproval() {
-        let actionKinds: [ReviewLoopActionKind] = [
-            .pushBranch,
-            .createReviewRequest,
-            .updateReviewRequest,
-            .rerunFailedChecks,
-        ]
-
-        for kind in actionKinds {
-            let action = ReviewLoopAction(kind: kind, title: "\(kind.rawValue)", detail: "")
-            #expect(action.requiresSessionApproval)
-        }
-    }
-
-    @Test func readyToMergeRequiresExplicitConfirmation() {
-        let action = ReviewLoopAction(kind: .readyToMerge, title: "Merge", detail: "")
-
-        #expect(action.requiresExplicitConfirmation)
-    }
-
     @Test func worstCheckBucketReturnsNilForEmptyChecks() {
         let request = makeReviewRequest(checks: [])
 

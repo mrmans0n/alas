@@ -51,15 +51,15 @@ struct ReviewLoopDrawerTests {
         #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    @Test func readinessActionsDoNotExposeStartNarrative() {
+    @Test func missingReviewRequestUsesCreateAction() {
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: nil),
             lastError: nil,
             canOpenAgentHandoff: false
         )
 
-        #expect(model.title != "Start " + "review session")
-        #expect(!model.actions.map(\.title).contains("Start"))
+        #expect(model.actions.map(\.kind) == [.refresh, .createReviewRequest])
+        #expect(model.actions.map(\.title) == ["Refresh", "Create PR"])
     }
 
     private typealias Action = ReviewReadinessModel.Action

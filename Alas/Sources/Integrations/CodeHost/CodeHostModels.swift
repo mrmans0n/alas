@@ -172,42 +172,12 @@ struct ReviewLoopSnapshot: Equatable, Sendable {
 }
 
 enum ReviewLoopActionKind: String, Codable, Equatable, Sendable {
-    case installProviderCLI
-    case authenticateProvider
-    case startSession
-    case pushBranch
-    case createReviewRequest
-    case updateReviewRequest
-    case waitForChecks
     case prepareCheckFailureHandoff
     case prepareReviewHandoff
-    case rerunFailedChecks
-    case waitForReview
-    case readyToMerge
-    case blocked
-    case none
 }
 
 struct ReviewLoopAction: Equatable, Sendable {
     let kind: ReviewLoopActionKind
     let title: String
     let detail: String
-
-    var requiresSessionApproval: Bool {
-        switch kind {
-        case .pushBranch, .createReviewRequest, .updateReviewRequest, .rerunFailedChecks:
-            true
-        default:
-            false
-        }
-    }
-
-    var requiresExplicitConfirmation: Bool {
-        switch kind {
-        case .readyToMerge:
-            true
-        default:
-            false
-        }
-    }
 }

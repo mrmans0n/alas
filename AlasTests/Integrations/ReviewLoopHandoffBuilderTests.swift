@@ -128,7 +128,7 @@ struct ReviewLoopHandoffBuilderTests {
         let prompt = ReviewLoopHandoffBuilder.build(
             snapshot: Self.makeSnapshot(request: nil),
             action: ReviewLoopAction(
-                kind: .blocked,
+                kind: .prepareCheckFailureHandoff,
                 title: "Blocked",
                 detail: "Provider unavailable"
             )
