@@ -104,7 +104,7 @@ extension CursorModelVariants {
                 name: preferred.info.name,
                 description: preferred.info.description))
         }
-        let model = modelItems.count > 0
+        let model = !modelItems.isEmpty
             ? ChipSpec(source: .model, options: modelItems, currentId: currentModel)
             : nil
 
