@@ -33,32 +33,44 @@ struct ReleaseInfoTests {
         #expect(release.assets.first?.browserDownloadUrl.absoluteString == "https://example.com/arm64.dmg")
     }
 
-    @Test func mapsToReleaseInfoWithMatchingArchDMG() throws {
-        let info = ReleaseInfo.make(from: try decode(sample), arch: "arm64")
-        #expect(info?.version == SemanticVersion(major: 0, minor: 6, patch: 0))
-        #expect(info?.releaseNotes == "## Fixes\n- thing")
-        #expect(info?.dmgURL?.absoluteString == "https://example.com/arm64.dmg")
-        #expect(info?.htmlURL.absoluteString == "https://github.com/mrmans0n/alas/releases/tag/v0.6.0")
+    @Test func makesStableReleaseInfoWithMatchingArchDMG() throws {
+        let info = ReleaseInfo.makeStable(from: try decode(sample), arch: "arm64")
+        guard case let .stable(stable) = info else {
+            Issue.record("expected .stable, got \(String(describing: info))")
+            return
+        }
+        #expect(stable.version == SemanticVersion(major: 0, minor: 6, patch: 0))
+        #expect(stable.releaseNotes == "## Fixes\n- thing")
+        #expect(stable.dmgURL?.absoluteString == "https://example.com/arm64.dmg")
+        #expect(stable.htmlURL.absoluteString == "https://github.com/mrmans0n/alas/releases/tag/v0.6.0")
     }
 
-    @Test func mapsWithNilDMGWhenArchAssetMissing() throws {
-        let info = ReleaseInfo.make(from: try decode(sample), arch: "riscv")
-        #expect(info?.dmgURL == nil)
+    @Test func makesStableWithNilDMGWhenArchAssetMissing() throws {
+        let info = ReleaseInfo.makeStable(from: try decode(sample), arch: "riscv")
+        guard case let .stable(stable) = info else {
+            Issue.record("expected .stable")
+            return
+        }
+        #expect(stable.dmgURL == nil)
     }
 
-    @Test func mapFailsWhenTagUnparseable() throws {
+    @Test func makeStableReturnsNilWhenTagUnparseable() throws {
         let bad = """
         {"tag_name": "nightly", "body": null, "html_url": "https://x.test", "prerelease": false, "draft": false, "target_commitish": "abc1234", "published_at": "2026-06-02T10:21:00Z", "assets": []}
         """
-        #expect(ReleaseInfo.make(from: try decode(bad), arch: "arm64") == nil)
+        #expect(ReleaseInfo.makeStable(from: try decode(bad), arch: "arm64") == nil)
     }
 
-    @Test func handlesNullBody() throws {
+    @Test func stableHandlesNullBody() throws {
         let noBody = """
         {"tag_name": "v0.6.0", "body": null, "html_url": "https://x.test", "prerelease": false, "draft": false, "target_commitish": "abc1234", "published_at": "2026-06-02T10:21:00Z", "assets": []}
         """
-        let info = ReleaseInfo.make(from: try decode(noBody), arch: "arm64")
-        #expect(info?.releaseNotes == "")
+        let info = ReleaseInfo.makeStable(from: try decode(noBody), arch: "arm64")
+        guard case let .stable(stable) = info else {
+            Issue.record("expected .stable")
+            return
+        }
+        #expect(stable.releaseNotes == "")
     }
 
     @Test func decodesTargetCommitishAndPublishedAt() throws {
@@ -66,5 +78,52 @@ struct ReleaseInfoTests {
         #expect(release.targetCommitish == "abc1234567890abcdef1234567890abcdef12345")
         let formatter = ISO8601DateFormatter()
         #expect(release.publishedAt == formatter.date(from: "2026-06-02T10:21:00Z"))
+    }
+
+    @Test func makesNightlyReleaseInfoWithShortSHAAndAsset() throws {
+        let json = """
+        {
+          "tag_name": "nightly",
+          "body": "## Changes\\n- nightly bits",
+          "html_url": "https://github.com/mrmans0n/alas/releases/tag/nightly",
+          "prerelease": true,
+          "draft": false,
+          "target_commitish": "abc1234567890abcdef1234567890abcdef12345",
+          "published_at": "2026-06-02T10:21:00Z",
+          "assets": [
+            {"name": "Alas-nightly.dmg", "browser_download_url": "https://example.com/nightly.dmg"},
+            {"name": "Alas-nightly.app.zip", "browser_download_url": "https://example.com/nightly.zip"}
+          ]
+        }
+        """
+        let info = ReleaseInfo.makeNightly(from: try decode(json))
+        guard case let .nightly(nightly) = info else {
+            Issue.record("expected .nightly, got \(String(describing: info))")
+            return
+        }
+        #expect(nightly.shortSHA == "abc1234")
+        #expect(nightly.dmgURL?.absoluteString == "https://example.com/nightly.dmg")
+        #expect(nightly.releaseNotes == "## Changes\n- nightly bits")
+        let formatter = ISO8601DateFormatter()
+        #expect(nightly.publishedAt == formatter.date(from: "2026-06-02T10:21:00Z"))
+    }
+
+    @Test func makeNightlyReturnsNilWhenTargetCommitishEmpty() throws {
+        let json = """
+        {"tag_name":"nightly","body":null,"html_url":"https://x.test","prerelease":true,"draft":false,"target_commitish":"","published_at":"2026-06-02T10:21:00Z","assets":[]}
+        """
+        #expect(ReleaseInfo.makeNightly(from: try decode(json)) == nil)
+    }
+
+    @Test func makeNightlyHasNilDMGWhenAssetMissing() throws {
+        let json = """
+        {"tag_name":"nightly","body":null,"html_url":"https://x.test","prerelease":true,"draft":false,"target_commitish":"abc1234","published_at":"2026-06-02T10:21:00Z","assets":[]}
+        """
+        let info = ReleaseInfo.makeNightly(from: try decode(json))
+        guard case let .nightly(nightly) = info else {
+            Issue.record("expected .nightly")
+            return
+        }
+        #expect(nightly.dmgURL == nil)
     }
 }

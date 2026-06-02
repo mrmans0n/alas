@@ -32,10 +32,13 @@ struct ReleaseChecker {
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             decoder.dateDecodingStrategy = .iso8601
             let release = try decoder.decode(GitHubRelease.self, from: data)
-            guard let info = ReleaseInfo.make(from: release, arch: arch) else {
+            guard let info = ReleaseInfo.makeStable(from: release, arch: arch) else {
                 return .failed("The latest release could not be read.")
             }
-            return info.version > current ? .updateAvailable(info) : .upToDate
+            guard case .stable(let stable) = info else {
+                return .failed("The latest release could not be read.")
+            }
+            return stable.version > current ? .updateAvailable(info) : .upToDate
         } catch {
             return .failed(error.localizedDescription)
         }

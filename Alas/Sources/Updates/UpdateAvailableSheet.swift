@@ -11,13 +11,28 @@ struct UpdateAvailableSheet: View {
 
     private let brewCommand = "brew upgrade --cask alas"
 
+    private var subtitleText: String {
+        switch info {
+        case .stable(let s):
+            return "Alas \(s.version.description) is available."
+        case .nightly(let n):
+            return "Nightly \(n.shortSHA) · \(relativeTime(from: n.publishedAt))"
+        }
+    }
+
+    private func relativeTime(from date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Update available")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
-                Text("Alas \(info.version.description) is available.")
+                Text(subtitleText)
                     .font(.system(size: 12))
                     .foregroundColor(theme.color("fg-dim"))
             }

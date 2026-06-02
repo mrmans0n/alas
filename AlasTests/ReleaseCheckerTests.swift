@@ -28,11 +28,12 @@ struct ReleaseCheckerTests {
     @Test func reportsUpdateWhenRemoteNewer() async {
         let result = await checker(returning: json(tag: "v0.6.0"))
             .check(current: SemanticVersion(major: 0, minor: 5, patch: 1))
-        guard case let .updateAvailable(info) = result else {
-            Issue.record("expected updateAvailable, got \(result)")
+        guard case let .updateAvailable(info) = result,
+              case let .stable(stable) = info else {
+            Issue.record("expected updateAvailable(.stable), got \(result)")
             return
         }
-        #expect(info.version == SemanticVersion(major: 0, minor: 6, patch: 0))
+        #expect(stable.version == SemanticVersion(major: 0, minor: 6, patch: 0))
     }
 
     @Test func reportsUpToDateWhenEqual() async {
