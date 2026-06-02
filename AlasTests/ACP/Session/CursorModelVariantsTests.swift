@@ -44,5 +44,6 @@ struct CursorModelVariantsTests {
     func skipsBareFragments() {
         let v = CursorModelVariants.parse("m[effort=high,broken,context=4k]")
         #expect(v.attrs.map { $0.key } == ["effort", "context"])
+        #expect(v.attrs.map { $0.value } == ["high", "4k"])
     }
 }
