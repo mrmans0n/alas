@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-06-02
+
+### 🐛 Fixes
+
+- Restore the custom Settings titlebar without duplicate semaphore controls (#446).
+- Restore ACP transcript scroll-up pagination on macOS 15 and newer (#447).
+- Use the pleading-face empty state icon for tabs (#448).
+- Use sparkles artwork in the ACP chat empty state (#449).
+- Rename the ACP chat menu section in the tab menu (#450).
+
 ## [0.5.2] - 2026-06-02
 
 ### ✨ Features
