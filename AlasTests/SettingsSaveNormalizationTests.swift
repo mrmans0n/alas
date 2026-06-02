@@ -62,6 +62,29 @@ struct SettingsSaveNormalizationTests {
         #expect(AppConfig.defaults.code.formatOnSave == false)
     }
 
+    @Test func decodeMissingCloseConfirmationSettingsDefaultToFalse() throws {
+        let json = #"{"themeId":"cool-slate","accent":"teal","density":"comfortable","matchSystemTheme":false,"sidebarMaterial":"appKitSidebar","sidebarWidth":244,"rightPaneWidth":320,"rightPaneVisible":true,"sidebarVisible":true,"commitDetailSplitRatio":0.32,"general":{"launchAtLogin":false,"closeToTray":true,"confirmQuit":true,"autoUpdate":true,"updateChannel":"Stable","crashReports":false,"usageAnalytics":false},"worktrees":{"rootPath":"~/.alas/worktrees","pathTemplate":"{worktreeRoot}/{repo}/{branch}","branchPrefix":"feature/","baseBranch":"main","trackUpstream":true,"deleteBranchOnRemove":true,"autoFetch":true,"fetchIntervalMinutes":5,"pruneStale":false},"terminal":{"shell":"/bin/zsh","workingDirectory":"worktreeRoot","startupScript":"","worktreeCreateScript":"","inheritParentEnv":true,"fontFamily":"JetBrains Mono","fontSize":13,"cursorStyle":"beam","cursorBlink":true,"scrollbackLines":10000,"bell":"visual","syncTabTitleWithTerminalTitle":false},"harness":{"notifyOnFinish":true,"notifyOnAwaiting":true},"code":{"fontFamily":"SF Mono","fontSize":13,"formatOnSave":true,"languageServers":[],"dismissedInstallNudges":[],"userDefinedRecipes":{}},"markdown":{"defaultViewMode":"editor"},"changes":{"aiToolId":"none","prompt":"Hello"},"agents":{"builtinState":{},"custom":[],"worktreeAutoLaunch":{"agentId":null,"useBypassPermissions":false}},"files":{"showIgnored":true}}"#
+        let data = Data(json.utf8)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.terminal.confirmCloseTabs == false)
+        #expect(decoded.harness.confirmCloseChatTabs == false)
+    }
+
+    @Test func decodeExplicitCloseConfirmationSettingsArePreserved() throws {
+        let json = #"{"themeId":"cool-slate","accent":"teal","density":"comfortable","matchSystemTheme":false,"sidebarMaterial":"appKitSidebar","sidebarWidth":244,"rightPaneWidth":320,"rightPaneVisible":true,"sidebarVisible":true,"commitDetailSplitRatio":0.32,"general":{"launchAtLogin":false,"closeToTray":true,"confirmQuit":true,"autoUpdate":true,"updateChannel":"Stable","crashReports":false,"usageAnalytics":false},"worktrees":{"rootPath":"~/.alas/worktrees","pathTemplate":"{worktreeRoot}/{repo}/{branch}","branchPrefix":"feature/","baseBranch":"main","trackUpstream":true,"deleteBranchOnRemove":true,"autoFetch":true,"fetchIntervalMinutes":5,"pruneStale":false},"terminal":{"shell":"/bin/zsh","workingDirectory":"worktreeRoot","startupScript":"","worktreeCreateScript":"","inheritParentEnv":true,"fontFamily":"JetBrains Mono","fontSize":13,"cursorStyle":"beam","cursorBlink":true,"scrollbackLines":10000,"bell":"visual","syncTabTitleWithTerminalTitle":false,"confirmCloseTabs":true},"harness":{"notifyOnFinish":true,"notifyOnAwaiting":true,"confirmCloseChatTabs":true},"code":{"fontFamily":"SF Mono","fontSize":13,"formatOnSave":true,"languageServers":[],"dismissedInstallNudges":[],"userDefinedRecipes":{}},"markdown":{"defaultViewMode":"editor"},"changes":{"aiToolId":"none","prompt":"Hello"},"agents":{"builtinState":{},"custom":[],"worktreeAutoLaunch":{"agentId":null,"useBypassPermissions":false}},"files":{"showIgnored":true}}"#
+        let data = Data(json.utf8)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.terminal.confirmCloseTabs == true)
+        #expect(decoded.harness.confirmCloseChatTabs == true)
+    }
+
+    @Test func staticDefaultConfigHasCloseConfirmationDisabled() {
+        #expect(AppConfig.defaults.terminal.confirmCloseTabs == false)
+        #expect(AppConfig.defaults.harness.confirmCloseChatTabs == false)
+    }
+
     @Test func decodeMissingSyncTabTitleField() throws {
         let json = #"{"themeId":"cool-slate","accent":"teal","density":"comfortable","matchSystemTheme":false,"sidebarMaterial":"appKitSidebar","sidebarWidth":244,"rightPaneWidth":320,"rightPaneVisible":true,"sidebarVisible":true,"commitDetailSplitRatio":0.32,"general":{"launchAtLogin":false,"closeToTray":true,"confirmQuit":true,"autoUpdate":true,"updateChannel":"Stable","crashReports":false,"usageAnalytics":false},"worktrees":{"rootPath":"~/.alas/worktrees","pathTemplate":"{worktreeRoot}/{repo}/{branch}","branchPrefix":"feature/","baseBranch":"main","trackUpstream":true,"deleteBranchOnRemove":true,"autoFetch":true,"fetchIntervalMinutes":5,"pruneStale":false},"terminal":{"shell":"/bin/zsh","workingDirectory":"worktreeRoot","startupScript":"","worktreeCreateScript":"","inheritParentEnv":true,"fontFamily":"JetBrains Mono","fontSize":13,"cursorStyle":"beam","cursorBlink":true,"scrollbackLines":10000,"bell":"visual"},"harness":{"notifyOnFinish":true,"notifyOnAwaiting":true},"code":{"fontFamily":"SF Mono","fontSize":13,"formatOnSave":true,"languageServers":[],"dismissedInstallNudges":[],"userDefinedRecipes":{}},"markdown":{"defaultViewMode":"editor"},"changes":{"aiToolId":"none","prompt":"Hello"},"agents":{"builtinState":{},"custom":[],"worktreeAutoLaunch":{"agentId":null,"useBypassPermissions":false}},"files":{"showIgnored":true}}"#
         let data = Data(json.utf8)

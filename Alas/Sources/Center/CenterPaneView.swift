@@ -32,7 +32,7 @@ struct CenterPaneView: View {
                     return buffer?.dirty ?? false
                 },
                 onActivate: { id in state.tabs.activate(worktreeId: worktree.id, tabId: id) },
-                onClose:    { id in state.closeTab(worktreeId: worktree.id, tabId: id) },
+                onClose:    { id in state.requestCloseTab(worktreeId: worktree.id, tabId: id) },
                 onCloseOthers: { id in state.closeOtherTabs(worktreeId: worktree.id, keeping: id) },
                 onCloseAll: { state.closeAllTabs(worktreeId: worktree.id) },
                 onCloseToLeft: { id in state.closeTabsToLeft(worktreeId: worktree.id, of: id) },

@@ -123,6 +123,7 @@ struct AppConfig: Codable, Equatable {
         var scrollbackLines: Int
         var bell: String                 // off | visual | sound
         var syncTabTitleWithTerminalTitle: Bool
+        var confirmCloseTabs: Bool
         /// When true, every interactive pane is wrapped in `zmx attach <name>`
         /// so the shell (and any running agents) survives app quit/relaunch.
         /// When false, panes launch as plain shells and die with the app.
@@ -132,7 +133,7 @@ struct AppConfig: Codable, Equatable {
             case shell, workingDirectory, startupScript, worktreeCreateScript,
                  inheritParentEnv, fontFamily, fontSize, cursorStyle, cursorBlink,
                  scrollbackLines, bell, syncTabTitleWithTerminalTitle,
-                 keepSessionsAlive
+                 confirmCloseTabs, keepSessionsAlive
         }
 
         init(
@@ -148,6 +149,7 @@ struct AppConfig: Codable, Equatable {
             scrollbackLines: Int,
             bell: String,
             syncTabTitleWithTerminalTitle: Bool,
+            confirmCloseTabs: Bool = false,
             keepSessionsAlive: Bool = true
         ) {
             self.shell = shell
@@ -162,6 +164,7 @@ struct AppConfig: Codable, Equatable {
             self.scrollbackLines = scrollbackLines
             self.bell = bell
             self.syncTabTitleWithTerminalTitle = syncTabTitleWithTerminalTitle
+            self.confirmCloseTabs = confirmCloseTabs
             self.keepSessionsAlive = keepSessionsAlive
         }
 
@@ -179,6 +182,7 @@ struct AppConfig: Codable, Equatable {
             scrollbackLines = try c.decode(Int.self, forKey: .scrollbackLines)
             bell = try c.decode(String.self, forKey: .bell)
             syncTabTitleWithTerminalTitle = (try? c.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? false
+            confirmCloseTabs = (try? c.decode(Bool.self, forKey: .confirmCloseTabs)) ?? false
             keepSessionsAlive = (try? c.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
         }
     }
@@ -188,6 +192,7 @@ struct AppConfig: Codable, Equatable {
         var notifyOnAwaiting: Bool
         var dismissedHookInstallNudges: [String]
         var dismissedACPSetupNudges: [String]
+        var confirmCloseChatTabs: Bool
         /// When true (default): ⏎ submits with .auto intent, ⌥⏎ steers.
         /// When false: the two are inverted — ⏎ steers, ⌥⏎ queues. The
         /// label in Settings is "Send on ⏎, queue on ⌥⏎ while busy".
@@ -196,18 +201,20 @@ struct AppConfig: Codable, Equatable {
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
-                 acpSendOnEnter
+                 confirmCloseChatTabs, acpSendOnEnter
         }
 
         init(notifyOnFinish: Bool, notifyOnAwaiting: Bool,
              dismissedHookInstallNudges: [String] = [],
              dismissedACPSetupNudges: [String] = [],
+             confirmCloseChatTabs: Bool = false,
              acpSendOnEnter: Bool = true)
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
             self.dismissedHookInstallNudges = dismissedHookInstallNudges
             self.dismissedACPSetupNudges = dismissedACPSetupNudges
+            self.confirmCloseChatTabs = confirmCloseChatTabs
             self.acpSendOnEnter = acpSendOnEnter
         }
 
@@ -217,6 +224,7 @@ struct AppConfig: Codable, Equatable {
             notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
             dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
             dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
+            confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
         }
     }
@@ -355,6 +363,7 @@ struct AppConfig: Codable, Equatable {
             scrollbackLines: 10000,
             bell: "visual",
             syncTabTitleWithTerminalTitle: false,
+            confirmCloseTabs: false,
             keepSessionsAlive: true
         ),
         harness: Harness(notifyOnFinish: true, notifyOnAwaiting: true),
@@ -496,6 +505,7 @@ extension AppConfig {
             let scrollbackLines = (try? termContainer.decode(Int.self, forKey: .scrollbackLines)) ?? 10000
             let bell = (try? termContainer.decode(String.self, forKey: .bell)) ?? "visual"
             let syncTabTitleWithTerminalTitle = (try? termContainer.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? false
+            let confirmCloseTabs = (try? termContainer.decode(Bool.self, forKey: .confirmCloseTabs)) ?? false
             let keepSessionsAlive = (try? termContainer.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
             terminal = Terminal(
                 shell: shell,
@@ -510,6 +520,7 @@ extension AppConfig {
                 scrollbackLines: scrollbackLines,
                 bell: bell,
                 syncTabTitleWithTerminalTitle: syncTabTitleWithTerminalTitle,
+                confirmCloseTabs: confirmCloseTabs,
                 keepSessionsAlive: keepSessionsAlive
             )
         } else {
@@ -526,6 +537,7 @@ extension AppConfig {
                 scrollbackLines: 10000,
                 bell: "visual",
                 syncTabTitleWithTerminalTitle: false,
+                confirmCloseTabs: false,
                 keepSessionsAlive: true
             )
         }

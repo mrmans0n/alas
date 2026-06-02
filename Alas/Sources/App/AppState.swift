@@ -1500,7 +1500,7 @@ final class AppState {
               case .terminal = tab else { return }
         guard let outcome = tabs.removeFocusedLeaf(worktreeId: worktreeId, tabId: activeId) else { return }
         if case .tabRemoved = outcome {
-            closeTab(worktreeId: worktreeId, tabId: activeId)
+            requestCloseTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
             closeTerminalSession(
@@ -1620,7 +1620,7 @@ final class AppState {
             return
         }
         if let activeId = tabs.activeTabId(forWorktree: worktreeId) {
-            closeTab(worktreeId: worktreeId, tabId: activeId)
+            requestCloseTab(worktreeId: worktreeId, tabId: activeId)
         }
     }
 
@@ -1948,6 +1948,25 @@ final class AppState {
             }
         }
         tabs.close(worktreeId: worktreeId, tabId: tabId)
+    }
+
+    func requestCloseTab(worktreeId: String, tabId: TabID) {
+        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) else { return }
+        if let prompt = CloseTabConfirmationPolicy.prompt(for: tab, config: config),
+           !confirmCloseTab(prompt) {
+            return
+        }
+        closeTab(worktreeId: worktreeId, tabId: tabId)
+    }
+
+    private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: prompt.confirmButtonTitle)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func cleanupTerminals(worktreeId: String, allTabs: [Tab], tabIds: [TabID]) {

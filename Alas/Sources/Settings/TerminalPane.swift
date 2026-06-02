@@ -38,6 +38,10 @@ struct TerminalPane: View {
                                 desc: "Terminal panes (and any running agents inside them) survive quit and relaunch with their shell, scrollback, and state.") {
                         AlasToggle(on: state.bind(\.terminal.keepSessionsAlive))
                     }
+                    SettingsRow(name: "Confirm before closing terminal tabs",
+                                desc: "Ask before closing Terminal tabs with Command-W or the tab close button.") {
+                        AlasToggle(on: state.bind(\.terminal.confirmCloseTabs))
+                    }
                 }
 
                 SettingsGroup(title: "Startup scripts") {
