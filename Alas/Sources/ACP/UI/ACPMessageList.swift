@@ -154,43 +154,24 @@ struct ACPMessageList: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .coordinateSpace(name: scrollSpaceName)
-                .background(
-                    ACPScrollEventObserver(
-                        onPaused: {
-                            setFollowsTranscriptTail(false)
-                        },
-                        onAtBottom: {
-                            setFollowsTranscriptTail(true)
-                        },
-                        isRestoring: { isRestoringTail },
-                        onScrollViewResolved: { scrollViewRef.scrollView = $0 }
-                    )
-                )
+                .modifier(ACPTranscriptScrollTracking(
+                    isRestoring: { isRestoringTail },
+                    onResolveScrollView: { scrollViewRef.scrollView = $0 },
+                    onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
+                    onPaused: { setFollowsTranscriptTail(false) },
+                    onAtBottom: { setFollowsTranscriptTail(true) },
+                    onGeometry: { prevMinY, newMinY, viewportH, contentH in
+                        handleScrollGeometry(
+                            previousMinY: prevMinY, newMinY: newMinY,
+                            viewportHeight: viewportH, contentHeight: contentH,
+                            proxy: proxy)
+                    }
+                ))
                 .onAppear {
                     restoreTailIfNeeded(proxy: proxy, animated: false)
                 }
                 .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
-                }
-                .onPreferenceChange(ACPHeadFramePreferenceKey.self) { frame in
-                    headFrame = frame
-                    // Auto-paginate: step back when the sentinel enters the
-                    // threshold band at the top of the viewport; debounce so
-                    // a single scroll doesn't decrement multiple times before
-                    // SwiftUI lays out the newly-revealed rows.
-                    // `frame.maxY > 0` ensures the sentinel is actually
-                    // visible — without it, restoring to the tail of a
-                    // long transcript puts the sentinel far above the
-                    // viewport (negative minY *and* negative maxY) and the
-                    // initial preference fire would still satisfy
-                    // `minY < threshold`, defeating the window before the
-                    // user scrolled.
-                    guard transcript.visibleHead > 0 else { return }
-                    guard frame.minY < headStepScrollThreshold, frame.maxY > 0 else { return }
-                    let now = Date()
-                    guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
-                    lastHeadStepAt = now
-                    stepHeadBackPreservingScroll()
                 }
                 .onChange(of: scrollSignature) { _, _ in
                     if session.followsTranscriptTail {
@@ -267,34 +248,102 @@ struct ACPMessageList: View {
         return .hidden
     }
 
-    /// Reveal older messages while keeping the viewport anchored to the
-    /// same content. Captures the content height before `stepHeadBack()`
-    /// prepends rows, then adjusts the clip-view origin by the delta so
-    /// the user's reading position doesn't jump.
-    private func stepHeadBackPreservingScroll() {
-        guard let scrollView = scrollViewRef.scrollView else {
+    /// macOS 14 fallback path. The Tahoe (macOS 15+) ScrollView is no longer
+    /// backed by an `NSScrollView`, and `frame(in:.named:)` reported through a
+    /// `PreferenceKey` stops delivering live values during scroll, so this
+    /// handler never fires there — scroll position comes from
+    /// `handleScrollGeometry` instead. On macOS 14 the legacy pipeline still
+    /// works, so we keep it: step the window back when the head sentinel
+    /// enters the threshold band at the top of the viewport.
+    ///
+    /// `frame.maxY > 0` ensures the sentinel is actually visible — without it,
+    /// restoring to the tail of a long transcript puts the sentinel far above
+    /// the viewport (negative minY *and* maxY) and the initial preference fire
+    /// would still satisfy `minY < threshold`, defeating the window before the
+    /// user scrolled.
+    private func handleHeadFramePreference(_ frame: CGRect, proxy: ScrollViewProxy) {
+        headFrame = frame
+        guard transcript.visibleHead > 0 else { return }
+        guard frame.minY < headStepScrollThreshold, frame.maxY > 0 else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
+        lastHeadStepAt = now
+        stepHeadBackPreservingScroll(proxy: proxy)
+    }
+
+    /// macOS 15+ path. `onScrollGeometryChange` feeds the live scroll position
+    /// straight from the SwiftUI ScrollView, replacing both the (now unreachable)
+    /// `NSScrollView` bounds observer and the dead `PreferenceKey` pipeline.
+    /// `minY` is `visibleRect.minY` (distance the viewport top has scrolled into
+    /// the content); paired with viewport/content heights it gives the shared
+    /// classifier the same offset/“distance from bottom” it computed from the
+    /// NSScrollView before.
+    private func handleScrollGeometry(
+        previousMinY: CGFloat,
+        newMinY: CGFloat,
+        viewportHeight: CGFloat,
+        contentHeight: CGFloat,
+        proxy: ScrollViewProxy
+    ) {
+        // Tail-follow pause/resume — reuse the shared classifier so the rules
+        // match the legacy observer exactly.
+        let decision = ACPScrollDirectionClassifier.decide(
+            previousOffsetY: previousMinY,
+            newOffsetY: newMinY,
+            viewportHeight: viewportHeight,
+            contentHeight: contentHeight,
+            isRestoring: isRestoringTail,
+            isUserDriven: ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
+        )
+        switch decision {
+        case .userScrolledUp: setFollowsTranscriptTail(false)
+        case .userAtBottom: setFollowsTranscriptTail(true)
+        case .noChange: break
+        }
+        // Head-step pagination: reveal an older chunk as the viewport nears the
+        // top of the content. When restored to the tail, `newMinY` is large, so
+        // the threshold check alone keeps this from firing prematurely.
+        guard transcript.visibleHead > 0, !isRestoringTail else { return }
+        guard newMinY < headStepScrollThreshold else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
+        lastHeadStepAt = now
+        stepHeadBackPreservingScroll(proxy: proxy)
+    }
+
+    /// Reveal an older chunk while keeping the viewport anchored to the same
+    /// content.
+    private func stepHeadBackPreservingScroll(proxy: ScrollViewProxy) {
+        // macOS 14: the ScrollView is NSScrollView-backed, so we preserve the
+        // exact reading position by shifting the clip-view origin by the height
+        // the prepended rows add.
+        if let scrollView = scrollViewRef.scrollView {
+            let clipView = scrollView.contentView
+            let oldOffset = clipView.bounds.origin.y
+            let oldContentHeight = scrollView.documentView?.bounds.height ?? 0
+            isRestoringTail = true
             transcript.stepHeadBack()
+            DispatchQueue.main.async {
+                let newContentHeight = scrollView.documentView?.bounds.height ?? 0
+                let delta = newContentHeight - oldContentHeight
+                if delta > 0 {
+                    clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: oldOffset + delta))
+                }
+                DispatchQueue.main.async { isRestoringTail = false }
+            }
             return
         }
-        let clipView = scrollView.contentView
-        let oldOffset = clipView.bounds.origin.y
-        let oldContentHeight = scrollView.documentView?.bounds.height ?? 0
-
+        // macOS 15+: no reachable NSScrollView. Anchor the row currently at the
+        // top of the window and pin it back to the top after the older rows lay
+        // out, so the viewport doesn't jump.
+        let anchorId = visibleMessages.first?.stableId
         isRestoringTail = true
         transcript.stepHeadBack()
-
-        // After SwiftUI lays out the prepended rows, compute the content
-        // height delta and shift the clip-view origin so the viewport
-        // stays anchored to the same messages.
         DispatchQueue.main.async {
-            let newContentHeight = scrollView.documentView?.bounds.height ?? 0
-            let delta = newContentHeight - oldContentHeight
-            if delta > 0 {
-                clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: oldOffset + delta))
+            if let anchorId {
+                proxy.scrollTo(anchorId, anchor: .top)
             }
-            DispatchQueue.main.async {
-                isRestoringTail = false
-            }
+            DispatchQueue.main.async { isRestoringTail = false }
         }
     }
 
@@ -337,6 +386,60 @@ private struct ACPHeadFramePreferenceKey: PreferenceKey {
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         value = nextValue()
     }
+}
+
+/// Drives transcript scroll tracking with the right mechanism per OS version.
+///
+/// macOS 15+ (including Tahoe) stopped backing SwiftUI `ScrollView` with an
+/// `NSScrollView`, and `frame(in:.named:)` reported through a `PreferenceKey`
+/// no longer delivers live values during scroll — so on those systems the
+/// legacy path silently never paginates and never pauses tail-follow.
+/// `onScrollGeometryChange` reads scroll position straight from the ScrollView
+/// and feeds both behaviours. macOS 14 keeps the original NSScrollView-observer
+/// plus preference path, which still works there.
+private struct ACPTranscriptScrollTracking: ViewModifier {
+    let isRestoring: () -> Bool
+    let onResolveScrollView: (NSScrollView) -> Void
+    let onHeadFrame: (CGRect) -> Void
+    let onPaused: () -> Void
+    let onAtBottom: () -> Void
+    /// `(previousMinY, newMinY, viewportHeight, contentHeight)`.
+    let onGeometry: (CGFloat, CGFloat, CGFloat, CGFloat) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.onScrollGeometryChange(for: ACPScrollProbe.self) { geo in
+                ACPScrollProbe(
+                    minY: geo.visibleRect.minY,
+                    viewportHeight: geo.visibleRect.height,
+                    contentHeight: geo.contentSize.height)
+            } action: { old, new in
+                onGeometry(old.minY, new.minY, new.viewportHeight, new.contentHeight)
+            }
+        } else {
+            content
+                .background(
+                    ACPScrollEventObserver(
+                        onPaused: onPaused,
+                        onAtBottom: onAtBottom,
+                        isRestoring: isRestoring,
+                        onScrollViewResolved: onResolveScrollView
+                    )
+                )
+                .onPreferenceChange(ACPHeadFramePreferenceKey.self, perform: onHeadFrame)
+        }
+    }
+}
+
+/// Equatable snapshot of the parts of `ScrollGeometry` the transcript needs.
+/// Version-agnostic so `ACPTranscriptScrollTracking` doesn't require blanket
+/// macOS 15 availability — the `ScrollGeometry` reference is confined to the
+/// `#available` branch above.
+private struct ACPScrollProbe: Equatable {
+    var minY: CGFloat
+    var viewportHeight: CGFloat
+    var contentHeight: CGFloat
 }
 
 private struct ACPScrollEventObserver: NSViewRepresentable {
