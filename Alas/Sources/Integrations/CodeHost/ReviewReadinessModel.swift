@@ -2,8 +2,23 @@ import Foundation
 
 struct ReviewReadinessModel: Equatable, Sendable {
     struct Chip: Equatable, Sendable, Identifiable {
+        enum Tone: String, Codable, Equatable, Sendable {
+            case accent
+            case success
+            case warning
+            case danger
+            case muted
+        }
+
         let id: String
         let title: String
+        let tone: Tone
+
+        init(id: String, title: String, tone: Tone = .muted) {
+            self.id = id
+            self.title = title
+            self.tone = tone
+        }
     }
 
     struct Fact: Equatable, Sendable, Identifiable {
@@ -31,7 +46,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
         guard let snapshot else {
             identity = "Review readiness"
             title = nil
-            chips = [Chip(id: "loading", title: "Checking")]
+            chips = [Chip(id: "loading", title: "Checking", tone: .accent)]
             facts = []
             actions = [Action(kind: .refresh, title: "Refresh", isEnabled: true)]
             blockingText = lastError ?? "Review state is still loading."
@@ -49,7 +64,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
 
         facts = Self.makeFacts(snapshot: snapshot, requestLabel: requestLabel)
         if lastError != nil || snapshot.errorMessage != nil {
-            chips = [Chip(id: "error", title: "Needs attention")]
+            chips = [Chip(id: "error", title: "Needs attention", tone: .warning)]
             actions = [Action(kind: .refresh, title: "Refresh", isEnabled: true)]
             return
         }
@@ -88,36 +103,36 @@ struct ReviewReadinessModel: Equatable, Sendable {
 
     private static func makeChips(snapshot: ReviewLoopSnapshot, requestLabel: String) -> [Chip] {
         guard snapshot.remote != nil else {
-            return [Chip(id: "unsupported", title: "No supported review host")]
+            return [Chip(id: "unsupported", title: "No supported review host", tone: .muted)]
         }
         if !snapshot.providerAvailable {
-            return [Chip(id: "cli-missing", title: "CLI missing")]
+            return [Chip(id: "cli-missing", title: "CLI missing", tone: .warning)]
         }
         if !snapshot.providerAuthenticated {
-            return [Chip(id: "auth-needed", title: "Auth needed")]
+            return [Chip(id: "auth-needed", title: "Auth needed", tone: .warning)]
         }
         if snapshot.local.needsPush {
-            return [Chip(id: "unpushed", title: "Unpushed")]
+            return [Chip(id: "unpushed", title: "Unpushed", tone: .accent)]
         }
         guard let request = snapshot.reviewRequest else {
-            return [Chip(id: "no-request", title: "No \(requestLabel)")]
+            return [Chip(id: "no-request", title: "No \(requestLabel)", tone: .muted)]
         }
         if request.worstCheckBucket == .fail {
-            return [Chip(id: "checks-failed", title: "CI failed")]
+            return [Chip(id: "checks-failed", title: "CI failed", tone: .danger)]
         }
         if request.worstCheckBucket == .pending {
-            return [Chip(id: "checks-pending", title: "Checks running")]
+            return [Chip(id: "checks-pending", title: "Checks running", tone: .accent)]
         }
         if request.hasActionableFeedback {
-            return [Chip(id: "review-feedback", title: "Review feedback")]
+            return [Chip(id: "review-feedback", title: "Review feedback", tone: .warning)]
         }
         if request.reviewDecision == .reviewRequired {
-            return [Chip(id: "review-pending", title: "Review pending")]
+            return [Chip(id: "review-pending", title: "Review pending", tone: .muted)]
         }
         if request.reviewDecision == .approved, request.mergeState == .clean {
-            return [Chip(id: "ready", title: "Ready")]
+            return [Chip(id: "ready", title: "Ready", tone: .success)]
         }
-        return [Chip(id: "attention", title: "Needs attention")]
+        return [Chip(id: "attention", title: "Needs attention", tone: .warning)]
     }
 
     private static func makeActions(

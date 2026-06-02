@@ -12,6 +12,7 @@ struct ReviewReadinessModelTests {
 
         #expect(model.identity == "Review readiness")
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["No supported review host"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.muted])
         #expect(model.actions.map(\ReviewReadinessModel.Action.kind) == [ReviewReadinessActionKind.refresh])
         #expect(model.blockingText == "No supported review host")
     }
@@ -24,6 +25,7 @@ struct ReviewReadinessModelTests {
         )
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Unpushed"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.accent])
         #expect(model.actions.contains(Action(kind: .pushBranch, title: "Push", isEnabled: true)))
         #expect(!model.actions.map(\.kind).contains(.createReviewRequest))
     }
@@ -36,6 +38,7 @@ struct ReviewReadinessModelTests {
         )
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["No PR"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.muted])
         #expect(model.actions.contains(Action(kind: .createReviewRequest, title: "Create PR", isEnabled: true)))
     }
 
@@ -67,6 +70,7 @@ struct ReviewReadinessModelTests {
         )
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["CI failed"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.danger])
         #expect(model.actions.contains(Action(kind: .rerunFailedChecks, title: "Rerun", isEnabled: true)))
         #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
     }
@@ -93,6 +97,7 @@ struct ReviewReadinessModelTests {
         )
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Review feedback"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.warning])
         #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
     }
 
@@ -105,6 +110,7 @@ struct ReviewReadinessModelTests {
         )
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Ready"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.success])
         #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.merge))
     }
 
@@ -117,6 +123,7 @@ struct ReviewReadinessModelTests {
 
         #expect(model.blockingText == "refresh failed")
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Needs attention"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.warning])
         #expect(model.actions.map(\ReviewReadinessModel.Action.kind) == [ReviewReadinessActionKind.refresh])
         #expect(model.facts.contains(Fact(id: "branch", label: "Branch", value: "feature/review-loop")))
     }

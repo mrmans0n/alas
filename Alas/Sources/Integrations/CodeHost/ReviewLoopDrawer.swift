@@ -18,7 +18,9 @@ struct ReviewLoopDrawer: View {
     var body: some View {
         let model = model
         VStack(spacing: 0) {
-            Divider().opacity(0.45)
+            Rectangle()
+                .fill(toneColor(model.primaryTone).opacity(0.34))
+                .frame(height: 1)
             Button {
                 state.setExpanded(!state.isExpanded)
             } label: {
@@ -30,13 +32,21 @@ struct ReviewLoopDrawer: View {
                 expandedBody(model: model)
             }
         }
-        .background(theme.color("bg-1").opacity(0.96))
+        .background(
+            ZStack(alignment: .top) {
+                theme.color("bg-1").opacity(0.97)
+                toneColor(model.primaryTone).opacity(0.045)
+            }
+        )
     }
 
     private func collapsedRow(model: ReviewReadinessModel) -> some View {
         HStack(spacing: 7) {
-            NerdFontGlyphView(symbol: "\u{EA84}", hex: "7A8089")
-                .frame(width: 13, height: 13)
+            Circle()
+                .fill(toneColor(model.primaryTone))
+                .frame(width: 6, height: 6)
+                .shadow(color: toneColor(model.primaryTone).opacity(model.primaryTone == .muted ? 0 : 0.45), radius: 3)
+            Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
             Text(model.identity.uppercased())
                 .font(.system(size: 10.5, weight: .semibold))
                 .tracking(0.5)
@@ -53,11 +63,7 @@ struct ReviewLoopDrawer: View {
 
             HStack(spacing: 5) {
                 ForEach(model.chips) { chip in
-                    Text(chip.title)
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundColor(theme.color("fg-dim"))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    chipView(chip)
                 }
             }
             Icon(name: state.isExpanded ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
@@ -91,7 +97,7 @@ struct ReviewLoopDrawer: View {
                         ForEach(model.actions) { action in
                             AlasButton(
                                 title: action.title,
-                                style: .normal,
+                                style: style(for: action.kind),
                                 action: { onAction(action.kind) }
                             )
                             .disabled(!action.isEnabled)
@@ -115,18 +121,85 @@ struct ReviewLoopDrawer: View {
                 factRow(fact)
             }
         }
-        .font(.system(size: 10.5))
-        .foregroundColor(theme.color("fg-dim"))
     }
 
     private func factRow(_ fact: ReviewReadinessModel.Fact) -> some View {
         HStack(spacing: 8) {
             Text(fact.label)
+                .font(.system(size: 10.5))
+                .foregroundColor(theme.color("fg-faint"))
             Spacer(minLength: 8)
             Text(fact.value)
-                .fontWeight(.semibold)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+        .padding(.horizontal, 7)
+        .frame(height: 22)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(theme.color("bg-2").opacity(0.48))
+        )
+    }
+
+    private func chipView(_ chip: ReviewReadinessModel.Chip) -> some View {
+        let color = toneColor(chip.tone)
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+            Text(chip.title)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundColor(labelColor(for: chip.tone))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 22)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(color.opacity(chip.tone == .muted ? 0.08 : 0.16))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(color.opacity(chip.tone == .muted ? 0.22 : 0.42), lineWidth: 0.75)
+        )
+    }
+
+    private func style(for action: ReviewReadinessActionKind) -> AlasButtonStyle {
+        switch action {
+        case .pushBranch, .createReviewRequest, .openAgentHandoff:
+            return .primary
+        case .refresh, .openReviewRequest, .rerunFailedChecks, .merge:
+            return .normal
+        }
+    }
+
+    private func labelColor(for tone: ReviewReadinessModel.Chip.Tone) -> Color {
+        switch tone {
+        case .muted:
+            return theme.color("fg-dim")
+        case .accent, .success, .warning, .danger:
+            return theme.darkMode
+                ? Color.blend(toneColor(tone), .white, t: 0.55)
+                : Color.blend(toneColor(tone), .black, t: 0.25)
+        }
+    }
+
+    private func toneColor(_ tone: ReviewReadinessModel.Chip.Tone) -> Color {
+        switch tone {
+        case .accent: theme.color("accent")
+        case .success: theme.color("add")
+        case .warning: theme.color("warn")
+        case .danger: theme.color("del")
+        case .muted: theme.color("fg-faint")
+        }
+    }
+}
+
+private extension ReviewReadinessModel {
+    var primaryTone: Chip.Tone {
+        chips.first?.tone ?? .muted
     }
 }
