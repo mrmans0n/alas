@@ -65,8 +65,23 @@ extension ACPChipState {
                                 modes: availableModes,
                                 currentMode: currentMode,
                                 configOptions: configOptions)
-        return ACPChipState(models: models, mode: mode,
-                            thinking: thinking, autoRun: routing.autoRun)
+        var result = ACPChipState(models: models, mode: mode,
+                                  thinking: thinking, autoRun: routing.autoRun)
+
+        // Cursor encodes thinking as `[effort=…]` / `[thinking=…]` suffixes
+        // on model variant ids. When the standard thinking heuristic finds
+        // nothing (i.e. no proper `thought_level` configOption was
+        // advertised), derive Model + Thinking chips from the variant list.
+        // Guards ensure the overlay never fires for other agents or for
+        // future-fixed Cursor builds that ship a real config option.
+        if agentId == "cursor-agent", result.thinking == nil {
+            let derived = CursorModelVariants.derive(
+                availableModels: availableModels,
+                currentModel: currentModel)
+            if let m = derived.model { result.models = m }
+            if let t = derived.thinking { result.thinking = t }
+        }
+        return result
     }
 
     private static func chipSpec(
