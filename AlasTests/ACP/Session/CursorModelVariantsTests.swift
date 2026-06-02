@@ -1,0 +1,211 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("CursorModelVariants.parse / compose")
+struct CursorModelVariantsTests {
+    @Test("plain id with no brackets parses to base and empty attrs")
+    func plainId() {
+        let v = CursorModelVariants.parse("gpt-5.3-codex")
+        #expect(v.base == "gpt-5.3-codex")
+        #expect(v.attrs.isEmpty)
+        #expect(CursorModelVariants.compose(base: v.base, attrs: v.attrs) == "gpt-5.3-codex")
+    }
+
+    @Test("bracketed id parses base and ordered attrs")
+    func bracketed() {
+        let id = "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]"
+        let v = CursorModelVariants.parse(id)
+        #expect(v.base == "claude-opus-4-6")
+        #expect(v.attrs.map { $0.key } == ["thinking", "context", "effort", "fast"])
+        #expect(v.attrs.map { $0.value } == ["true", "200k", "high", "false"])
+        #expect(CursorModelVariants.compose(base: v.base, attrs: v.attrs) == id)
+    }
+
+    @Test("single-attr bracketed id round-trips")
+    func singleAttr() {
+        let id = "m[effort=medium]"
+        let v = CursorModelVariants.parse(id)
+        #expect(v.base == "m")
+        #expect(v.attrs.count == 1)
+        #expect(v.attrs[0].key == "effort")
+        #expect(v.attrs[0].value == "medium")
+        #expect(CursorModelVariants.compose(base: v.base, attrs: v.attrs) == id)
+    }
+
+    @Test("malformed bracketed id (missing close) treats whole string as base")
+    func malformedMissingClose() {
+        let v = CursorModelVariants.parse("m[effort=high")
+        #expect(v.base == "m[effort=high")
+        #expect(v.attrs.isEmpty)
+    }
+
+    @Test("attr fragments without '=' are skipped")
+    func skipsBareFragments() {
+        let v = CursorModelVariants.parse("m[effort=high,broken,context=4k]")
+        #expect(v.attrs.map { $0.key } == ["effort", "context"])
+        #expect(v.attrs.map { $0.value } == ["high", "4k"])
+    }
+}
+
+@Suite("CursorModelVariants.derive")
+struct CursorModelVariantsDeriveTests {
+    private func model(_ id: String, _ name: String) -> ACPModelInfo {
+        ACPModelInfo(id: id, name: name)
+    }
+
+    @Test("derives Model + Thinking from effort-bearing variants")
+    func effortVariants() {
+        let models = [
+            model("claude-opus-4-6[effort=low,context=200k]",    "Opus 4.6"),
+            model("claude-opus-4-6[effort=medium,context=200k]", "Opus 4.6"),
+            model("claude-opus-4-6[effort=high,context=200k]",   "Opus 4.6"),
+            model("gpt-5.3-codex[effort=medium]",                "GPT 5.3 Codex"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "claude-opus-4-6[effort=medium,context=200k]")
+
+        #expect(d.model?.options.map { $0.name }.sorted() == ["GPT 5.3 Codex", "Opus 4.6"])
+        // Selecting GPT switches base while preserving the user's current effort=medium.
+        let gpt = d.model?.options.first { $0.name == "GPT 5.3 Codex" }
+        #expect(gpt?.id == "gpt-5.3-codex[effort=medium]")
+        #expect(d.model?.currentId == "claude-opus-4-6[effort=medium,context=200k]")
+
+        #expect(d.thinking?.options.map { $0.name } == ["low", "medium", "high"])
+        let medium = d.thinking?.options.first { $0.name == "medium" }
+        #expect(medium?.id == "claude-opus-4-6[effort=medium,context=200k]")
+        #expect(d.thinking?.currentId == "claude-opus-4-6[effort=medium,context=200k]")
+    }
+
+    @Test("falls back to `thinking` bool when no `effort` attrs present")
+    func thinkingBoolFallback() {
+        let models = [
+            model("claude-sonnet-4-6[thinking=true,context=200k]",  "Sonnet 4.6"),
+            model("claude-sonnet-4-6[thinking=false,context=200k]", "Sonnet 4.6"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "claude-sonnet-4-6[thinking=true,context=200k]")
+        #expect(d.thinking?.options.map { $0.name } == ["true", "false"])
+        let on = d.thinking?.options.first { $0.name == "true" }
+        #expect(on?.id == "claude-sonnet-4-6[thinking=true,context=200k]")
+    }
+
+    @Test("no brackets anywhere -> both chips nil")
+    func noBrackets() {
+        let d = CursorModelVariants.derive(
+            availableModels: [model("a", "A"), model("b", "B")],
+            currentModel: "a")
+        #expect(d.model == nil)
+        #expect(d.thinking == nil)
+    }
+
+    @Test("currentModel not in availableModels -> nil chips")
+    func unknownCurrentModel() {
+        let models = [model("a[effort=high]", "A")]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "z[effort=low]")
+        #expect(d.model == nil)
+        #expect(d.thinking == nil)
+    }
+
+    @Test("base group with no effort/thinking attr -> Thinking nil, Model still derived")
+    func modelOnlyWhenNoThinkingAttr() {
+        let models = [
+            model("a[context=4k]", "A"),
+            model("b[context=4k]", "B"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "a[context=4k]")
+        #expect(d.model?.options.map { $0.name }.sorted() == ["A", "B"])
+        #expect(d.thinking == nil)
+    }
+
+    @Test("Thinking chip preserves non-thinking attrs when picking a value")
+    func thinkingPreservesOtherAttrs() {
+        let models = [
+            model("m[effort=medium,context=1m]", "M"),
+            model("m[effort=high,context=200k]", "M"),
+            model("m[effort=high,context=1m]",   "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[effort=medium,context=1m]")
+        // Picking `high` must preserve context=1m, not collapse to the first
+        // `high` variant (which has context=200k).
+        let high = d.thinking?.options.first { $0.name == "high" }
+        #expect(high?.id == "m[effort=high,context=1m]")
+    }
+
+    @Test("Model chip preserves non-thinking attrs when switching base")
+    func modelPreservesOtherAttrs() {
+        let models = [
+            model("a[effort=high,context=1m]",   "A"),
+            model("b[effort=high,context=200k]", "B"),
+            model("b[effort=high,context=1m]",   "B"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "a[effort=high,context=1m]")
+        // Switching to base B must preserve context=1m, not the first B variant.
+        let b = d.model?.options.first { $0.name == "B" }
+        #expect(b?.id == "b[effort=high,context=1m]")
+    }
+
+    @Test("`thinking=false` wins over `effort` so off stays distinct")
+    func thinkingFalseWinsOverEffort() {
+        // Cursor sometimes ships the "off" variant with a default effort
+        // attr that mirrors the most common "on" effort level. Without an
+        // override the label-by-effort logic would collapse off + medium.
+        let models = [
+            model("m[thinking=false,effort=medium]", "M"),
+            model("m[thinking=true,effort=medium]",  "M"),
+            model("m[thinking=true,effort=high]",    "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[thinking=false,effort=medium]")
+        #expect(d.thinking?.options.map { $0.name } == ["false", "medium", "high"])
+        #expect(d.thinking?.options.first { $0.name == "false" }?.id == "m[thinking=false,effort=medium]")
+        #expect(d.thinking?.options.first { $0.name == "medium" }?.id == "m[thinking=true,effort=medium]")
+    }
+
+    @Test("currentModel shares a base but is not exactly advertised -> nil chips")
+    func currentModelNotExactlyAdvertised() {
+        // A stale `currentModel` whose base matches an advertised variant
+        // but whose exact id is not in the list would otherwise produce
+        // chips whose `currentId` isn't one of their options.
+        let models = [
+            model("m[effort=high,context=200k]", "M"),
+            model("m[effort=low,context=200k]",  "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[effort=high,context=1m]")
+        #expect(d.model == nil)
+        #expect(d.thinking == nil)
+    }
+
+    @Test("Thinking chip exposes both `thinking=false` and effort levels when mixed")
+    func mixedThinkingAndEffort() {
+        // Real Cursor shape: a "thinking off" variant has no effort attr,
+        // while "thinking on" variants carry effort=low/medium/high.
+        let models = [
+            model("m[thinking=false]",              "M"),
+            model("m[thinking=true,effort=high]",   "M"),
+            model("m[thinking=true,effort=medium]", "M"),
+            model("m[thinking=true,effort=low]",    "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[thinking=false]")
+        // The off option must remain reachable; effort levels are alongside it.
+        #expect(d.thinking?.options.map { $0.name } == ["false", "high", "medium", "low"])
+        #expect(d.thinking?.options.first { $0.name == "false" }?.id == "m[thinking=false]")
+        #expect(d.thinking?.options.first { $0.name == "high" }?.id == "m[thinking=true,effort=high]")
+        #expect(d.thinking?.currentId == "m[thinking=false]")
+    }
+}

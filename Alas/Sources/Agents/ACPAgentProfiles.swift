@@ -40,6 +40,16 @@ enum ACPAgentProfiles {
             return .init(modeSource: .mode,
                          thinkingSource: .configOption(id: "effort"),
                          autoRun: .supported)
+        case "cursor-agent":
+            // Cursor encodes thinking as `[effort=…]` / `[thinking=…]` suffixes
+            // on model variant ids rather than advertising a `thought_level`
+            // configOption. The heuristic still gets first shot here so that
+            // if Cursor ships a proper config option later, it wins
+            // automatically and the variant overlay in ACPChipState becomes
+            // a no-op.
+            return .init(modeSource: .mode,
+                         thinkingSource: .heuristic,
+                         autoRun: .supported)
         case "pi":
             return .init(modeSource: .none,
                          thinkingSource: .mode,

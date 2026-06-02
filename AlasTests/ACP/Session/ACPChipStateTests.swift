@@ -194,3 +194,73 @@ struct ACPChipStateTests {
         } else { Issue.record("configOption model chip should win") }
     }
 }
+
+extension ACPChipStateTests {
+    @Test("cursor-agent: variant suffixes synthesize Model + Thinking chips")
+    func cursorVariantsSynthesizeChips() {
+        let state = ACPChipState.normalize(
+            agentId: "cursor-agent",
+            availableModels: [
+                model("claude-opus-4-6[effort=low,context=200k]",    "Opus 4.6"),
+                model("claude-opus-4-6[effort=medium,context=200k]", "Opus 4.6"),
+                model("claude-opus-4-6[effort=high,context=200k]",   "Opus 4.6"),
+                model("gpt-5.3-codex[effort=medium]",                "GPT 5.3 Codex"),
+            ],
+            currentModel: "claude-opus-4-6[effort=medium,context=200k]",
+            availableModes: [mode("agent", "Agent")],
+            currentMode: "agent",
+            configOptions: [])
+        // Derived chips preserve first-appearance order from `availableModels`.
+        #expect(state.models?.options.map { $0.name } == ["Opus 4.6", "GPT 5.3 Codex"])
+        #expect(state.thinking?.options.map { $0.name } == ["low", "medium", "high"])
+        #expect(state.thinking?.source == .model)
+        #expect(state.mode?.options.first?.name == "Agent")
+    }
+
+    @Test("cursor-agent: real thought_level configOption wins over variant overlay")
+    func cursorConfigOptionWinsOverVariants() {
+        let state = ACPChipState.normalize(
+            agentId: "cursor-agent",
+            availableModels: [
+                model("claude-opus-4-6[effort=high]", "Opus 4.6"),
+                model("claude-opus-4-6[effort=low]",  "Opus 4.6"),
+            ],
+            currentModel: "claude-opus-4-6[effort=high]",
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [configOption("effort",
+                                         current: "high",
+                                         options: [("low","Low"),("high","High")],
+                                         category: "thought_level")])
+        // The heuristic finds the configOption first; overlay is bypassed.
+        if case .configOption(let id)? = state.thinking?.source { #expect(id == "effort") }
+        else { Issue.record("expected configOption source") }
+        #expect(state.thinking?.options.map { $0.name } == ["Low", "High"])
+    }
+
+    @Test("cursor-agent: no brackets -> no synthesized chips")
+    func cursorNoBracketsNoOverlay() {
+        let state = ACPChipState.normalize(
+            agentId: "cursor-agent",
+            availableModels: [model("a", "A"), model("b", "B")],
+            currentModel: "a",
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [])
+        #expect(state.thinking == nil)
+        // Legacy availableModels path still produces a Model chip.
+        #expect(state.models?.options.map { $0.name } == ["A", "B"])
+    }
+
+    @Test("non-cursor agent with bracketed model id: overlay does NOT fire")
+    func nonCursorIgnoresVariants() {
+        let state = ACPChipState.normalize(
+            agentId: "future-agent",
+            availableModels: [model("m[effort=high]", "M"), model("m[effort=low]", "M")],
+            currentModel: "m[effort=high]",
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [])
+        #expect(state.thinking == nil)
+    }
+}
