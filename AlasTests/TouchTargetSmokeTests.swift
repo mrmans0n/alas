@@ -78,6 +78,52 @@ struct TouchTargetSmokeTests {
         #expect(controller.view != nil)
     }
 
+    @Test func agentMenuSectionTitlesUseCurrentLabels() {
+        #expect(TabBarView.terminalAgentMenuSectionTitle == "Terminal")
+        #expect(TabBarView.acpAgentMenuSectionTitle == "ACP Chat")
+    }
+
+    @Test func tabBarViewWithAgentMenuSectionsRendersWithoutCrashing() throws {
+        let tab = Tab.terminal(TerminalTabState(id: "term1", title: "bash", sessionId: "s1"))
+        let terminalAgent = try #require(AgentBuiltins.entry(id: "codex"))
+        let acpAgent = try #require(AgentBuiltins.entry(id: "claude"))
+        let view = TabBarView(
+            tabs: [tab],
+            activeId: tab.id,
+            harnessLookup: { _ in nil },
+            dirtyLookup: { _ in false },
+            onActivate: { _ in },
+            onClose: { _ in },
+            onCloseOthers: { _ in },
+            onCloseAll: { },
+            onCloseToLeft: { _ in },
+            onCloseToRight: { _ in },
+            onCopyPath: { _ in },
+            onCopyRelativePath: { _ in },
+            onRenameTerminal: { _ in },
+            onRenameACPSession: { _ in },
+            onCopyACPSession: { _ in },
+            onExportACPSession: { _ in },
+            onNewTerminal: { },
+            enabledAgents: [terminalAgent],
+            onLaunchAgent: { _ in },
+            onLaunchACPSession: { _ in },
+            acpAgents: [acpAgent],
+            onRevealRightSidebar: { },
+            rightSidebarHidden: false,
+            onRevealSidebar: { },
+            sidebarHidden: false,
+            onMove: { _, _ in },
+            titleLookup: { _ in nil },
+            transcriptLookup: { _ in nil }
+        )
+        .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 34)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(controller.view.fittingSize.height > 0)
+    }
+
     @Test func tabBarViewWithDirtyAndHarnessRendersWithoutCrashing() {
         let tab = Tab.terminal(TerminalTabState(id: "term1", title: "bash", sessionId: "s1"))
         let view = TabBarView(
