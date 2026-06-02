@@ -417,6 +417,54 @@ struct ACPComposerDraftBridgeTests {
         #expect(typingColor == NSColor.labelColor)
     }
 
+    @Test("slash panel closes when filtering has no command matches")
+    func slashPanelClosesWhenFilteringHasNoMatches() {
+        let (textView, coordinator) = makeSlashTextView()
+        _ = coordinator
+        textView.string = "/"
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.string = "/zz"
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        textView.reconcileSlashPanel()
+
+        #expect(!textView.isSlashPanelOpen)
+    }
+
+    @Test("slash panel closes when input is cleared outside keyDown")
+    func slashPanelClosesWhenInputIsClearedOutsideKeyDown() {
+        let (textView, coordinator) = makeSlashTextView()
+        _ = coordinator
+        textView.string = "/"
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.string = ""
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.reconcileSlashPanel()
+
+        #expect(!textView.isSlashPanelOpen)
+    }
+
+    @Test("slash panel closes when composer editing ends")
+    func slashPanelClosesOnEditingEnd() {
+        let (textView, coordinator) = makeSlashTextView()
+        textView.string = "/"
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        coordinator.textDidEndEditing(
+            Notification(name: NSText.didEndEditingNotification, object: textView)
+        )
+
+        #expect(!textView.isSlashPanelOpen)
+    }
+
     @Test("plain paste insertion normalizes inherited rich text styling")
     func plainPasteInsertionNormalizesRichTextStyling() throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
@@ -536,6 +584,27 @@ struct ACPComposerDraftBridgeTests {
             onDraftClear: {},
             onSubmit: onSubmit
         )
+    }
+
+    private func makeSlashTextView() -> (ACPNSTextView, ACPInputField.Coordinator) {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        coordinator.promptSuggestions = [
+            ACPPromptSuggestion(command: "/init", description: "Initialize"),
+            ACPPromptSuggestion(command: "/review", description: "Review"),
+        ]
+        coordinator.theme = Theme(
+            id: "test",
+            name: "Test",
+            tokens: [
+                "fg": "#ffffff",
+                "fg-faint": "#888888",
+                "accent": "#5fb7c4",
+            ]
+        )
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+        return (textView, coordinator)
     }
 
     @Test("⌥⏎ (insertNewlineIgnoringFieldEditor:) submits with .steer")
