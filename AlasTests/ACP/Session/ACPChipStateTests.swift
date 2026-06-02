@@ -210,7 +210,8 @@ extension ACPChipStateTests {
             availableModes: [mode("agent", "Agent")],
             currentMode: "agent",
             configOptions: [])
-        #expect(state.models?.options.map { $0.name }.sorted() == ["GPT 5.3 Codex", "Opus 4.6"])
+        // Derived chips preserve first-appearance order from `availableModels`.
+        #expect(state.models?.options.map { $0.name } == ["Opus 4.6", "GPT 5.3 Codex"])
         #expect(state.thinking?.options.map { $0.name } == ["low", "medium", "high"])
         #expect(state.thinking?.source == .model)
         #expect(state.mode?.options.first?.name == "Agent")

@@ -78,7 +78,14 @@ extension ACPChipState {
             let derived = CursorModelVariants.derive(
                 availableModels: availableModels,
                 currentModel: currentModel)
-            if let m = derived.model { result.models = m }
+            // Don't clobber a `category: "model"` configOption-sourced models
+            // chip — that path means Cursor advertised a proper model selector
+            // and we should respect it. Only overlay onto the legacy `.model`
+            // source (or when there's no models chip at all).
+            if let m = derived.model,
+               result.models == nil || result.models?.source == .model {
+                result.models = m
+            }
             if let t = derived.thinking { result.thinking = t }
         }
         return result
