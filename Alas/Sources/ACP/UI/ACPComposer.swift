@@ -200,6 +200,9 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         func textDidEndEditing(_ notification: Notification) {
+            if let tv = notification.object as? ACPNSTextView {
+                tv.dismissSlashPanel()
+            }
             isFocused.wrappedValue = false
         }
 
@@ -257,6 +260,9 @@ struct ACPInputField: NSViewRepresentable {
             else { return }
             guard !restoringDraft else { return }
             pendingSubmitID = nil
+            if let tv = tv as? ACPNSTextView {
+                tv.reconcileSlashPanel()
+            }
             let draft = Self.draft(from: storage)
             lastSyncedDraft = draft
             onDraftChange(draft)
@@ -282,6 +288,9 @@ struct ACPInputField: NSViewRepresentable {
 
         func submit(_ textView: NSTextView, intent: ACPSubmitIntent = .auto) {
             flushPendingRestyleNow()
+            if let tv = textView as? ACPNSTextView {
+                tv.dismissSlashPanel()
+            }
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
             // Allow image-only prompts: an attached image carries no text, so
@@ -323,6 +332,9 @@ struct ACPInputField: NSViewRepresentable {
 
         private func restore(_ draft: ACPComposerDraft, into textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
+            if let tv = textView as? ACPNSTextView {
+                tv.dismissSlashPanel()
+            }
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft))
             ACPMarkdownLiveStyler.restyle(storage)
@@ -332,6 +344,9 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         private func clearVisibleDraft(in textView: NSTextView) {
+            if let tv = textView as? ACPNSTextView {
+                tv.dismissSlashPanel()
+            }
             restoringDraft = true
             textView.string = ""
             textView.needsDisplay = true
@@ -567,7 +582,12 @@ final class ACPNSTextView: NSTextView {
         // whether we're sitting on a `/foo…` token. This is what makes
         // the picker reactive — every keystroke either opens, updates,
         // or closes the panel.
-        refreshSlashContext()
+        reconcileSlashPanel()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        reconcileSlashPanel()
     }
 
     private func presentMentionPopover() {
@@ -620,7 +640,7 @@ final class ACPNSTextView: NSTextView {
         return nil
     }
 
-    private func refreshSlashContext() {
+    func reconcileSlashPanel() {
         guard let coord = coordinator, !coord.promptSuggestions.isEmpty else {
             closeSlashPanel()
             return
@@ -632,6 +652,9 @@ final class ACPNSTextView: NSTextView {
         if slashPanel == nil { presentSlashPanel() }
         slashStart = tok.start
         slashPanel?.model.setQuery(tok.query)
+        if slashPanel?.model.filtered.isEmpty == true {
+            closeSlashPanel()
+        }
     }
 
     private func presentSlashPanel() {
