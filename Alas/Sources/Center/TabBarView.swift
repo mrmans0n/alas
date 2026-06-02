@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct TabBarView: View {
+    static let terminalAgentMenuSectionTitle = "Terminal"
+    static let acpAgentMenuSectionTitle = "ACP Chat"
+
     let tabs: [Tab]
     let activeId: TabID?
     let harnessLookup: (TabID) -> (agent: AgentKind, state: ActivityState)?
@@ -256,7 +259,7 @@ private struct AgentSparkleMenu: View {
                 Text("No enabled agents")
             } else {
                 if !agents.isEmpty {
-                    Section("Terminal") {
+                    Section(TabBarView.terminalAgentMenuSectionTitle) {
                         ForEach(agents) { agent in
                             Button {
                                 onLaunchAgent(agent.id)
@@ -271,7 +274,7 @@ private struct AgentSparkleMenu: View {
                     }
                 }
                 if !acpAgents.isEmpty {
-                    Section("ACP session") {
+                    Section(TabBarView.acpAgentMenuSectionTitle) {
                         ForEach(acpAgents) { agent in
                             Button {
                                 onLaunchACPSession(agent.id)
