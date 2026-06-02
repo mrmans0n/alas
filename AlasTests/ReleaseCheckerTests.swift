@@ -98,7 +98,13 @@ struct ReleaseCheckerTests {
 
     // MARK: - Nightly track
 
-    private func nightlyJSON(sha: String, publishedAt: String) -> Data {
+    private static let stableTestURL = URL(string: "https://stable.test")!
+    private static let nightlyTestURL = URL(string: "https://nightly.test")!
+    private static let tagRefTestURL = URL(string: "https://tagref.test")!
+
+    private func nightlyReleaseJSON(publishedAt: String) -> Data {
+        // `target_commitish` is intentionally a branch name to mirror what
+        // GitHub returns for the rolling nightly release in production.
         Data("""
         {
           "tag_name": "nightly",
@@ -106,13 +112,34 @@ struct ReleaseCheckerTests {
           "html_url": "https://github.com/mrmans0n/alas/releases/tag/nightly",
           "prerelease": true,
           "draft": false,
-          "target_commitish": "\(sha)",
+          "target_commitish": "main",
           "published_at": "\(publishedAt)",
           "assets": [
             {"name": "Alas-nightly.dmg", "browser_download_url": "https://example.com/nightly.dmg"}
           ]
         }
         """.utf8)
+    }
+
+    private func nightlyTagRefJSON(sha: String) -> Data {
+        Data("""
+        {"ref":"refs/tags/nightly","node_id":"x","url":"https://example.test","object":{"sha":"\(sha)","type":"commit","url":"https://example.test/obj"}}
+        """.utf8)
+    }
+
+    private func nightlyChecker(tagSHA: String, publishedAt: String) -> ReleaseChecker {
+        ReleaseChecker(
+            stableReleaseURL: Self.stableTestURL,
+            nightlyReleaseURL: Self.nightlyTestURL,
+            nightlyTagRefURL: Self.tagRefTestURL,
+            arch: "arm64",
+            fetch: { url in
+                if url == Self.tagRefTestURL {
+                    return self.nightlyTagRefJSON(sha: tagSHA)
+                }
+                return self.nightlyReleaseJSON(publishedAt: publishedAt)
+            }
+        )
     }
 
     private func iso(_ s: String) -> Date {
@@ -129,12 +156,7 @@ struct ReleaseCheckerTests {
     }
 
     @Test func nightlyReportsUpdateWhenSHADiffersAndRemoteNewer() async {
-        let checker = ReleaseChecker(
-            stableReleaseURL: URL(string: "https://stable.test")!,
-            nightlyReleaseURL: URL(string: "https://nightly.test")!,
-            arch: "arm64",
-            fetch: { _ in self.nightlyJSON(sha: "fff9999", publishedAt: "2026-06-02T12:00:00Z") }
-        )
+        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-02T12:00:00Z")
         let result = await checker.check(identity: nightlyIdentity(
             sha: "aaa1111aaa1111aaa1111aaa1111aaa1111aaa11",
             buildDate: "2026-06-02T10:00:00Z"
@@ -148,12 +170,7 @@ struct ReleaseCheckerTests {
 
     @Test func nightlyReportsUpToDateWhenSHAMatches() async {
         let sameSHA = "abc1234567890abcdef1234567890abcdef12345"
-        let checker = ReleaseChecker(
-            stableReleaseURL: URL(string: "https://stable.test")!,
-            nightlyReleaseURL: URL(string: "https://nightly.test")!,
-            arch: "arm64",
-            fetch: { _ in self.nightlyJSON(sha: sameSHA, publishedAt: "2026-06-02T12:00:00Z") }
-        )
+        let checker = nightlyChecker(tagSHA: sameSHA, publishedAt: "2026-06-02T12:00:00Z")
         let result = await checker.check(identity: nightlyIdentity(
             sha: sameSHA,
             buildDate: "2026-06-02T10:00:00Z"
@@ -162,12 +179,7 @@ struct ReleaseCheckerTests {
     }
 
     @Test func nightlyReportsUpToDateWhenRemoteOlderEvenIfSHADiffers() async {
-        let checker = ReleaseChecker(
-            stableReleaseURL: URL(string: "https://stable.test")!,
-            nightlyReleaseURL: URL(string: "https://nightly.test")!,
-            arch: "arm64",
-            fetch: { _ in self.nightlyJSON(sha: "fff9999", publishedAt: "2026-06-01T08:00:00Z") }
-        )
+        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-01T08:00:00Z")
         let result = await checker.check(identity: nightlyIdentity(
             sha: "aaa1111aaa1111aaa1111aaa1111aaa1111aaa11",
             buildDate: "2026-06-02T10:00:00Z"
@@ -176,12 +188,7 @@ struct ReleaseCheckerTests {
     }
 
     @Test func nightlyFallsBackToDateCompareWhenLocalSHAMissing() async {
-        let checker = ReleaseChecker(
-            stableReleaseURL: URL(string: "https://stable.test")!,
-            nightlyReleaseURL: URL(string: "https://nightly.test")!,
-            arch: "arm64",
-            fetch: { _ in self.nightlyJSON(sha: "fff9999", publishedAt: "2026-06-02T12:00:00Z") }
-        )
+        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-02T12:00:00Z")
         let result = await checker.check(identity: nightlyIdentity(
             sha: nil,
             buildDate: "2026-06-02T10:00:00Z"
@@ -193,12 +200,7 @@ struct ReleaseCheckerTests {
     }
 
     @Test func nightlyFallbackReportsUpToDateWhenDatesAreEqual() async {
-        let checker = ReleaseChecker(
-            stableReleaseURL: URL(string: "https://stable.test")!,
-            nightlyReleaseURL: URL(string: "https://nightly.test")!,
-            arch: "arm64",
-            fetch: { _ in self.nightlyJSON(sha: "fff9999", publishedAt: "2026-06-02T10:00:00Z") }
-        )
+        let checker = nightlyChecker(tagSHA: "fff9999", publishedAt: "2026-06-02T10:00:00Z")
         let result = await checker.check(identity: nightlyIdentity(
             sha: nil,
             buildDate: "2026-06-02T10:00:00Z"
@@ -206,10 +208,27 @@ struct ReleaseCheckerTests {
         #expect(result == .upToDate)
     }
 
+    @Test func nightlyUsesTagRefSHANotTargetCommitish() async {
+        // Even though the release payload's `target_commitish` says "main",
+        // the checker must use the SHA returned by the tag-ref endpoint.
+        let checker = nightlyChecker(tagSHA: "deadbeef0000000000000000000000000000beef", publishedAt: "2026-06-02T12:00:00Z")
+        let result = await checker.check(identity: nightlyIdentity(
+            sha: "aaa1111aaa1111aaa1111aaa1111aaa1111aaa11",
+            buildDate: "2026-06-02T10:00:00Z"
+        ))
+        guard case let .updateAvailable(.nightly(info)) = result else {
+            Issue.record("expected .updateAvailable(.nightly), got \(result)")
+            return
+        }
+        #expect(info.shortSHA == "deadbee")
+        #expect(info.fullSHA == "deadbeef0000000000000000000000000000beef")
+    }
+
     @Test func stableViaIdentityStillReportsUpdate() async {
         let checker = ReleaseChecker(
-            stableReleaseURL: URL(string: "https://stable.test")!,
-            nightlyReleaseURL: URL(string: "https://nightly.test")!,
+            stableReleaseURL: Self.stableTestURL,
+            nightlyReleaseURL: Self.nightlyTestURL,
+            nightlyTagRefURL: Self.tagRefTestURL,
             arch: "arm64",
             fetch: { _ in self.json(tag: "v0.6.0") }
         )
@@ -223,18 +242,24 @@ struct ReleaseCheckerTests {
         #expect(stable.version == SemanticVersion(major: 0, minor: 6, patch: 0))
     }
 
-    @Test func checkerRoutesToCorrectURLPerTrack() async {
-        var observed: URL?
+    @Test func nightlyHitsBothReleaseAndTagRefURLs() async {
+        var observed: [URL] = []
         let checker = ReleaseChecker(
-            stableReleaseURL: URL(string: "https://stable.test")!,
-            nightlyReleaseURL: URL(string: "https://nightly.test")!,
+            stableReleaseURL: Self.stableTestURL,
+            nightlyReleaseURL: Self.nightlyTestURL,
+            nightlyTagRefURL: Self.tagRefTestURL,
             arch: "arm64",
             fetch: { url in
-                observed = url
-                return self.nightlyJSON(sha: "fff9999", publishedAt: "2026-06-02T12:00:00Z")
+                observed.append(url)
+                if url == Self.tagRefTestURL {
+                    return self.nightlyTagRefJSON(sha: "fff9999")
+                }
+                return self.nightlyReleaseJSON(publishedAt: "2026-06-02T12:00:00Z")
             }
         )
         _ = await checker.check(identity: nightlyIdentity(sha: "aaa", buildDate: "2026-06-02T10:00:00Z"))
-        #expect(observed?.absoluteString == "https://nightly.test")
+        #expect(observed.contains(Self.nightlyTestURL))
+        #expect(observed.contains(Self.tagRefTestURL))
+        #expect(!observed.contains(Self.stableTestURL))
     }
 }

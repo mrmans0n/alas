@@ -124,6 +124,9 @@ targets:
     info:
       path: Alas/Resources/Info.plist
       properties:
+        AlasBuildDate: ""
+        AlasGitSHA: ""
+        AlasReleaseTrack: stable
         CFBundleDevelopmentRegion: en
         CFBundleShortVersionString: "0.5.1"
         CFBundleVersion: "1"

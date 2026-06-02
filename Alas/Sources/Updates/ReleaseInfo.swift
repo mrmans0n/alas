@@ -31,6 +31,19 @@ struct GitHubRelease: Decodable {
     }
 }
 
+/// Decoded subset of GitHub's `git/ref/tags/{tag}` payload. Used to resolve
+/// the true commit SHA a tag points to — `GitHubRelease.target_commitish` is
+/// unreliable for rolling tags (GitHub keeps it at the original branch name
+/// when the tag already exists).
+struct GitRef: Decodable {
+    let object: Object
+
+    struct Object: Decodable {
+        let sha: String
+        let type: String
+    }
+}
+
 /// Normalized release info the UI consumes. Two variants:
 /// - `.stable` for SemVer-tagged releases from `/releases/latest`.
 /// - `.nightly` for the rolling pre-release from `/releases/tags/nightly`.
@@ -80,16 +93,17 @@ enum ReleaseInfo: Equatable, Identifiable {
     }
 
     /// Maps the rolling `nightly` release. `arch` is intentionally ignored —
-    /// nightlies publish a single `Alas-nightly.dmg` today. Returns nil if
-    /// `target_commitish` is empty (no SHA to compare against).
-    static func makeNightly(from release: GitHubRelease) -> ReleaseInfo? {
-        let sha = release.targetCommitish
-        guard !sha.isEmpty else { return nil }
-        let shortSHA = String(sha.prefix(7))
+    /// nightlies publish a single `Alas-nightly.dmg` today. `tagSHA` must be
+    /// the commit SHA the `nightly` git tag actually points to (resolved via
+    /// the git refs API), not `release.targetCommitish`. Returns nil if the
+    /// SHA is empty.
+    static func makeNightly(from release: GitHubRelease, tagSHA: String) -> ReleaseInfo? {
+        guard !tagSHA.isEmpty else { return nil }
+        let shortSHA = String(tagSHA.prefix(7))
         let dmg = release.assets.first { $0.name == "Alas-nightly.dmg" }?.browserDownloadUrl
         return .nightly(NightlyReleaseInfo(
             shortSHA: shortSHA,
-            fullSHA: sha,
+            fullSHA: tagSHA,
             publishedAt: release.publishedAt,
             releaseNotes: release.body ?? "",
             htmlURL: release.htmlUrl,

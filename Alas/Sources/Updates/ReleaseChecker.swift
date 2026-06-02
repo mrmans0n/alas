@@ -13,17 +13,20 @@ struct ReleaseChecker {
 
     let stableReleaseURL: URL
     let nightlyReleaseURL: URL
+    let nightlyTagRefURL: URL
     let arch: String
     let fetch: Fetch
 
     init(
         stableReleaseURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/latest")!,
         nightlyReleaseURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/tags/nightly")!,
+        nightlyTagRefURL: URL = URL(string: "https://api.github.com/repos/mrmans0n/alas/git/ref/tags/nightly")!,
         arch: String = HostArch.assetSlug,
         fetch: @escaping Fetch = ReleaseChecker.defaultFetch
     ) {
         self.stableReleaseURL = stableReleaseURL
         self.nightlyReleaseURL = nightlyReleaseURL
+        self.nightlyTagRefURL = nightlyTagRefURL
         self.arch = arch
         self.fetch = fetch
     }
@@ -55,7 +58,12 @@ struct ReleaseChecker {
     private func checkNightly(identity: BuildIdentity) async -> CheckResult {
         do {
             let release = try await fetchRelease(at: nightlyReleaseURL)
-            guard let info = ReleaseInfo.makeNightly(from: release) else {
+            // The release's `target_commitish` is unreliable for the rolling
+            // nightly tag (GitHub leaves it at the original branch name when
+            // the tag already exists), so resolve the tag's true SHA via the
+            // git refs API.
+            let tagSHA = try await fetchTagSHA(at: nightlyTagRefURL)
+            guard let info = ReleaseInfo.makeNightly(from: release, tagSHA: tagSHA) else {
                 return .failed("The latest nightly could not be read.")
             }
             guard case let .nightly(nightly) = info else {
@@ -84,6 +92,14 @@ struct ReleaseChecker {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(GitHubRelease.self, from: data)
+    }
+
+    private func fetchTagSHA(at url: URL) async throws -> String {
+        let data = try await fetch(url)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let ref = try decoder.decode(GitRef.self, from: data)
+        return ref.object.sha
     }
 
     static func defaultFetch(_ url: URL) async throws -> Data {
