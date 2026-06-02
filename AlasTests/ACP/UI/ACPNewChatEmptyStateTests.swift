@@ -5,6 +5,13 @@ import Testing
 @MainActor
 @Suite("ACP new chat empty state")
 struct ACPNewChatEmptyStateTests {
+    @Test("empty state artwork uses the shared sparkles image")
+    func artworkUsesSharedSparklesImage() {
+        #expect(ACPNewChatEmptyStateArtwork.systemImageName == "sparkles")
+        #expect(ACPNewChatEmptyStateArtwork.frameSize == 40)
+        #expect(ACPNewChatEmptyStateArtwork.fontSize < ACPNewChatEmptyStateArtwork.frameSize)
+    }
+
     @Test("fresh ready empty sessions show the new empty state")
     func freshReadyEmptySessionShowsEmptyState() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "New session")
