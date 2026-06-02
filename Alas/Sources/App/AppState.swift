@@ -2976,13 +2976,13 @@ final class AppState {
         tabs.append(acpSession: state, to: worktree.id)
     }
 
-    func openReviewLoopHandoff(from reviewLoop: ReviewLoopState) {
+    func openReviewLoopHandoff(from reviewLoop: ReviewLoopState, action: ReviewLoopAction) {
         guard let snapshot = reviewLoop.snapshot else { return }
         let agentID = config.changes.aiToolId
         guard agentID != "none", agent(id: agentID) != nil else { return }
         let prompt = ReviewLoopHandoffBuilder.build(
             snapshot: snapshot,
-            action: reviewLoop.primaryAction
+            action: action
         )
         openNewACPSession(agentID: agentID, initialPrompt: prompt)
     }

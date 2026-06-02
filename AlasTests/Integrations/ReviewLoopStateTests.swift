@@ -5,21 +5,6 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopStateTests {
-    @Test func sessionApprovalResetsOnBranchChange() async throws {
-        let state = ReviewLoopState(
-            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
-            baseBranch: "main",
-            providerRegistry: CodeHostProviderRegistry(providers: [:])
-        )
-
-        state.approveSession(branchName: "feature/one")
-        #expect(state.sessionApproved)
-
-        state.approveSession(branchName: "feature/two")
-
-        #expect(!state.sessionApproved)
-    }
-
     @Test func refreshBuildsInstallProviderActionWhenProviderIsMissing() async throws {
         let local = Self.makeLocal()
         let state = ReviewLoopState(
@@ -33,7 +18,7 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.remote?.repositorySlug == "mrmans0n/alas")
         #expect(state.snapshot?.providerAvailable == false)
         #expect(state.snapshot?.providerAuthenticated == false)
-        #expect(state.primaryAction.kind == .installProviderCLI)
+        #expect(state.snapshot?.providerCapabilities == .readOnly)
     }
 
     @Test func refreshBuildsInstallProviderActionWhenProviderIsUnavailable() async throws {
@@ -50,7 +35,7 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.remote?.repositorySlug == "mrmans0n/alas")
         #expect(state.snapshot?.providerAvailable == false)
         #expect(state.snapshot?.providerAuthenticated == false)
-        #expect(state.primaryAction.kind == .installProviderCLI)
+        #expect(state.snapshot?.providerCapabilities == .readOnly)
     }
 
     @Test func unsupportedRemoteReturnsNoneAndPreservesLocalSnapshot() async throws {
@@ -68,7 +53,7 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.remote == nil)
         #expect(state.snapshot?.providerAvailable == false)
         #expect(state.snapshot?.providerAuthenticated == false)
-        #expect(state.primaryAction.kind == .none)
+        #expect(state.snapshot?.providerCapabilities == .readOnly)
     }
 
     @Test func emptyRemotesReturnNoneAndPreserveLocalSnapshot() async throws {
@@ -86,7 +71,20 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.remote == nil)
         #expect(state.snapshot?.providerAvailable == false)
         #expect(state.snapshot?.providerAuthenticated == false)
-        #expect(state.primaryAction.kind == .none)
+        #expect(state.snapshot?.providerCapabilities == .readOnly)
+    }
+
+    @Test func refreshStoresProviderCapabilitiesOnSnapshot() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
+
+        #expect(state.snapshot?.providerCapabilities == provider.capabilities)
     }
 
     @Test func providerRequestGetsChecksAttachedToSnapshotRequest() async throws {
@@ -167,26 +165,9 @@ struct ReviewLoopStateTests {
 
         #expect(state.lastError?.contains("review request failed") == true)
         #expect(state.snapshot?.errorMessage?.contains("review request failed") == true)
-        #expect(state.primaryAction.kind == .blocked)
-        #expect(state.primaryAction.detail.contains("review request failed"))
     }
 
-    @Test func pushActionRequiresSessionApproval() async throws {
-        let provider = FakeCodeHostProvider(kind: .github)
-        let state = ReviewLoopState(
-            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
-            baseBranch: "main",
-            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
-        )
-
-        await state.refresh(local: Self.makeLocal(needsPush: true), remotes: [Self.makeGitHubRemote()])
-
-        #expect(state.primaryAction.kind == .startSession)
-        state.approveSession(branchName: "feature/review-loop")
-        #expect(state.primaryAction.kind == .pushBranch)
-    }
-
-    @Test func runCreateReviewRequestUsesProviderAfterApproval() async throws {
+    @Test func createReviewRequestUsesProviderWithoutSessionApproval() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
@@ -195,10 +176,7 @@ struct ReviewLoopStateTests {
         )
 
         await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
-        state.approveSession(branchName: "feature/review-loop")
-
-        #expect(state.primaryAction.kind == .createReviewRequest)
-        let didRun = await state.runPrimaryAction()
+        let didRun = await state.createReviewRequest()
 
         #expect(didRun)
         #expect(provider.createdReviewRequests.count == 1)
@@ -207,38 +185,7 @@ struct ReviewLoopStateTests {
         #expect(provider.createdReviewRequests.first?.title == "feature/review-loop")
     }
 
-    @Test func runActionUsesCapturedActionInsteadOfCurrentPrimaryAction() async throws {
-        let provider = FakeCodeHostProvider(kind: .github)
-        let state = ReviewLoopState(
-            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
-            baseBranch: "main",
-            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
-        )
-
-        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
-        state.approveSession(branchName: "feature/review-loop")
-        let capturedAction = state.primaryAction
-        let capturedSnapshot = try #require(state.snapshot)
-        let capturedApproval = state.sessionApproved
-        state.setPrimaryActionForTests(
-            ReviewLoopAction(
-                kind: .blocked,
-                title: "Blocked",
-                detail: "State changed"
-            )
-        )
-
-        let didRun = await state.run(
-            action: capturedAction,
-            snapshot: capturedSnapshot,
-            sessionApproved: capturedApproval
-        )
-
-        #expect(didRun)
-        #expect(provider.createdReviewRequests.count == 1)
-    }
-
-    @Test func runActionUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
+    @Test func createReviewRequestUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
@@ -250,45 +197,19 @@ struct ReviewLoopStateTests {
             local: Self.makeLocal(branchName: "feature/captured", needsPush: false),
             remotes: [Self.makeGitHubRemote()]
         )
-        state.approveSession(branchName: "feature/captured")
-        let capturedAction = state.primaryAction
         let capturedSnapshot = try #require(state.snapshot)
-        let capturedApproval = state.sessionApproved
         await state.refresh(
             local: Self.makeLocal(branchName: "feature/current", needsPush: false),
             remotes: [Self.makeGitHubRemote()]
         )
 
-        let didRun = await state.run(
-            action: capturedAction,
-            snapshot: capturedSnapshot,
-            sessionApproved: capturedApproval
-        )
+        let didRun = await state.createReviewRequest(snapshot: capturedSnapshot)
 
         #expect(didRun)
         #expect(provider.createdReviewRequests.first?.branch == "feature/captured")
     }
 
-    @Test func runPrimaryActionRecordsProviderError() async throws {
-        let provider = FakeCodeHostProvider(
-            kind: .github,
-            createError: StubError(message: "create failed")
-        )
-        let state = ReviewLoopState(
-            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
-            baseBranch: "main",
-            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
-        )
-
-        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
-        state.approveSession(branchName: "feature/review-loop")
-        let didRun = await state.runPrimaryAction()
-
-        #expect(!didRun)
-        #expect(state.lastError?.contains("create failed") == true)
-    }
-
-    @Test func runPrimaryActionRecordsCommandFailureStderr() async throws {
+    @Test func createReviewRequestRecordsProviderError() async throws {
         let provider = FakeCodeHostProvider(
             kind: .github,
             createError: CodeHostProviderError.commandFailed(
@@ -303,26 +224,14 @@ struct ReviewLoopStateTests {
         )
 
         await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
-        state.approveSession(branchName: "feature/review-loop")
-        let didRun = await state.runPrimaryAction()
+        let didRun = await state.createReviewRequest()
 
         #expect(!didRun)
         #expect(state.lastError == "gh pr create failed: GraphQL: Head sha can't be blank")
     }
 
-    @Test func runRerunFailedChecksUsesProviderWhenActionIsSet() async throws {
-        let remote = Self.makeRemote()
-        let request = Self.makeReviewRequest(remote: remote, checks: [
-            ReviewCheck(
-                id: "ci-tests",
-                name: "Tests",
-                workflow: "CI",
-                bucket: .fail,
-                detailURL: nil,
-                completedAt: nil
-            ),
-        ])
-        let provider = FakeCodeHostProvider(kind: .github, request: request)
+    @Test func rerunFailedChecksUsesProviderWithoutSessionApproval() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
             baseBranch: "main",
@@ -330,18 +239,34 @@ struct ReviewLoopStateTests {
         )
 
         await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
-        state.approveSession(branchName: "feature/review-loop")
-        state.setPrimaryActionForTests(
-            ReviewLoopAction(
-                kind: .rerunFailedChecks,
-                title: "Rerun checks",
-                detail: "Retry failed CI"
-            )
-        )
-        let didRun = await state.runPrimaryAction()
+        let didRun = await state.rerunFailedChecks()
 
         #expect(didRun)
         #expect(provider.rerunFailedChecksBranches == ["feature/review-loop"])
+    }
+
+    @Test func rerunFailedChecksUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(
+            local: Self.makeLocal(branchName: "feature/captured", needsPush: false),
+            remotes: [Self.makeGitHubRemote()]
+        )
+        let capturedSnapshot = try #require(state.snapshot)
+        await state.refresh(
+            local: Self.makeLocal(branchName: "feature/current", needsPush: false),
+            remotes: [Self.makeGitHubRemote()]
+        )
+
+        let didRun = await state.rerunFailedChecks(snapshot: capturedSnapshot)
+
+        #expect(didRun)
+        #expect(provider.rerunFailedChecksBranches == ["feature/captured"])
     }
 
     @Test func overlappingRefreshIgnoresOlderResult() async throws {
@@ -441,20 +366,18 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.local.branchName == "feature/slower")
     }
 
-    @Test func localRefreshFailureBlocksAndClearsSessionApproval() async throws {
+    @Test func localRefreshFailureRecordsErrorOnSnapshot() async throws {
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
             baseBranch: "main",
             providerRegistry: CodeHostProviderRegistry(providers: [:])
         )
 
-        state.approveSession(branchName: "feature/review-loop")
         let attempt = state.beginLocalRefresh(local: Self.makeLocal())
         state.failLocalRefresh(attempt, error: StubError(message: "git status failed"))
 
-        #expect(state.sessionApproved == false)
         #expect(state.snapshot?.errorMessage?.contains("git status failed") == true)
-        #expect(state.primaryAction.kind == .blocked)
+        #expect(state.lastError?.contains("git status failed") == true)
     }
 
     @Test func localInspectionFailureBlocksWithoutLocalSnapshot() async throws {
@@ -469,8 +392,7 @@ struct ReviewLoopStateTests {
 
         #expect(state.isRefreshing == false)
         #expect(state.snapshot == nil)
-        #expect(state.primaryAction.kind == .blocked)
-        #expect(state.primaryAction.detail.contains("git status failed"))
+        #expect(state.lastError?.contains("git status failed") == true)
     }
 
     @Test func localRefreshFailureClearsInFlightRefreshingFlag() async throws {

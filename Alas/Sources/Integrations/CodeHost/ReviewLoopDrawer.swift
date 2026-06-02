@@ -82,6 +82,7 @@ enum ReviewLoopDrawerModel {
 
 struct ReviewLoopDrawer: View {
     @Bindable var state: ReviewLoopState
+    let action: ReviewLoopAction
     let onPrimaryAction: () -> Void
     let onOpenProvider: () -> Void
     let onRefresh: () -> Void
@@ -126,7 +127,7 @@ struct ReviewLoopDrawer: View {
 
             Spacer(minLength: 6)
 
-            Text(ReviewLoopDrawerModel.statusText(request: request, action: state.primaryAction))
+            Text(ReviewLoopDrawerModel.statusText(request: request, action: action))
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
@@ -140,14 +141,14 @@ struct ReviewLoopDrawer: View {
 
     private func expandedBody(request: ReviewRequest?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(state.primaryAction.title)
+            Text(action.title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(ReviewLoopDrawerModel.detailText(
-                action: state.primaryAction,
+                action: action,
                 lastError: state.lastError
             ))
                 .font(.system(size: 11))
@@ -157,12 +158,12 @@ struct ReviewLoopDrawer: View {
 
             HStack(spacing: 8) {
                 AlasButton(
-                    title: ReviewLoopDrawerModel.primaryButtonTitle(for: state.primaryAction.kind),
+                    title: ReviewLoopDrawerModel.primaryButtonTitle(for: action.kind),
                     style: .normal,
                     action: onPrimaryAction
                 )
                 .disabled(!ReviewLoopDrawerModel.isPrimaryActionEnabled(
-                    state.primaryAction.kind,
+                    action.kind,
                     canOpenAgentHandoff: canOpenAgentHandoff
                 ))
 

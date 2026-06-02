@@ -12,13 +12,9 @@ final class ReviewLoopState {
     private let worktreePath: URL
     private var baseBranch: String
     private let providerRegistry: CodeHostProviderRegistry
-    private let planner: ReviewLoopPlanner
-    private var approvedBranchName: String?
     private var refreshGeneration: Int = 0
 
     private(set) var snapshot: ReviewLoopSnapshot?
-    private(set) var primaryAction: ReviewLoopAction
-    private(set) var sessionApproved: Bool = false
     private(set) var isRefreshing: Bool = false
     private(set) var isExpanded: Bool = false
     private(set) var lastError: String?
@@ -26,14 +22,11 @@ final class ReviewLoopState {
     init(
         worktreePath: URL,
         baseBranch: String,
-        providerRegistry: CodeHostProviderRegistry = .live(),
-        planner: ReviewLoopPlanner = ReviewLoopPlanner()
+        providerRegistry: CodeHostProviderRegistry = .live()
     ) {
         self.worktreePath = worktreePath
         self.baseBranch = baseBranch
         self.providerRegistry = providerRegistry
-        self.planner = planner
-        self.primaryAction = planner.nextAction(snapshot: nil, sessionApproved: false)
     }
 
     func setExpanded(_ expanded: Bool) {
@@ -62,24 +55,7 @@ final class ReviewLoopState {
                 providerCapabilities: snapshot?.providerCapabilities ?? .readOnly,
                 errorMessage: snapshot?.errorMessage
             )
-            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
         }
-    }
-
-    func approveSession(branchName: String) {
-        if let approvedBranchName, approvedBranchName != branchName {
-            resetSessionApproval()
-            return
-        }
-        approvedBranchName = branchName
-        sessionApproved = true
-        primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
-    }
-
-    func resetSessionApproval() {
-        approvedBranchName = nil
-        sessionApproved = false
-        primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
     }
 
     func beginLocalInspection() -> ReviewLoopRefreshAttempt {
@@ -93,9 +69,6 @@ final class ReviewLoopState {
     private func beginRefresh(local: ReviewLoopLocalState?) -> ReviewLoopRefreshAttempt {
         refreshGeneration += 1
         let generation = refreshGeneration
-        if let local, let approvedBranchName, approvedBranchName != local.branchName {
-            resetSessionApproval()
-        }
 
         isRefreshing = true
         lastError = nil
@@ -108,8 +81,6 @@ final class ReviewLoopState {
         let message = Self.describe(error)
         lastError = message
         refreshGeneration += 1
-        approvedBranchName = nil
-        sessionApproved = false
         isRefreshing = false
         if let local = attempt.local {
             snapshot = ReviewLoopSnapshot(
@@ -121,14 +92,8 @@ final class ReviewLoopState {
                 providerCapabilities: .readOnly,
                 errorMessage: message
             )
-            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: false)
         } else {
             snapshot = nil
-            primaryAction = ReviewLoopAction(
-                kind: .blocked,
-                title: "Review state unavailable",
-                detail: "Could not inspect local review state: \(message)"
-            )
         }
     }
 
@@ -162,7 +127,6 @@ final class ReviewLoopState {
                 providerCapabilities: .readOnly,
                 errorMessage: nil
             )
-            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
             return
         }
 
@@ -177,7 +141,6 @@ final class ReviewLoopState {
                 providerCapabilities: .readOnly,
                 errorMessage: nil
             )
-            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
             return
         }
 
@@ -193,7 +156,6 @@ final class ReviewLoopState {
                 providerCapabilities: .readOnly,
                 errorMessage: nil
             )
-            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
             return
         }
 
@@ -209,7 +171,6 @@ final class ReviewLoopState {
                 providerCapabilities: .readOnly,
                 errorMessage: nil
             )
-            primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
             return
         }
 
@@ -267,50 +228,54 @@ final class ReviewLoopState {
                 errorMessage: message
             )
         }
-
-        primaryAction = planner.nextAction(snapshot: snapshot, sessionApproved: sessionApproved)
     }
 
-    func runPrimaryAction() async -> Bool {
+    func createReviewRequest() async -> Bool {
         guard let snapshot else { return false }
-        return await run(
-            action: primaryAction,
-            snapshot: snapshot,
-            sessionApproved: sessionApproved
-        )
+        return await createReviewRequest(snapshot: snapshot)
     }
 
-    func run(
-        action: ReviewLoopAction,
-        snapshot: ReviewLoopSnapshot,
-        sessionApproved: Bool
-    ) async -> Bool {
-        guard let remote = snapshot.remote,
+    func createReviewRequest(snapshot: ReviewLoopSnapshot) async -> Bool {
+        guard
+              let remote = snapshot.remote,
               let provider = providerRegistry.provider(for: remote.kind)
         else { return false }
-        guard !action.requiresSessionApproval || sessionApproved else { return false }
 
         lastError = nil
         do {
-            switch action.kind {
-            case .createReviewRequest:
-                _ = try await provider.createReviewRequest(
-                    remote: remote,
-                    branch: snapshot.local.branchName,
-                    baseBranch: snapshot.local.baseBranch,
-                    title: snapshot.local.branchName,
-                    body: "Created from Alas.",
-                    cwd: worktreePath
-                )
-            case .rerunFailedChecks:
-                try await provider.rerunFailedChecks(
-                    remote: remote,
-                    branch: snapshot.local.branchName,
-                    cwd: worktreePath
-                )
-            default:
-                break
-            }
+            _ = try await provider.createReviewRequest(
+                remote: remote,
+                branch: snapshot.local.branchName,
+                baseBranch: snapshot.local.baseBranch,
+                title: snapshot.local.branchName,
+                body: "Created from Alas.",
+                cwd: worktreePath
+            )
+            return true
+        } catch {
+            lastError = Self.describe(error)
+            return false
+        }
+    }
+
+    func rerunFailedChecks() async -> Bool {
+        guard let snapshot else { return false }
+        return await rerunFailedChecks(snapshot: snapshot)
+    }
+
+    func rerunFailedChecks(snapshot: ReviewLoopSnapshot) async -> Bool {
+        guard
+              let remote = snapshot.remote,
+              let provider = providerRegistry.provider(for: remote.kind)
+        else { return false }
+
+        lastError = nil
+        do {
+            try await provider.rerunFailedChecks(
+                remote: remote,
+                branch: snapshot.local.branchName,
+                cwd: worktreePath
+            )
             return true
         } catch {
             lastError = Self.describe(error)
@@ -375,17 +340,10 @@ extension ReviewLoopState {
                 errorMessage: snapshot?.errorMessage
             )
         }
-        if let approvedBranchName, approvedBranchName != branchName {
-            resetSessionApproval()
-        }
     }
 
     func refreshForTests(local: ReviewLoopLocalState) async {
         await refresh(local: local, remotes: [])
-    }
-
-    func setPrimaryActionForTests(_ action: ReviewLoopAction) {
-        primaryAction = action
     }
 }
 #endif

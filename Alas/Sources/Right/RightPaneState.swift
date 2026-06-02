@@ -167,6 +167,10 @@ final class RightPaneState {
         return true
     }
 
+    var reviewLoopPrimaryAction: ReviewLoopAction {
+        ReviewLoopPlanner().nextAction(snapshot: reviewLoop.snapshot, sessionApproved: true)
+    }
+
     init(worktree: Worktree, baseBranch: String) {
         self.worktree = worktree
         self.baseBranch = baseBranch
@@ -238,14 +242,15 @@ final class RightPaneState {
     }
 
     func handleReviewLoopPrimaryAction(appState: AppState) {
-        switch reviewLoop.primaryAction.kind {
+        let action = reviewLoopPrimaryAction
+        switch action.kind {
         case .startSession:
-            reviewLoop.approveSession(branchName: reviewLoop.snapshot?.local.branchName ?? currentBranch)
+            break
         case .prepareCheckFailureHandoff, .prepareReviewHandoff:
             guard canOpenReviewLoopHandoff(appState: appState) else { return }
-            appState.openReviewLoopHandoff(from: reviewLoop)
+            appState.openReviewLoopHandoff(from: reviewLoop, action: action)
         case .pushBranch:
-            guard reviewLoop.sessionApproved, let snapshot = reviewLoop.snapshot else { return }
+            guard let snapshot = reviewLoop.snapshot else { return }
             Task { @MainActor in
                 do {
                     let result = try await Process.git(
@@ -261,16 +266,17 @@ final class RightPaneState {
                     sidebarError = error.localizedDescription
                 }
             }
-        case .createReviewRequest, .rerunFailedChecks:
-            guard reviewLoop.sessionApproved, let snapshot = reviewLoop.snapshot else { return }
-            let action = reviewLoop.primaryAction
-            let sessionApproved = reviewLoop.sessionApproved
+        case .createReviewRequest:
+            guard let snapshot = reviewLoop.snapshot else { return }
             Task { @MainActor in
-                if await reviewLoop.run(
-                    action: action,
-                    snapshot: snapshot,
-                    sessionApproved: sessionApproved
-                ) {
+                if await reviewLoop.createReviewRequest(snapshot: snapshot) {
+                    await refresh()
+                }
+            }
+        case .rerunFailedChecks:
+            guard let snapshot = reviewLoop.snapshot else { return }
+            Task { @MainActor in
+                if await reviewLoop.rerunFailedChecks(snapshot: snapshot) {
                     await refresh()
                 }
             }
@@ -280,7 +286,7 @@ final class RightPaneState {
     }
 
     func canOpenReviewLoopHandoff(appState: AppState) -> Bool {
-        switch reviewLoop.primaryAction.kind {
+        switch reviewLoopPrimaryAction.kind {
         case .prepareCheckFailureHandoff, .prepareReviewHandoff:
             let agentID = appState.config.changes.aiToolId
             return reviewLoop.snapshot != nil && agentID != "none" && appState.agent(id: agentID) != nil
