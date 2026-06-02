@@ -123,4 +123,35 @@ struct CursorModelVariantsDeriveTests {
         #expect(d.model?.options.map { $0.name }.sorted() == ["A", "B"])
         #expect(d.thinking == nil)
     }
+
+    @Test("Thinking chip preserves non-thinking attrs when picking a value")
+    func thinkingPreservesOtherAttrs() {
+        let models = [
+            model("m[effort=medium,context=1m]", "M"),
+            model("m[effort=high,context=200k]", "M"),
+            model("m[effort=high,context=1m]",   "M"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "m[effort=medium,context=1m]")
+        // Picking `high` must preserve context=1m, not collapse to the first
+        // `high` variant (which has context=200k).
+        let high = d.thinking?.options.first { $0.name == "high" }
+        #expect(high?.id == "m[effort=high,context=1m]")
+    }
+
+    @Test("Model chip preserves non-thinking attrs when switching base")
+    func modelPreservesOtherAttrs() {
+        let models = [
+            model("a[effort=high,context=1m]",   "A"),
+            model("b[effort=high,context=200k]", "B"),
+            model("b[effort=high,context=1m]",   "B"),
+        ]
+        let d = CursorModelVariants.derive(
+            availableModels: models,
+            currentModel: "a[effort=high,context=1m]")
+        // Switching to base B must preserve context=1m, not the first B variant.
+        let b = d.model?.options.first { $0.name == "B" }
+        #expect(b?.id == "b[effort=high,context=1m]")
+    }
 }

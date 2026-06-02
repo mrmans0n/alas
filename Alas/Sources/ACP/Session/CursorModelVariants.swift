@@ -88,17 +88,22 @@ extension CursorModelVariants {
         }
 
         // Model chip: one item per distinct base, ordered by first appearance.
+        // For each base, prefer the variant whose thinking value matches the
+        // current selection AND whose other attrs (context, fast, …) best
+        // match the current variant — picking the first match would silently
+        // change hidden dimensions like context when the user only meant to
+        // switch the model.
         var seenBases = Set<String>()
         var modelItems: [ChipSpec.Item] = []
         for (info, variant) in parsed where seenBases.insert(variant.base).inserted {
-            // Pick the variant for this base whose thinking value matches the
-            // user's current selection; else any variant from this base.
-            let preferred = parsed.first(where: { p in
+            let candidates = parsed.filter { p in
                 p.variant.base == variant.base
                     && (thinkingKey.map { key in
                         p.variant.attrs.first(where: { $0.key == key })?.value == currentThinkingValue
                     } ?? true)
-            }) ?? (info, variant)
+            }
+            let preferred = bestMatch(in: candidates, against: currentVariant,
+                                       ignoring: thinkingKey) ?? (info, variant)
             modelItems.append(ChipSpec.Item(
                 id: preferred.info.id,
                 name: preferred.info.name,
@@ -109,22 +114,57 @@ extension CursorModelVariants {
             : nil
 
         // Thinking chip: one item per distinct thinking value within the
-        // current base, ordered by first appearance.
+        // current base, ordered by first appearance. For each value, pick
+        // the variant id whose non-thinking attrs best match the current
+        // variant — same reason as above.
         let thinking: ChipSpec? = {
             guard let thinkingKey else { return nil }
             var seenValues = Set<String>()
             var thinkingItems: [ChipSpec.Item] = []
-            for (info, variant) in currentGroup {
+            for (_, variant) in currentGroup {
                 guard let value = variant.attrs.first(where: { $0.key == thinkingKey })?.value,
                       seenValues.insert(value).inserted
                 else { continue }
+                let candidates = currentGroup.filter { p in
+                    p.variant.attrs.first(where: { $0.key == thinkingKey })?.value == value
+                }
+                guard let pick = bestMatch(in: candidates, against: currentVariant,
+                                           ignoring: thinkingKey) else { continue }
                 thinkingItems.append(ChipSpec.Item(
-                    id: info.id, name: value, description: info.description))
+                    id: pick.info.id, name: value, description: pick.info.description))
             }
             guard !thinkingItems.isEmpty else { return nil }
             return ChipSpec(source: .model, options: thinkingItems, currentId: currentModel)
         }()
 
         return Derived(model: model, thinking: thinking)
+    }
+
+    /// Pick the candidate whose non-thinking attrs best match `reference`.
+    /// Ties resolve to the first candidate in source order (stable). Returns
+    /// nil only when `candidates` is empty.
+    private static func bestMatch(
+        in candidates: [(info: ACPModelInfo, variant: Variant)],
+        against reference: Variant,
+        ignoring thinkingKey: String?
+    ) -> (info: ACPModelInfo, variant: Variant)? {
+        candidates.max { a, b in
+            attrMatchScore(a.variant, against: reference, ignoring: thinkingKey)
+                < attrMatchScore(b.variant, against: reference, ignoring: thinkingKey)
+        }
+    }
+
+    /// Count attrs in `candidate` whose `(key, value)` also appears in
+    /// `reference`, skipping the thinking key itself.
+    private static func attrMatchScore(
+        _ candidate: Variant,
+        against reference: Variant,
+        ignoring thinkingKey: String?
+    ) -> Int {
+        candidate.attrs.reduce(0) { acc, attr in
+            if let thinkingKey, attr.key == thinkingKey { return acc }
+            let refValue = reference.attrs.first(where: { $0.key == attr.key })?.value
+            return acc + (refValue == attr.value ? 1 : 0)
+        }
     }
 }
