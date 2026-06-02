@@ -10,6 +10,28 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
         case .gitlab: "GitLab"
         }
     }
+
+    var reviewRequestLabel: String {
+        switch self {
+        case .github: "PR"
+        case .gitlab: "MR"
+        }
+    }
+
+    var reviewRequestNumberPrefix: String {
+        switch self {
+        case .github: "#"
+        case .gitlab: "!"
+        }
+    }
+
+    var createReviewRequestTitle: String {
+        "Create \(reviewRequestLabel)"
+    }
+
+    var openReviewRequestTitle: String {
+        "Open \(reviewRequestLabel)"
+    }
 }
 
 struct CodeHostRemote: Equatable, Sendable {
@@ -21,6 +43,24 @@ struct CodeHostRemote: Equatable, Sendable {
     let webURL: URL
 
     var repositorySlug: String { "\(owner)/\(repository)" }
+}
+
+struct CodeHostProviderCapabilities: Equatable, Sendable {
+    let canCreateReviewRequest: Bool
+    let canRerunFailedChecks: Bool
+    let canOpenReviewRequest: Bool
+
+    static let readOnly = CodeHostProviderCapabilities(
+        canCreateReviewRequest: false,
+        canRerunFailedChecks: false,
+        canOpenReviewRequest: true
+    )
+
+    static let githubCLI = CodeHostProviderCapabilities(
+        canCreateReviewRequest: true,
+        canRerunFailedChecks: true,
+        canOpenReviewRequest: true
+    )
 }
 
 enum ReviewRequestState: String, Codable, Equatable, Sendable {
@@ -99,7 +139,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
 
     var provider: CodeHostKind { remote.kind }
 
-    var displayIdentity: String { "\(provider.displayName) #\(number)" }
+    var displayIdentity: String { "\(provider.displayName) \(provider.reviewRequestNumberPrefix)\(number)" }
 
     var worstCheckBucket: ReviewCheckBucket? {
         checks.max { $0.bucket.severity < $1.bucket.severity }?.bucket

@@ -2,6 +2,7 @@ import Foundation
 
 struct GitHubCLIProvider: CodeHostProvider {
     let kind: CodeHostKind = .github
+    let capabilities: CodeHostProviderCapabilities = .githubCLI
 
     private let runner: any CodeHostCommandRunning
 

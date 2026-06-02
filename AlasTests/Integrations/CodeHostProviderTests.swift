@@ -24,6 +24,14 @@ struct CodeHostProviderTests {
         #expect(registry.provider(for: .gitlab) == nil)
     }
 
+    @Test func liveGitHubProviderExposesDirectActionCapabilities() {
+        let provider = CodeHostProviderRegistry.live().provider(for: .github)
+
+        #expect(provider?.capabilities.canCreateReviewRequest == true)
+        #expect(provider?.capabilities.canRerunFailedChecks == true)
+        #expect(provider?.capabilities.canOpenReviewRequest == true)
+    }
+
     @Test func processRunnerUsesShellResolvedPath() async throws {
         let prior = ShellEnvResolver.shared.resolvedPath
         ShellEnvResolver.shared.resolvedPath = "/custom/provider/bin:/usr/bin:/bin"
@@ -41,6 +49,7 @@ struct CodeHostProviderTests {
 
     private struct FakeCodeHostProvider: CodeHostProvider {
         let kind: CodeHostKind
+        let capabilities: CodeHostProviderCapabilities = .readOnly
 
         func isAvailable() async -> Bool {
             true

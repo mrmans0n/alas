@@ -15,6 +15,40 @@ struct CodeHostModelsTests {
         #expect(request.displayIdentity == "GitHub #428")
     }
 
+    @Test func codeHostKindUsesProviderNativeReviewRequestLabels() {
+        #expect(CodeHostKind.github.reviewRequestLabel == "PR")
+        #expect(CodeHostKind.github.reviewRequestNumberPrefix == "#")
+        #expect(CodeHostKind.github.createReviewRequestTitle == "Create PR")
+        #expect(CodeHostKind.github.openReviewRequestTitle == "Open PR")
+
+        #expect(CodeHostKind.gitlab.reviewRequestLabel == "MR")
+        #expect(CodeHostKind.gitlab.reviewRequestNumberPrefix == "!")
+        #expect(CodeHostKind.gitlab.createReviewRequestTitle == "Create MR")
+        #expect(CodeHostKind.gitlab.openReviewRequestTitle == "Open MR")
+    }
+
+    @Test func reviewRequestDisplayIdentityUsesProviderNativeNumberPrefix() {
+        let gitlabRemote = CodeHostRemote(
+            kind: .gitlab,
+            host: "gitlab.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://gitlab.com/mrmans0n/alas")!
+        )
+        let request = makeReviewRequest(remote: gitlabRemote)
+
+        #expect(request.displayIdentity == "GitLab !428")
+    }
+
+    @Test func providerCapabilitiesDefaultToSafeReadOnlyValues() {
+        let capabilities = CodeHostProviderCapabilities.readOnly
+
+        #expect(capabilities.canCreateReviewRequest == false)
+        #expect(capabilities.canRerunFailedChecks == false)
+        #expect(capabilities.canOpenReviewRequest == true)
+    }
+
     @Test func reviewRequiredWithoutActionableThreadsHasNoActionableFeedback() {
         let request = makeReviewRequest(reviewDecision: .reviewRequired)
 

@@ -40,6 +40,7 @@ struct ProcessCodeHostCommandRunner: CodeHostCommandRunning {
 
 protocol CodeHostProvider: Sendable {
     var kind: CodeHostKind { get }
+    var capabilities: CodeHostProviderCapabilities { get }
 
     func isAvailable() async -> Bool
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool
@@ -54,6 +55,10 @@ protocol CodeHostProvider: Sendable {
     ) async throws -> URL
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck]
     func rerunFailedChecks(remote: CodeHostRemote, branch: String, cwd: URL) async throws
+}
+
+extension CodeHostProvider {
+    var capabilities: CodeHostProviderCapabilities { .readOnly }
 }
 
 struct CodeHostProviderRegistry: Sendable {
