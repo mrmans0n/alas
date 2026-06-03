@@ -36,7 +36,9 @@ final class ACPSessionRunner {
     /// CLAUDECODE/CLAUDE_SESSION_ID markers that would otherwise leak
     /// back in via a re-augment from `ProcessInfo`.
     private let agentEnv: [String: String]
+    private let ownerInstanceId: String?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
+    private let onPersist: (() -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
@@ -71,7 +73,9 @@ final class ACPSessionRunner {
          suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
-         onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil)
+         onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
+         onPersist: (() -> Void)? = nil,
+         ownerInstanceId: String? = nil)
     {
         self.session = session
         self.connection = connection
@@ -79,16 +83,27 @@ final class ACPSessionRunner {
         self.sessionId = sessionId
         self.worktreePath = worktreePath
         self.agentEnv = agentEnv
+        self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
+        self.onPersist = onPersist
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.persistedMessageCount = (try? store.messageCount(sessionId: sessionId)) ?? 0
+        self.seq = Int64(persistedMessageCount)
+        // Capture the three values holdsLeaseForWrite() reads so the closure
+        // can be formed before `self` is fully initialised (policy is the
+        // last stored property). The logic is identical to holdsLeaseForWrite.
+        let _store = store
+        let _sessionId = sessionId
+        let _ownerInstanceId = ownerInstanceId
         self.policy = ACPPermissionPolicy(
             session: session,
-            log: ACPPermissionDecisionLog(store: store)
+            log: ACPPermissionDecisionLog(store: store, canWrite: {
+                guard let id = _ownerInstanceId else { return true }
+                return (try? _store.loadLease(sessionId: _sessionId))?.ownerInstance == id
+            })
         )
-        self.seq = Int64(persistedMessageCount)
     }
 
     func start() {
@@ -187,6 +202,21 @@ final class ACPSessionRunner {
                         )
                     }
                 case .write(let id, let params):
+                    // Guard the actual disk write: if this runner has lost
+                    // the session lease (takeover), deny the request rather
+                    // than modifying the working tree on behalf of a session
+                    // another instance now owns.
+                    // Note: terminal execution is also covered — Fix 1's
+                    // prompt stand-down tears the runner down within ~100 ms
+                    // of a takeover ping, and runner.stop() calls
+                    // terminalHost.killAll(), so in-flight terminal commands
+                    // are already gated by that path.
+                    guard self.holdsLeaseForWrite() else {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                        break
+                    }
                     if self.onDirtyCheck?(params.path) == true {
                         self.appendAndPersistSystemNotice("Agent wrote to \(URL(fileURLWithPath: params.path).lastPathComponent) — you have unsaved changes in this file.")
                     }
@@ -246,12 +276,24 @@ final class ACPSessionRunner {
         // time killAll() won't fire on tab close — without this an
         // active `npm test`/`sleep`/server outlives the agent.
         session.terminalHost.killAll()
+        onPersist?()
     }
 
     private func handleTerminalRequest(_ req: ACPTerminalRequest) {
         let host = self.session.terminalHost
         switch req {
         case .create(let id, let p):
+            // Gate terminal creation on the lease: a runner that has lost
+            // the writer lease must not start new terminal side effects in
+            // the brief window before stand-down tears it down. This is
+            // defense-in-depth alongside the heartbeat/stand-down path
+            // (which calls stop() → terminalHost.killAll() within ~100ms
+            // of a takeover ping). Matches the existing file-write gate.
+            guard holdsLeaseForWrite() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
             do {
                 let res = try host.create(p)
                 self.connection.client.respondToTerminalRequest(
@@ -300,6 +342,16 @@ final class ACPSessionRunner {
                 }
             }
         case .kill(let id, let p):
+            // Gate terminal kill on the lease: a former writer that lost
+            // the session lease must not mutate terminals for a session
+            // another instance now owns. Note: runner.stop() calls
+            // terminalHost.killAll() directly (NOT through this handler),
+            // so teardown is unaffected by this gate.
+            guard holdsLeaseForWrite() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
             do {
                 try host.kill(p)
                 self.connection.client.respondToTerminalRequest(
@@ -312,6 +364,16 @@ final class ACPSessionRunner {
                     id: id, result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
             }
         case .release(let id, let p):
+            // Gate terminal release on the lease: a former writer that lost
+            // the session lease must not mutate terminals for a session
+            // another instance now owns. Note: runner.stop() calls
+            // terminalHost.killAll() directly (NOT through this handler),
+            // so teardown is unaffected by this gate.
+            guard holdsLeaseForWrite() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
             do {
                 try host.release(p)
                 self.connection.client.respondToTerminalRequest(
@@ -348,6 +410,7 @@ final class ACPSessionRunner {
     /// list refresh; the runner skips that because it has no manager
     /// handle, and the next open via the manager picks up the new row.
     func persistSessionRow() {
+        guard holdsLeaseForWrite() else { return }
         guard let row = try? store.loadSession(id: sessionId) else { return }
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
@@ -424,6 +487,12 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
+        // A former writer that lost the lease must not send a cancel RPC to
+        // the agent for a session another instance now owns. The local
+        // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
+        // it only affects this runner's own sendNow catch path and has no
+        // cross-instance side effects.
+        guard holdsLeaseForWrite() else { return }
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
         await MainActor.run {
@@ -438,11 +507,13 @@ final class ACPSessionRunner {
             policy.userCancelled()
             let changedIndices = session.cancelInFlightToolCalls()
             session.terminalHost.killAll()
-            for i in changedIndices {
-                let m = session.transcript.messages[i]
-                if let payload = try? ACPMessageCodec.encode(m) {
-                    let id = "msg-\(sessionId)-\(i)"
-                    try? store.updateMessagePayload(id: id, payload: payload)
+            if holdsLeaseForWrite() {
+                for i in changedIndices {
+                    let m = session.transcript.messages[i]
+                    if let payload = try? ACPMessageCodec.encode(m) {
+                        let id = "msg-\(sessionId)-\(i)"
+                        try? store.updateMessagePayload(id: id, payload: payload)
+                    }
                 }
             }
             // Pop the head ONLY if it's the same `.sending` item we
@@ -672,6 +743,7 @@ extension ACPSessionRunner {
     /// would block the UI for a transient SQLite error and we'd rather
     /// lose a queue snapshot than the user's draft.
     func persistQueue() {
+        guard holdsLeaseForWrite() else { return }
         try? store.upsertQueue(sessionId: sessionId, items: session.queue)
     }
 
@@ -685,6 +757,7 @@ extension ACPSessionRunner {
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
+        guard holdsLeaseForWrite() else { return }
         guard !steerInProgress,
               session.agentState == .ready,
               session.transcript.streamingState == .idle,
@@ -1062,6 +1135,14 @@ extension ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// True when this runner may write — it still holds the session lease.
+    /// When `ownerInstanceId` is nil (tests that construct a runner directly
+    /// without a lease), gating is disabled and writes always proceed.
+    private func holdsLeaseForWrite() -> Bool {
+        guard let ownerInstanceId else { return true }
+        return (try? store.loadLease(sessionId: sessionId))?.ownerInstance == ownerInstanceId
+    }
+
     /// Persist the specific message rows touched by an `apply()` call.
     /// Use this instead of `persistFromIndex` when the caller can name
     /// exactly which indices changed — a plan or tool-call update may
@@ -1069,6 +1150,7 @@ extension ACPSessionRunner {
     /// one, so the count-delta heuristic in `persistFromIndex` would
     /// write back the wrong row.
     func persistIndices(_ indices: Set<Int>) {
+        guard holdsLeaseForWrite() else { return }
         guard !indices.isEmpty else { return }
         let messages = session.transcript.messages
         let now = Int64(Date().timeIntervalSince1970)
@@ -1089,6 +1171,7 @@ extension ACPSessionRunner {
                 }
             }
         }
+        onPersist?()
     }
 
     /// Persist messages from the apply() boundary. Three cases:
@@ -1103,6 +1186,7 @@ extension ACPSessionRunner {
     /// text was visible in memory but never written, so reopening a
     /// session lost most of the conversation.
     func persistFromIndex(_ from: Int) {
+        guard holdsLeaseForWrite() else { return }
         let messages = session.transcript.messages
         guard messages.count > 0 else { return }
 
@@ -1135,5 +1219,6 @@ extension ACPSessionRunner {
                 }
             }
         }
+        onPersist?()
     }
 }

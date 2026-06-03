@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 6
+    static let targetSchemaVersion = 7
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -31,6 +31,8 @@ final class ACPSessionStore {
         if current < 4 { try migrate_to_v4() }
         if current < 5 { try migrate_to_v5() }
         if current < 6 { try migrate_to_v6() }
+        if current < 7 { try migrate_to_v7() }
+        try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -125,6 +127,50 @@ final class ACPSessionStore {
     private func migrate_to_v6() throws {
         try db.exec("ALTER TABLE sessions ADD COLUMN context_recovery_pending INTEGER NOT NULL DEFAULT 0")
     }
+
+    /// One-time-per-open repair for databases damaged by two instances
+    /// writing the same session before leases existed. Collapses
+    /// duplicate (session_id, seq) message rows (keeping the newest by
+    /// created_at) so hydration's `ORDER BY seq` stops yielding
+    /// conflicting entries. Idempotent: a clean DB has no duplicates.
+    private func recoverFromConcurrentWriters() throws {
+        try db.exec("""
+        DELETE FROM messages
+        WHERE rowid NOT IN (
+            SELECT rowid FROM (
+                SELECT rowid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY session_id, seq
+                           ORDER BY created_at DESC, rowid DESC
+                       ) AS rn
+                FROM messages
+            ) WHERE rn = 1
+        )
+        """)
+    }
+
+    private func migrate_to_v7() throws {
+        // One row per *owned* session. Presence + a live owner means a
+        // writer holds the session; absence/staleness means it's free.
+        // ON DELETE CASCADE keeps the lease in lockstep with the session.
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_leases (
+          session_id      TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          owner_instance  TEXT NOT NULL,
+          pid             INTEGER NOT NULL,
+          heartbeat_at    INTEGER NOT NULL,
+          status          TEXT NOT NULL DEFAULT 'idle'
+        )
+        """)
+    }
+}
+
+struct ACPSessionLease: Equatable {
+    let sessionId: String
+    let ownerInstance: String
+    let pid: Int64
+    let heartbeatAt: Int64
+    let status: String   // "idle" | "busy"
 }
 
 struct ACPSessionRow: Equatable {
@@ -334,5 +380,95 @@ extension ACPSessionStore {
             bindings: [sessionId])
         guard let payload = rows.first?["payload"] as? Data else { return [] }
         return (try? JSONDecoder().decode([QueuedPrompt].self, from: payload)) ?? []
+    }
+}
+
+extension ACPSessionStore {
+    func loadLease(sessionId: String) throws -> ACPSessionLease? {
+        let rows = try db.query(
+            "SELECT * FROM session_leases WHERE session_id = ?", bindings: [sessionId])
+        guard let r = rows.first else { return nil }
+        return ACPSessionLease(
+            sessionId: r["session_id"] as? String ?? "",
+            ownerInstance: r["owner_instance"] as? String ?? "",
+            pid: (r["pid"] as? Int64) ?? 0,
+            heartbeatAt: (r["heartbeat_at"] as? Int64) ?? 0,
+            status: r["status"] as? String ?? "idle")
+    }
+
+    /// Atomically claim the writer role for `sessionId`. Returns true if
+    /// this instance owns the lease afterwards.
+    ///
+    /// A lease is reclaimable when its heartbeat is older than
+    /// `staleAfter` seconds, OR its owning process is no longer alive
+    /// (fast crash reclaim). Re-claiming a lease this instance already
+    /// holds always succeeds and refreshes the heartbeat.
+    ///
+    /// The dead-pid reclaim, the UPSERT, and the confirming read run in
+    /// one `BEGIN IMMEDIATE` transaction so two instances racing on the
+    /// same dead-owner lease can't both delete-then-insert and both win.
+    /// A plain `BEGIN` (WAL) would defer the write lock and still race.
+    func claimLease(sessionId: String, instanceId: String, pid: Int64,
+                    now: Int64, staleAfter: Int64) throws -> Bool {
+        let staleCutoff = now - staleAfter
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            // Fast-path crash reclaim: a lease whose owner pid is dead can
+            // be removed unconditionally — a dead pid never comes back.
+            if let existing = try loadLease(sessionId: sessionId),
+               existing.ownerInstance != instanceId,
+               !ACPProcessLiveness.pidAlive(existing.pid) {
+                try db.exec(
+                    "DELETE FROM session_leases WHERE session_id = ? AND owner_instance = ?",
+                    bindings: [sessionId, existing.ownerInstance])
+            }
+            try db.exec("""
+            INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status)
+            VALUES (?,?,?,?,'idle')
+            ON CONFLICT(session_id) DO UPDATE SET
+                owner_instance = excluded.owner_instance,
+                pid = excluded.pid,
+                heartbeat_at = excluded.heartbeat_at,
+                status = 'idle'
+            WHERE session_leases.owner_instance = excluded.owner_instance
+               OR session_leases.heartbeat_at < ?
+            """, bindings: [sessionId, instanceId, pid, now, staleCutoff])
+            let won = try loadLease(sessionId: sessionId)?.ownerInstance == instanceId
+            try db.exec("COMMIT")
+            return won
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// Refresh heartbeat (and optionally status) — no-op if we no longer
+    /// own the lease (someone took over).
+    func refreshHeartbeat(sessionId: String, instanceId: String,
+                          now: Int64, status: String) throws {
+        try db.exec("""
+        UPDATE session_leases SET heartbeat_at = ?, status = ?
+        WHERE session_id = ? AND owner_instance = ?
+        """, bindings: [now, status, sessionId, instanceId])
+    }
+
+    func releaseLease(sessionId: String, instanceId: String) throws {
+        try db.exec(
+            "DELETE FROM session_leases WHERE session_id = ? AND owner_instance = ?",
+            bindings: [sessionId, instanceId])
+    }
+
+    /// Forcibly seize the lease (explicit user takeover) regardless of
+    /// the current owner's liveness.
+    func seizeLease(sessionId: String, instanceId: String, pid: Int64, now: Int64) throws {
+        try db.exec("""
+        INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status)
+        VALUES (?,?,?,?,'idle')
+        ON CONFLICT(session_id) DO UPDATE SET
+            owner_instance = excluded.owner_instance,
+            pid = excluded.pid,
+            heartbeat_at = excluded.heartbeat_at,
+            status = 'idle'
+        """, bindings: [sessionId, instanceId, pid, now])
     }
 }

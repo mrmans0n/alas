@@ -6,6 +6,10 @@ import os
 @Observable
 @MainActor
 final class AppState {
+    /// Stable for this process; identifies this app instance to the ACP
+    /// session-lease layer so two running Alas builds don't fight over a
+    /// shared per-worktree database.
+    let instanceId: String = UUID().uuidString
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
@@ -2031,8 +2035,16 @@ final class AppState {
         // (other tabs may share it), so the global flush from
         // disposeACPManager wouldn't fire here.
         manager.flushPendingDraftWrite(forSession: sessionId)
-        guard let runner = manager.runners[sessionId] else { return }
-        runner.stop()
+        // Call detach unconditionally — a session can hold a writer lease
+        // + heartbeat + writer-watch before its runner is registered (the
+        // "attach window"). If we returned early when no runner was present,
+        // closing the tab during that window would leak all of those
+        // resources. detach is idempotent: releaseWriterLease is owner-
+        // scoped, and endMirroring / stopHeartbeat / stopWriterWatch are
+        // all no-ops when not active.
+        if let runner = manager.runners[sessionId] {
+            runner.stop()
+        }
         Task { @MainActor in
             await manager.detach(sessionId: sessionId)
         }
@@ -2933,6 +2945,8 @@ final class AppState {
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 store: store,
+                instanceId: instanceId,
+                pid: Int64(ProcessInfo.processInfo.processIdentifier),
                 hydratorPath: dbURL.path,
                 onDirtyCheck: { [weak self] path in
                     self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
@@ -2977,8 +2991,20 @@ final class AppState {
         // detach() task below schedules. The actual child-process
         // shutdown then happens asynchronously.
         for sid in sessionIds { manager.runners[sid]?.stop() }
+        // Cancel mirror pollers and heartbeats — mirror sessions have no
+        // runner and are never reached by the detach loop above, so they
+        // must be torn down explicitly to stop the 2.5s backstop polls and
+        // notifier subscriptions from outliving the manager.
+        manager.shutdownBackgroundTasks()
         Task { @MainActor in
             for sid in sessionIds { await manager.detach(sessionId: sid) }
+            // Release any leases this manager still owns AFTER all runner
+            // connections are shut down (detach above). A freed lease must
+            // not be claimable while an old agent process is still alive.
+            // `detach` already released runner-session leases; this mops up
+            // any remaining pre-runner owned leases (e.g. sessions acquired
+            // a lease but didn't register a runner yet).
+            manager.releaseAllOwnedLeases()
         }
     }
 

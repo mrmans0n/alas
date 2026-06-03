@@ -412,6 +412,52 @@ struct ACPSessionRunnerQueueTests {
         #expect(persisted == session.queue)
     }
 
+    @Test("flushQueueIfIdle is a no-op when the runner has lost the lease")
+    func flushQueueNoopWhenLeaseLost() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-flush-lease-lost-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(
+            id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance — the runner's ownerInstanceId is "ME".
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+
+        // Pre-condition: session is idle with a pending queue item — normally this would flush.
+        session.enqueue(blocks: [.text("should-not-dispatch")])
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].status == .pending)
+
+        // Flush must be blocked because "ME" does not hold the lease.
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // No prompt was dispatched and the queue is unchanged.
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.isEmpty,
+                "former writer must not dispatch a queued prompt after losing the lease")
+        #expect(session.queue.count == 1,
+                "queue must remain unchanged when the lease is held by another instance")
+        #expect(session.queue[0].status == .pending,
+                "queue head must stay .pending (not flipped to .sending) when lease is lost")
+    }
+
     @Test("flushQueueIfIdle is a no-op while .awaitingPermission, then drains after .idle")
     func awaitingPermissionDefersDrain() async throws {
         let (runner, mock, session, _) = try mkRunner()

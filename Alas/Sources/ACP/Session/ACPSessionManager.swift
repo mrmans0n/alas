@@ -5,9 +5,12 @@ final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
     typealias ACPConnectionFactory = @MainActor (_ spec: ACPLaunchSpec) throws -> ACPConnection
 
+    let instanceId: String
+    let pid: Int64
     let worktreeId: String
     let worktreePath: String
     let store: ACPSessionStore
+    let changeNotifier: ACPChangeNotifier
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
     let onDirtyCheck: ((String) -> Bool)?
@@ -24,6 +27,10 @@ final class ACPSessionManager: ObservableObject {
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
     var runnerCountForDiagnostics: Int { runners.count }
     #endif
+    /// Sessions for which THIS instance holds the writer lease (backing store).
+    var _ownedLeases: Set<ACPSession.ID> = []
+    /// Per-session periodic heartbeat tasks (backing store).
+    var _heartbeatTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session debounced write tasks for `composer_drafts`. The
     /// in-memory `session.composerDraft` updates on every keystroke;
     /// the SQLite write only fires after a brief idle (or a forced
@@ -45,24 +52,47 @@ final class ACPSessionManager: ObservableObject {
     /// Re-opening through `placeholderSession` + `hydrateIfNeeded` recreates
     /// it cleanly from SQLite.
     private var sessionRefCounts: [ACPSession.ID: Int] = [:]
+    // MARK: Mirror state (read-only follower when another instance holds the lease)
+    private var mirrorTokens: [ACPSession.ID: Int32] = [:]
+    private var mirrorDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var mirrorPoll: [ACPSession.ID: Task<Void, Never>] = [:]
+    // MARK: Writer-watch state (prompt stand-down when a takeover ping arrives)
+    private var writerWatchTokens: [ACPSession.ID: Int32] = [:]
+    private var writerWatchDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Runtime-only layout memory for the plan sidebar. This intentionally
     /// lives on the manager rather than `ACPSession` so a tab switch can
     /// evict and later recreate the session object without losing whether
     /// the plan was last rendered inline or in the toolbar pill.
     private var planSidebarVisibility: [ACPSession.ID: Bool] = [:]
+    /// Set to true by `shutdownBackgroundTasks` so any in-flight `attach`
+    /// coroutine that resumes after dispose aborts at the pre-commit guard
+    /// rather than registering a runner for a session whose manager is dead.
+    private var isDisposed = false
+    /// Sessions for which an `attach` coroutine has acquired the writer
+    /// lease but has not yet registered a runner (the pre-runner window).
+    /// `releaseAllOwnedLeases` skips these so their own `defer` block can
+    /// release the lease after `connection.shutdown` — preserving the
+    /// correct shutdown order (connection down before lease freed).
+    private var attachingSessions: Set<ACPSession.ID> = []
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
+         instanceId: String = UUID().uuidString,
+         pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
          hydratorPath: String? = nil,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
+         changeNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
          connectionFactory: ACPConnectionFactory? = nil)
     {
+        self.instanceId = instanceId
+        self.pid = pid
         self.worktreeId = worktreeId
         self.worktreePath = worktreePath
         self.store = store
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
+        self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         self.hydrator = hydratorPath.flatMap { try? ACPSessionHydrator(path: $0) }
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
@@ -452,6 +482,10 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
+        // Stop any active mirror poll/subscription so the 2.5s poll task
+        // doesn't keep waking after a mirrored tab closes. Idempotent —
+        // no-op for writer sessions.
+        endMirroring(sessionId: id)
         session.transcript.resetMarkdownCaches()
         sessions[id] = nil
     }
@@ -480,7 +514,10 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Persist a session-level change (model/mode/title/autoRun) and bump updated_at.
+    /// No-ops only when another live instance owns the writer lease (this pane
+    /// is a mirror); the writer and not-yet-leased cases persist normally.
     func persist(_ s: ACPSession) {
+        guard !anotherLiveInstanceOwnsLease(sessionId: s.id) else { return }
         guard let row = try? store.loadSession(id: s.id) else { return }
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
@@ -517,8 +554,10 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Rename a session with the given title and source. Updates both
-    /// the in-memory session and SQLite in one call.
+    /// the in-memory session and SQLite in one call. No-ops only when
+    /// another live instance owns the writer lease (this pane is a mirror).
     func renameSession(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) {
+        guard !anotherLiveInstanceOwnsLease(sessionId: id) else { return }
         guard let session = sessions[id] else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -592,7 +631,12 @@ final class ACPSessionManager: ObservableObject {
     /// store directly — otherwise removing or clearing queue items
     /// only mutates the cached `ACPSession`, and the supposedly-removed
     /// prompts reappear on relaunch.
+    ///
+    /// No-ops only when another live instance owns the writer lease — a
+    /// mirror must not overwrite the active owner's queue. The writer and
+    /// not-yet-leased cases persist normally.
     func persistQueue(for session: ACPSession) {
+        guard !anotherLiveInstanceOwnsLease(sessionId: session.id) else { return }
         try? store.upsertQueue(sessionId: session.id, items: session.queue)
     }
 
@@ -669,6 +713,360 @@ final class ACPSessionManager: ObservableObject {
     }
 }
 
+// MARK: - Writer lease + heartbeat
+
+extension ACPSessionManager {
+    /// Seconds after which a lease whose owner stopped heart-beating is
+    /// considered abandoned and reclaimable.
+    static let leaseStaleAfter: Int64 = 15
+
+    /// Attempt to become the writer for `sessionId`. Returns true if we
+    /// now hold the lease. Idempotent for a lease we already own.
+    @discardableResult
+    func acquireWriterLease(sessionId: ACPSession.ID) -> Bool {
+        let now = Int64(Date().timeIntervalSince1970)
+        let won = (try? store.claimLease(
+            sessionId: sessionId, instanceId: instanceId, pid: pid,
+            now: now, staleAfter: Self.leaseStaleAfter)) ?? false
+        if won { _ownedLeases.insert(sessionId) } else { _ownedLeases.remove(sessionId) }
+        return won
+    }
+
+    func releaseWriterLease(sessionId: ACPSession.ID) {
+        try? store.releaseLease(sessionId: sessionId, instanceId: instanceId)
+        _ownedLeases.remove(sessionId)
+    }
+
+    /// True when this session is open here but owned by another live
+    /// instance (read-only mirror). Delegates to `anotherLiveInstanceOwnsLease`
+    /// so a stale former owner (still in `_ownedLeases`) is immediately treated
+    /// as read-only after a takeover ping, without waiting for the heartbeat.
+    func isMirror(sessionId: ACPSession.ID) -> Bool {
+        anotherLiveInstanceOwnsLease(sessionId: sessionId)
+    }
+
+    /// True when a DIFFERENT, live instance currently owns this session's
+    /// lease in the store. Unlike `isMirror`, this does NOT short-circuit on
+    /// our in-memory `_ownedLeases`: during a takeover the former owner keeps
+    /// the id in `_ownedLeases` until its heartbeat catches up, so manager
+    /// writes must consult the store row directly to avoid writing to a
+    /// session another instance now owns.
+    private func anotherLiveInstanceOwnsLease(sessionId: ACPSession.ID) -> Bool {
+        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
+        return lease.ownerInstance != instanceId
+            && ACPProcessLiveness.pidAlive(lease.pid)
+            && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
+    }
+
+    /// Whether the instance currently writing this mirrored session is
+    /// actively streaming (drives the mirror's busy spinner). Reads the
+    /// lease status written by the owner's heartbeat.
+    func mirrorIsBusy(sessionId: ACPSession.ID) -> Bool {
+        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
+        return lease.status == "busy"
+    }
+
+    /// One heartbeat tick for an owned session. Returns true if the
+    /// caller should stand down (we lost the lease to another instance).
+    /// Side effects: refreshes our heartbeat when we still own the row,
+    /// or re-asserts ownership (re-inserts) when the row has gone missing
+    /// while we still believe we own it (e.g. a failed concurrent takeover
+    /// deleted it) — preventing a rowless session another instance could
+    /// claim out from under us.
+    // exposed for tests
+    @discardableResult
+    func heartbeatTick(sessionId: ACPSession.ID) -> Bool {
+        guard _ownedLeases.contains(sessionId) else { return false }
+        let now = Int64(Date().timeIntervalSince1970)
+        if let lease = try? store.loadLease(sessionId: sessionId) {
+            if lease.ownerInstance != instanceId {
+                return true   // taken over → stand down
+            }
+            // Still ours — refresh heartbeat + status.
+            let status = runners[sessionId]?.session.transcript.streamingState == .streaming
+                ? "busy" : "idle"
+            try? store.refreshHeartbeat(
+                sessionId: sessionId, instanceId: instanceId, now: now, status: status)
+            return false
+        } else {
+            // Row missing but we believe we own it — re-assert ownership so
+            // the session isn't left rowless and claimable by another instance.
+            try? store.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid, now: now)
+            return false
+        }
+    }
+
+    private func startHeartbeat(sessionId: ACPSession.ID) {
+        _heartbeatTasks[sessionId]?.cancel()
+        _heartbeatTasks[sessionId] = Task { [weak self] in
+            // Refresh immediately so the just-claimed lease doesn't rely on
+            // the first 5s tick (a slow initialize/newSession could otherwise
+            // let the heartbeat age past leaseStaleAfter mid-attach).
+            await MainActor.run {
+                guard let self else { return }
+                if self.heartbeatTick(sessionId: sessionId) {
+                    Task { await self.standDown(sessionId: sessionId) }
+                }
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
+                guard let self else { return }
+                let shouldStandDown = await MainActor.run { self.heartbeatTick(sessionId: sessionId) }
+                if shouldStandDown {
+                    await self.standDown(sessionId: sessionId)
+                }
+            }
+        }
+    }
+
+    private func stopHeartbeat(sessionId: ACPSession.ID) {
+        _heartbeatTasks.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    // MARK: - Writer watch (prompt stand-down on takeover ping)
+
+    /// Subscribe to the change notifier while we own a session so a
+    /// takeover ping triggers an immediate ownership re-check and stand-down
+    /// rather than waiting up to 5 s for the heartbeat.
+    private func startWriterWatch(sessionId: ACPSession.ID) {
+        guard writerWatchTokens[sessionId] == nil else { return }
+        let token = changeNotifier.subscribe { [weak self] in
+            // The Darwin notifier delivers off the main thread; hop back.
+            Task { @MainActor [weak self] in
+                self?.scheduleWriterOwnershipCheck(sessionId: sessionId)
+            }
+        }
+        writerWatchTokens[sessionId] = token
+    }
+
+    private func scheduleWriterOwnershipCheck(sessionId: ACPSession.ID) {
+        writerWatchDebounce[sessionId]?.cancel()
+        writerWatchDebounce[sessionId] = Task { [weak self] in
+            // 100 ms coalesce window: the writer itself posts a ping on every
+            // persist, so we debounce to avoid checking on each of those.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let self else { return }
+            await MainActor.run {
+                guard self._ownedLeases.contains(sessionId) else { return }
+                if self.heartbeatTick(sessionId: sessionId) {
+                    self._ownedLeases.remove(sessionId)
+                    Task { await self.standDown(sessionId: sessionId) }
+                }
+            }
+        }
+    }
+
+    private func stopWriterWatch(sessionId: ACPSession.ID) {
+        if let t = writerWatchTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
+        writerWatchDebounce.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    // MARK: - Test accessors for writer watch
+
+    /// True when a writer-watch change-notifier subscription is active for
+    /// `sessionId`. Used by tests to verify start/stop symmetry.
+    func writerWatchActiveForTest(sessionId: ACPSession.ID) -> Bool {
+        writerWatchTokens[sessionId] != nil
+    }
+
+    // MARK: - Takeover (mirror seizes writer role)
+
+    /// Explicit user takeover from a mirror: seize the lease, nudge the
+    /// previous owner to notice (via the change ping), then attach as the
+    /// writer (re-attaching to the remote session via session/load inside
+    /// `attach`). The previous owner stands down when its heartbeat sees
+    /// it no longer owns the lease (within ~5s).
+    func takeOver(sessionId: ACPSession.ID) {
+        let now = Int64(Date().timeIntervalSince1970)
+        try? store.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid, now: now)
+        _ownedLeases.insert(sessionId)
+        changeNotifier.post()
+        endMirroring(sessionId: sessionId)
+        startHeartbeat(sessionId: sessionId)
+        startWriterWatch(sessionId: sessionId)
+        if let session = sessions[sessionId] {
+            // Refresh the cached remoteSessionId from the store so the
+            // re-attach uses session/load (resuming the existing agent
+            // conversation) rather than session/new (creating a fresh one).
+            // A mirror that was opened before the writer persisted
+            // remote_session_id has a stale/nil in-memory value; reading
+            // the store row here fixes that before attach branches on it.
+            // Only overwrite when the store has a non-empty value so we
+            // don't clobber a good in-memory id with a missing row.
+            if let row = try? store.loadSession(id: sessionId),
+               let remote = row.remoteSessionId, !remote.isEmpty {
+                session.remoteSessionId = remote
+            }
+            // Refresh the queue from the store so the taking-over instance
+            // starts from the current persisted queue rather than whatever
+            // stale/empty in-memory state the mirror cached. Queue writes
+            // don't post a change notification, so the mirror's in-memory
+            // queue can be stale at takeover time.
+            let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+            session.restoreQueue(queue)
+            session.agentState = .idle   // allow attach's agentState guard to proceed
+            Task { await attach(to: sessionId, freshlyCreated: false) }
+        }
+    }
+
+    /// Relinquish the writer role we just lost to a takeover: cancel any
+    /// in-flight prompt, tear down the runner/agent, and become a mirror.
+    /// Does NOT release the lease — we no longer own it.
+    private func standDown(sessionId: ACPSession.ID) async {
+        stopHeartbeat(sessionId: sessionId)
+        stopWriterWatch(sessionId: sessionId)
+        _ownedLeases.remove(sessionId)
+        if let runner = runners.removeValue(forKey: sessionId) {
+            runner.invalidateActivePrompt()
+            runner.stop()
+            await runner.connection.shutdown()
+        }
+        if let session = sessions[sessionId] {
+            session.agentState = .idle
+            session.transcript.streamingState = .idle
+        }
+        // Only begin mirroring when the session is still open. A takeover
+        // notification can race with tab closure: if `detach`/`evictIfIdle`
+        // already removed the session, starting a mirror poll would leak a
+        // background task for a session that no longer exists.
+        if sessions[sessionId] != nil {
+            beginMirroring(sessionId: sessionId)
+        }
+    }
+
+    // MARK: - Test accessors
+
+    /// True once `shutdownBackgroundTasks` has been called. In-flight attach
+    /// coroutines check this flag at their pre-commit guard to avoid
+    /// registering a runner on a disposed manager.
+    func isDisposedForTest() -> Bool { isDisposed }
+
+    func ownsLeaseForTest(sessionId: ACPSession.ID) -> Bool {
+        (try? store.loadLease(sessionId: sessionId))?.ownerInstance == instanceId
+    }
+
+    /// True while an `attach` coroutine holds the lease for `sessionId`
+    /// but has not yet registered a runner. Used by tests to verify that
+    /// `releaseAllOwnedLeases` skips attaching sessions.
+    func isAttachingForTest(_ sessionId: ACPSession.ID) -> Bool {
+        attachingSessions.contains(sessionId)
+    }
+
+    func heartbeatTickForTest(sessionId: ACPSession.ID) -> Bool {
+        heartbeatTick(sessionId: sessionId)
+    }
+
+    /// True when a mirror poll task is active for `sessionId`. Used by
+    /// tests to verify that eviction cancels the poll.
+    func mirrorPollActiveForTest(sessionId: ACPSession.ID) -> Bool {
+        mirrorPoll[sessionId] != nil
+    }
+}
+
+// MARK: - Mirror (read-only follower)
+
+extension ACPSessionManager {
+    /// Start mirroring a session owned by another instance: subscribe to
+    /// the change ping (debounced) and run a slow poll backstop. Never
+    /// spawns a runner.
+    func beginMirroring(sessionId: ACPSession.ID) {
+        guard sessions[sessionId] != nil else { return }
+        guard mirrorTokens[sessionId] == nil else { return }
+        let token = changeNotifier.subscribe { [weak self] in
+            // The Darwin notifier delivers off the main thread; hop back.
+            Task { @MainActor [weak self] in
+                self?.scheduleMirrorRefresh(sessionId: sessionId)
+            }
+        }
+        mirrorTokens[sessionId] = token
+        mirrorPoll[sessionId] = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)   // 2.5s backstop
+                await self?.refreshMirror(sessionId: sessionId)
+            }
+        }
+        mirrorDebounce[sessionId]?.cancel()
+        mirrorDebounce[sessionId] = Task { [weak self] in await self?.refreshMirror(sessionId: sessionId) }
+    }
+
+    func endMirroring(sessionId: ACPSession.ID) {
+        if let t = mirrorTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
+        mirrorDebounce.removeValue(forKey: sessionId)?.cancel()
+        mirrorPoll.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    /// Cancel every background task owned by this manager — mirror
+    /// subscriptions/pollers (which have no runner and so are never reached
+    /// by `detach`) and heartbeats. Called when the worktree's manager is
+    /// disposed so nothing keeps waking after the manager is dropped.
+    ///
+    /// NOTE: does NOT release leases. Call `releaseAllOwnedLeases()` AFTER
+    /// all runner connections have been shut down (`detach` loops in
+    /// `disposeACPManager`) so a freed lease is never claimable while the
+    /// old agent process is still alive.
+    func shutdownBackgroundTasks() {
+        isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
+        for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
+        for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
+        for (_, task) in _heartbeatTasks { task.cancel() }
+        _heartbeatTasks.removeAll()
+    }
+
+    /// Release every lease this manager still owns. Call AFTER runner
+    /// connections are shut down so a freed lease is never claimable while
+    /// the old agent is still alive.
+    ///
+    /// Sessions that are still in the pre-runner attach window (`attachingSessions`)
+    /// are intentionally skipped: their `attach` defer releases the lease AFTER
+    /// `connection.shutdown`, preserving the correct teardown order. The lease
+    /// is never leaked — it is either released by the attach defer on abort, or
+    /// goes stale in 15 s if the attach coroutine is permanently wedged.
+    func releaseAllOwnedLeases() {
+        for sid in Array(_ownedLeases) where !attachingSessions.contains(sid) {
+            try? store.releaseLease(sessionId: sid, instanceId: instanceId)
+            _ownedLeases.remove(sid)
+        }
+    }
+
+    private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {
+        mirrorDebounce[sessionId]?.cancel()
+        mirrorDebounce[sessionId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)   // 100ms coalesce
+            guard !Task.isCancelled else { return }
+            await self?.refreshMirror(sessionId: sessionId)
+        }
+    }
+
+    /// Re-read the transcript from SQLite and apply it into the cached
+    /// mirror session. Performs a full rebuild using `replaceTranscriptMessages`
+    /// so `toolCallIndices` and the render window stay consistent — bypassing
+    /// by-index mutation avoids violating those invariants.
+    func refreshMirror(sessionId: ACPSession.ID) async {
+        guard let session = sessions[sessionId] else { return }
+        // Always sync the queue — it can change (drain/clear) with no new
+        // transcript rows, so this must run before any early-return below.
+        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+        session.restoreQueue(queue)
+        // Sync transcript messages; early-return when nothing new to apply.
+        let stored = (try? store.loadMessages(sessionId: sessionId)) ?? []
+        guard !stored.isEmpty else { return }
+        let decoder = JSONDecoder()
+        var messages: [ACPMessage] = []
+        messages.reserveCapacity(stored.count)
+        for m in stored {
+            guard let wire = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder)
+            else { continue }
+            messages.append(wire.toMessage())
+        }
+        session.replaceTranscriptMessages(messages)
+        // Anchor the visible window to the tail so new content is visible,
+        // but only when the session is following the tail (user hasn't scrolled up).
+        if session.followsTranscriptTail {
+            session.transcript.resetWindowToTail()
+        }
+    }
+}
+
 // MARK: - Process lifecycle
 
 extension ACPSessionManager {
@@ -701,6 +1099,31 @@ extension ACPSessionManager {
         // backfill wait) early-returns on the `.spawning` guard above
         // instead of racing into a duplicate runner.
         session.agentState = .spawning
+        // Only the lease holder runs a live agent + writes. If another
+        // live instance owns this session, stay a read-only mirror.
+        guard acquireWriterLease(sessionId: sessionId) else {
+            session.agentState = .idle
+            beginMirroring(sessionId: sessionId)
+            return
+        }
+        endMirroring(sessionId: sessionId)
+        startHeartbeat(sessionId: sessionId)
+        startWriterWatch(sessionId: sessionId)
+        // Mark this session as attaching so `releaseAllOwnedLeases` skips it.
+        // The remove runs on every exit (success, abort, throw) via the defer below.
+        attachingSessions.insert(sessionId)
+        // Any failure path below must hand the session back: release the
+        // lease and stop the heartbeat so another instance can claim it.
+        // Only a fully-registered runner (the success path) keeps them.
+        var attachSucceeded = false
+        defer {
+            attachingSessions.remove(sessionId)
+            if !attachSucceeded {
+                stopHeartbeat(sessionId: sessionId)
+                stopWriterWatch(sessionId: sessionId)
+                releaseWriterLease(sessionId: sessionId)
+            }
+        }
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
         // where `index` is the in-memory transcript position. Tail-first
         // hydration leaves `transcript.messages` shorter than the persisted
@@ -802,7 +1225,9 @@ extension ACPSessionManager {
                                                 runner,
                                                 sessionId: sessionId
                                               )
-                                          })
+                                          },
+                                          onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          ownerInstanceId: instanceId)
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }
@@ -838,7 +1263,12 @@ extension ACPSessionManager {
                     result = try await connection.newSession(cwd: worktreePath)
                     if session.hasConversationTranscript {
                         shouldHoldQueueForRecovery = true
-                        persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                        // Guard the store write: if another instance took over
+                        // while we were awaiting loadSession/newSession, do not
+                        // persist recovery state to a session we no longer own.
+                        if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                            persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                        }
                     }
                     restoreWarning = .init(
                         message: "Agent context could not be restored.",
@@ -849,7 +1279,12 @@ extension ACPSessionManager {
                 result = try await connection.newSession(cwd: worktreePath)
                 if session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
-                    persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                    // Guard the store write: if another instance took over
+                    // while we were awaiting newSession, do not persist
+                    // recovery state to a session we no longer own.
+                    if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                        persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                    }
                 }
                 restoreWarning = .init(
                     message: "Agent context could not be restored.",
@@ -862,6 +1297,18 @@ extension ACPSessionManager {
                     canSendTranscript: session.hasConversationTranscript
                 )
             }
+            // Abort the commit if we were taken over OR the manager was disposed
+            // while we awaited spawn/initialize — never register a runner or
+            // persist for a session we no longer (or never will) own.
+            // `attachSucceeded` stays false so the defer releases the lease
+            // and stops the heartbeat/writerWatch.
+            if isDisposed || anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                await connection.shutdown()
+                startedRunner?.stop()
+                session.agentState = .idle
+                if !isDisposed { beginMirroring(sessionId: sessionId) }   // don't start a mirror on a disposed manager
+                return
+            }
             session.remoteSessionId = result.sessionId
             session.availableModels = result.availableModels
             session.availableModes = result.availableModes
@@ -873,6 +1320,7 @@ extension ACPSessionManager {
             persistSessionRemoteId(session)
             startRunnerIfNeeded()
             runners[sessionId] = runner
+            attachSucceeded = true
             session.agentState = .ready
             if !shouldHoldQueueForRecovery {
                 runner.flushQueueIfIdle()
@@ -1082,6 +1530,10 @@ extension ACPSessionManager {
             runner.stop()
             await runner.connection.shutdown()
         }
+        stopHeartbeat(sessionId: sessionId)
+        stopWriterWatch(sessionId: sessionId)
+        releaseWriterLease(sessionId: sessionId)
+        endMirroring(sessionId: sessionId)
         // SwiftUI's `.onDisappear` retain release for a closing tab can
         // arrive BEFORE this async detach starts, so the release runs while
         // agentState is still `.ready` and short-circuits eviction. Re-check

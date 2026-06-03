@@ -2,8 +2,19 @@ import Foundation
 
 struct ACPPermissionDecisionLog {
     let store: ACPSessionStore
+    /// Optional gate: when provided, `record` becomes a no-op if the
+    /// closure returns `false`. Used by `ACPSessionRunner` to prevent
+    /// writes to the `permission_decisions` table after another instance
+    /// has seized the session lease.
+    let canWrite: (() -> Bool)?
+
+    init(store: ACPSessionStore, canWrite: (() -> Bool)? = nil) {
+        self.store = store
+        self.canWrite = canWrite
+    }
 
     func record(sessionId: String, scopeKey: String, decision: ACPPermissionDecision, scope: ACPPermissionScopeKind) throws {
+        if let canWrite, !canWrite() { return }
         let now = Int64(Date().timeIntervalSince1970)
         try store.db.exec("""
         INSERT INTO permission_decisions (session_id, scope_key, decision, scope, decided_at)
