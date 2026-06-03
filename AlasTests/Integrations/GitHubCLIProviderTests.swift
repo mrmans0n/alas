@@ -239,6 +239,29 @@ struct GitHubCLIProviderTests {
         #expect(await runner.commands.count == 2)
     }
 
+    @Test func currentReviewRequestPagesReviewThreads() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsFirstPageOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsSecondPageOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.threads.map(\.id) == ["thread-page-1", "thread-page-2"])
+        let commands = await runner.commands
+        #expect(commands.count == 3)
+        #expect(!commands[1].args.contains("-F cursor=cursor-1"))
+        #expect(commands[2].args.contains("-F"))
+        #expect(commands[2].args.contains("cursor=cursor-1"))
+    }
+
     @Test func reviewThreadsJSONParsesActionableSummaries() throws {
         let threads = try GitHubCLIProvider.parseReviewThreads(Self.reviewThreadsOutput)
 
@@ -588,7 +611,77 @@ struct GitHubCLIProviderTests {
                     ]
                   }
                 }
-              ]
+              ],
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    private static let reviewThreadsFirstPageOutput = """
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "nodes": [
+                {
+                  "id": "thread-page-1",
+                  "isResolved": false,
+                  "isOutdated": false,
+                  "comments": {
+                    "nodes": [
+                      {
+                        "body": "First page feedback.",
+                        "url": "https://github.com/mrmans0n/alas/pull/42#discussion_page_1",
+                        "author": { "login": "reviewer" }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "cursor-1"
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    private static let reviewThreadsSecondPageOutput = """
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "nodes": [
+                {
+                  "id": "thread-page-2",
+                  "isResolved": false,
+                  "isOutdated": false,
+                  "comments": {
+                    "nodes": [
+                      {
+                        "body": "Second page feedback.",
+                        "url": "https://github.com/mrmans0n/alas/pull/42#discussion_page_2",
+                        "author": { "login": "reviewer" }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              }
             }
           }
         }

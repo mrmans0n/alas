@@ -4,10 +4,10 @@ struct GitHubCLIProvider: CodeHostProvider {
     let kind: CodeHostKind = .github
     let capabilities: CodeHostProviderCapabilities = .githubCLI
     static let reviewThreadsQuery = """
-    query($owner: String!, $repo: String!, $number: Int!) {
+    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
-          reviewThreads(first: 50) {
+          reviewThreads(first: 50, after: $cursor) {
             nodes {
               id
               isResolved
@@ -22,6 +22,10 @@ struct GitHubCLIProvider: CodeHostProvider {
                   }
                 }
               }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
             }
           }
         }
@@ -158,22 +162,52 @@ struct GitHubCLIProvider: CodeHostProvider {
         request: ReviewRequest,
         cwd: URL
     ) async throws -> [ReviewThreadSummary] {
+        var threads: [ReviewThreadSummary] = []
+        var cursor: String?
+
+        repeat {
+            let page = try await reviewThreadsPage(remote: remote, request: request, cursor: cursor, cwd: cwd)
+            threads.append(contentsOf: page.threads)
+            if page.pageInfo.hasNextPage {
+                guard let endCursor = page.pageInfo.endCursor, !endCursor.isEmpty else {
+                    throw CodeHostProviderError.malformedOutput("gh review threads output is missing a pagination cursor")
+                }
+                cursor = endCursor
+            } else {
+                cursor = nil
+            }
+        } while cursor != nil
+
+        return threads
+    }
+
+    private func reviewThreadsPage(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cursor: String?,
+        cwd: URL
+    ) async throws -> ReviewThreadsPage {
+        var args = [
+            "api", "graphql",
+            "-f", "query=\(Self.reviewThreadsQuery)",
+            "-F", "owner=\(remote.owner)",
+            "-F", "repo=\(remote.repository)",
+            "-F", "number=\(request.number)",
+        ]
+        if let cursor {
+            args.append(contentsOf: ["-F", "cursor=\(cursor)"])
+        }
+
         let result = try await runner.run(
             "gh",
-            args: [
-                "api", "graphql",
-                "-f", "query=\(Self.reviewThreadsQuery)",
-                "-F", "owner=\(remote.owner)",
-                "-F", "repo=\(remote.repository)",
-                "-F", "number=\(request.number)",
-            ],
+            args: args,
             cwd: cwd
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
         }
 
-        return try Self.parseReviewThreads(result.stdout)
+        return try Self.parseReviewThreadsPage(result.stdout)
     }
 
     func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {
@@ -282,6 +316,10 @@ struct GitHubCLIProvider: CodeHostProvider {
     }
 
     static func parseReviewThreads(_ json: String) throws -> [ReviewThreadSummary] {
+        try parseReviewThreadsPage(json).threads
+    }
+
+    private static func parseReviewThreadsPage(_ json: String) throws -> ReviewThreadsPage {
         let data = Data(json.utf8)
         let response: ReviewThreadsResponse
         do {
@@ -290,8 +328,8 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh review threads output")
         }
 
-        let nodes = response.data.repository.pullRequest.reviewThreads.nodes
-        return try nodes.compactMap { thread in
+        let connection = response.data.repository.pullRequest.reviewThreads
+        let threads: [ReviewThreadSummary] = try connection.nodes.compactMap { thread in
             guard let comment = thread.comments.nodes.first(where: { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                 return nil
             }
@@ -305,6 +343,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 isActionable: !thread.isResolved && !thread.isOutdated
             )
         }
+        return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
     }
 
     private static func isNoChecksReported(_ result: ProcessResult) -> Bool {
@@ -492,6 +531,17 @@ private struct ReviewThreadsPullRequest: Decodable {
 
 private struct ReviewThreadsConnection: Decodable {
     let nodes: [ReviewThreadNode]
+    let pageInfo: ReviewThreadsPageInfo
+}
+
+private struct ReviewThreadsPage: Equatable {
+    let threads: [ReviewThreadSummary]
+    let pageInfo: ReviewThreadsPageInfo
+}
+
+private struct ReviewThreadsPageInfo: Decodable, Equatable {
+    let hasNextPage: Bool
+    let endCursor: String?
 }
 
 private struct ReviewThreadNode: Decodable {
