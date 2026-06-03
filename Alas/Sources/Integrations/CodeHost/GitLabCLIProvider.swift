@@ -56,7 +56,18 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "glab mr list", stderr: result.stderr)
         }
 
-        guard let request = try Self.parseMRList(result.stdout, remote: remote, headOwner: headOwner) else {
+        let sourceProjectPathsByID = try await sourceProjectPathsByID(
+            fromMRListJSON: result.stdout,
+            headOwner: headOwner,
+            remote: remote,
+            cwd: cwd
+        )
+        guard let request = try Self.parseMRList(
+            result.stdout,
+            remote: remote,
+            headOwner: headOwner,
+            sourceProjectPathsByID: sourceProjectPathsByID
+        ) else {
             return nil
         }
 
@@ -190,6 +201,44 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try Self.parseMRView(result.stdout, remote: remote)
     }
 
+    private func sourceProjectPathsByID(
+        fromMRListJSON json: String,
+        headOwner: String?,
+        remote: CodeHostRemote,
+        cwd: URL
+    ) async throws -> [Int: String] {
+        guard let headOwner = Self.normalizedOptionalString(headOwner), !headOwner.isEmpty else {
+            return [:]
+        }
+
+        let items = try Self.decodeMRList(json)
+        guard items.count > 1 else {
+            return [:]
+        }
+
+        var pathsByID: [Int: String] = [:]
+        let idsToResolve = Set(items.compactMap { item -> Int? in
+            guard item.sourceProjectNamespace(sourceProjectPathsByID: [:]) == nil else {
+                return nil
+            }
+            return item.sourceProjectID
+        })
+
+        for id in idsToResolve.sorted() {
+            let result = try await runner.run(
+                "glab",
+                args: ["api", "projects/\(id)", "--hostname", remote.host, "--output", "json"],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "glab api projects/\(id)", stderr: result.stderr)
+            }
+            pathsByID[id] = try Self.parseProjectPath(result.stdout)
+        }
+
+        return pathsByID
+    }
+
     private func unresolvedDiscussions(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -238,23 +287,24 @@ struct GitLabCLIProvider: CodeHostProvider {
         throw CodeHostProviderError.malformedOutput("glab mr create returned an invalid URL")
     }
 
-    static func parseMRList(_ json: String, remote: CodeHostRemote, headOwner: String?) throws -> ReviewRequest? {
-        let data = Data(json.utf8)
-        let items: [MRListItem]
-        do {
-            items = try JSONDecoder().decode([MRListItem].self, from: data)
-        } catch {
-            throw CodeHostProviderError.malformedOutput("Unable to parse glab mr list output")
-        }
+    static func parseMRList(
+        _ json: String,
+        remote: CodeHostRemote,
+        headOwner: String?,
+        sourceProjectPathsByID: [Int: String] = [:]
+    ) throws -> ReviewRequest? {
+        let items = try decodeMRList(json)
 
         guard let item = items.first else {
             return nil
         }
 
         if let headOwner = headOwner?.trimmingCharacters(in: .whitespacesAndNewlines), !headOwner.isEmpty {
-            let itemsWithSourceProject = items.filter { $0.sourceProjectNamespace != nil }
+            let itemsWithSourceProject = items.filter { $0.sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) != nil }
             if !itemsWithSourceProject.isEmpty {
-                guard let item = itemsWithSourceProject.first(where: { $0.matchesSourceProjectOwner(headOwner) }) else {
+                guard let item = itemsWithSourceProject.first(where: {
+                    $0.matchesSourceProjectOwner(headOwner, sourceProjectPathsByID: sourceProjectPathsByID)
+                }) else {
                     return nil
                 }
                 return try reviewRequest(from: item, remote: remote, context: "glab mr list")
@@ -266,6 +316,29 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
 
         return try reviewRequest(from: item, remote: remote, context: "glab mr list")
+    }
+
+    static func parseProjectPath(_ json: String) throws -> String {
+        let data = Data(json.utf8)
+        let project: GitLabProject
+        do {
+            project = try JSONDecoder().decode(GitLabProject.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api project output")
+        }
+        guard let path = normalizedOptionalString(project.pathWithNamespace) else {
+            throw CodeHostProviderError.malformedOutput("glab api project output is missing path_with_namespace")
+        }
+        return path
+    }
+
+    private static func decodeMRList(_ json: String) throws -> [MRListItem] {
+        let data = Data(json.utf8)
+        do {
+            return try JSONDecoder().decode([MRListItem].self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab mr list output")
+        }
     }
 
     static func parseMRView(_ json: String, remote: CodeHostRemote) throws -> ReviewRequest {
@@ -563,6 +636,7 @@ private struct MRListItem: Decodable {
     let approvalsRequired: Int?
     let approvalsLeft: Int?
     let sourceProject: SourceProject?
+    let sourceProjectID: Int?
     let sourceProjectPath: String?
     let sourceProjectPathWithNamespace: String?
 
@@ -570,12 +644,15 @@ private struct MRListItem: Decodable {
         (draft ?? false) || (workInProgress ?? false)
     }
 
-    var sourceProjectNamespace: String? {
-        sourceProject?.pathWithNamespace ?? sourceProjectPathWithNamespace ?? sourceProjectPath
+    func sourceProjectNamespace(sourceProjectPathsByID: [Int: String]) -> String? {
+        sourceProject?.pathWithNamespace
+            ?? sourceProjectPathWithNamespace
+            ?? sourceProjectPath
+            ?? sourceProjectID.flatMap { sourceProjectPathsByID[$0] }
     }
 
-    func matchesSourceProjectOwner(_ headOwner: String) -> Bool {
-        guard let sourceProjectNamespace else {
+    func matchesSourceProjectOwner(_ headOwner: String, sourceProjectPathsByID: [Int: String]) -> Bool {
+        guard let sourceProjectNamespace = sourceProjectNamespace(sourceProjectPathsByID: sourceProjectPathsByID) else {
             return false
         }
         return sourceProjectNamespace == headOwner || sourceProjectNamespace.hasPrefix("\(headOwner)/")
@@ -596,12 +673,21 @@ private struct MRListItem: Decodable {
         case approvalsRequired = "approvals_required"
         case approvalsLeft = "approvals_left"
         case sourceProject = "source_project"
+        case sourceProjectID = "source_project_id"
         case sourceProjectPath = "source_project_path"
         case sourceProjectPathWithNamespace = "source_project_path_with_namespace"
     }
 }
 
 private struct SourceProject: Decodable {
+    let pathWithNamespace: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case pathWithNamespace = "path_with_namespace"
+    }
+}
+
+private struct GitLabProject: Decodable {
     let pathWithNamespace: String?
 
     private enum CodingKeys: String, CodingKey {

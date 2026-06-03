@@ -304,6 +304,28 @@ struct GitLabCLIProviderTests {
         #expect(try GitLabCLIProvider.parseMRList(output, remote: Self.remote, headOwner: "nacho") == nil)
     }
 
+    @Test func mrListFiltersByResolvedSourceProjectID() throws {
+        let request = try #require(try GitLabCLIProvider.parseMRList(
+            Self.duplicateForkMRListOutput,
+            remote: Self.remote,
+            headOwner: "nacho",
+            sourceProjectPathsByID: [
+                1001: "platform/mobile/alas",
+                1002: "nacho/alas",
+            ]
+        ))
+
+        #expect(request.number == 43)
+        #expect(request.title == "Fork MR")
+    }
+
+    @Test func projectPathParsingRequiresPathWithNamespace() throws {
+        #expect(try GitLabCLIProvider.parseProjectPath(#"{"path_with_namespace":"nacho/alas"}"#) == "nacho/alas")
+        #expect(throws: CodeHostProviderError.malformedOutput("glab api project output is missing path_with_namespace")) {
+            _ = try GitLabCLIProvider.parseProjectPath(#"{"name":"alas"}"#)
+        }
+    }
+
     @Test func mrMergeStatusesMapToReviewMergeState() throws {
         let cases: [(status: String, mergeState: ReviewMergeState)] = [
             ("mergeable", .clean),
@@ -488,6 +510,50 @@ struct GitLabCLIProviderTests {
                 "--output", "json",
                 "-R", "platform/mobile/alas",
             ],
+            cwd: Self.cwd
+        ))
+    }
+
+    @Test func currentReviewRequestResolvesSourceProjectIDsBeforeFilteringForkMRs() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.duplicateForkMRListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"path_with_namespace":"platform/mobile/alas"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"path_with_namespace":"nacho/alas"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.forkMRViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+
+        let request = try await GitLabCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: "nacho",
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 43)
+        #expect(await runner.commands.map { Array($0.args.prefix(2)) } == [
+            ["mr", "list"],
+            ["api", "projects/1001"],
+            ["api", "projects/1002"],
+            ["mr", "view"],
+            ["mr", "note"],
+            ["ci", "get"],
+        ])
+        #expect(await runner.commands[1] == FakeRunner.Command(
+            executable: "glab",
+            args: ["api", "projects/1001", "--hostname", "gitlab.example.com", "--output", "json"],
+            cwd: Self.cwd
+        ))
+        #expect(await runner.commands[2] == FakeRunner.Command(
+            executable: "glab",
+            args: ["api", "projects/1002", "--hostname", "gitlab.example.com", "--output", "json"],
+            cwd: Self.cwd
+        ))
+        #expect(await runner.commands[3] == FakeRunner.Command(
+            executable: "glab",
+            args: ["mr", "view", "43", "--output", "json", "-R", "platform/mobile/alas"],
             cwd: Self.cwd
         ))
     }
@@ -859,6 +925,45 @@ struct GitLabCLIProviderTests {
       "approvals_required": 1,
       "approvals_left": 1
     }
+    """
+
+    private static let forkMRViewOutput = """
+    {
+      "iid": 43,
+      "title": "Fork MR",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+      "state": "opened",
+      "draft": false,
+      "source_branch": "feature/gitlab-provider",
+      "target_branch": "main",
+      "merge_status": "can_be_merged",
+      "detailed_merge_status": "mergeable"
+    }
+    """
+
+    private static let duplicateForkMRListOutput = """
+    [
+      {
+        "iid": 42,
+        "title": "Base project MR",
+        "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+        "state": "opened",
+        "draft": false,
+        "source_branch": "feature/gitlab-provider",
+        "target_branch": "main",
+        "source_project_id": 1001
+      },
+      {
+        "iid": 43,
+        "title": "Fork MR",
+        "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+        "state": "opened",
+        "draft": false,
+        "source_branch": "feature/gitlab-provider",
+        "target_branch": "main",
+        "source_project_id": 1002
+      }
+    ]
     """
 
     private static let discussionsOutput = """
