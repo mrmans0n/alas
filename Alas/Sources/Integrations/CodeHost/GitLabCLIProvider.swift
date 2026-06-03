@@ -62,7 +62,8 @@ struct GitLabCLIProvider: CodeHostProvider {
 
         let detailedRequest = (try? await reviewRequestDetails(remote: remote, request: request, cwd: cwd)) ?? request
         let threads = (try? await unresolvedDiscussions(remote: remote, request: detailedRequest, cwd: cwd)) ?? []
-        return Self.withEnrichment(threads: threads, checks: [], on: detailedRequest)
+        let checks = (try? await checks(remote: remote, request: detailedRequest, cwd: cwd)) ?? []
+        return Self.withEnrichment(threads: threads, checks: checks, on: detailedRequest)
     }
 
     func createReviewRequest(
@@ -105,8 +106,25 @@ struct GitLabCLIProvider: CodeHostProvider {
     }
 
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] {
-        _ = (remote, request, cwd)
-        return []
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "ci", "get",
+                "--merge-request", "\(request.number)",
+                "--with-job-details",
+                "--output", "json",
+                "-R", remote.repositorySlug,
+            ],
+            cwd: cwd
+        )
+        if result.exitCode != 0, Self.isNoPipelineReported(result) {
+            return []
+        }
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab ci get", stderr: result.stderr)
+        }
+
+        return try Self.parsePipeline(result.stdout)
     }
 
     func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {
@@ -220,6 +238,51 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try reviewRequest(from: item, remote: remote, context: "glab mr view")
     }
 
+    static func parsePipeline(_ json: String) throws -> [ReviewCheck] {
+        let data = Data(json.utf8)
+        let pipeline: GitLabPipeline
+        do {
+            pipeline = try JSONDecoder().decode(GitLabPipeline.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab ci get output")
+        }
+
+        let workflow = normalizedOptionalString(pipeline.ref)
+        if let jobs = pipeline.jobs, !jobs.isEmpty {
+            return try jobs.map { job in
+                let detailURL = try parseOptionalHTTPURL(
+                    job.webURL,
+                    context: "glab ci get returned an invalid URL"
+                )
+                return ReviewCheck(
+                    id: checkID(for: job, pipeline: pipeline),
+                    name: job.name,
+                    workflow: workflow,
+                    bucket: mapCheckBucket(job.status),
+                    detailURL: detailURL,
+                    completedAt: try parseOptionalGitLabDate(job.finishedAt)
+                )
+            }
+        }
+
+        let detailURL = try parseOptionalHTTPURL(
+            pipeline.webURL,
+            context: "glab ci get returned an invalid URL"
+        )
+        let completedAt = try parseOptionalGitLabDate(pipeline.finishedAt)
+            ?? parseOptionalGitLabDate(pipeline.updatedAt)
+        return [
+            ReviewCheck(
+                id: checkID(for: pipeline),
+                name: "pipeline",
+                workflow: workflow,
+                bucket: mapCheckBucket(pipeline.status),
+                detailURL: detailURL,
+                completedAt: completedAt
+            ),
+        ]
+    }
+
     private static func reviewRequest(
         from item: MRListItem,
         remote: CodeHostRemote,
@@ -282,6 +345,94 @@ struct GitLabCLIProvider: CodeHostProvider {
         default:
             .unknown
         }
+    }
+
+    private static func mapCheckBucket(_ status: String) -> ReviewCheckBucket {
+        switch status.lowercased() {
+        case "success":
+            .pass
+        case "failed":
+            .fail
+        case "running", "pending", "created", "preparing", "waiting_for_resource", "manual", "scheduled":
+            .pending
+        case "canceled", "cancelled":
+            .cancel
+        case "skipped":
+            .skipping
+        default:
+            .unknown
+        }
+    }
+
+    private static func isNoPipelineReported(_ result: ProcessResult) -> Bool {
+        let output = "\(result.stdout)\n\(result.stderr)".lowercased()
+        return output.contains("no pipeline")
+            || output.contains("no pipelines")
+            || output.contains("pipeline not found")
+    }
+
+    private static func parseOptionalHTTPURL(_ value: String?, context: String) throws -> URL? {
+        guard let value = normalizedOptionalString(value) else {
+            return nil
+        }
+        guard let url = URL(string: value), url.isHTTPOrHTTPS else {
+            throw CodeHostProviderError.malformedOutput(context)
+        }
+        return url
+    }
+
+    private static func parseOptionalGitLabDate(_ value: String?) throws -> Date? {
+        guard let value = normalizedOptionalString(value) else {
+            return nil
+        }
+        if let date = parseDate(value, formatOptions: [.withInternetDateTime]) {
+            return date
+        }
+        if let date = parseDate(value, formatOptions: [.withInternetDateTime, .withFractionalSeconds]) {
+            return date
+        }
+        throw CodeHostProviderError.malformedOutput("Unable to parse GitLab date")
+    }
+
+    private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = formatOptions
+        return formatter.date(from: value)
+    }
+
+    private static func normalizedOptionalString(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func checkID(for pipeline: GitLabPipeline) -> String {
+        encodedID([
+            "gitlab-pipeline-check",
+            pipeline.id.map(String.init) ?? "",
+            "pipeline",
+            pipeline.status,
+            pipeline.webURL ?? "",
+        ])
+    }
+
+    private static func checkID(for job: GitLabJob, pipeline: GitLabPipeline) -> String {
+        encodedID([
+            "gitlab-job-check",
+            pipeline.id.map(String.init) ?? "",
+            job.id.map(String.init) ?? "",
+            job.name,
+            job.status,
+            job.webURL ?? "",
+        ])
+    }
+
+    private static func encodedID(_ fields: [String]) -> String {
+        fields
+            .map { "\($0.utf8.count)#\($0)" }
+            .joined()
     }
 
     private static func withEnrichment(
@@ -364,6 +515,42 @@ private struct SourceProject: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case pathWithNamespace = "path_with_namespace"
+    }
+}
+
+private struct GitLabPipeline: Decodable {
+    let id: Int?
+    let status: String
+    let ref: String?
+    let webURL: String?
+    let finishedAt: String?
+    let updatedAt: String?
+    let jobs: [GitLabJob]?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case status
+        case ref
+        case webURL = "web_url"
+        case finishedAt = "finished_at"
+        case updatedAt = "updated_at"
+        case jobs
+    }
+}
+
+private struct GitLabJob: Decodable {
+    let id: Int?
+    let name: String
+    let status: String
+    let webURL: String?
+    let finishedAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case status
+        case webURL = "web_url"
+        case finishedAt = "finished_at"
     }
 }
 

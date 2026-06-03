@@ -293,6 +293,89 @@ struct GitLabCLIProviderTests {
         }
     }
 
+    @Test func pipelineJSONPrefersJobLevelChecks() throws {
+        let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithJobsOutput)
+
+        #expect(checks.count == 2)
+        #expect(checks.map(\.name) == ["build", "test"])
+        #expect(checks.map(\.workflow) == ["feature/gitlab-provider", "feature/gitlab-provider"])
+        #expect(checks.map(\.bucket) == [.pass, .fail])
+        #expect(checks[0].detailURL == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/jobs/101"))
+        #expect(checks[1].detailURL == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/jobs/102"))
+        #expect(checks[0].completedAt == ISO8601DateFormatter().date(from: "2026-06-01T12:34:56Z"))
+        #expect(checks[1].completedAt == ISO8601DateFormatter().date(from: "2026-06-01T12:35:56Z"))
+        #expect(checks[0].id != checks[1].id)
+    }
+
+    @Test func pipelineJSONFallsBackToPipelineLevelCheckWhenJobsAreMissing() throws {
+        let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineOutput)
+
+        #expect(checks.count == 1)
+        #expect(checks[0].name == "pipeline")
+        #expect(checks[0].workflow == "feature/gitlab-provider")
+        #expect(checks[0].bucket == .pass)
+        #expect(checks[0].detailURL == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/pipelines/777"))
+        #expect(checks[0].completedAt == ISO8601DateFormatter().date(from: "2026-06-01T12:36:56Z"))
+    }
+
+    @Test func pipelineCheckStatusesMapGitLabAliases() throws {
+        let cases: [(status: String, bucket: ReviewCheckBucket)] = [
+            ("waiting_for_resource", .pending),
+            ("manual", .pending),
+            ("scheduled", .pending),
+            ("cancelled", .cancel),
+            ("skipped", .skipping),
+            ("blocked", .unknown),
+        ]
+
+        for testCase in cases {
+            let checks = try GitLabCLIProvider.parsePipeline(
+                """
+                {
+                  "id": 777,
+                  "status": "\(testCase.status)",
+                  "ref": "feature/gitlab-provider",
+                  "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/777",
+                  "jobs": []
+                }
+                """
+            )
+
+            #expect(checks.map(\.bucket) == [testCase.bucket])
+        }
+    }
+
+    @Test func pipelineJSONRejectsMalformedURLAndDate() throws {
+        #expect(throws: CodeHostProviderError.malformedOutput("glab ci get returned an invalid URL")) {
+            _ = try GitLabCLIProvider.parsePipeline(
+                """
+                {
+                  "id": 777,
+                  "status": "success",
+                  "ref": "feature/gitlab-provider",
+                  "web_url": "file:///tmp/pipeline",
+                  "jobs": []
+                }
+                """
+            )
+        }
+
+        #expect(throws: CodeHostProviderError.malformedOutput("Unable to parse GitLab date")) {
+            _ = try GitLabCLIProvider.parsePipeline(
+                """
+                {
+                  "id": 777,
+                  "status": "success",
+                  "ref": "feature/gitlab-provider",
+                  "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/777",
+                  "finished_at": "not-a-date",
+                  "jobs": []
+                }
+                """
+            )
+        }
+    }
+
     @Test func currentReviewRequestUsesExpectedMRListCommand() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
@@ -309,7 +392,7 @@ struct GitLabCLIProviderTests {
         )
 
         #expect(request?.number == 42)
-        #expect(await runner.commands.map(\.args.first) == ["mr", "mr", "mr"])
+        #expect(await runner.commands.map(\.args.first) == ["mr", "mr", "mr", "ci"])
         #expect(await runner.commands.first == FakeRunner.Command(
             executable: "glab",
             args: [
@@ -337,6 +420,103 @@ struct GitLabCLIProviderTests {
             ],
             cwd: Self.cwd
         ))
+        #expect(await runner.commands[3] == FakeRunner.Command(
+            executable: "glab",
+            args: [
+                "ci", "get",
+                "--merge-request", "42",
+                "--with-job-details",
+                "--output", "json",
+                "-R", "platform/mobile/alas",
+            ],
+            cwd: Self.cwd
+        ))
+    }
+
+    @Test func checksLoadsMRHeadPipeline() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        let checks = try await GitLabCLIProvider(runner: runner).checks(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(checks.map(\.name) == ["build", "test"])
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "ci", "get",
+                    "--merge-request", "42",
+                    "--with-job-details",
+                    "--output", "json",
+                    "-R", "platform/mobile/alas",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func checksReturnsEmptyWhenNoPipelineIsReported() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "no pipeline found for merge request !42"),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        let checks = try await GitLabCLIProvider(runner: runner).checks(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(checks.isEmpty)
+    }
+
+    @Test func checksThrowsCommandFailedOnOtherNonzeroExit() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "authentication failed"),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "glab ci get",
+            stderr: "authentication failed"
+        )) {
+            _ = try await GitLabCLIProvider(runner: runner).checks(
+                remote: Self.remote,
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
+    @Test func currentReviewRequestIncludesPipelineChecks() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+
+        let request = try await GitLabCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.checks.map(\.name) == ["build", "test"])
+        #expect(await runner.commands.map { Array($0.args.prefix(2)) } == [
+            ["mr", "list"],
+            ["mr", "view"],
+            ["mr", "note"],
+            ["ci", "get"],
+        ])
     }
 
     @Test func createReviewRequestUsesExpectedArgsForNormalMR() async throws {
@@ -492,6 +672,42 @@ struct GitLabCLIProviderTests {
     """
 
     private static let discussionsOutput = "[]"
+
+    private static let pipelineOutput = """
+    {
+      "id": 777,
+      "status": "success",
+      "ref": "feature/gitlab-provider",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/777",
+      "updated_at": "2026-06-01T12:36:56Z",
+      "jobs": []
+    }
+    """
+
+    private static let pipelineWithJobsOutput = """
+    {
+      "id": 777,
+      "status": "failed",
+      "ref": "feature/gitlab-provider",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/777",
+      "jobs": [
+        {
+          "id": 101,
+          "name": "build",
+          "status": "success",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/101",
+          "finished_at": "2026-06-01T12:34:56Z"
+        },
+        {
+          "id": 102,
+          "name": "test",
+          "status": "failed",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/102",
+          "finished_at": "2026-06-01T12:35:56Z"
+        }
+      ]
+    }
+    """
 
     private actor FakeRunner: CodeHostCommandRunning {
         struct Command: Equatable {
