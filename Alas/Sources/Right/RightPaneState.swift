@@ -246,12 +246,15 @@ final class RightPaneState {
         case .openAgentHandoff:
             guard canOpenReviewLoopHandoff(appState: appState) else { return }
             appState.openReviewLoopHandoff(from: reviewLoop, actionKind: action)
-        case .pushBranch:
+        case .pushBranch, .forcePushBranch:
             guard let snapshot = reviewLoop.snapshot else { return }
             Task { @MainActor in
                 do {
                     let result = try await Process.git(
-                        ["push", "-u", snapshot.remote?.remoteName ?? "origin", snapshot.local.branchName],
+                        Self.reviewLoopPushArguments(
+                            snapshot: snapshot,
+                            forceWithLease: action == .forcePushBranch
+                        ),
                         cwd: worktree.path
                     )
                     guard result.exitCode == 0 else {
@@ -292,6 +295,18 @@ final class RightPaneState {
     func openReviewLoopProviderPage() {
         guard let url = reviewLoop.snapshot?.reviewRequest?.url else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    nonisolated static func reviewLoopPushArguments(
+        snapshot: ReviewLoopSnapshot,
+        forceWithLease: Bool
+    ) -> [String] {
+        var args = ["push"]
+        if forceWithLease {
+            args.append("--force-with-lease")
+        }
+        args.append(contentsOf: ["-u", snapshot.remote?.remoteName ?? "origin", snapshot.local.branchName])
+        return args
     }
 
     nonisolated static func reviewLoopPushFailureMessage(_ result: ProcessResult) -> String {
@@ -390,7 +405,10 @@ final class RightPaneState {
         commits: [CommitInfo],
         headSHA: String
     ) async {
-        let needsPush = (try? await git.needsPush(worktreePath: worktree.path)) ?? true
+        async let needsPushProbe = git.needsPush(worktreePath: worktree.path)
+        async let upstreamAheadProbe = git.upstreamAheadCommitCount(worktreePath: worktree.path)
+        let needsPush = (try? await needsPushProbe) ?? true
+        let upstreamAheadCommitCount = (try? await upstreamAheadProbe) ?? 0
         let local = ReviewLoopLocalState(
             branchName: currentBranch,
             headSHA: headSHA,
@@ -399,6 +417,7 @@ final class RightPaneState {
             hasStagedChanges: changes.contains { $0.stage == .staged },
             aheadCommitCount: commits.count,
             hasUpstream: upstreamRef != nil,
+            upstreamAheadCommitCount: upstreamAheadCommitCount,
             needsPush: needsPush
         )
 

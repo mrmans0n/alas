@@ -30,6 +30,21 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.createReviewRequest))
     }
 
+    @Test func divergedBranchExposesForcePushInsteadOfNormalPush() {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(local: Self.makeLocal(needsPush: true, upstreamAheadCommitCount: 3), reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Remote diverged"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.warning])
+        #expect(model.blockingText == "Remote has commits not in this branch. Force push uses --force-with-lease.")
+        #expect(model.actions.contains(Action(kind: .forcePushBranch, title: "Force push", isEnabled: true)))
+        #expect(!model.actions.map(\.kind).contains(.pushBranch))
+        #expect(!model.actions.map(\.kind).contains(.createReviewRequest))
+    }
+
     @Test func noGitHubRequestExposesCreatePR() {
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: nil),
@@ -124,6 +139,15 @@ struct ReviewReadinessModelTests {
         #expect(push?.iconName == "arrow.up")
         #expect(push?.emphasis == .primary)
 
+        let diverged = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(local: Self.makeLocal(needsPush: true, upstreamAheadCommitCount: 2), reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        let forcePush = diverged.actions.first { $0.kind == .forcePushBranch }
+        #expect(forcePush?.iconName == "exclamationmark.arrow.triangle.2.circlepath")
+        #expect(forcePush?.emphasis == .primary)
+
         let noRequest = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: nil),
             lastError: nil,
@@ -186,7 +210,10 @@ struct ReviewReadinessModelTests {
         )
     }
 
-    private static func makeLocal(needsPush: Bool = false) -> ReviewLoopLocalState {
+    private static func makeLocal(
+        needsPush: Bool = false,
+        upstreamAheadCommitCount: Int = 0
+    ) -> ReviewLoopLocalState {
         ReviewLoopLocalState(
             branchName: "feature/review-loop",
             headSHA: "abc123",
@@ -195,6 +222,7 @@ struct ReviewReadinessModelTests {
             hasStagedChanges: false,
             aheadCommitCount: needsPush ? 1 : 0,
             hasUpstream: true,
+            upstreamAheadCommitCount: upstreamAheadCommitCount,
             needsPush: needsPush
         )
     }

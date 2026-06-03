@@ -158,7 +158,67 @@ struct ReviewLoopLocalState: Equatable, Sendable {
     let hasStagedChanges: Bool
     let aheadCommitCount: Int
     let hasUpstream: Bool
+    let upstreamAheadCommitCount: Int
     let needsPush: Bool
+
+    init(
+        branchName: String,
+        headSHA: String,
+        baseBranch: String,
+        hasWorkingTreeChanges: Bool,
+        hasStagedChanges: Bool,
+        aheadCommitCount: Int,
+        hasUpstream: Bool,
+        needsPush: Bool
+    ) {
+        self.init(
+            branchName: branchName,
+            headSHA: headSHA,
+            baseBranch: baseBranch,
+            hasWorkingTreeChanges: hasWorkingTreeChanges,
+            hasStagedChanges: hasStagedChanges,
+            aheadCommitCount: aheadCommitCount,
+            hasUpstream: hasUpstream,
+            upstreamAheadCommitCount: 0,
+            needsPush: needsPush
+        )
+    }
+
+    init(
+        branchName: String,
+        headSHA: String,
+        baseBranch: String,
+        hasWorkingTreeChanges: Bool,
+        hasStagedChanges: Bool,
+        aheadCommitCount: Int,
+        hasUpstream: Bool,
+        upstreamAheadCommitCount: Int,
+        needsPush: Bool
+    ) {
+        self.branchName = branchName
+        self.headSHA = headSHA
+        self.baseBranch = baseBranch
+        self.hasWorkingTreeChanges = hasWorkingTreeChanges
+        self.hasStagedChanges = hasStagedChanges
+        self.aheadCommitCount = aheadCommitCount
+        self.hasUpstream = hasUpstream
+        self.upstreamAheadCommitCount = upstreamAheadCommitCount
+        self.needsPush = needsPush
+    }
+
+    var pushState: ReviewLoopPushState {
+        if !hasUpstream { return .missingUpstream }
+        if needsPush, upstreamAheadCommitCount > 0 { return .diverged }
+        if needsPush { return .unpushed }
+        return .inSync
+    }
+}
+
+enum ReviewLoopPushState: Equatable, Sendable {
+    case inSync
+    case missingUpstream
+    case unpushed
+    case diverged
 }
 
 struct ReviewLoopSnapshot: Equatable, Sendable {

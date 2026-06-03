@@ -43,6 +43,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             switch kind {
             case .refresh: "arrow.clockwise"
             case .pushBranch: "arrow.up"
+            case .forcePushBranch: "exclamationmark.arrow.triangle.2.circlepath"
             case .createReviewRequest: "plus"
             case .openReviewRequest: "arrow.up.right.square"
             case .rerunFailedChecks: "arrow.clockwise"
@@ -53,7 +54,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
 
         var emphasis: Emphasis {
             switch kind {
-            case .pushBranch, .createReviewRequest, .openAgentHandoff:
+            case .pushBranch, .forcePushBranch, .createReviewRequest, .openAgentHandoff:
                 .primary
             case .refresh, .openReviewRequest, .rerunFailedChecks, .merge:
                 .normal
@@ -86,7 +87,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
 
         identity = request?.displayIdentity ?? kind?.displayName ?? "Review readiness"
         title = request?.title
-        blockingText = lastError ?? snapshot.errorMessage ?? Self.providerBlockingText(snapshot)
+        blockingText = lastError ?? snapshot.errorMessage ?? Self.providerBlockingText(snapshot) ?? Self.localBlockingText(snapshot)
 
         facts = Self.makeFacts(snapshot: snapshot, requestLabel: requestLabel)
         if lastError != nil || snapshot.errorMessage != nil {
@@ -108,6 +109,15 @@ struct ReviewReadinessModel: Equatable, Sendable {
         if !snapshot.providerAvailable { return "\(remote.kind.displayName) CLI missing" }
         if !snapshot.providerAuthenticated { return "\(remote.kind.displayName) auth needed" }
         return nil
+    }
+
+    private static func localBlockingText(_ snapshot: ReviewLoopSnapshot) -> String? {
+        switch snapshot.local.pushState {
+        case .diverged:
+            "Remote has commits not in this branch. Force push uses --force-with-lease."
+        case .inSync, .missingUpstream, .unpushed:
+            nil
+        }
     }
 
     private static func makeFacts(snapshot: ReviewLoopSnapshot, requestLabel: String) -> [Fact] {
@@ -136,6 +146,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
         }
         if !snapshot.providerAuthenticated {
             return [Chip(id: "auth-needed", title: "Auth needed", tone: .warning)]
+        }
+        if snapshot.local.pushState == .diverged {
+            return [Chip(id: "remote-diverged", title: "Remote diverged", tone: .warning)]
         }
         if snapshot.local.needsPush {
             return [Chip(id: "unpushed", title: "Unpushed", tone: .accent)]
@@ -170,7 +183,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
         guard snapshot.remote != nil, snapshot.providerAvailable, snapshot.providerAuthenticated else {
             return actions
         }
-        if snapshot.local.needsPush {
+        if snapshot.local.pushState == .diverged {
+            actions.append(Action(kind: .forcePushBranch, title: "Force push", isEnabled: true))
+        } else if snapshot.local.needsPush {
             actions.append(Action(kind: .pushBranch, title: "Push", isEnabled: true))
         } else if let request = snapshot.reviewRequest {
             if snapshot.providerCapabilities.canOpenReviewRequest {
@@ -222,6 +237,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
 enum ReviewReadinessActionKind: String, Codable, Equatable, Sendable {
     case refresh
     case pushBranch
+    case forcePushBranch
     case createReviewRequest
     case openReviewRequest
     case rerunFailedChecks
