@@ -2998,6 +2998,13 @@ final class AppState {
         manager.shutdownBackgroundTasks()
         Task { @MainActor in
             for sid in sessionIds { await manager.detach(sessionId: sid) }
+            // Release any leases this manager still owns AFTER all runner
+            // connections are shut down (detach above). A freed lease must
+            // not be claimable while an old agent process is still alive.
+            // `detach` already released runner-session leases; this mops up
+            // any remaining pre-runner owned leases (e.g. sessions acquired
+            // a lease but didn't register a runner yet).
+            manager.releaseAllOwnedLeases()
         }
     }
 

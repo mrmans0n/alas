@@ -342,6 +342,16 @@ final class ACPSessionRunner {
                 }
             }
         case .kill(let id, let p):
+            // Gate terminal kill on the lease: a former writer that lost
+            // the session lease must not mutate terminals for a session
+            // another instance now owns. Note: runner.stop() calls
+            // terminalHost.killAll() directly (NOT through this handler),
+            // so teardown is unaffected by this gate.
+            guard holdsLeaseForWrite() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
             do {
                 try host.kill(p)
                 self.connection.client.respondToTerminalRequest(
@@ -354,6 +364,16 @@ final class ACPSessionRunner {
                     id: id, result: .failure(.init(code: -32000, message: error.localizedDescription, data: nil)))
             }
         case .release(let id, let p):
+            // Gate terminal release on the lease: a former writer that lost
+            // the session lease must not mutate terminals for a session
+            // another instance now owns. Note: runner.stop() calls
+            // terminalHost.killAll() directly (NOT through this handler),
+            // so teardown is unaffected by this gate.
+            guard holdsLeaseForWrite() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
             do {
                 try host.release(p)
                 self.connection.client.respondToTerminalRequest(

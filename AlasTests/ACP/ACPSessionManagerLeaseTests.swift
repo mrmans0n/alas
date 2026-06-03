@@ -643,7 +643,7 @@ import Foundation
                 "attach must not register a runner after the manager is disposed")
     }
 
-    @Test("shutdownBackgroundTasks releases leases of pre-runner sessions")
+    @Test("releaseAllOwnedLeases frees pre-runner leases so another instance can claim them")
     func shutdownReleasesOwnedLeases() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("dispose-lease-\(UUID()).sqlite")
@@ -653,11 +653,143 @@ import Foundation
         // A owns the lease but has no runner (the pre-runner attach window).
         #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
 
-        // Disposing the manager must release the lease even with no runner.
+        // Simulate the dispose ordering: cancel tasks first, then release
+        // leases after connections are shut down.
         mgrA.shutdownBackgroundTasks()
+        // Tasks are cancelled but leases not yet released (connections
+        // would be shut down between these two calls in production).
+        #expect(mgrA._ownedLeases.contains(session.id),
+                "lease must still be held after shutdownBackgroundTasks (released separately)")
+        mgrA.releaseAllOwnedLeases()
 
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
-        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
+        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true,
+                "another instance must be able to acquire after releaseAllOwnedLeases")
+    }
+
+    // MARK: - Fix 2: takeOver refreshes queue from store
+
+    @Test("takeOver restores queue from store into the taking-over session")
+    func takeOverRestoresQueueFromStore() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("takeover-queue-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        _ = mgrA.acquireWriterLease(sessionId: session.id)
+
+        // Writer (A) persists a non-empty queue into the store.
+        session.enqueue(blocks: [.text("queued item from writer")])
+        mgrA.persistQueue(for: session)
+        let stored = try storeA.loadQueue(sessionId: session.id)
+        #expect(stored.count == 1, "precondition: writer persisted one queue item")
+
+        // Mirror (B) creates a placeholder — queue starts empty.
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        let mirrorSession = mgrB.placeholderSession(id: session.id)
+        #expect(mirrorSession != nil)
+        #expect(mirrorSession!.queue.isEmpty,
+                "precondition: mirror placeholder queue is empty before takeOver")
+
+        // B takes over — must refresh the queue from the store synchronously.
+        mgrB.takeOver(sessionId: session.id)
+
+        // The synchronous queue refresh inside takeOver must have restored
+        // the persisted queue so the taking-over instance starts from the
+        // current state (not the mirror's stale/empty cached queue).
+        #expect(mgrB.sessions[session.id]?.queue.count == 1,
+                "takeOver must refresh queue from the store before spawning attach")
+    }
+
+    // MARK: - Fix 3: Terminal kill/release gate
+
+    @Test("terminal kill denied when lease is held by another instance")
+    func terminalKillDeniedWhenLeaseLost() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-terminal-kill-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId.
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        // Request terminal/kill while the lease is held by "OTHER".
+        let params = ACPTerminalIdParams(sessionId: sid, terminalId: "t1")
+        mock.emitTerminal(.kill(id: .number(42), params: params))
+
+        // Wait for a response.
+        for _ in 0..<50 {
+            if mock.terminalResponses[.number(42)] != nil { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .failure(let err)? = mock.terminalResponses[.number(42)] else {
+            Issue.record("expected a failure response from the terminal-kill gate")
+            return
+        }
+        #expect(err.code == -32003,
+                "terminal kill must respond with code -32003 (lease lost) not a kill error")
+    }
+
+    @Test("terminal release denied when lease is held by another instance")
+    func terminalReleaseDeniedWhenLeaseLost() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-terminal-release-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId.
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        // Request terminal/release while the lease is held by "OTHER".
+        let params = ACPTerminalIdParams(sessionId: sid, terminalId: "t1")
+        mock.emitTerminal(.release(id: .number(43), params: params))
+
+        // Wait for a response.
+        for _ in 0..<50 {
+            if mock.terminalResponses[.number(43)] != nil { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .failure(let err)? = mock.terminalResponses[.number(43)] else {
+            Issue.record("expected a failure response from the terminal-release gate")
+            return
+        }
+        #expect(err.code == -32003,
+                "terminal release must respond with code -32003 (lease lost) not a release error")
     }
 }

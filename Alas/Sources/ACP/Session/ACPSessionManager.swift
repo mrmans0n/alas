@@ -891,6 +891,13 @@ extension ACPSessionManager {
                let remote = row.remoteSessionId, !remote.isEmpty {
                 session.remoteSessionId = remote
             }
+            // Refresh the queue from the store so the taking-over instance
+            // starts from the current persisted queue rather than whatever
+            // stale/empty in-memory state the mirror cached. Queue writes
+            // don't post a change notification, so the mirror's in-memory
+            // queue can be stale at takeover time.
+            let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+            session.restoreQueue(queue)
             session.agentState = .idle   // allow attach's agentState guard to proceed
             Task { await attach(to: sessionId, freshlyCreated: false) }
         }
@@ -979,16 +986,23 @@ extension ACPSessionManager {
     /// subscriptions/pollers (which have no runner and so are never reached
     /// by `detach`) and heartbeats. Called when the worktree's manager is
     /// disposed so nothing keeps waking after the manager is dropped.
+    ///
+    /// NOTE: does NOT release leases. Call `releaseAllOwnedLeases()` AFTER
+    /// all runner connections have been shut down (`detach` loops in
+    /// `disposeACPManager`) so a freed lease is never claimable while the
+    /// old agent process is still alive.
     func shutdownBackgroundTasks() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
         for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
         _heartbeatTasks.removeAll()
-        // Release any lease this manager still owns — including sessions in
-        // the pre-runner attach window that disposeACPManager's runner-based
-        // detach loop never reaches — so another instance can reclaim them
-        // immediately instead of waiting for the lease to go stale.
+    }
+
+    /// Release every lease this manager still owns. Call AFTER runner
+    /// connections are shut down so a freed lease is never claimable while
+    /// the old agent is still alive.
+    func releaseAllOwnedLeases() {
         for sid in Array(_ownedLeases) {
             try? store.releaseLease(sessionId: sid, instanceId: instanceId)
         }
