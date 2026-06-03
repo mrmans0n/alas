@@ -37,6 +37,33 @@ keep="${ALAS_ZMX_CACHE_KEEP:-5}"
 warn() { echo "build-zmx.sh: warning: $*" >&2; }
 die()  { echo "build-zmx.sh: error: $*" >&2; exit 1; }
 
+# Optional opt-out: when the dev intentionally builds without zmx (no zig
+# toolchain, no submodule), ALAS_ZMX_OPTIONAL=1 downgrades any blocking
+# precondition to a warning so embed-ghostty-resources.sh can take the
+# matching optional path. Without this, the pre-build phase would fail
+# before the embed phase ever runs, making the opt-out unreachable.
+#
+# Also remove any previously built zmx binary for this arch so a worktree
+# that built zmx before (e.g. on a different host or before the toolchain
+# was uninstalled) does not silently ship the stale helper via the
+# `-x` check in embed-ghostty-resources.sh. For the universal recursive
+# path, every per-slice install dir is wiped too.
+skip_if_optional() {
+    if [ "${ALAS_ZMX_OPTIONAL:-}" = "1" ]; then
+        if [ "${target_arch}" = "universal" ]; then
+            rm -f \
+                "${srcroot}/.build/zmx/arm64/install/bin/zmx" \
+                "${srcroot}/.build/zmx/x86_64/install/bin/zmx" \
+                "${zmx_output}"
+        else
+            rm -f "${zmx_output}"
+        fi
+        warn "$*; skipping zmx build (ALAS_ZMX_OPTIONAL=1)"
+        exit 0
+    fi
+    die "$*"
+}
+
 # Universal-build fast path: recursively invoke this script for each slice,
 # then `lipo` the results. Each per-arch recursive call goes through the
 # normal cache, so re-archives with no zmx change short-circuit on both
@@ -47,10 +74,13 @@ if [ "${target_arch}" = "universal" ]; then
     for slice in arm64 x86_64; do
         env ALAS_ZMX_TARGET_ARCH="${slice}" CURRENT_ARCH="" bash "${script_path}"
     done
-    lipo -create \
-        "${srcroot}/.build/zmx/arm64/install/bin/zmx" \
-        "${srcroot}/.build/zmx/x86_64/install/bin/zmx" \
-        -output "${zmx_output}"
+    arm64_slice="${srcroot}/.build/zmx/arm64/install/bin/zmx"
+    x86_64_slice="${srcroot}/.build/zmx/x86_64/install/bin/zmx"
+    if [ ! -x "${arm64_slice}" ] || [ ! -x "${x86_64_slice}" ]; then
+        # Per-slice builds skipped via ALAS_ZMX_OPTIONAL=1; no binary to lipo.
+        skip_if_optional "per-slice zmx builds produced no binary"
+    fi
+    lipo -create "${arm64_slice}" "${x86_64_slice}" -output "${zmx_output}"
     chmod +x "${zmx_output}"
     echo "build-zmx.sh: produced universal ${zmx_output}"
     exit 0
@@ -68,12 +98,12 @@ resolve_zig_bin() {
 }
 
 zig_bin="$(resolve_zig_bin)"
-[ -x "${zig_bin}" ] || die "zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN"
+[ -x "${zig_bin}" ] || skip_if_optional "zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN"
 
 mkdir -p "${zmx_build_root}" "${zmx_install_prefix}/bin" "${cache_root}"
 
 # Submodule presence check.
-[ -d "${zmx_src}/.git" ] || [ -f "${zmx_src}/.git" ] || die "submodule missing: ${zmx_src}"
+[ -d "${zmx_src}/.git" ] || [ -f "${zmx_src}/.git" ] || skip_if_optional "submodule missing: ${zmx_src}"
 
 # Fingerprint inputs:
 #   - submodule HEAD SHA
