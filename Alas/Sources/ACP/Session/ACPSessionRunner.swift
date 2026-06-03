@@ -45,6 +45,7 @@ final class ACPSessionRunner {
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
     private var pendingQuestionContinuation: CheckedContinuation<ACPQuestionResponse, Never>?
+    private var pendingQuestionPreviousStreamingState: ACPSession.StreamingState?
     private var seq: Int64 = 0
     private var steerUndoExpiryTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -284,7 +285,7 @@ final class ACPSessionRunner {
         questionsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
-        resolvePendingQuestion(.init(outcome: .cancelled))
+        resolvePendingQuestion(.init(outcome: .cancelled), restorePreviousState: false)
         // Kill agent-spawned subprocesses now. ACPSessionManager keeps
         // the ACPSession cached after detach, so the session's deinit-
         // time killAll() won't fire on tab close — without this an
@@ -294,6 +295,7 @@ final class ACPSessionRunner {
     }
 
     private func awaitQuestionResponse(_ request: ACPQuestionRequest) async -> ACPQuestionResponse {
+        pendingQuestionPreviousStreamingState = session.transcript.streamingState
         session.transcript.streamingState = .awaitingInput
         session.transcript.pendingQuestion = .init(id: request.id, params: request.params)
         return await withCheckedContinuation { continuation in
@@ -305,13 +307,19 @@ final class ACPSessionRunner {
         resolvePendingQuestion(response)
     }
 
-    private func resolvePendingQuestion(_ response: ACPQuestionResponse) {
+    private func resolvePendingQuestion(
+        _ response: ACPQuestionResponse,
+        restorePreviousState: Bool = true
+    ) {
         guard let continuation = pendingQuestionContinuation else { return }
         pendingQuestionContinuation = nil
         session.transcript.pendingQuestion = nil
         if session.transcript.streamingState == .awaitingInput {
-            session.transcript.streamingState = .idle
+            session.transcript.streamingState = restorePreviousState
+                ? pendingQuestionPreviousStreamingState ?? .idle
+                : .idle
         }
+        pendingQuestionPreviousStreamingState = nil
         continuation.resume(returning: response)
     }
 
@@ -785,11 +793,11 @@ extension ACPSessionRunner {
     }
 
     /// Drain the queue head if the runner is still live, setup is not
-    /// blocked on auth, transcript state is `.idle`, the head is `.pending`,
-    /// and the head has no `lastError`. Marks the head `.sending`, persists,
-    /// and dispatches `sendNow` with the head's id so success can pop the
-    /// right item and failure can flag the right item without disturbing
-    /// the rest of the queue.
+    /// blocked on auth, no prompt owns the transport, transcript state is
+    /// `.idle`, the head is `.pending`, and the head has no `lastError`.
+    /// Marks the head `.sending`, persists, and dispatches `sendNow` with the
+    /// head's id so success can pop the right item and failure can flag the
+    /// right item without disturbing the rest of the queue.
     ///
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
@@ -797,6 +805,7 @@ extension ACPSessionRunner {
         guard holdsLeaseForWrite() else { return }
         guard !steerInProgress,
               session.agentState == .ready,
+              activePromptID == nil,
               session.transcript.streamingState == .idle,
               let head = session.queue.first,
               head.status == .pending,

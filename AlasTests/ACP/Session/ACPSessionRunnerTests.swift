@@ -110,6 +110,72 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
+    @Test("question answer does not flush queued prompt while original prompt is active")
+    func questionAnswerDoesNotFlushQueueWhilePromptActive() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.agentState = .ready
+        runner.start()
+
+        let promptCounter = AsyncCounter()
+        let firstStarted = AsyncGate()
+        let finishFirst = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let promptNumber = await promptCounter.next()
+            if promptNumber == 1 {
+                await firstStarted.open()
+                await finishFirst.wait()
+            }
+            return Data("{}".utf8)
+        }
+
+        runner.send(text: "first", attachments: [])
+        await firstStarted.wait()
+        try await waitUntil { runner.session.transcript.streamingState == .sending }
+
+        runner.send(text: "queued", attachments: [], intent: .auto)
+        #expect(runner.session.queue.count == 1)
+
+        let params = ACPQuestionRequestParams(
+            toolCallId: "call_123",
+            title: "Need input",
+            questions: [
+                .init(
+                    id: "q1",
+                    prompt: "Which implementation path should I take?",
+                    options: [
+                        .init(id: "cursor", label: "Implement Cursor first"),
+                        .init(id: "generic", label: "Wait for generic ACP")
+                    ],
+                    allowMultiple: false
+                )
+            ]
+        )
+        mock.emitQuestion(id: .number(42), params: params)
+        try await waitUntil {
+            runner.session.transcript.pendingQuestion?.params == params
+                && runner.session.transcript.streamingState == .awaitingInput
+        }
+
+        runner.answerQuestion(.init(outcome: .answered(answers: [
+            .init(questionId: "q1", selectedOptionIds: ["cursor"])
+        ])))
+
+        try await waitUntil {
+            mock.questionResponses[.number(42)] != nil
+        }
+        #expect(runner.session.transcript.pendingQuestion == nil)
+        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(runner.session.queue.count == 1)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+
+        await finishFirst.open()
+        try await waitUntil {
+            mock.sent.filter { $0.method == "session/prompt" }.count == 2
+                && runner.session.queue.isEmpty
+                && runner.session.transcript.streamingState == .idle
+        }
+    }
+
     @Test("prompt completion waits for yielded updates before marking output boundary")
     func promptCompletionWaitsForYieldedUpdatesBeforeBoundary() async throws {
         let url = FileManager.default.temporaryDirectory
