@@ -188,6 +188,32 @@ import Foundation
                 "writer must be able to persist the queue when it holds the lease")
     }
 
+    // MARK: - P1: Stale-owner write block (store re-read)
+
+    @Test("a former owner whose lease was seized cannot persist (store-lease re-read)")
+    func staleOwnerCannotPersistQueue() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("handoff-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)   // A owns it (in _ownedLeases)
+        // B seizes the lease in the shared store (takeover) — A's _ownedLeases is now stale.
+        let now = Int64(Date().timeIntervalSince1970)
+        try storeA.seizeLease(sessionId: session.id, instanceId: "B", pid: Int64(getpid()), now: now)
+        // The store now shows B as owner, but A's in-memory _ownedLeases still contains the session.
+        // isMirror would return false (short-circuits on _ownedLeases), but the store-aware guard must block writes.
+        #expect(try storeA.loadLease(sessionId: session.id)?.ownerInstance == "B")
+        // Populate the session's queue so persistQueue would have something to write.
+        session.enqueue(blocks: [.text("stale-owner prompt")])
+        #expect(session.queue.count == 1)
+        // A still THINKS it owns the session in memory, but a manager write must be blocked.
+        mgrA.persistQueue(for: session)
+        let stored = try storeA.loadQueue(sessionId: session.id)
+        #expect(stored.isEmpty,
+                "former owner must not write queue when another live instance owns the store lease")
+    }
+
     // MARK: - P2: Mirror poll teardown on eviction
 
     @Test("endMirroring is idempotent and evictIfIdle cancels the mirror poll")
@@ -222,5 +248,18 @@ import Foundation
         // Calling endMirroring again must be safe (idempotent).
         mgrB.endMirroring(sessionId: sessionA.id)
         #expect(!mgrB.mirrorPollActiveForTest(sessionId: sessionA.id))
+    }
+
+    @Test("shutdownBackgroundTasks cancels mirror pollers")
+    func disposeStopsMirrorPoll() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dispose-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        mgrA.beginMirroring(sessionId: session.id)
+        #expect(mgrA.mirrorPollActiveForTest(sessionId: session.id) == true)
+        mgrA.shutdownBackgroundTasks()
+        #expect(mgrA.mirrorPollActiveForTest(sessionId: session.id) == false)
     }
 }

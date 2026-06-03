@@ -504,7 +504,7 @@ final class ACPSessionManager: ObservableObject {
     /// No-ops only when another live instance owns the writer lease (this pane
     /// is a mirror); the writer and not-yet-leased cases persist normally.
     func persist(_ s: ACPSession) {
-        guard !isMirror(sessionId: s.id) else { return }
+        guard !anotherLiveInstanceOwnsLease(sessionId: s.id) else { return }
         guard let row = try? store.loadSession(id: s.id) else { return }
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
@@ -544,7 +544,7 @@ final class ACPSessionManager: ObservableObject {
     /// the in-memory session and SQLite in one call. No-ops only when
     /// another live instance owns the writer lease (this pane is a mirror).
     func renameSession(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) {
-        guard !isMirror(sessionId: id) else { return }
+        guard !anotherLiveInstanceOwnsLease(sessionId: id) else { return }
         guard let session = sessions[id] else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -623,7 +623,7 @@ final class ACPSessionManager: ObservableObject {
     /// mirror must not overwrite the active owner's queue. The writer and
     /// not-yet-leased cases persist normally.
     func persistQueue(for session: ACPSession) {
-        guard !isMirror(sessionId: session.id) else { return }
+        guard !anotherLiveInstanceOwnsLease(sessionId: session.id) else { return }
         try? store.upsertQueue(sessionId: session.id, items: session.queue)
     }
 
@@ -728,6 +728,19 @@ extension ACPSessionManager {
     /// instance (read-only mirror).
     func isMirror(sessionId: ACPSession.ID) -> Bool {
         if _ownedLeases.contains(sessionId) { return false }
+        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
+        return lease.ownerInstance != instanceId
+            && ACPProcessLiveness.pidAlive(lease.pid)
+            && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
+    }
+
+    /// True when a DIFFERENT, live instance currently owns this session's
+    /// lease in the store. Unlike `isMirror`, this does NOT short-circuit on
+    /// our in-memory `_ownedLeases`: during a takeover the former owner keeps
+    /// the id in `_ownedLeases` until its heartbeat catches up, so manager
+    /// writes must consult the store row directly to avoid writing to a
+    /// session another instance now owns.
+    private func anotherLiveInstanceOwnsLease(sessionId: ACPSession.ID) -> Bool {
         guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
         return lease.ownerInstance != instanceId
             && ACPProcessLiveness.pidAlive(lease.pid)
@@ -883,6 +896,16 @@ extension ACPSessionManager {
         if let t = mirrorTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
         mirrorDebounce.removeValue(forKey: sessionId)?.cancel()
         mirrorPoll.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    /// Cancel every background task owned by this manager — mirror
+    /// subscriptions/pollers (which have no runner and so are never reached
+    /// by `detach`) and heartbeats. Called when the worktree's manager is
+    /// disposed so nothing keeps waking after the manager is dropped.
+    func shutdownBackgroundTasks() {
+        for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
+        for (_, task) in _heartbeatTasks { task.cancel() }
+        _heartbeatTasks.removeAll()
     }
 
     private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {

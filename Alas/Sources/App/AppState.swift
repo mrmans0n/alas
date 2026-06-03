@@ -2983,6 +2983,11 @@ final class AppState {
         // detach() task below schedules. The actual child-process
         // shutdown then happens asynchronously.
         for sid in sessionIds { manager.runners[sid]?.stop() }
+        // Cancel mirror pollers and heartbeats — mirror sessions have no
+        // runner and are never reached by the detach loop above, so they
+        // must be torn down explicitly to stop the 2.5s backstop polls and
+        // notifier subscriptions from outliving the manager.
+        manager.shutdownBackgroundTasks()
         Task { @MainActor in
             for sid in sessionIds { await manager.detach(sessionId: sid) }
         }
