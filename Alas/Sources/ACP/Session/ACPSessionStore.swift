@@ -318,26 +318,6 @@ extension ACPSessionStore {
         }
     }
 
-    /// Load messages with `seq >= fromSeq`, ordered. Callers pass the
-    /// lowest seq that might still be mutating (the boundary row the
-    /// mirror last saw) so an in-place tail update is re-read along with
-    /// any newly appended rows.
-    func loadMessages(sessionId: String, afterSeq fromSeq: Int64) throws -> [ACPStoredMessage] {
-        let rows = try db.query("""
-        SELECT id, session_id, kind, seq, payload, created_at
-        FROM messages WHERE session_id = ? AND seq >= ? ORDER BY seq ASC
-        """, bindings: [sessionId, fromSeq])
-        return rows.map { r in
-            ACPStoredMessage(
-                id: r["id"] as? String ?? "",
-                sessionId: r["session_id"] as? String ?? "",
-                kind: r["kind"] as? String ?? "",
-                seq: (r["seq"] as? Int64) ?? 0,
-                payload: (r["payload"] as? Data) ?? Data(),
-                createdAt: (r["created_at"] as? Int64) ?? 0)
-        }
-    }
-
     func loadToolCallContent(sessionId: String, toolCallId: String) throws -> String? {
         let rows = try db.query("""
         SELECT payload FROM messages

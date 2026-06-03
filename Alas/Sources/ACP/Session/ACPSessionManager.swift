@@ -54,7 +54,6 @@ final class ACPSessionManager: ObservableObject {
     private var sessionRefCounts: [ACPSession.ID: Int] = [:]
     // MARK: Mirror state (read-only follower when another instance holds the lease)
     private var mirrorTokens: [ACPSession.ID: Int32] = [:]
-    private var mirrorSeen: [ACPSession.ID: Int64] = [:]
     private var mirrorDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
     private var mirrorPoll: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Runtime-only layout memory for the plan sidebar. This intentionally
@@ -777,14 +776,14 @@ extension ACPSessionManager {
                 await self?.refreshMirror(sessionId: sessionId)
             }
         }
-        Task { await refreshMirror(sessionId: sessionId) }
+        mirrorDebounce[sessionId]?.cancel()
+        mirrorDebounce[sessionId] = Task { [weak self] in await self?.refreshMirror(sessionId: sessionId) }
     }
 
     func endMirroring(sessionId: ACPSession.ID) {
         if let t = mirrorTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
         mirrorDebounce.removeValue(forKey: sessionId)?.cancel()
         mirrorPoll.removeValue(forKey: sessionId)?.cancel()
-        mirrorSeen.removeValue(forKey: sessionId)
     }
 
     private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {
@@ -807,9 +806,7 @@ extension ACPSessionManager {
         let decoder = JSONDecoder()
         var messages: [ACPMessage] = []
         messages.reserveCapacity(stored.count)
-        var maxSeq: Int64 = 0
         for m in stored {
-            maxSeq = max(maxSeq, m.seq)
             guard let wire = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder)
             else { continue }
             messages.append(wire.toMessage())
@@ -820,7 +817,6 @@ extension ACPSessionManager {
         if session.followsTranscriptTail {
             session.transcript.resetWindowToTail()
         }
-        mirrorSeen[sessionId] = maxSeq
     }
 }
 
