@@ -8,22 +8,27 @@ struct GitRemote: Equatable, Sendable {
 enum CodeHostRemoteDetector {
     static func detect(
         from remotes: [GitRemote],
-        supportedKinds: Set<CodeHostKind>? = nil
+        supportedKinds: Set<CodeHostKind>? = nil,
+        preferredRemoteName: String? = nil
     ) -> CodeHostRemote? {
         remotes
             .sorted { lhs, rhs in
-                switch (lhs.name == "origin", rhs.name == "origin") {
-                case (true, false):
-                    true
-                case (false, true):
-                    false
-                default:
-                    lhs.name < rhs.name
+                let lhsPriority = priority(for: lhs.name, preferredRemoteName: preferredRemoteName)
+                let rhsPriority = priority(for: rhs.name, preferredRemoteName: preferredRemoteName)
+                if lhsPriority != rhsPriority {
+                    return lhsPriority < rhsPriority
                 }
+                return lhs.name < rhs.name
             }
             .lazy
             .compactMap { parse(remote: $0, supportedKinds: supportedKinds) }
             .first
+    }
+
+    private static func priority(for remoteName: String, preferredRemoteName: String?) -> Int {
+        if let preferredRemoteName, remoteName == preferredRemoteName { return 0 }
+        if remoteName == "origin" { return 1 }
+        return 2
     }
 
     private static func parse(

@@ -141,9 +141,11 @@ final class ReviewLoopState {
         }
 
         let supportedKinds = providerRegistry.supportedKinds
+        let preferredRemoteName = Self.preferredRemoteName(for: baseLocal.baseBranch, remotes: remotes)
         guard let remote = CodeHostRemoteDetector.detect(
             from: remotes,
-            supportedKinds: supportedKinds.isEmpty ? nil : supportedKinds
+            supportedKinds: supportedKinds.isEmpty ? nil : supportedKinds,
+            preferredRemoteName: preferredRemoteName
         ) else {
             guard isCurrentRefresh(generation) else { return }
             snapshot = ReviewLoopSnapshot(
@@ -316,6 +318,10 @@ final class ReviewLoopState {
 
     private func isCurrentRefresh(_ generation: Int) -> Bool {
         generation == refreshGeneration
+    }
+
+    private static func preferredRemoteName(for baseBranch: String, remotes: [GitRemote]) -> String? {
+        remotes.first { baseBranch.hasPrefix("\($0.name)/") }?.name
     }
 
     private static func withHeadRemoteOwner(

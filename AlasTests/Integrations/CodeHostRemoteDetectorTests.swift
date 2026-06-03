@@ -99,6 +99,20 @@ struct CodeHostRemoteDetectorTests {
         #expect(remote?.repository == "alas")
     }
 
+    @Test func preferredRemoteOverridesOrigin() {
+        let remote = CodeHostRemoteDetector.detect(
+            from: [
+                GitRemote(name: "origin", url: "https://github.com/nacho/alas.git"),
+                GitRemote(name: "upstream", url: "https://github.com/mrmans0n/alas.git"),
+            ],
+            preferredRemoteName: "upstream"
+        )
+
+        #expect(remote?.remoteName == "upstream")
+        #expect(remote?.owner == "mrmans0n")
+        #expect(remote?.repository == "alas")
+    }
+
     @Test func unsupportedLocalPathReturnsNil() {
         let remote = CodeHostRemoteDetector.detect(from: [
             GitRemote(name: "origin", url: "../alas.git"),

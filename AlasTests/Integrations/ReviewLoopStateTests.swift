@@ -76,6 +76,28 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.providerCapabilities == .readOnly)
     }
 
+    @Test func refreshPrefersBaseRemoteOverOriginFork() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "upstream/main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(
+            local: Self.makeLocal(baseBranch: "upstream/main", needsPush: false),
+            remotes: [
+                GitRemote(name: "origin", url: "git@github.com:nacho/alas.git"),
+                GitRemote(name: "upstream", url: "git@github.com:mrmans0n/alas.git"),
+            ]
+        )
+
+        let remote = try #require(state.snapshot?.remote)
+        #expect(remote.remoteName == "upstream")
+        #expect(remote.owner == "mrmans0n")
+        #expect(remote.repository == "alas")
+    }
+
     @Test func emptyRemotesReturnNoneAndPreserveLocalSnapshot() async throws {
         let local = Self.makeLocal(branchName: "feature/no-remote", headSHA: "def456")
         let provider = FakeCodeHostProvider(kind: .github)
@@ -679,12 +701,13 @@ struct ReviewLoopStateTests {
     private static func makeLocal(
         branchName: String = "feature/review-loop",
         headSHA: String = "abc123",
+        baseBranch: String = "main",
         needsPush: Bool = true
     ) -> ReviewLoopLocalState {
         ReviewLoopLocalState(
             branchName: branchName,
             headSHA: headSHA,
-            baseBranch: "main",
+            baseBranch: baseBranch,
             hasWorkingTreeChanges: false,
             hasStagedChanges: false,
             aheadCommitCount: needsPush ? 1 : 0,
