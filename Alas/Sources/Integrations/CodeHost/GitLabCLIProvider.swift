@@ -171,11 +171,15 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "glab ci get", stderr: result.stderr)
         }
 
-        let failedJobIDs = try Self.failedJobIDs(fromPipelineJSON: result.stdout)
-        for jobID in failedJobIDs {
+        let retryTargets = try Self.failedJobRetryTargets(fromPipelineJSON: result.stdout)
+        for target in retryTargets {
             let retry = try await runner.run(
                 "glab",
-                args: ["ci", "retry", "\(jobID)", "-R", remote.repositorySlug],
+                args: [
+                    "ci", "retry", "\(target.jobID)",
+                    "--pipeline-id", "\(target.pipelineID)",
+                    "-R", remote.repositorySlug,
+                ],
                 cwd: cwd
             )
             guard retry.exitCode == 0 else {
@@ -424,11 +428,29 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
     }
 
-    private static func failedJobIDs(fromPipelineJSON json: String) throws -> [Int] {
+    private static func failedJobRetryTargets(fromPipelineJSON json: String) throws -> [GitLabRetryTarget] {
         let pipeline = try decodePipeline(json)
-        return pipeline.jobs?.compactMap { job in
-            job.status.lowercased() == "failed" && job.allowFailure != true ? job.id : nil
+        let failedJobs = pipeline.jobs?.filter { job in
+            job.status.lowercased() == "failed" && job.allowFailure != true
         } ?? []
+
+        guard !failedJobs.isEmpty else {
+            if pipeline.status.lowercased() == "failed" {
+                throw CodeHostProviderError.malformedOutput("glab ci get output did not include retryable failed job IDs")
+            }
+            return []
+        }
+
+        guard let pipelineID = pipeline.id else {
+            throw CodeHostProviderError.malformedOutput("glab ci get output is missing a pipeline id for retry")
+        }
+
+        return try failedJobs.map { job in
+            guard let jobID = job.id else {
+                throw CodeHostProviderError.malformedOutput("glab ci get output did not include retryable failed job IDs")
+            }
+            return GitLabRetryTarget(jobID: jobID, pipelineID: pipelineID)
+        }
     }
 
     private static func reviewRequest(
@@ -734,6 +756,11 @@ private struct GitLabJob: Decodable {
         case webURL = "web_url"
         case finishedAt = "finished_at"
     }
+}
+
+private struct GitLabRetryTarget {
+    let jobID: Int
+    let pipelineID: Int
 }
 
 private struct GitLabDiscussion: Decodable {
