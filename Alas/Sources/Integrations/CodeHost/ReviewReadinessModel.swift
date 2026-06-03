@@ -200,7 +200,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             if snapshot.providerCapabilities.canOpenReviewRequest {
                 actions.append(Action(kind: .openReviewRequest, title: request.provider.openReviewRequestTitle, isEnabled: true))
             }
-            if request.worstCheckBucket == .fail, snapshot.providerCapabilities.canRerunFailedChecks {
+            if request.hasRerunnableFailedCheck, snapshot.providerCapabilities.canRerunFailedChecks {
                 actions.append(Action(kind: .rerunFailedChecks, title: "Rerun", isEnabled: true))
             }
             if (request.worstCheckBucket == .fail || request.hasActionableFeedback), canOpenAgentHandoff {
@@ -260,6 +260,12 @@ struct ReviewReadinessModel: Equatable, Sendable {
         case .unstable: "unstable"
         case .unknown: "unknown"
         }
+    }
+}
+
+private extension ReviewRequest {
+    var hasRerunnableFailedCheck: Bool {
+        checks.contains { $0.bucket == .fail && $0.workflow != nil }
     }
 }
 

@@ -157,6 +157,27 @@ struct ReviewReadinessModelTests {
         #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
     }
 
+    @Test func externalFailedChecksHideRerunButKeepAgentHandoff() {
+        let externalCheck = ReviewCheck(
+            id: "buildkite",
+            name: "Buildkite",
+            workflow: nil,
+            bucket: .fail,
+            detailURL: URL(string: "https://buildkite.com/mrmans0n/alas/builds/42"),
+            completedAt: nil
+        )
+        let request = Self.makeReviewRequest(checks: [externalCheck])
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: true
+        )
+
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["CI failed"])
+        #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.rerunFailedChecks))
+        #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
+    }
+
     @Test func changesRequestedExposesReviewFeedbackAndAgentHandoff() {
         let request = Self.makeReviewRequest(reviewDecision: .changesRequested)
         let model = ReviewReadinessModel(
