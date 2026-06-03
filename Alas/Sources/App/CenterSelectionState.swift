@@ -4,6 +4,7 @@ enum CenterSelectionState: Equatable {
     case worktree(Worktree)
     case deleting(Worktree)
     case deleteFailed(Worktree, message: String)
+    case creating(Worktree)
     case empty
 }
 
@@ -19,6 +20,9 @@ struct CenterSelectionStateResolver {
             switch op {
             case .deleting:
                 if let wt = findWorktree(by: id) { return .deleting(wt) }
+                return .empty
+            case .creating:
+                if let wt = findWorktree(by: id) { return .creating(wt) }
                 return .empty
             case .deleteFailed(let message):
                 if let wt = findWorktree(by: id) { return .deleteFailed(wt, message: message) }
