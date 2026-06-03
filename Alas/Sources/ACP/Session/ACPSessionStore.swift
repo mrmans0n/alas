@@ -32,6 +32,7 @@ final class ACPSessionStore {
         if current < 5 { try migrate_to_v5() }
         if current < 6 { try migrate_to_v6() }
         if current < 7 { try migrate_to_v7() }
+        try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -125,6 +126,27 @@ final class ACPSessionStore {
 
     private func migrate_to_v6() throws {
         try db.exec("ALTER TABLE sessions ADD COLUMN context_recovery_pending INTEGER NOT NULL DEFAULT 0")
+    }
+
+    /// One-time-per-open repair for databases damaged by two instances
+    /// writing the same session before leases existed. Collapses
+    /// duplicate (session_id, seq) message rows (keeping the newest by
+    /// created_at) so hydration's `ORDER BY seq` stops yielding
+    /// conflicting entries. Idempotent: a clean DB has no duplicates.
+    private func recoverFromConcurrentWriters() throws {
+        try db.exec("""
+        DELETE FROM messages
+        WHERE rowid NOT IN (
+            SELECT rowid FROM (
+                SELECT rowid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY session_id, seq
+                           ORDER BY created_at DESC, rowid DESC
+                       ) AS rn
+                FROM messages
+            ) WHERE rn = 1
+        )
+        """)
     }
 
     private func migrate_to_v7() throws {
