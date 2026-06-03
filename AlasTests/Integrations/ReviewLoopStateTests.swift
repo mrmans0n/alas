@@ -449,7 +449,11 @@ struct ReviewLoopStateTests {
     }
 
     @Test func rerunFailedChecksUsesProviderWithoutSessionApproval() async throws {
-        let provider = FakeCodeHostProvider(kind: .github)
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(
+            kind: .github,
+            request: Self.makeReviewRequest(remote: remote, checks: [])
+        )
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
             baseBranch: "main",
@@ -461,12 +465,23 @@ struct ReviewLoopStateTests {
 
         #expect(didRun)
         #expect(provider.rerunFailedChecksRequests == [
-            FakeCodeHostProvider.RerunFailedChecksRequest(branch: "feature/review-loop", headSHA: "abc123"),
+            FakeCodeHostProvider.RerunFailedChecksRequest(
+                branch: "feature/review-loop",
+                headSHA: "abc123",
+                requestNumber: 42
+            ),
         ])
     }
 
     @Test func rerunFailedChecksUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
-        let provider = FakeCodeHostProvider(kind: .github)
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(
+            kind: .github,
+            requestForBranch: [
+                "feature/captured": Self.makeReviewRequest(remote: remote, number: 42, checks: []),
+                "feature/current": Self.makeReviewRequest(remote: remote, number: 43, checks: []),
+            ]
+        )
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
             baseBranch: "main",
@@ -487,7 +502,11 @@ struct ReviewLoopStateTests {
 
         #expect(didRun)
         #expect(provider.rerunFailedChecksRequests == [
-            FakeCodeHostProvider.RerunFailedChecksRequest(branch: "feature/captured", headSHA: "abc123"),
+            FakeCodeHostProvider.RerunFailedChecksRequest(
+                branch: "feature/captured",
+                headSHA: "abc123",
+                requestNumber: 42
+            ),
         ])
     }
 
@@ -866,12 +885,13 @@ struct ReviewLoopStateTests {
 
     private static func makeReviewRequest(
         remote: CodeHostRemote,
+        number: Int = 42,
         headRefName: String = "feature/review-loop",
         checks: [ReviewCheck]
     ) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
-            number: 42,
+            number: number,
             title: "Review loop",
             url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
             state: .open,
@@ -914,6 +934,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
     struct RerunFailedChecksRequest: Equatable {
         let branch: String
         let headSHA: String
+        let requestNumber: Int?
     }
 
     let kind: CodeHostKind
@@ -1009,9 +1030,14 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         remote: CodeHostRemote,
         branch: String,
         headSHA: String,
+        request: ReviewRequest?,
         cwd: URL
     ) async throws {
         if let rerunError { throw rerunError }
-        rerunFailedChecksRequests.append(RerunFailedChecksRequest(branch: branch, headSHA: headSHA))
+        rerunFailedChecksRequests.append(RerunFailedChecksRequest(
+            branch: branch,
+            headSHA: headSHA,
+            requestNumber: request?.number
+        ))
     }
 }

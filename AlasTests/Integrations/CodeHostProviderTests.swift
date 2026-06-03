@@ -94,6 +94,12 @@ struct CodeHostProviderTests {
             []
         }
 
-        func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {}
+        func rerunFailedChecks(
+            remote: CodeHostRemote,
+            branch: String,
+            headSHA: String,
+            request: ReviewRequest?,
+            cwd: URL
+        ) async throws {}
     }
 }

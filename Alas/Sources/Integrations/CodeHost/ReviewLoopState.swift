@@ -337,6 +337,7 @@ final class ReviewLoopState {
                 remote: remote,
                 branch: snapshot.local.branchName,
                 headSHA: snapshot.local.headSHA,
+                request: snapshot.reviewRequest,
                 cwd: worktreePath
             )
             return true

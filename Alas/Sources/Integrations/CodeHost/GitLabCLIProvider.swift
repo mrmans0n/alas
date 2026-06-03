@@ -127,8 +127,50 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try Self.parsePipeline(result.stdout)
     }
 
-    func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {
-        _ = (remote, branch, headSHA, cwd)
+    func rerunFailedChecks(
+        remote: CodeHostRemote,
+        branch: String,
+        headSHA: String,
+        request: ReviewRequest?,
+        cwd: URL
+    ) async throws {
+        _ = headSHA
+        var args = ["ci", "get"]
+        if let request {
+            args.append(contentsOf: ["--merge-request", "\(request.number)"])
+        } else {
+            args.append(contentsOf: ["--branch", branch])
+        }
+        args.append(contentsOf: [
+            "--status", "failed",
+            "--with-job-details",
+            "--output", "json",
+            "-R", remote.repositorySlug,
+        ])
+
+        let result = try await runner.run(
+            "glab",
+            args: args,
+            cwd: cwd
+        )
+        if result.exitCode != 0, Self.isNoPipelineReported(result) {
+            return
+        }
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab ci get", stderr: result.stderr)
+        }
+
+        let failedJobIDs = try Self.failedJobIDs(fromPipelineJSON: result.stdout)
+        for jobID in failedJobIDs {
+            let retry = try await runner.run(
+                "glab",
+                args: ["ci", "retry", "\(jobID)", "-R", remote.repositorySlug],
+                cwd: cwd
+            )
+            guard retry.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "glab ci retry", stderr: retry.stderr)
+            }
+        }
     }
 
     private func reviewRequestDetails(
@@ -239,13 +281,7 @@ struct GitLabCLIProvider: CodeHostProvider {
     }
 
     static func parsePipeline(_ json: String) throws -> [ReviewCheck] {
-        let data = Data(json.utf8)
-        let pipeline: GitLabPipeline
-        do {
-            pipeline = try JSONDecoder().decode(GitLabPipeline.self, from: data)
-        } catch {
-            throw CodeHostProviderError.malformedOutput("Unable to parse glab ci get output")
-        }
+        let pipeline = try decodePipeline(json)
 
         let workflow = normalizedOptionalString(pipeline.ref)
         if let jobs = pipeline.jobs, !jobs.isEmpty {
@@ -281,6 +317,22 @@ struct GitLabCLIProvider: CodeHostProvider {
                 completedAt: completedAt
             ),
         ]
+    }
+
+    private static func decodePipeline(_ json: String) throws -> GitLabPipeline {
+        let data = Data(json.utf8)
+        do {
+            return try JSONDecoder().decode(GitLabPipeline.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab ci get output")
+        }
+    }
+
+    private static func failedJobIDs(fromPipelineJSON json: String) throws -> [Int] {
+        let pipeline = try decodePipeline(json)
+        return pipeline.jobs?.compactMap { job in
+            job.status.lowercased() == "failed" ? job.id : nil
+        } ?? []
     }
 
     private static func reviewRequest(

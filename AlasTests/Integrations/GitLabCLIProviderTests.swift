@@ -494,6 +494,137 @@ struct GitLabCLIProviderTests {
         }
     }
 
+    @Test func rerunFailedChecksRetriesFailedJobs() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithFailedJobsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headSHA: "abc123",
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "ci", "get",
+                    "--merge-request", "42",
+                    "--status", "failed",
+                    "--with-job-details",
+                    "--output", "json",
+                    "-R", "platform/mobile/alas",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "glab",
+                args: ["ci", "retry", "102", "-R", "platform/mobile/alas"],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "glab",
+                args: ["ci", "retry", "103", "-R", "platform/mobile/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func rerunFailedChecksDoesNothingWhenNoFailedJobs() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithSuccessfulJobsOutput, stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headSHA: "abc123",
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "ci", "get",
+                    "--merge-request", "42",
+                    "--status", "failed",
+                    "--with-job-details",
+                    "--output", "json",
+                    "-R", "platform/mobile/alas",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func rerunFailedChecksTreatsNoPipelineAsNoop() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "no pipeline found for branch feature/gitlab-provider"),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headSHA: "abc123",
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands.count == 1)
+    }
+
+    @Test func rerunFailedChecksThrowsOnGetFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "authentication failed"),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "glab ci get",
+            stderr: "authentication failed"
+        )) {
+            try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+                remote: Self.remote,
+                branch: "feature/gitlab-provider",
+                headSHA: "abc123",
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
+    @Test func rerunFailedChecksThrowsOnRetryFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithFailedJobsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "retry failed"),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "glab ci retry",
+            stderr: "retry failed"
+        )) {
+            try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+                remote: Self.remote,
+                branch: "feature/gitlab-provider",
+                headSHA: "abc123",
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
     @Test func currentReviewRequestIncludesPipelineChecks() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
@@ -704,6 +835,58 @@ struct GitLabCLIProviderTests {
           "status": "failed",
           "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/102",
           "finished_at": "2026-06-01T12:35:56Z"
+        }
+      ]
+    }
+    """
+
+    private static let pipelineWithFailedJobsOutput = """
+    {
+      "id": 778,
+      "status": "failed",
+      "ref": "feature/gitlab-provider",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/778",
+      "jobs": [
+        {
+          "id": 101,
+          "name": "build",
+          "status": "success",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/101"
+        },
+        {
+          "id": 102,
+          "name": "test",
+          "status": "failed",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/102"
+        },
+        {
+          "id": 103,
+          "name": "lint",
+          "status": "failed",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/103"
+        }
+      ]
+    }
+    """
+
+    private static let pipelineWithSuccessfulJobsOutput = """
+    {
+      "id": 779,
+      "status": "success",
+      "ref": "feature/gitlab-provider",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/779",
+      "jobs": [
+        {
+          "id": 104,
+          "name": "build",
+          "status": "success",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/104"
+        },
+        {
+          "id": 105,
+          "name": "test",
+          "status": "skipped",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/105"
         }
       ]
     }

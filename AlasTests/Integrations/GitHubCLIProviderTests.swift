@@ -486,6 +486,7 @@ struct GitHubCLIProviderTests {
             remote: Self.remote,
             branch: "feature/github-provider",
             headSHA: "abc123",
+            request: nil,
             cwd: Self.cwd
         )
 
