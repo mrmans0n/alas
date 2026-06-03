@@ -27,6 +27,9 @@ struct ACPFirstRunConnectingView: View {
                 Text(ACPFirstRunConnectingViewCopy.subtitle(agentDisplayName: agentDisplayName))
                     .font(.system(size: 12.5))
                     .foregroundStyle(theme.color("fg-dim"))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
             }
             phaseChips
         }
