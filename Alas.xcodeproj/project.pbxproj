@@ -594,6 +594,7 @@
 		AC905947E88C7A2BE39D9B00 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
 		ACD22D2C262833B77006E8BE /* DeleteFailedWorktreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1944B7BC9FC74CD09D816B6 /* DeleteFailedWorktreeView.swift */; };
 		ACDDE4B18A94164BDFEED06B /* BranchOpsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAD20759A17B6EFE3AC0C81 /* BranchOpsMenu.swift */; };
+		ACF240D867C3CCCD59E5A0E6 /* HarnessConfigAutoRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4F87B7B6F4A6E6ED882F1F /* HarnessConfigAutoRunTests.swift */; };
 		AD311BBE11A5A2751EA0907C /* HoverFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AF8152B18C9D6290724122F /* HoverFeature.swift */; };
 		ADF6D3B634D9CCA17D7884EC /* PiACPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6641006D2208E28C46AAB2 /* PiACPInstallerTests.swift */; };
 		AE179E24A9E308150D1FD1D5 /* CommitPromptStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E40B5F193E3CB5EB5BA945A /* CommitPromptStatusTests.swift */; };
@@ -1165,6 +1166,7 @@
 		4D20C843AB88A6EB14D2A1BD /* ACPStdioClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPStdioClient.swift; sourceTree = "<group>"; };
 		4D4A929D20297ED9DAB53982 /* TreeSitterYAML */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TreeSitterYAML; path = ThirdParty/TreeSitterYAML; sourceTree = SOURCE_ROOT; };
 		4D4DEBF2A9CFDCFDAD288499 /* ACPContentBlockImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPContentBlockImageTests.swift; sourceTree = "<group>"; };
+		4D4F87B7B6F4A6E6ED882F1F /* HarnessConfigAutoRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessConfigAutoRunTests.swift; sourceTree = "<group>"; };
 		4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParserTests.swift; sourceTree = "<group>"; };
 		4D63B166AF2C533BE6E59365 /* session-update-agent-chunk.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-agent-chunk.json"; sourceTree = "<group>"; };
 		4DA7089B238D285A1A2040CA /* PaneLeafEncodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneLeafEncodeTests.swift; sourceTree = "<group>"; };
@@ -2107,6 +2109,7 @@
 				2ED9D6E2F4F80DC4EC282918 /* Code */,
 				EAD92DAB367A7F31FF1223D1 /* Diagnostics */,
 				08BD96F4379A0D250DE4303C /* JSONRPC */,
+				D7416CBAB1B316023E546714 /* Persistence */,
 				5FA3F5C4A99F2C74080DA0EF /* SQLiteKit */,
 			);
 			path = AlasTests;
@@ -3078,6 +3081,14 @@
 				99DCC0EF4B5701083CB34167 /* ghostty */,
 			);
 			path = ThirdParty;
+			sourceTree = "<group>";
+		};
+		D7416CBAB1B316023E546714 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				4D4F87B7B6F4A6E6ED882F1F /* HarnessConfigAutoRunTests.swift */,
+			);
+			path = Persistence;
 			sourceTree = "<group>";
 		};
 		DA23E862C6C2D386B4C76E10 /* Shortcuts */ = {
@@ -4191,6 +4202,7 @@
 				1748C3645E9B769F371F69E6 /* GitServiceUpstreamTests.swift in Sources */,
 				A2298208242B45155BA07BCD /* GitStatusCacheTests.swift in Sources */,
 				9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */,
+				ACF240D867C3CCCD59E5A0E6 /* HarnessConfigAutoRunTests.swift in Sources */,
 				D1F372532A0F9607051020F5 /* HarnessDetectorTests.swift in Sources */,
 				8FA934ED00389FC4D4A6A479 /* HarnessServiceTests.swift in Sources */,
 				3EA6388E72FDD02E5242002C /* HeadReaderTests.swift in Sources */,
