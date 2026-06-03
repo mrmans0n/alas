@@ -262,7 +262,9 @@ struct ReviewLoopStateTests {
         let didRun = await state.rerunFailedChecks()
 
         #expect(didRun)
-        #expect(provider.rerunFailedChecksBranches == ["feature/review-loop"])
+        #expect(provider.rerunFailedChecksRequests == [
+            FakeCodeHostProvider.RerunFailedChecksRequest(branch: "feature/review-loop", headSHA: "abc123"),
+        ])
     }
 
     @Test func rerunFailedChecksUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
@@ -286,7 +288,9 @@ struct ReviewLoopStateTests {
         let didRun = await state.rerunFailedChecks(snapshot: capturedSnapshot)
 
         #expect(didRun)
-        #expect(provider.rerunFailedChecksBranches == ["feature/captured"])
+        #expect(provider.rerunFailedChecksRequests == [
+            FakeCodeHostProvider.RerunFailedChecksRequest(branch: "feature/captured", headSHA: "abc123"),
+        ])
     }
 
     @Test func overlappingRefreshIgnoresOlderResult() async throws {
@@ -687,6 +691,11 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         let body: String
     }
 
+    struct RerunFailedChecksRequest: Equatable {
+        let branch: String
+        let headSHA: String
+    }
+
     let kind: CodeHostKind
     var available: Bool
     var authenticated: Bool
@@ -699,7 +708,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
     var createError: Error?
     var rerunError: Error?
     var createdReviewRequests: [CreatedReviewRequest] = []
-    var rerunFailedChecksBranches: [String] = []
+    var rerunFailedChecksRequests: [RerunFailedChecksRequest] = []
 
     init(
         kind: CodeHostKind,
@@ -766,8 +775,13 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         return checks
     }
 
-    func rerunFailedChecks(remote: CodeHostRemote, branch: String, cwd: URL) async throws {
+    func rerunFailedChecks(
+        remote: CodeHostRemote,
+        branch: String,
+        headSHA: String,
+        cwd: URL
+    ) async throws {
         if let rerunError { throw rerunError }
-        rerunFailedChecksBranches.append(branch)
+        rerunFailedChecksRequests.append(RerunFailedChecksRequest(branch: branch, headSHA: headSHA))
     }
 }

@@ -225,6 +225,7 @@ struct GitHubCLIProviderTests {
         try await GitHubCLIProvider(runner: runner).rerunFailedChecks(
             remote: Self.remote,
             branch: "feature/github-provider",
+            headSHA: "abc123",
             cwd: Self.cwd
         )
 
@@ -234,6 +235,7 @@ struct GitHubCLIProviderTests {
                 args: [
                     "run", "list",
                     "--branch", "feature/github-provider",
+                    "--commit", "abc123",
                     "--status", "failure",
                     "--limit", "20",
                     "--json", "databaseId,status,conclusion,url",

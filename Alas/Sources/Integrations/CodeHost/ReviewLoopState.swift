@@ -286,6 +286,7 @@ final class ReviewLoopState {
             try await provider.rerunFailedChecks(
                 remote: remote,
                 branch: snapshot.local.branchName,
+                headSHA: snapshot.local.headSHA,
                 cwd: worktreePath
             )
             return true

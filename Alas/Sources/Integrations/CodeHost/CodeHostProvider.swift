@@ -54,7 +54,7 @@ protocol CodeHostProvider: Sendable {
         cwd: URL
     ) async throws -> URL
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck]
-    func rerunFailedChecks(remote: CodeHostRemote, branch: String, cwd: URL) async throws
+    func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws
 }
 
 extension CodeHostProvider {
