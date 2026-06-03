@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-04
+
+### ✨ Features
+
+- Add GitLab review request provider support (#465).
+
+### 🐛 Fixes
+
+- Target the correct GitLab pipeline when retrying failed jobs (#466).
+
 ## [0.5.4] - 2026-06-03
 
 ### ✨ Features
