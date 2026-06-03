@@ -277,34 +277,27 @@ final class ReviewLoopState {
         }
     }
 
-    func createReviewRequest() async -> Bool {
-        guard let snapshot else { return false }
-        return await createReviewRequest(snapshot: snapshot)
-    }
-
-    func createReviewRequest(snapshot: ReviewLoopSnapshot) async -> Bool {
-        guard
-              let remote = snapshot.remote,
+    func createReviewRequest(
+        snapshot: ReviewLoopSnapshot,
+        title: String,
+        body: String,
+        isDraft: Bool
+    ) async throws -> URL {
+        guard let remote = snapshot.remote,
               let provider = providerRegistry.provider(for: remote.kind)
-        else { return false }
-
-        lastError = nil
-        do {
-            _ = try await provider.createReviewRequest(
-                remote: remote,
-                branch: snapshot.local.branchName,
-                headOwner: snapshot.local.headRemoteOwner,
-                baseBranch: snapshot.local.baseBranch,
-                title: snapshot.local.branchName,
-                body: "Created from Alas.",
-                isDraft: false,
-                cwd: worktreePath
-            )
-            return true
-        } catch {
-            lastError = Self.describe(error)
-            return false
+        else {
+            throw CodeHostProviderError.unsupportedProvider(snapshot.remote?.kind ?? .github)
         }
+        return try await provider.createReviewRequest(
+            remote: remote,
+            branch: snapshot.local.branchName,
+            headOwner: snapshot.local.headRemoteOwner,
+            baseBranch: snapshot.local.baseBranch,
+            title: title,
+            body: body,
+            isDraft: isDraft,
+            cwd: worktreePath
+        )
     }
 
     func rerunFailedChecks() async -> Bool {

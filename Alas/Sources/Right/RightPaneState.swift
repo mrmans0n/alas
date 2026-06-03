@@ -269,8 +269,16 @@ final class RightPaneState {
         case .createReviewRequest:
             guard let snapshot = reviewLoop.snapshot else { return }
             Task { @MainActor in
-                if await reviewLoop.createReviewRequest(snapshot: snapshot) {
+                do {
+                    _ = try await reviewLoop.createReviewRequest(
+                        snapshot: snapshot,
+                        title: snapshot.local.branchName,
+                        body: "Created from Alas.",
+                        isDraft: false
+                    )
                     await refresh()
+                } catch {
+                    sidebarError = error.localizedDescription
                 }
             }
         case .rerunFailedChecks:

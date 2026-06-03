@@ -215,8 +215,13 @@ struct CenterPaneView: View {
                         )
                         .id(draftState.id)
                     case .draftReviewRequest(let draftState):
-                        Text(draftState.displayTitle)
-                            .id(draftState.id)
+                        DraftReviewRequestTabView(
+                            worktreePath: worktree.path,
+                            worktreeId: worktree.id,
+                            tabState: draftState,
+                            appState: state
+                        )
+                        .id(draftState.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
