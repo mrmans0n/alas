@@ -322,6 +322,13 @@ final class RightPaneState {
         return "git push failed with exit code \(result.exitCode)."
     }
 
+    nonisolated static func reviewLoopAheadCommitCount(
+        displayCommits: [CommitInfo],
+        baseCommits: [CommitInfo]?
+    ) -> Int {
+        baseCommits?.count ?? displayCommits.count
+    }
+
     @MainActor
     func refresh() async {
         let reviewLoopInspection = reviewLoop.beginLocalInspection()
@@ -342,12 +349,18 @@ final class RightPaneState {
                 baseBranch: baseBranch,
                 ignoreUpstream: ignoreUpstream
             )
+            async let reviewLoopBase = git.commitsAhead(
+                at: worktree.path,
+                baseBranch: baseBranch,
+                ignoreUpstream: true
+            )
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let upstream = git.resolveUpstreamRef(worktreePath: worktree.path)
             async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
+            let reviewLoopBaseResult = try? await reviewLoopBase
             let resolvedUpstream = try? await upstream
             self.upstreamRef = resolvedUpstream?.ref
             _ = await mergeRefresh
@@ -401,7 +414,8 @@ final class RightPaneState {
             await refreshReviewLoop(
                 inspection: reviewLoopInspection,
                 changes: entries,
-                commits: commits,
+                displayCommits: commits,
+                baseCommits: reviewLoopBaseResult?.commits,
                 headSHA: headSHA,
                 upstreamRemoteName: resolvedUpstream?.remote,
                 upstreamBranchName: upstreamBranchName
@@ -419,7 +433,8 @@ final class RightPaneState {
     private func refreshReviewLoop(
         inspection: ReviewLoopRefreshAttempt,
         changes: [ChangedFile],
-        commits: [CommitInfo],
+        displayCommits: [CommitInfo],
+        baseCommits: [CommitInfo]?,
         headSHA: String,
         upstreamRemoteName: String?,
         upstreamBranchName: String?
@@ -434,7 +449,10 @@ final class RightPaneState {
             baseBranch: baseBranch,
             hasWorkingTreeChanges: !changes.isEmpty,
             hasStagedChanges: changes.contains { $0.stage == .staged },
-            aheadCommitCount: commits.count,
+            aheadCommitCount: Self.reviewLoopAheadCommitCount(
+                displayCommits: displayCommits,
+                baseCommits: baseCommits
+            ),
             hasUpstream: upstreamRef != nil,
             upstreamRemoteName: upstreamRemoteName,
             upstreamBranchName: upstreamBranchName,

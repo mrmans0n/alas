@@ -42,6 +42,21 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(args == ["push", "-u", "origin", "feature/review-loop"])
     }
 
+    @Test func reviewLoopAheadCommitCountPrefersBaseRelativeCount() {
+        let displayCommits: [CommitInfo] = []
+        let baseCommits = [
+            Self.makeCommit(sha: "abc1234"),
+            Self.makeCommit(sha: "def5678"),
+        ]
+
+        let count = RightPaneState.reviewLoopAheadCommitCount(
+            displayCommits: displayCommits,
+            baseCommits: baseCommits
+        )
+
+        #expect(count == 2)
+    }
+
     @Test func forcePushArgumentsUseForceWithLease() {
         let snapshot = Self.makeSnapshot()
 
@@ -112,6 +127,21 @@ struct RightPaneStateReviewLoopPushTests {
             providerAuthenticated: true,
             providerCapabilities: .githubCLI,
             errorMessage: nil
+        )
+    }
+
+    private static func makeCommit(sha: String) -> CommitInfo {
+        CommitInfo(
+            sha: sha,
+            shortSha: String(sha.prefix(7)),
+            author: "Test",
+            authorInitials: "T",
+            date: Date(timeIntervalSince1970: 0),
+            subject: "Change",
+            conventionalTag: nil,
+            filesChanged: 0,
+            insertions: 0,
+            deletions: 0
         )
     }
 }
