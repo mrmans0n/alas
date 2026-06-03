@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 6
+    static let targetSchemaVersion = 7
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -31,6 +31,7 @@ final class ACPSessionStore {
         if current < 4 { try migrate_to_v4() }
         if current < 5 { try migrate_to_v5() }
         if current < 6 { try migrate_to_v6() }
+        if current < 7 { try migrate_to_v7() }
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
         } else if current < Self.targetSchemaVersion {
@@ -124,6 +125,21 @@ final class ACPSessionStore {
 
     private func migrate_to_v6() throws {
         try db.exec("ALTER TABLE sessions ADD COLUMN context_recovery_pending INTEGER NOT NULL DEFAULT 0")
+    }
+
+    private func migrate_to_v7() throws {
+        // One row per *owned* session. Presence + a live owner means a
+        // writer holds the session; absence/staleness means it's free.
+        // ON DELETE CASCADE keeps the lease in lockstep with the session.
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_leases (
+          session_id      TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          owner_instance  TEXT NOT NULL,
+          pid             INTEGER NOT NULL,
+          heartbeat_at    INTEGER NOT NULL,
+          status          TEXT NOT NULL DEFAULT 'idle'
+        )
+        """)
     }
 }
 
