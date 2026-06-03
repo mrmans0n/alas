@@ -52,6 +52,11 @@ final class ACPSessionManager: ObservableObject {
     /// Re-opening through `placeholderSession` + `hydrateIfNeeded` recreates
     /// it cleanly from SQLite.
     private var sessionRefCounts: [ACPSession.ID: Int] = [:]
+    // MARK: Mirror state (read-only follower when another instance holds the lease)
+    private var mirrorTokens: [ACPSession.ID: Int32] = [:]
+    private var mirrorSeen: [ACPSession.ID: Int64] = [:]
+    private var mirrorDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var mirrorPoll: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Runtime-only layout memory for the plan sidebar. This intentionally
     /// lives on the manager rather than `ACPSession` so a tab switch can
     /// evict and later recreate the session object without losing whether
@@ -751,6 +756,74 @@ extension ACPSessionManager {
     }
 }
 
+// MARK: - Mirror (read-only follower)
+
+extension ACPSessionManager {
+    /// Start mirroring a session owned by another instance: subscribe to
+    /// the change ping (debounced) and run a slow poll backstop. Never
+    /// spawns a runner.
+    func beginMirroring(sessionId: ACPSession.ID) {
+        guard mirrorTokens[sessionId] == nil else { return }
+        let token = changeNotifier.subscribe { [weak self] in
+            // The Darwin notifier delivers off the main thread; hop back.
+            Task { @MainActor [weak self] in
+                self?.scheduleMirrorRefresh(sessionId: sessionId)
+            }
+        }
+        mirrorTokens[sessionId] = token
+        mirrorPoll[sessionId] = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)   // 2.5s backstop
+                await self?.refreshMirror(sessionId: sessionId)
+            }
+        }
+        Task { await refreshMirror(sessionId: sessionId) }
+    }
+
+    func endMirroring(sessionId: ACPSession.ID) {
+        if let t = mirrorTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
+        mirrorDebounce.removeValue(forKey: sessionId)?.cancel()
+        mirrorPoll.removeValue(forKey: sessionId)?.cancel()
+        mirrorSeen.removeValue(forKey: sessionId)
+    }
+
+    private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {
+        mirrorDebounce[sessionId]?.cancel()
+        mirrorDebounce[sessionId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)   // 100ms coalesce
+            guard !Task.isCancelled else { return }
+            await self?.refreshMirror(sessionId: sessionId)
+        }
+    }
+
+    /// Re-read the transcript from SQLite and apply it into the cached
+    /// mirror session. Performs a full rebuild using `replaceTranscriptMessages`
+    /// so `toolCallIndices` and the render window stay consistent — bypassing
+    /// by-index mutation avoids violating those invariants.
+    func refreshMirror(sessionId: ACPSession.ID) async {
+        guard let session = sessions[sessionId] else { return }
+        let stored = (try? store.loadMessages(sessionId: sessionId)) ?? []
+        guard !stored.isEmpty else { return }
+        let decoder = JSONDecoder()
+        var messages: [ACPMessage] = []
+        messages.reserveCapacity(stored.count)
+        var maxSeq: Int64 = 0
+        for m in stored {
+            maxSeq = max(maxSeq, m.seq)
+            guard let wire = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder)
+            else { continue }
+            messages.append(wire.toMessage())
+        }
+        session.replaceTranscriptMessages(messages)
+        // Anchor the visible window to the tail so new content is visible,
+        // but only when the session is following the tail (user hasn't scrolled up).
+        if session.followsTranscriptTail {
+            session.transcript.resetWindowToTail()
+        }
+        mirrorSeen[sessionId] = maxSeq
+    }
+}
+
 // MARK: - Process lifecycle
 
 extension ACPSessionManager {
@@ -773,8 +846,10 @@ extension ACPSessionManager {
         // live instance owns this session, stay a read-only mirror.
         guard acquireWriterLease(sessionId: sessionId) else {
             session.agentState = .idle
+            beginMirroring(sessionId: sessionId)
             return
         }
+        endMirroring(sessionId: sessionId)
         startHeartbeat(sessionId: sessionId)
         // Any failure path below must hand the session back: release the
         // lease and stop the heartbeat so another instance can claim it.
@@ -1162,6 +1237,7 @@ extension ACPSessionManager {
         }
         stopHeartbeat(sessionId: sessionId)
         releaseWriterLease(sessionId: sessionId)
+        endMirroring(sessionId: sessionId)
         // SwiftUI's `.onDisappear` retain release for a closing tab can
         // arrive BEFORE this async detach starts, so the release runs while
         // agentState is still `.ready` and short-circuits eviction. Re-check

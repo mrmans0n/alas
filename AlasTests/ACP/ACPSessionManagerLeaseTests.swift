@@ -50,6 +50,32 @@ import Foundation
         #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
     }
 
+    @Test("mirror re-read applies appended messages from another writer")
+    func mirrorReReads() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-read-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        _ = mgrA.acquireWriterLease(sessionId: session.id)
+
+        // Writer appends a user message directly to the shared DB.
+        let msg: ACPMessage = .user(id: UUID(), text: "hello from writer", attachments: [])
+        let payload = try ACPMessageCodec.encode(msg)
+        let now = Int64(Date().timeIntervalSince1970)
+        try storeA.appendMessage(
+            sessionId: session.id, id: "m0", kind: msg.kind,
+            seq: 0, payload: payload, createdAt: now)
+
+        // Mirror instance creates a placeholder then pulls the new row.
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        let mirror = mgrB.placeholderSession(id: session.id)
+        #expect(mirror != nil)
+        await mgrB.refreshMirror(sessionId: session.id)
+        #expect(mgrB.sessions[session.id]?.transcript.messages.isEmpty == false)
+    }
+
     @Test("a failed attach releases the writer lease")
     func failedAttachReleasesLease() async throws {
         struct StubError: Error {}
