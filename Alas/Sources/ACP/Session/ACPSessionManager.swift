@@ -908,7 +908,13 @@ extension ACPSessionManager {
             session.agentState = .idle
             session.transcript.streamingState = .idle
         }
-        beginMirroring(sessionId: sessionId)
+        // Only begin mirroring when the session is still open. A takeover
+        // notification can race with tab closure: if `detach`/`evictIfIdle`
+        // already removed the session, starting a mirror poll would leak a
+        // background task for a session that no longer exists.
+        if sessions[sessionId] != nil {
+            beginMirroring(sessionId: sessionId)
+        }
     }
 
     // MARK: - Test accessors
@@ -935,6 +941,7 @@ extension ACPSessionManager {
     /// the change ping (debounced) and run a slow poll backstop. Never
     /// spawns a runner.
     func beginMirroring(sessionId: ACPSession.ID) {
+        guard sessions[sessionId] != nil else { return }
         guard mirrorTokens[sessionId] == nil else { return }
         let token = changeNotifier.subscribe { [weak self] in
             // The Darwin notifier delivers off the main thread; hop back.
@@ -996,6 +1003,11 @@ extension ACPSessionManager {
             messages.append(wire.toMessage())
         }
         session.replaceTranscriptMessages(messages)
+        // Sync the mirror's cached queue so a stale in-memory queue does not
+        // survive into a potential takeover. Without this a writer that drains
+        // or clears queued prompts would leave this mirror holding stale items.
+        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+        session.restoreQueue(queue)
         // Anchor the visible window to the tail so new content is visible,
         // but only when the session is following the tail (user hasn't scrolled up).
         if session.followsTranscriptTail {
@@ -1196,7 +1208,12 @@ extension ACPSessionManager {
                     result = try await connection.newSession(cwd: worktreePath)
                     if session.hasConversationTranscript {
                         shouldHoldQueueForRecovery = true
-                        persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                        // Guard the store write: if another instance took over
+                        // while we were awaiting loadSession/newSession, do not
+                        // persist recovery state to a session we no longer own.
+                        if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                            persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                        }
                     }
                     restoreWarning = .init(
                         message: "Agent context could not be restored.",
@@ -1207,7 +1224,12 @@ extension ACPSessionManager {
                 result = try await connection.newSession(cwd: worktreePath)
                 if session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
-                    persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                    // Guard the store write: if another instance took over
+                    // while we were awaiting newSession, do not persist
+                    // recovery state to a session we no longer own.
+                    if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                        persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                    }
                 }
                 restoreWarning = .init(
                     message: "Agent context could not be restored.",
