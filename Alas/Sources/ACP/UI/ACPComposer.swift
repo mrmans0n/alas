@@ -103,6 +103,9 @@ struct ACPInputField: NSViewRepresentable {
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         coordinator.isFocused.wrappedValue = false
         coordinator.flushPendingRestyleNow()
+        if let tv = nsView.documentView as? ACPNSTextView {
+            tv.dismissFloatingPanels()
+        }
     }
 
     /// When busy, the placeholder advertises whichever action ⏎ will
@@ -541,6 +544,17 @@ final class ACPNSTextView: NSTextView {
         super.didChangeText()
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
+    }
+
+    /// Dismiss any floating picker panel owned by this text view. The
+    /// panels are attached as child windows of the host window (not of
+    /// this view), so without an explicit close on teardown they outlive
+    /// the composer and stay visible across tab switches until app quit.
+    /// `dismantleNSView` calls this when the SwiftUI representable is
+    /// torn down (tab switch, window close).
+    func dismissFloatingPanels() {
+        dismissSlashPanel()
+        closeMentionPanel()
     }
 
     override func keyDown(with event: NSEvent) {
