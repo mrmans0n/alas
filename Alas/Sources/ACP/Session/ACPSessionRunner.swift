@@ -37,6 +37,7 @@ final class ACPSessionRunner {
     /// back in via a re-augment from `ProcessInfo`.
     private let agentEnv: [String: String]
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
+    private let onPersist: (() -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
@@ -71,7 +72,8 @@ final class ACPSessionRunner {
          suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
-         onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil)
+         onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
+         onPersist: (() -> Void)? = nil)
     {
         self.session = session
         self.connection = connection
@@ -80,6 +82,7 @@ final class ACPSessionRunner {
         self.worktreePath = worktreePath
         self.agentEnv = agentEnv
         self.onAuthRequired = onAuthRequired
+        self.onPersist = onPersist
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
@@ -246,6 +249,7 @@ final class ACPSessionRunner {
         // time killAll() won't fire on tab close — without this an
         // active `npm test`/`sleep`/server outlives the agent.
         session.terminalHost.killAll()
+        onPersist?()
     }
 
     private func handleTerminalRequest(_ req: ACPTerminalRequest) {
@@ -1089,6 +1093,7 @@ extension ACPSessionRunner {
                 }
             }
         }
+        onPersist?()
     }
 
     /// Persist messages from the apply() boundary. Three cases:
@@ -1135,5 +1140,6 @@ extension ACPSessionRunner {
                 }
             }
         }
+        onPersist?()
     }
 }

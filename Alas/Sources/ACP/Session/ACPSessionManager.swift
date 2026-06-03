@@ -10,6 +10,7 @@ final class ACPSessionManager: ObservableObject {
     let worktreeId: String
     let worktreePath: String
     let store: ACPSessionStore
+    let changeNotifier: ACPChangeNotifier
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
     let onDirtyCheck: ((String) -> Bool)?
@@ -63,6 +64,7 @@ final class ACPSessionManager: ObservableObject {
          hydratorPath: String? = nil,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
+         changeNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
          connectionFactory: ACPConnectionFactory? = nil)
     {
@@ -73,6 +75,7 @@ final class ACPSessionManager: ObservableObject {
         self.store = store
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
+        self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         self.hydrator = hydratorPath.flatMap { try? ACPSessionHydrator(path: $0) }
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
@@ -878,7 +881,8 @@ extension ACPSessionManager {
                                                 runner,
                                                 sessionId: sessionId
                                               )
-                                          })
+                                          },
+                                          onPersist: { [weak self] in self?.changeNotifier.post() })
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }

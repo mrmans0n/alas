@@ -493,6 +493,85 @@ struct ACPSessionRunnerTests {
         return (runner, mock)
     }
 
+    // MARK: - onPersist callback tests
+
+    @Test("onPersist fires after persistFromIndex writes a message")
+    func onPersistFiresAfterPersistFromIndex() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-onpersist-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        var posts = 0
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onPersist: { posts += 1 }
+        )
+
+        session.appendSystemNotice("hello")
+        runner.persistFromIndex(0)
+        #expect(posts >= 1)
+    }
+
+    @Test("onPersist fires after persistIndices writes a message")
+    func onPersistFiresAfterPersistIndices() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-onpersist-idx-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        var posts = 0
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onPersist: { posts += 1 }
+        )
+
+        session.appendSystemNotice("hello")
+        runner.persistIndices([0])
+        #expect(posts >= 1)
+    }
+
+    @Test("onPersist fires on stop()")
+    func onPersistFiresOnStop() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-onpersist-stop-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        var posts = 0
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onPersist: { posts += 1 }
+        )
+
+        runner.stop()
+        #expect(posts >= 1)
+    }
+
     private func waitUntil(
         timeoutNanoseconds: UInt64 = 1_000_000_000,
         _ condition: @escaping @MainActor () -> Bool
