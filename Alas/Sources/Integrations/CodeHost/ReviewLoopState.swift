@@ -140,6 +140,19 @@ final class ReviewLoopState {
             return
         }
 
+        guard !baseLocal.headSHA.isEmpty else {
+            snapshot = ReviewLoopSnapshot(
+                local: baseLocal,
+                remote: nil,
+                reviewRequest: nil,
+                providerAvailable: false,
+                providerAuthenticated: false,
+                providerCapabilities: .readOnly,
+                errorMessage: "No commits yet."
+            )
+            return
+        }
+
         let supportedKinds = providerRegistry.supportedKinds
         let preferredRemoteName = Self.preferredRemoteName(for: baseLocal.baseBranch, remotes: remotes)
         guard let remote = CodeHostRemoteDetector.detect(
