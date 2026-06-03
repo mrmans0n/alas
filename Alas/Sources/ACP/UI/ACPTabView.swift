@@ -115,6 +115,9 @@ private struct ACPSessionView: View {
             )
             adapterBanner()
             contextRestoreBanner()
+            if isMirror {
+                mirrorBanner()
+            }
             if let err = session.lastError {
                 errorBanner(err)
             }
@@ -167,6 +170,8 @@ private struct ACPSessionView: View {
     private var isNewEmptySession: Bool {
         ACPNewChatEmptyStatePolicy.isVisible(for: session)
     }
+
+    private var isMirror: Bool { manager.isMirror(sessionId: sessionId) }
 
     private var composerPlacement: ACPComposerPlacement {
         isNewEmptySession ? .raisedEmpty : .bottom
@@ -329,6 +334,8 @@ private struct ACPSessionView: View {
                         }
                         return accepted
                     }
+                    .disabled(isMirror)
+                    .opacity(isMirror ? 0.5 : 1)
 
                     if let undo = session.steerUndo, !undo.snapshot.isEmpty {
                         VStack {
@@ -422,6 +429,19 @@ private struct ACPSessionView: View {
                 EmptyView()
             }
         }
+    }
+
+    @ViewBuilder
+    private func mirrorBanner() -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "eye")
+            Text("Open in another window — read-only")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.quaternary)
     }
 
     @ViewBuilder
