@@ -34,6 +34,9 @@ if [ -x "${zmx_source}" ]; then
     mkdir -p "${zmx_destination_dir}"
     rsync -a "${zmx_source}" "${zmx_destination}"
     chmod +x "${zmx_destination}"
+elif [ "${ALAS_ZMX_OPTIONAL:-}" = "1" ]; then
+    echo "embed-ghostty-resources.sh: warning: zmx binary not found or not executable at ${zmx_source}; terminal panes will not persist across app quit" >&2
 else
-    echo "embed-ghostty-resources.sh: warning: zmx binary not found at ${zmx_source}; terminal panes will not persist across app quit" >&2
+    echo "embed-ghostty-resources.sh: error: zmx binary not found or not executable at ${zmx_source}" >&2
+    exit 1
 fi
