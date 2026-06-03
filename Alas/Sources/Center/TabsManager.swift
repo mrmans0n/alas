@@ -643,6 +643,43 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func openOrFocusDraftReviewRequest(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab {
+        let baseState = DraftReviewRequestTabState(worktreeId: worktreeId, snapshot: snapshot)
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           case .draftReviewRequest(var existing) = file.tabs[idx] {
+            existing.refreshSnapshotMetadata(from: snapshot)
+            let tab = Tab.draftReviewRequest(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+        let tab = Tab.draftReviewRequest(baseState)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func updateDraftReviewRequest(
+        worktreeId: String,
+        tabId: TabID,
+        mutate: (inout DraftReviewRequestTabState) -> Void
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .draftReviewRequest(var state) = file.tabs[idx]
+        else { return nil }
+        mutate(&state)
+        let tab = Tab.draftReviewRequest(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
     /// Clear any stashed draft commit state for the given worktree.
     /// Used when the user explicitly discards the draft (via tab context
     /// menu) or after a successful commit consumes the draft.

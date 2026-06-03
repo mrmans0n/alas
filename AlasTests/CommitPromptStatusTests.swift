@@ -9,4 +9,15 @@ struct CommitPromptStatusTests {
     @Test func modifiedPromptUsesCustomStatusChip() {
         #expect(CommitPromptStatus.chipLabel(for: AppConfig.defaultCommitPrompt + "\nExtra instruction.") == "Custom")
     }
+
+    @Test func reviewRequestPromptStatusDetectsCustomPrompt() {
+        #expect(CommitPromptStatus.chipLabel(
+            for: AppConfig.defaultReviewRequestPrompt,
+            defaultPrompt: AppConfig.defaultReviewRequestPrompt
+        ) == nil)
+        #expect(CommitPromptStatus.chipLabel(
+            for: AppConfig.defaultReviewRequestPrompt + "\nExtra instruction.",
+            defaultPrompt: AppConfig.defaultReviewRequestPrompt
+        ) == "Custom")
+    }
 }

@@ -58,6 +58,7 @@ protocol CodeHostProvider: Sendable {
         baseBranch: String,
         title: String,
         body: String,
+        isDraft: Bool,
         cwd: URL
     ) async throws -> URL
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck]

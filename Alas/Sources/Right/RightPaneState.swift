@@ -268,11 +268,7 @@ final class RightPaneState {
             }
         case .createReviewRequest:
             guard let snapshot = reviewLoop.snapshot else { return }
-            Task { @MainActor in
-                if await reviewLoop.createReviewRequest(snapshot: snapshot) {
-                    await refresh()
-                }
-            }
+            appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: snapshot)
         case .rerunFailedChecks:
             guard let snapshot = reviewLoop.snapshot else { return }
             Task { @MainActor in

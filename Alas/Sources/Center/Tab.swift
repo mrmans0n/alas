@@ -9,6 +9,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case commit(CommitTabState)
     case commitEditor(CommitEditorTabState)
     case draftCommit(DraftCommitTabState)
+    case draftReviewRequest(DraftReviewRequestTabState)
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
@@ -21,6 +22,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commit(let s):       return s.id
         case .commitEditor(let s): return s.id
         case .draftCommit(let s):  return s.id
+        case .draftReviewRequest(let s): return s.id
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
@@ -35,6 +37,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commit(let s):       return s.title
         case .commitEditor(let s): return s.title
         case .draftCommit:         return "Draft commit"
+        case .draftReviewRequest(let s): return s.displayTitle
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
@@ -49,6 +52,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commit:       return "commit"
         case .commitEditor: return "commit"
         case .draftCommit:  return "commit"
+        case .draftReviewRequest: return "pull-request"
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
@@ -118,6 +122,67 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         self.bodyText = bodyText
         self.amend = amend
         self.selectedPath = selectedPath
+    }
+}
+
+struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let provider: CodeHostKind
+    let repositorySlug: String
+    let branchName: String
+    let baseBranch: String
+    var headOwner: String?
+    var headSHA: String
+    var title: String
+    var body: String
+    var createAsDraft: Bool
+    var selectedPath: String?
+    var createdURL: URL?
+
+    var displayTitle: String {
+        if createdURL != nil { return "\(provider.reviewRequestLabel) created" }
+        return "Draft \(provider.reviewRequestLabel)"
+    }
+
+    init(worktreeId: String, snapshot: ReviewLoopSnapshot) {
+        let provider = snapshot.remote?.kind ?? .github
+        self.worktreeId = worktreeId
+        self.provider = provider
+        self.repositorySlug = snapshot.remote?.repositorySlug ?? ""
+        self.branchName = snapshot.local.branchName
+        self.baseBranch = snapshot.local.baseBranch
+        self.id = [
+            "draft-review-request",
+            worktreeId,
+            provider.rawValue,
+            self.repositorySlug,
+            snapshot.local.branchName,
+            snapshot.local.baseBranch,
+        ].joined(separator: ":")
+        self.headOwner = snapshot.local.headRemoteOwner
+        self.headSHA = snapshot.local.headSHA
+        self.title = ""
+        self.body = ""
+        self.createAsDraft = false
+        self.selectedPath = nil
+        self.createdURL = nil
+    }
+
+    mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
+        if headSHA != snapshot.local.headSHA {
+            createdURL = nil
+        }
+        headOwner = snapshot.local.headRemoteOwner
+        headSHA = snapshot.local.headSHA
+    }
+
+    func matchesTarget(_ snapshot: ReviewLoopSnapshot) -> Bool {
+        snapshot.remote?.kind == provider
+            && snapshot.remote?.repositorySlug == repositorySlug
+            && snapshot.local.branchName == branchName
+            && snapshot.local.baseBranch == baseBranch
+            && snapshot.local.headSHA == headSHA
     }
 }
 

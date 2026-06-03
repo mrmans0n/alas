@@ -277,33 +277,47 @@ final class ReviewLoopState {
         }
     }
 
-    func createReviewRequest() async -> Bool {
-        guard let snapshot else { return false }
-        return await createReviewRequest(snapshot: snapshot)
+    func createReviewRequest(
+        snapshot: ReviewLoopSnapshot,
+        title: String,
+        body: String,
+        isDraft: Bool
+    ) async throws -> URL {
+        try await createReviewRequest(
+            snapshot: snapshot,
+            branch: snapshot.local.branchName,
+            headOwner: snapshot.local.headRemoteOwner,
+            baseBranch: snapshot.local.baseBranch,
+            title: title,
+            body: body,
+            isDraft: isDraft
+        )
     }
 
-    func createReviewRequest(snapshot: ReviewLoopSnapshot) async -> Bool {
-        guard
-              let remote = snapshot.remote,
+    func createReviewRequest(
+        snapshot: ReviewLoopSnapshot,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        title: String,
+        body: String,
+        isDraft: Bool
+    ) async throws -> URL {
+        guard let remote = snapshot.remote,
               let provider = providerRegistry.provider(for: remote.kind)
-        else { return false }
-
-        lastError = nil
-        do {
-            _ = try await provider.createReviewRequest(
-                remote: remote,
-                branch: snapshot.local.branchName,
-                headOwner: snapshot.local.headRemoteOwner,
-                baseBranch: snapshot.local.baseBranch,
-                title: snapshot.local.branchName,
-                body: "Created from Alas.",
-                cwd: worktreePath
-            )
-            return true
-        } catch {
-            lastError = Self.describe(error)
-            return false
+        else {
+            throw CodeHostProviderError.unsupportedProvider(snapshot.remote?.kind ?? .github)
         }
+        return try await provider.createReviewRequest(
+            remote: remote,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
+            title: title,
+            body: body,
+            isDraft: isDraft,
+            cwd: worktreePath
+        )
     }
 
     func rerunFailedChecks() async -> Bool {
@@ -416,6 +430,10 @@ final class ReviewLoopState {
 
 #if DEBUG
 extension ReviewLoopState {
+    func setSnapshotForTests(_ snapshot: ReviewLoopSnapshot) {
+        self.snapshot = snapshot
+    }
+
     func updateLocalBranchForTests(_ branchName: String) {
         if let current = snapshot?.local {
             snapshot = ReviewLoopSnapshot(

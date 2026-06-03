@@ -37,6 +37,19 @@ struct ChangesPane: View {
                     }
                 }
 
+                SettingsGroup(title: "Review requests") {
+                    SettingsRow(
+                        name: "Prompt",
+                        desc: "Used by the sparkle button in the draft PR tab. The committed branch diff is appended on stdin."
+                    ) {
+                        promptEditorRow(
+                            windowId: "review-request-prompt-editor",
+                            currentValue: state.config.changes.reviewRequestPrompt,
+                            defaultValue: AppConfig.defaultReviewRequestPrompt
+                        )
+                    }
+                }
+
                 SettingsGroup(title: "Merge conflicts") {
                     SettingsRow(name: "Bulk resolve prompt",
                                 desc: "Sent to the agent CWD'd at the worktree when the user clicks 'Resolve all with agent'. The agent uses its own tools to enumerate, reconcile, and stage every conflicted file.") {
@@ -72,8 +85,8 @@ struct ChangesPane: View {
             AlasButton(title: "Edit", style: .normal) {
                 openWindow(id: windowId)
             }
-            if currentValue != defaultValue {
-                PromptStatusChip(label: "Custom")
+            if let label = CommitPromptStatus.chipLabel(for: currentValue, defaultPrompt: defaultValue) {
+                PromptStatusChip(label: label)
             }
         }
     }

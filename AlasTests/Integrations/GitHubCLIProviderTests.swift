@@ -387,6 +387,7 @@ struct GitHubCLIProviderTests {
             baseBranch: "main",
             title: "feature/github-provider",
             body: "Created from Alas.",
+            isDraft: false,
             cwd: Self.cwd
         )
 
@@ -406,6 +407,46 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func createReviewRequestOmitsDraftFlagForNormalPR() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "https://github.com/mrmans0n/alas/pull/44\n", stderr: ""),
+        ])
+
+        _ = try await GitHubCLIProvider(runner: runner).createReviewRequest(
+            remote: Self.remote,
+            branch: "feature/review-draft",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            title: "Add draft tab",
+            body: "## Summary\n- Adds a draft tab",
+            isDraft: false,
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands.first?.args.contains("--draft") == false)
+    }
+
+    @Test func createReviewRequestAddsDraftFlagForDraftPR() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "https://github.com/mrmans0n/alas/pull/45\n", stderr: ""),
+        ])
+
+        _ = try await GitHubCLIProvider(runner: runner).createReviewRequest(
+            remote: Self.remote,
+            branch: "feature/review-draft",
+            headOwner: "nacho",
+            baseBranch: "origin/main",
+            title: "Add draft tab",
+            body: "## Summary\n- Adds a draft tab",
+            isDraft: true,
+            cwd: Self.cwd
+        )
+
+        let args = try #require(await runner.commands.first?.args)
+        #expect(args.contains("--draft"))
+        #expect(args.contains("nacho:feature/review-draft"))
+    }
+
     @Test func createReviewRequestNormalizesRemoteQualifiedBaseBranch() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "https://github.com/mrmans0n/alas/pull/43\n", stderr: ""),
@@ -418,6 +459,7 @@ struct GitHubCLIProviderTests {
             baseBranch: "origin/main",
             title: "feature/github-provider",
             body: "Created from Alas.",
+            isDraft: false,
             cwd: Self.cwd
         )
 

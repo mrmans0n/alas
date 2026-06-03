@@ -256,13 +256,21 @@ struct ReviewLoopStateTests {
         )
 
         await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
-        let didRun = await state.createReviewRequest()
+        let snapshot = try #require(state.snapshot)
+        let url = try await state.createReviewRequest(
+            snapshot: snapshot,
+            title: "Review loop title",
+            body: "Review loop body",
+            isDraft: true
+        )
 
-        #expect(didRun)
+        #expect(url == Self.makeRemote().webURL)
         #expect(provider.createdReviewRequests.count == 1)
         #expect(provider.createdReviewRequests.first?.branch == "feature/review-loop")
         #expect(provider.createdReviewRequests.first?.baseBranch == "main")
-        #expect(provider.createdReviewRequests.first?.title == "feature/review-loop")
+        #expect(provider.createdReviewRequests.first?.title == "Review loop title")
+        #expect(provider.createdReviewRequests.first?.body == "Review loop body")
+        #expect(provider.createdReviewRequests.first?.isDraft == true)
     }
 
     @Test func createReviewRequestPassesForkHeadOwner() async throws {
@@ -288,9 +296,14 @@ struct ReviewLoopStateTests {
             Self.makeGitHubRemote(),
             GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
         ])
-        let didRun = await state.createReviewRequest()
+        let snapshot = try #require(state.snapshot)
+        _ = try await state.createReviewRequest(
+            snapshot: snapshot,
+            title: "Review loop title",
+            body: "Review loop body",
+            isDraft: false
+        )
 
-        #expect(didRun)
         #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
     }
 
@@ -317,9 +330,14 @@ struct ReviewLoopStateTests {
             GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git"),
             GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
         ])
-        let didRun = await state.createReviewRequest()
+        let snapshot = try #require(state.snapshot)
+        _ = try await state.createReviewRequest(
+            snapshot: snapshot,
+            title: "Review loop title",
+            body: "Review loop body",
+            isDraft: false
+        )
 
-        #expect(didRun)
         #expect(state.snapshot?.remote?.owner == "mrmans0n")
         #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
     }
@@ -360,10 +378,44 @@ struct ReviewLoopStateTests {
             remotes: [Self.makeGitHubRemote()]
         )
 
-        let didRun = await state.createReviewRequest(snapshot: capturedSnapshot)
+        _ = try await state.createReviewRequest(
+            snapshot: capturedSnapshot,
+            title: "Review loop title",
+            body: "Review loop body",
+            isDraft: false
+        )
 
-        #expect(didRun)
         #expect(provider.createdReviewRequests.first?.branch == "feature/captured")
+    }
+
+    @Test func createReviewRequestUsesExplicitDraftTarget() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(
+            local: Self.makeLocal(branchName: "feature/current", baseBranch: "main", needsPush: false),
+            remotes: [Self.makeGitHubRemote()]
+        )
+        let snapshot = try #require(state.snapshot)
+
+        _ = try await state.createReviewRequest(
+            snapshot: snapshot,
+            branch: "feature/captured",
+            headOwner: "nacho",
+            baseBranch: "release",
+            title: "Review loop title",
+            body: "Review loop body",
+            isDraft: true
+        )
+
+        #expect(provider.createdReviewRequests.first?.branch == "feature/captured")
+        #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
+        #expect(provider.createdReviewRequests.first?.baseBranch == "release")
+        #expect(provider.createdReviewRequests.first?.isDraft == true)
     }
 
     @Test func createReviewRequestRecordsProviderError() async throws {
@@ -381,10 +433,19 @@ struct ReviewLoopStateTests {
         )
 
         await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
-        let didRun = await state.createReviewRequest()
+        let snapshot = try #require(state.snapshot)
 
-        #expect(!didRun)
-        #expect(state.lastError == "gh pr create failed: GraphQL: Head sha can't be blank")
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "gh pr create",
+            stderr: "GraphQL: Head sha can't be blank"
+        )) {
+            _ = try await state.createReviewRequest(
+                snapshot: snapshot,
+                title: "Review loop title",
+                body: "Review loop body",
+                isDraft: false
+            )
+        }
     }
 
     @Test func rerunFailedChecksUsesProviderWithoutSessionApproval() async throws {
@@ -847,6 +908,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         let baseBranch: String
         let title: String
         let body: String
+        let isDraft: Bool
     }
 
     struct RerunFailedChecksRequest: Equatable {
@@ -923,6 +985,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         baseBranch: String,
         title: String,
         body: String,
+        isDraft: Bool,
         cwd: URL
     ) async throws -> URL {
         if let createError { throw createError }
@@ -931,7 +994,8 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
             headOwner: headOwner,
             baseBranch: baseBranch,
             title: title,
-            body: body
+            body: body,
+            isDraft: isDraft
         ))
         return remote.webURL
     }
