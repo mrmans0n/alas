@@ -2,7 +2,7 @@ import Foundation
 
 struct GitLabCLIProvider: CodeHostProvider {
     let kind: CodeHostKind = .gitlab
-    let capabilities: CodeHostProviderCapabilities = .readOnly
+    let capabilities: CodeHostProviderCapabilities = .gitlabCLI
 
     private let runner: any CodeHostCommandRunning
 

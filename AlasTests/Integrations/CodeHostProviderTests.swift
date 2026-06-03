@@ -32,11 +32,11 @@ struct CodeHostProviderTests {
         #expect(provider?.capabilities.canOpenReviewRequest == true)
     }
 
-    @Test func liveGitLabProviderStartsReadOnlyUntilActionsAreImplemented() {
+    @Test func liveGitLabProviderExposesDirectActionCapabilities() {
         let provider = CodeHostProviderRegistry.live().provider(for: .gitlab)
 
-        #expect(provider?.capabilities.canCreateReviewRequest == false)
-        #expect(provider?.capabilities.canRerunFailedChecks == false)
+        #expect(provider?.capabilities.canCreateReviewRequest == true)
+        #expect(provider?.capabilities.canRerunFailedChecks == true)
         #expect(provider?.capabilities.canOpenReviewRequest == true)
     }
 
