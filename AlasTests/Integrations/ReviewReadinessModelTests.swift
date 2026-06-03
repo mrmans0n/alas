@@ -114,6 +114,41 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.merge))
     }
 
+    @Test func actionsExposeCompactPresentationForDrawerButtons() {
+        let unpushed = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(local: Self.makeLocal(needsPush: true), reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        let push = unpushed.actions.first { $0.kind == .pushBranch }
+        #expect(push?.iconName == "arrow.up")
+        #expect(push?.emphasis == .primary)
+
+        let noRequest = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        let create = noRequest.actions.first { $0.kind == .createReviewRequest }
+        #expect(create?.iconName == "plus")
+        #expect(create?.emphasis == .primary)
+
+        let failedChecks = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: Self.makeReviewRequest(checks: [Self.makeCheck(bucket: .fail)])),
+            lastError: nil,
+            canOpenAgentHandoff: true
+        )
+        let actions = Dictionary(uniqueKeysWithValues: failedChecks.actions.map { ($0.kind, $0) })
+        #expect(actions[.refresh]?.iconName == "arrow.clockwise")
+        #expect(actions[.refresh]?.emphasis == .normal)
+        #expect(actions[.openReviewRequest]?.iconName == "arrow.up.right.square")
+        #expect(actions[.openReviewRequest]?.emphasis == .normal)
+        #expect(actions[.rerunFailedChecks]?.iconName == "arrow.clockwise")
+        #expect(actions[.rerunFailedChecks]?.emphasis == .normal)
+        #expect(actions[.openAgentHandoff]?.iconName == "sparkle")
+        #expect(actions[.openAgentHandoff]?.emphasis == .primary)
+    }
+
     @Test func lastErrorBecomesBlockingTextWhileFactsStillIncludeBranch() {
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(errorMessage: "provider failed"),

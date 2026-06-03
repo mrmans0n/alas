@@ -28,11 +28,37 @@ struct ReviewReadinessModel: Equatable, Sendable {
     }
 
     struct Action: Equatable, Sendable, Identifiable {
+        enum Emphasis: String, Codable, Equatable, Sendable {
+            case primary
+            case normal
+        }
+
         let kind: ReviewReadinessActionKind
         let title: String
         let isEnabled: Bool
 
         var id: ReviewReadinessActionKind { kind }
+
+        var iconName: String {
+            switch kind {
+            case .refresh: "arrow.clockwise"
+            case .pushBranch: "arrow.up"
+            case .createReviewRequest: "plus"
+            case .openReviewRequest: "arrow.up.right.square"
+            case .rerunFailedChecks: "arrow.clockwise"
+            case .openAgentHandoff: "sparkle"
+            case .merge: "arrow.triangle.merge"
+            }
+        }
+
+        var emphasis: Emphasis {
+            switch kind {
+            case .pushBranch, .createReviewRequest, .openAgentHandoff:
+                .primary
+            case .refresh, .openReviewRequest, .rerunFailedChecks, .merge:
+                .normal
+            }
+        }
     }
 
     let identity: String

@@ -19,7 +19,7 @@ struct ReviewLoopDrawer: View {
         let model = model
         VStack(spacing: 0) {
             Rectangle()
-                .fill(toneColor(model.primaryTone).opacity(0.34))
+                .fill(toneColor(model.primaryTone).opacity(0.24))
                 .frame(height: 1)
             Button {
                 state.setExpanded(!state.isExpanded)
@@ -35,7 +35,7 @@ struct ReviewLoopDrawer: View {
         .background(
             ZStack(alignment: .top) {
                 theme.color("bg-1").opacity(0.97)
-                toneColor(model.primaryTone).opacity(0.045)
+                toneColor(model.primaryTone).opacity(0.028)
             }
         )
     }
@@ -95,12 +95,9 @@ struct ReviewLoopDrawer: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(model.actions) { action in
-                            AlasButton(
-                                title: action.title,
-                                style: style(for: action.kind),
-                                action: { onAction(action.kind) }
-                            )
-                            .disabled(!action.isEnabled)
+                            ReviewReadinessActionButton(action: action) {
+                                onAction(action.kind)
+                            }
                         }
                     }
                 }
@@ -159,21 +156,12 @@ struct ReviewLoopDrawer: View {
         .frame(height: 22)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(color.opacity(chip.tone == .muted ? 0.08 : 0.16))
+                .fill(color.opacity(chip.tone == .muted ? 0.07 : 0.12))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(color.opacity(chip.tone == .muted ? 0.22 : 0.42), lineWidth: 0.75)
+                .strokeBorder(color.opacity(chip.tone == .muted ? 0.2 : 0.34), lineWidth: 0.75)
         )
-    }
-
-    private func style(for action: ReviewReadinessActionKind) -> AlasButtonStyle {
-        switch action {
-        case .pushBranch, .createReviewRequest, .openAgentHandoff:
-            return .primary
-        case .refresh, .openReviewRequest, .rerunFailedChecks, .merge:
-            return .normal
-        }
     }
 
     private func labelColor(for tone: ReviewReadinessModel.Chip.Tone) -> Color {
@@ -194,6 +182,73 @@ struct ReviewLoopDrawer: View {
         case .warning: theme.color("warn")
         case .danger: theme.color("del")
         case .muted: theme.color("fg-faint")
+        }
+    }
+}
+
+private struct ReviewReadinessActionButton: View {
+    let action: ReviewReadinessModel.Action
+    let onAction: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button(action: onAction) {
+            HStack(spacing: 6) {
+                Icon(name: action.iconName, size: iconSize, color: foreground)
+                Text(action.title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundColor(foreground)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(background)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(border, lineWidth: 0.75)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!action.isEnabled)
+        .opacity(action.isEnabled ? 1 : 0.5)
+        .help(action.title)
+    }
+
+    private var iconSize: CGFloat {
+        switch action.kind {
+        case .openAgentHandoff:
+            11
+        default:
+            10.5
+        }
+    }
+
+    private var background: Color {
+        switch action.emphasis {
+        case .primary:
+            theme.color("accent")
+        case .normal:
+            theme.color("bg-3").opacity(0.72)
+        }
+    }
+
+    private var border: Color {
+        switch action.emphasis {
+        case .primary:
+            theme.color("accent").opacity(0.7)
+        case .normal:
+            theme.color("line")
+        }
+    }
+
+    private var foreground: Color {
+        switch action.emphasis {
+        case .primary:
+            theme.color("bg-0")
+        case .normal:
+            theme.color("fg-muted")
         }
     }
 }
