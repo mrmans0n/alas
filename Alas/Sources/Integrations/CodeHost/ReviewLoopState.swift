@@ -410,6 +410,10 @@ final class ReviewLoopState {
 
 #if DEBUG
 extension ReviewLoopState {
+    func setSnapshotForTests(_ snapshot: ReviewLoopSnapshot) {
+        self.snapshot = snapshot
+    }
+
     func updateLocalBranchForTests(_ branchName: String) {
         if let current = snapshot?.local {
             snapshot = ReviewLoopSnapshot(
