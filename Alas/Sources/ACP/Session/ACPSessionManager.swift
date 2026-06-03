@@ -752,6 +752,15 @@ extension ACPSessionManager {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
                 guard let self else { return }
                 await MainActor.run {
+                    guard self._ownedLeases.contains(sessionId) else { return }
+                    // Detect an explicit takeover: if the lease now belongs to
+                    // another instance, stand down rather than re-stamping it.
+                    if let lease = try? self.store.loadLease(sessionId: sessionId),
+                       lease.ownerInstance != self.instanceId {
+                        self._ownedLeases.remove(sessionId)
+                        Task { await self.standDown(sessionId: sessionId) }
+                        return
+                    }
                     self.refreshHeartbeatNow(sessionId: sessionId)
                 }
             }
@@ -760,6 +769,50 @@ extension ACPSessionManager {
 
     private func stopHeartbeat(sessionId: ACPSession.ID) {
         _heartbeatTasks.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    // MARK: - Takeover (mirror seizes writer role)
+
+    /// Explicit user takeover from a mirror: seize the lease, nudge the
+    /// previous owner to notice (via the change ping), then attach as the
+    /// writer (re-attaching to the remote session via session/load inside
+    /// `attach`). The previous owner stands down when its heartbeat sees
+    /// it no longer owns the lease (within ~5s).
+    func takeOver(sessionId: ACPSession.ID) {
+        let now = Int64(Date().timeIntervalSince1970)
+        try? store.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid, now: now)
+        _ownedLeases.insert(sessionId)
+        changeNotifier.post()
+        endMirroring(sessionId: sessionId)
+        startHeartbeat(sessionId: sessionId)
+        if let session = sessions[sessionId] {
+            session.agentState = .idle   // allow attach's agentState guard to proceed
+            Task { await attach(to: sessionId, freshlyCreated: false) }
+        }
+    }
+
+    /// Relinquish the writer role we just lost to a takeover: cancel any
+    /// in-flight prompt, tear down the runner/agent, and become a mirror.
+    /// Does NOT release the lease — we no longer own it.
+    private func standDown(sessionId: ACPSession.ID) async {
+        stopHeartbeat(sessionId: sessionId)
+        _ownedLeases.remove(sessionId)
+        if let runner = runners.removeValue(forKey: sessionId) {
+            runner.invalidateActivePrompt()
+            runner.stop()
+            await runner.connection.shutdown()
+        }
+        if let session = sessions[sessionId] {
+            session.agentState = .idle
+            session.transcript.streamingState = .idle
+        }
+        beginMirroring(sessionId: sessionId)
+    }
+
+    // MARK: - Test accessors
+
+    func ownsLeaseForTest(sessionId: ACPSession.ID) -> Bool {
+        (try? store.loadLease(sessionId: sessionId))?.ownerInstance == instanceId
     }
 }
 

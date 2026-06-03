@@ -76,6 +76,27 @@ import Foundation
         #expect(mgrB.sessions[session.id]?.transcript.messages.isEmpty == false)
     }
 
+    @Test("takeOver seizes a live lease and flips ownership")
+    func takeOverSeizes() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("takeover-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        #expect(mgrA.isMirror(sessionId: session.id) == false)
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        _ = mgrB.placeholderSession(id: session.id)
+        mgrB.takeOver(sessionId: session.id)
+
+        // The synchronous parts (seizeLease + _ownedLeases insert) must have
+        // completed before takeOver returns; the async attach kicks off later.
+        #expect(try storeB.loadLease(sessionId: session.id)?.ownerInstance == "B")
+        #expect(mgrA.ownsLeaseForTest(sessionId: session.id) == false)
+    }
+
     @Test("a failed attach releases the writer lease")
     func failedAttachReleasesLease() async throws {
         struct StubError: Error {}
