@@ -110,6 +110,24 @@ struct GitHubCLIProviderTests {
         #expect(url == URL(string: "https://github.com/mrmans0n/alas/pull/43"))
     }
 
+    @Test func qualifiedHeadUsesOwnerOnlyForForkHeads() {
+        #expect(GitHubCLIProvider.qualifiedHead(
+            branch: "feature/github-provider",
+            headOwner: "nacho",
+            baseOwner: "mrmans0n"
+        ) == "nacho:feature/github-provider")
+        #expect(GitHubCLIProvider.qualifiedHead(
+            branch: "feature/github-provider",
+            headOwner: "mrmans0n",
+            baseOwner: "mrmans0n"
+        ) == "feature/github-provider")
+        #expect(GitHubCLIProvider.qualifiedHead(
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseOwner: "mrmans0n"
+        ) == "feature/github-provider")
+    }
+
     @Test func latestRunIDParsesFirstAndEmptyList() throws {
         let id = try GitHubCLIProvider.parseLatestRunID(
             """
@@ -213,6 +231,37 @@ struct GitHubCLIProviderTests {
         )
 
         #expect(checks.isEmpty)
+    }
+
+    @Test func createReviewRequestQualifiesForkHeadOwner() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "https://github.com/mrmans0n/alas/pull/43\n", stderr: ""),
+        ])
+
+        _ = try await GitHubCLIProvider(runner: runner).createReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: "nacho",
+            baseBranch: "main",
+            title: "feature/github-provider",
+            body: "Created from Alas.",
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "create",
+                    "--base", "main",
+                    "--head", "nacho:feature/github-provider",
+                    "--title", "feature/github-provider",
+                    "--body", "Created from Alas.",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
     }
 
     @Test func rerunFailedChecksIssuesRerunForFailedRuns() async throws {

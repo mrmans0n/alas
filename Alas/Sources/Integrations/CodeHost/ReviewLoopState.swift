@@ -45,6 +45,8 @@ final class ReviewLoopState {
                 aheadCommitCount: current.aheadCommitCount,
                 hasUpstream: current.hasUpstream,
                 upstreamRemoteName: current.upstreamRemoteName,
+                headRemoteOwner: current.headRemoteOwner,
+                upstreamAheadCommitCount: current.upstreamAheadCommitCount,
                 needsPush: current.needsPush
             )
             snapshot = ReviewLoopSnapshot(
@@ -113,7 +115,7 @@ final class ReviewLoopState {
 
     func refresh(_ attempt: ReviewLoopRefreshAttempt, remotes: [GitRemote]) async {
         guard isCurrentRefresh(attempt.generation) else { return }
-        guard let local = attempt.local else {
+        guard let baseLocal = attempt.local else {
             isRefreshing = false
             return
         }
@@ -125,9 +127,9 @@ final class ReviewLoopState {
             }
         }
 
-        guard !local.branchName.isEmpty else {
+        guard !baseLocal.branchName.isEmpty else {
             snapshot = ReviewLoopSnapshot(
-                local: local,
+                local: baseLocal,
                 remote: nil,
                 reviewRequest: nil,
                 providerAvailable: false,
@@ -145,7 +147,7 @@ final class ReviewLoopState {
         ) else {
             guard isCurrentRefresh(generation) else { return }
             snapshot = ReviewLoopSnapshot(
-                local: local,
+                local: baseLocal,
                 remote: nil,
                 reviewRequest: nil,
                 providerAvailable: false,
@@ -155,6 +157,7 @@ final class ReviewLoopState {
             )
             return
         }
+        let local = Self.withHeadRemoteOwner(baseLocal, remotes: remotes, baseRemote: remote)
 
         guard let provider = providerRegistry.provider(for: remote.kind) else {
             guard isCurrentRefresh(generation) else { return }
@@ -272,6 +275,7 @@ final class ReviewLoopState {
             _ = try await provider.createReviewRequest(
                 remote: remote,
                 branch: snapshot.local.branchName,
+                headOwner: snapshot.local.headRemoteOwner,
                 baseBranch: snapshot.local.baseBranch,
                 title: snapshot.local.branchName,
                 body: "Created from Alas.",
@@ -312,6 +316,36 @@ final class ReviewLoopState {
 
     private func isCurrentRefresh(_ generation: Int) -> Bool {
         generation == refreshGeneration
+    }
+
+    private static func withHeadRemoteOwner(
+        _ local: ReviewLoopLocalState,
+        remotes: [GitRemote],
+        baseRemote: CodeHostRemote
+    ) -> ReviewLoopLocalState {
+        guard let upstreamRemoteName = local.upstreamRemoteName,
+              let upstreamRemote = remotes.first(where: { $0.name == upstreamRemoteName }),
+              let headRemote = CodeHostRemoteDetector.detect(
+                  from: [upstreamRemote],
+                  supportedKinds: [baseRemote.kind]
+              ),
+              headRemote.kind == baseRemote.kind,
+              headRemote.host == baseRemote.host
+        else { return local }
+
+        return ReviewLoopLocalState(
+            branchName: local.branchName,
+            headSHA: local.headSHA,
+            baseBranch: local.baseBranch,
+            hasWorkingTreeChanges: local.hasWorkingTreeChanges,
+            hasStagedChanges: local.hasStagedChanges,
+            aheadCommitCount: local.aheadCommitCount,
+            hasUpstream: local.hasUpstream,
+            upstreamRemoteName: local.upstreamRemoteName,
+            headRemoteOwner: headRemote.owner,
+            upstreamAheadCommitCount: local.upstreamAheadCommitCount,
+            needsPush: local.needsPush
+        )
     }
 
     private func preservedReviewRequestForError(

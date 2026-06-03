@@ -224,6 +224,35 @@ struct ReviewLoopStateTests {
         #expect(provider.createdReviewRequests.first?.title == "feature/review-loop")
     }
 
+    @Test func createReviewRequestPassesForkHeadOwner() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        let local = ReviewLoopLocalState(
+            branchName: "feature/review-loop",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 0,
+            hasUpstream: true,
+            upstreamRemoteName: "fork",
+            needsPush: false
+        )
+
+        await state.refresh(local: local, remotes: [
+            Self.makeGitHubRemote(),
+            GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+        ])
+        let didRun = await state.createReviewRequest()
+
+        #expect(didRun)
+        #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
+    }
+
     @Test func createReviewRequestUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         let state = ReviewLoopState(
@@ -719,6 +748,7 @@ private struct StubError: LocalizedError {
 private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable {
     struct CreatedReviewRequest: Equatable {
         let branch: String
+        let headOwner: String?
         let baseBranch: String
         let title: String
         let body: String
@@ -788,6 +818,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,
+        headOwner: String?,
         baseBranch: String,
         title: String,
         body: String,
@@ -796,6 +827,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         if let createError { throw createError }
         createdReviewRequests.append(CreatedReviewRequest(
             branch: branch,
+            headOwner: headOwner,
             baseBranch: baseBranch,
             title: title,
             body: body

@@ -55,17 +55,19 @@ struct GitHubCLIProvider: CodeHostProvider {
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,
+        headOwner: String?,
         baseBranch: String,
         title: String,
         body: String,
         cwd: URL
     ) async throws -> URL {
+        let head = Self.qualifiedHead(branch: branch, headOwner: headOwner, baseOwner: remote.owner)
         let result = try await runner.run(
             "gh",
             args: [
                 "pr", "create",
                 "--base", baseBranch,
-                "--head", branch,
+                "--head", head,
                 "--title", title,
                 "--body", body,
                 "-R", remote.repositorySlug,
@@ -77,6 +79,14 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
 
         return try Self.parseCreateOutput(result.stdout)
+    }
+
+    static func qualifiedHead(branch: String, headOwner: String?, baseOwner: String) -> String {
+        guard let headOwner,
+              !headOwner.isEmpty,
+              headOwner != baseOwner
+        else { return branch }
+        return "\(headOwner):\(branch)"
     }
 
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] {

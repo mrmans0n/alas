@@ -45,6 +45,19 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.createReviewRequest))
     }
 
+    @Test func staleBranchBlocksReviewActions() {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(local: Self.makeLocal(needsPush: false, upstreamAheadCommitCount: 2), reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Remote ahead"])
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.warning])
+        #expect(model.blockingText == "Remote has commits not in this branch. Pull or rebase before using review actions.")
+        #expect(model.actions.map(\.kind) == [ReviewReadinessActionKind.refresh])
+    }
+
     @Test func noGitHubRequestExposesCreatePR() {
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: nil),

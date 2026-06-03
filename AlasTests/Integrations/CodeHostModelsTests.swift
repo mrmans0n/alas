@@ -49,6 +49,22 @@ struct CodeHostModelsTests {
         #expect(capabilities.canOpenReviewRequest == true)
     }
 
+    @Test func remoteAheadOnlyBranchIsStale() {
+        let local = ReviewLoopLocalState(
+            branchName: "feature/review-loop",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 0,
+            hasUpstream: true,
+            upstreamAheadCommitCount: 2,
+            needsPush: false
+        )
+
+        #expect(local.pushState == .stale)
+    }
+
     @Test func reviewRequiredWithoutActionableThreadsHasNoActionableFeedback() {
         let request = makeReviewRequest(reviewDecision: .reviewRequired)
 

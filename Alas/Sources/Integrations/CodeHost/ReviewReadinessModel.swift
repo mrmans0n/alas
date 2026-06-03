@@ -115,6 +115,8 @@ struct ReviewReadinessModel: Equatable, Sendable {
         switch snapshot.local.pushState {
         case .diverged:
             "Remote has commits not in this branch. Pull, rebase, or force push from the terminal if intentional."
+        case .stale:
+            "Remote has commits not in this branch. Pull or rebase before using review actions."
         case .inSync, .missingUpstream, .unpushed:
             nil
         }
@@ -150,6 +152,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
         if snapshot.local.pushState == .diverged {
             return [Chip(id: "remote-diverged", title: "Remote diverged", tone: .warning)]
         }
+        if snapshot.local.pushState == .stale {
+            return [Chip(id: "remote-stale", title: "Remote ahead", tone: .warning)]
+        }
         if snapshot.local.needsPush {
             return [Chip(id: "unpushed", title: "Unpushed", tone: .accent)]
         }
@@ -184,7 +189,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
         guard snapshot.remote != nil, snapshot.providerAvailable, snapshot.providerAuthenticated else {
             return [refreshAction]
         }
-        if snapshot.local.pushState == .diverged {
+        if snapshot.local.pushState == .diverged || snapshot.local.pushState == .stale {
             return [refreshAction]
         } else if snapshot.local.needsPush {
             actions.append(Action(kind: .pushBranch, title: "Push", isEnabled: true))

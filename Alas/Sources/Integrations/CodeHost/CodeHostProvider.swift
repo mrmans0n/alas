@@ -48,6 +48,7 @@ protocol CodeHostProvider: Sendable {
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,
+        headOwner: String?,
         baseBranch: String,
         title: String,
         body: String,

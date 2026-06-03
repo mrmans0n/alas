@@ -159,6 +159,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
     let aheadCommitCount: Int
     let hasUpstream: Bool
     let upstreamRemoteName: String?
+    let headRemoteOwner: String?
     let upstreamAheadCommitCount: Int
     let needsPush: Bool
 
@@ -171,6 +172,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
         aheadCommitCount: Int,
         hasUpstream: Bool,
         upstreamRemoteName: String? = nil,
+        headRemoteOwner: String? = nil,
         needsPush: Bool
     ) {
         self.init(
@@ -182,6 +184,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
             aheadCommitCount: aheadCommitCount,
             hasUpstream: hasUpstream,
             upstreamRemoteName: upstreamRemoteName,
+            headRemoteOwner: headRemoteOwner,
             upstreamAheadCommitCount: 0,
             needsPush: needsPush
         )
@@ -196,6 +199,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
         aheadCommitCount: Int,
         hasUpstream: Bool,
         upstreamRemoteName: String? = nil,
+        headRemoteOwner: String? = nil,
         upstreamAheadCommitCount: Int,
         needsPush: Bool
     ) {
@@ -207,6 +211,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
         self.aheadCommitCount = aheadCommitCount
         self.hasUpstream = hasUpstream
         self.upstreamRemoteName = upstreamRemoteName
+        self.headRemoteOwner = headRemoteOwner
         self.upstreamAheadCommitCount = upstreamAheadCommitCount
         self.needsPush = needsPush
     }
@@ -214,6 +219,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
     var pushState: ReviewLoopPushState {
         if !hasUpstream { return .missingUpstream }
         if needsPush, upstreamAheadCommitCount > 0 { return .diverged }
+        if upstreamAheadCommitCount > 0 { return .stale }
         if needsPush { return .unpushed }
         return .inSync
     }
@@ -224,6 +230,7 @@ enum ReviewLoopPushState: Equatable, Sendable {
     case missingUpstream
     case unpushed
     case diverged
+    case stale
 }
 
 struct ReviewLoopSnapshot: Equatable, Sendable {
