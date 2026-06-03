@@ -197,18 +197,23 @@ struct AppConfig: Codable, Equatable {
         /// When false: the two are inverted — ⏎ steers, ⌥⏎ queues. The
         /// label in Settings is "Send on ⏎, queue on ⌥⏎ while busy".
         var acpSendOnEnter: Bool
+        /// When true, newly created chat sessions start with auto-run enabled
+        /// (the agent runs tools without asking). Seeds the per-session value
+        /// only; the composer bolt still wins afterward. Default: false.
+        var acpAutoRunByDefault: Bool
 
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
-                 confirmCloseChatTabs, acpSendOnEnter
+                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault
         }
 
-        init(notifyOnFinish: Bool, notifyOnAwaiting: Bool,
+        init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
              dismissedHookInstallNudges: [String] = [],
              dismissedACPSetupNudges: [String] = [],
              confirmCloseChatTabs: Bool = false,
-             acpSendOnEnter: Bool = true)
+             acpSendOnEnter: Bool = true,
+             acpAutoRunByDefault: Bool = false)
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
@@ -216,6 +221,7 @@ struct AppConfig: Codable, Equatable {
             self.dismissedACPSetupNudges = dismissedACPSetupNudges
             self.confirmCloseChatTabs = confirmCloseChatTabs
             self.acpSendOnEnter = acpSendOnEnter
+            self.acpAutoRunByDefault = acpAutoRunByDefault
         }
 
         init(from decoder: Decoder) throws {
@@ -226,6 +232,7 @@ struct AppConfig: Codable, Equatable {
             dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
             confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
+            acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
         }
     }
 

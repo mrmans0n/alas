@@ -17,6 +17,28 @@ struct ACPSessionManagerTests {
         #expect(row?.agentId == "claude")
     }
 
+    @Test("createSession seeds autoRun from the default when true")
+    func createSessionSeedsAutoRunTrue() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-autorun-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let s = mgr.createSession(agentId: "claude", autoRunDefault: true)
+        #expect(s.autoRunEnabled == true)
+        let row = try store.loadSession(id: s.id)
+        #expect(row?.autoRun == true)
+    }
+
+    @Test("createSession defaults autoRun to false")
+    func createSessionDefaultsAutoRunFalse() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-autorun-off-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let s = mgr.createSession(agentId: "claude")
+        #expect(s.autoRunEnabled == false)
+        let row = try store.loadSession(id: s.id)
+        #expect(row?.autoRun == false)
+    }
+
     @Test("placeholderSession marks store-backed sessions as restored from persistence")
     func placeholderSessionMarksRestoredFromPersistence() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-restored-\(UUID()).sqlite")

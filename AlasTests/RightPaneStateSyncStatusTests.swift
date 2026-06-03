@@ -29,6 +29,26 @@ struct RightPaneStateSyncStatusTests {
         return tmp
     }
 
+    @Test func refreshClearsHeadSHAWhenHeadCannotResolve() async throws {
+        let repo = try await makeRepoOnFeature()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = RightPaneState(
+            worktree: makeWorktree(at: repo, branch: "feature"),
+            baseBranch: "main"
+        )
+        await state.refresh()
+        let originalHead = try #require(state.currentHeadSHA.isEmpty ? nil : state.currentHeadSHA)
+
+        _ = try await Process.git(["checkout", "-q", "--orphan", "unborn"], cwd: repo)
+        await state.refresh()
+
+        #expect(state.currentBranch == "unborn")
+        #expect(state.currentHeadSHA == "")
+        #expect(state.currentHeadSHA != originalHead)
+        #expect(state.reviewLoop.snapshot?.local.headSHA == "")
+        #expect(state.reviewLoop.snapshot?.errorMessage == "No commits yet.")
+    }
+
     // MARK: - showBehindBaseChip
 
     @Test func baseChipHiddenWhenStatusNil() async throws {

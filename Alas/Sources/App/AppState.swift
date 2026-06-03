@@ -413,6 +413,28 @@ final class AppState {
         // waiting for `restoreTerminalTabIfNeeded` (driven by
         // TerminalTabView.task) to fire when the user opens the tab.
         refreshPersistedHookSymlinks()
+        sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
+    }
+
+    /// Compute (knownWorktreeIds, knownLeafIds) from in-memory state and
+    /// hand them to `TerminalService.sweepOrphans`. Run after `reloadTabs`
+    /// so persisted leaves are visible; without this, sessions leaked by
+    /// any prior bug (or quit race) would persist forever because nothing
+    /// would ever try to kill them on subsequent launches.
+    private func sweepOrphanZmxSessions(worktreeIds: [String]) {
+        var leafIds: Set<String> = []
+        for worktreeId in worktreeIds {
+            for tab in tabs.tabs(forWorktree: worktreeId) {
+                guard case .terminal(let state) = tab else { continue }
+                for leaf in state.root.leaves() {
+                    leafIds.insert(leaf.id)
+                }
+            }
+        }
+        terminal.sweepOrphans(
+            knownWorktreeIds: Set(worktreeIds),
+            knownLeafIds: leafIds
+        )
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
@@ -2967,13 +2989,45 @@ final class AppState {
     }
 
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.
-    func openNewACPSession(agentID: String) {
+    func openNewACPSession(agentID: String, initialPrompt: String? = nil) {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
-        let session = mgr.createSession(agentId: agentID)
+        let session = mgr.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
+        if let initialPrompt, !initialPrompt.isEmpty {
+            mgr.persistComposerDraft(
+                ACPComposerDraft(segments: [.text(initialPrompt)]),
+                for: session
+            )
+        }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    func openReviewLoopHandoff(from reviewLoop: ReviewLoopState, actionKind: ReviewReadinessActionKind) {
+        guard let snapshot = reviewLoop.snapshot else { return }
+        guard actionKind == .openAgentHandoff else { return }
+        let agentID = config.changes.aiToolId
+        guard agentID != "none", agent(id: agentID) != nil else { return }
+        let prompt = ReviewLoopHandoffBuilder.build(
+            snapshot: snapshot,
+            action: ReviewLoopAction(
+                kind: Self.reviewLoopHandoffActionKind(for: snapshot.reviewRequest),
+                title: "Open in Agent",
+                detail: "Prepare a focused agent handoff."
+            )
+        )
+        openNewACPSession(agentID: agentID, initialPrompt: prompt)
+    }
+
+    nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
+        if request?.hasActionableFeedback == true {
+            return .prepareReviewHandoff
+        }
+        if request?.worstCheckBucket == .fail {
+            return .prepareCheckFailureHandoff
+        }
+        return .prepareCheckFailureHandoff
     }
 
     /// Reopen a persisted ACP session as a center-pane tab. If a tab

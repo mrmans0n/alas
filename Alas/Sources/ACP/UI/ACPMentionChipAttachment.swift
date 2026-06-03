@@ -23,7 +23,6 @@ final class ACPMentionChipAttachment: NSTextAttachment {
 private final class ACPMentionChipCell: NSTextAttachmentCell {
     let displayName: String
     private let label: String
-    private let labelFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .medium)
 
     init(displayName: String) {
         self.displayName = displayName
@@ -33,13 +32,18 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
     required init(coder: NSCoder) { fatalError() }
 
     override var cellSize: NSSize {
-        let attrs: [NSAttributedString.Key: Any] = [.font: labelFont]
-        let textSize = (label as NSString).size(withAttributes: attrs)
-        return NSSize(width: ceil(textSize.width) + 14, height: 18)
+        ACPMentionChipMetrics.cellSize(for: label)
     }
 
     override func cellBaselineOffset() -> NSPoint {
-        NSPoint(x: 0, y: -1)
+        let size = ACPMentionChipMetrics.cellSize(for: label)
+        return NSPoint(
+            x: 0,
+            y: ACPMentionChipMetrics.baselineOffset(
+                for: NSFont.systemFont(ofSize: 13),
+                attachmentHeight: size.height
+            )
+        )
     }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
@@ -54,7 +58,7 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
 
         let textColor = accent.blended(withFraction: 0.55, of: .white) ?? .white
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: labelFont,
+            .font: ACPMentionChipMetrics.labelFont,
             .foregroundColor: textColor,
         ]
         let textSize = (label as NSString).size(withAttributes: attrs)
@@ -73,6 +77,34 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
                             proposedLineFragment lineFrag: NSRect,
                             glyphPosition position: NSPoint,
                             characterIndex charIndex: Int) -> NSRect {
-        NSRect(origin: .zero, size: cellSize)
+        let size = ACPMentionChipMetrics.cellSize(for: label)
+        let font = textContainer.layoutManager?.textStorage?.attribute(
+            .font,
+            at: charIndex,
+            effectiveRange: nil
+        ) as? NSFont ?? NSFont.systemFont(ofSize: 13)
+        return NSRect(
+            x: 0,
+            y: ACPMentionChipMetrics.baselineOffset(for: font, attachmentHeight: size.height),
+            width: size.width,
+            height: size.height
+        )
+    }
+}
+
+private enum ACPMentionChipMetrics {
+    static var labelFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: 11.5, weight: .medium)
+    }
+
+    static func cellSize(for label: String) -> NSSize {
+        let attrs: [NSAttributedString.Key: Any] = [.font: labelFont]
+        let textSize = (label as NSString).size(withAttributes: attrs)
+        return NSSize(width: ceil(textSize.width) + 14, height: 18)
+    }
+
+    static func baselineOffset(for font: NSFont, attachmentHeight: CGFloat) -> CGFloat {
+        let letterCenterFromBaseline = (font.ascender + font.descender) / 2
+        return letterCenterFromBaseline - attachmentHeight / 2
     }
 }

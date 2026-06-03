@@ -74,6 +74,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// The next attach consumes it by calling ACP `authenticate` after
     /// initialize and before session creation/loading.
     var pendingAuthMethodId: String?
+    /// Runtime-only first-run attach phase for the brief window between
+    /// opening a brand-new ACP chat and receiving the ready remote session.
+    /// This is never persisted; restored sessions derive their UI from
+    /// persisted session fields instead.
+    @Published var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
 
     var imageInputSupported: Bool { promptCapabilities.image }
     var embeddedContextSupported: Bool { promptCapabilities.embeddedContext }

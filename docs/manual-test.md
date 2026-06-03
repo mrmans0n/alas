@@ -219,3 +219,13 @@ Inside an Alas-spawned terminal:
 - `ao README.md` opens the file in the editor (identical behavior to `alas open README.md`).
 - `ao` with no arguments prints `usage: alas open <path> [path...]` and exits with a non-zero status.
 - Launching a terminal **outside** Alas, `type ao` reports `ao: not found` (or the shell's equivalent).
+
+## Review Loop Drawer
+
+1. Open a GitHub-backed worktree on a branch with local commits.
+2. Confirm the Changes tab shows a bottom review-loop drawer.
+3. Confirm missing `gh` auth or missing `gh` appears as the primary next action when applicable.
+4. On an unpublished branch, click "Start" and confirm the next action becomes push.
+5. On a branch with an open PR, confirm the drawer shows `GitHub #<number>` and compact check/review/merge status.
+6. For a failing check, confirm "Open in agent" creates an ACP tab with a focused handoff prompt.
+7. Confirm merge, comment posting, review-thread resolution, force-push, and editing-agent runs are not executed without explicit user action.

@@ -102,27 +102,29 @@ private struct ACPSessionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ACPToolbar(
-                session: session,
-                manager: manager,
-                agentLookup: { state.agent(id: $0) },
-                state: state,
-                worktree: worktree,
-                planSidebarUserMinimized: session.planSidebarMinimized,
-                onRestorePlanSidebar: {
-                    session.planSidebarMinimized = false
+            if ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: isFirstRunConnecting) {
+                ACPToolbar(
+                    session: session,
+                    manager: manager,
+                    agentLookup: { state.agent(id: $0) },
+                    state: state,
+                    worktree: worktree,
+                    planSidebarUserMinimized: session.planSidebarMinimized,
+                    onRestorePlanSidebar: {
+                        session.planSidebarMinimized = false
+                    }
+                )
+                adapterBanner()
+                contextRestoreBanner()
+                if isMirror {
+                    mirrorBanner()
                 }
-            )
-            adapterBanner()
-            contextRestoreBanner()
-            if isMirror {
-                mirrorBanner()
-            }
-            if let err = session.lastError {
-                errorBanner(err)
-            }
-            if case .failed(let msg) = session.hydrationState {
-                hydrationFailureBanner(message: msg)
+                if let err = session.lastError {
+                    errorBanner(err)
+                }
+                if case .failed(let msg) = session.hydrationState {
+                    hydrationFailureBanner(message: msg)
+                }
             }
             transcriptAndComposer
         }
@@ -167,6 +169,14 @@ private struct ACPSessionView: View {
         return session.transcript.messages.isEmpty
     }
 
+    private var firstRunConnectingPhase: ACPFirstRunConnectingPhase? {
+        ACPFirstRunConnectingPolicy.phase(for: session)
+    }
+
+    private var isFirstRunConnecting: Bool {
+        firstRunConnectingPhase != nil
+    }
+
     private var isNewEmptySession: Bool {
         ACPNewChatEmptyStatePolicy.isVisible(for: session)
     }
@@ -175,7 +185,10 @@ private struct ACPSessionView: View {
     private var mirrorIsBusy: Bool { manager.mirrorIsBusy(sessionId: sessionId) }
 
     private var composerPlacement: ACPComposerPlacement {
-        isNewEmptySession ? .raisedEmpty : .bottom
+        ACPFirstRunConnectingPolicy.composerPlacement(
+            firstRunConnecting: isFirstRunConnecting,
+            newEmptySession: isNewEmptySession
+        )
     }
 
     private var emptyStateAnimation: Animation {
@@ -186,7 +199,12 @@ private struct ACPSessionView: View {
         GeometryReader { proxy in
             HStack(spacing: 0) {
                 ZStack(alignment: .bottom) {
-                    if isConnecting {
+                    if let phase = firstRunConnectingPhase {
+                        ACPFirstRunConnectingView(
+                            agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
+                            phase: phase
+                        )
+                    } else if isConnecting {
                         ACPConnectingPlaceholder(
                             agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
                         )
@@ -354,6 +372,7 @@ private struct ACPSessionView: View {
                     }
                 }
                 .animation(emptyStateAnimation, value: isNewEmptySession)
+                .animation(emptyStateAnimation, value: isFirstRunConnecting)
 
                 if showPlanSidebar {
                     ACPPlanSidebar(

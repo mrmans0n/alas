@@ -1,0 +1,572 @@
+import Foundation
+
+struct GitHubCLIProvider: CodeHostProvider {
+    let kind: CodeHostKind = .github
+    let capabilities: CodeHostProviderCapabilities = .githubCLI
+    static let reviewThreadsQuery = """
+    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 50, after: $cursor) {
+            nodes {
+              id
+              isResolved
+              isOutdated
+              comments(first: 50) {
+                nodes {
+                  id
+                  body
+                  url
+                  author {
+                    login
+                  }
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
+
+    private let runner: any CodeHostCommandRunning
+
+    init(runner: any CodeHostCommandRunning = ProcessCodeHostCommandRunner()) {
+        self.runner = runner
+    }
+
+    func isAvailable() async -> Bool {
+        do {
+            let result = try await runner.run("gh", args: ["--version"], cwd: nil)
+            return result.exitCode == 0
+        } catch {
+            return false
+        }
+    }
+
+    func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool {
+        do {
+            let result = try await runner.run(
+                "gh",
+                args: ["auth", "status", "--hostname", remote.host],
+                cwd: cwd
+            )
+            return result.exitCode == 0
+        } catch {
+            return false
+        }
+    }
+
+    func currentReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "pr", "list",
+                "--head", branch,
+                "--base", base,
+                "--state", "open",
+                "--limit", "20",
+                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "-R", remote.repositorySlug,
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr list", stderr: result.stderr)
+        }
+
+        guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
+            return nil
+        }
+        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
+        return Self.withThreads(threads, on: request)
+    }
+
+    func createReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        title: String,
+        body: String,
+        cwd: URL
+    ) async throws -> URL {
+        let head = Self.qualifiedHead(branch: branch, headOwner: headOwner, baseOwner: remote.owner)
+        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "pr", "create",
+                "--base", base,
+                "--head", head,
+                "--title", title,
+                "--body", body,
+                "-R", remote.repositorySlug,
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr create", stderr: result.stderr)
+        }
+
+        return try Self.parseCreateOutput(result.stdout)
+    }
+
+    static func qualifiedHead(branch: String, headOwner: String?, baseOwner: String) -> String {
+        guard let headOwner,
+              !headOwner.isEmpty,
+              headOwner != baseOwner
+        else { return branch }
+        return "\(headOwner):\(branch)"
+    }
+
+    static func normalizedBaseBranch(_ baseBranch: String, remoteName: String) -> String {
+        let prefix = "\(remoteName)/"
+        guard baseBranch.hasPrefix(prefix) else { return baseBranch }
+        return String(baseBranch.dropFirst(prefix.count))
+    }
+
+    func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] {
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "pr", "checks", "\(request.number)",
+                "--json", "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
+                "-R", remote.repositorySlug,
+            ],
+            cwd: cwd
+        )
+        if result.exitCode == 1, Self.isNoChecksReported(result) {
+            return []
+        }
+        guard result.exitCode == 0 || result.exitCode == 1 || result.exitCode == 8 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr checks", stderr: result.stderr)
+        }
+
+        return try Self.parseChecks(result.stdout)
+    }
+
+    private func reviewThreads(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> [ReviewThreadSummary] {
+        var threads: [ReviewThreadSummary] = []
+        var cursor: String?
+
+        repeat {
+            let page = try await reviewThreadsPage(remote: remote, request: request, cursor: cursor, cwd: cwd)
+            threads.append(contentsOf: page.threads)
+            if page.pageInfo.hasNextPage {
+                guard let endCursor = page.pageInfo.endCursor, !endCursor.isEmpty else {
+                    throw CodeHostProviderError.malformedOutput("gh review threads output is missing a pagination cursor")
+                }
+                cursor = endCursor
+            } else {
+                cursor = nil
+            }
+        } while cursor != nil
+
+        return threads
+    }
+
+    private func reviewThreadsPage(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cursor: String?,
+        cwd: URL
+    ) async throws -> ReviewThreadsPage {
+        var args = [
+            "api", "graphql",
+            "-f", "query=\(Self.reviewThreadsQuery)",
+            "-F", "owner=\(remote.owner)",
+            "-F", "repo=\(remote.repository)",
+            "-F", "number=\(request.number)",
+        ]
+        if let cursor {
+            args.append(contentsOf: ["-F", "cursor=\(cursor)"])
+        }
+
+        let result = try await runner.run(
+            "gh",
+            args: args,
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        }
+
+        return try Self.parseReviewThreadsPage(result.stdout)
+    }
+
+    func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {
+        let listResult = try await runner.run(
+            "gh",
+            args: [
+                "run", "list",
+                "--branch", branch,
+                "--commit", headSHA,
+                "--status", "failure",
+                "--limit", "20",
+                "--json", "databaseId,status,conclusion,url",
+                "-R", remote.repositorySlug,
+            ],
+            cwd: cwd
+        )
+        guard listResult.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh run list", stderr: listResult.stderr)
+        }
+
+        for runID in try Self.parseRunIDs(listResult.stdout) {
+            let rerunResult = try await runner.run(
+                "gh",
+                args: ["run", "rerun", "\(runID)", "--failed", "-R", remote.repositorySlug],
+                cwd: cwd
+            )
+            guard rerunResult.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh run rerun", stderr: rerunResult.stderr)
+            }
+        }
+    }
+
+    static func parsePRList(_ json: String, remote: CodeHostRemote, headOwner: String? = nil) throws -> ReviewRequest? {
+        let data = Data(json.utf8)
+        let items: [PRListItem]
+        do {
+            items = try JSONDecoder().decode([PRListItem].self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh pr list output")
+        }
+
+        let item: PRListItem?
+        if let headOwner, !headOwner.isEmpty {
+            item = items.first { $0.headRepositoryOwner?.login == headOwner }
+        } else {
+            item = items.first
+        }
+        guard let item else {
+            return nil
+        }
+        guard let url = URL(string: item.url), url.isHTTPOrHTTPS else {
+            throw CodeHostProviderError.malformedOutput("gh pr list returned an invalid URL")
+        }
+
+        return ReviewRequest(
+            remote: remote,
+            number: item.number,
+            title: item.title,
+            url: url,
+            state: mapState(item.state),
+            isDraft: item.isDraft,
+            headRefName: item.headRefName,
+            baseRefName: item.baseRefName,
+            reviewDecision: mapReviewDecision(item.reviewDecision),
+            mergeState: mapMergeState(item.mergeStateStatus),
+            checks: [],
+            threads: []
+        )
+    }
+
+    static func parseChecks(_ json: String) throws -> [ReviewCheck] {
+        let data = Data(json.utf8)
+        let items: [CheckItem]
+        do {
+            items = try JSONDecoder().decode([CheckItem].self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh pr checks output")
+        }
+
+        return try items.map { item in
+            let detailURL = item.link.flatMap(URL.init(string:))
+            if let detailURL, !detailURL.isHTTPOrHTTPS {
+                throw CodeHostProviderError.malformedOutput("gh pr checks returned an invalid URL")
+            }
+
+            let completedAt = try parseOptionalDate(item.completedAt)
+            _ = try parseOptionalDate(item.startedAt)
+
+            return ReviewCheck(
+                id: checkID(for: item),
+                name: item.name,
+                workflow: item.workflow,
+                bucket: mapBucket(item.bucket),
+                detailURL: detailURL,
+                completedAt: completedAt
+            )
+        }
+    }
+
+    static func parseCreateOutput(_ stdout: String) throws -> URL {
+        let trimmed = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), url.isHTTPOrHTTPS else {
+            throw CodeHostProviderError.malformedOutput("gh pr create returned an invalid URL")
+        }
+        return url
+    }
+
+    static func parseReviewThreads(_ json: String) throws -> [ReviewThreadSummary] {
+        try parseReviewThreadsPage(json).threads
+    }
+
+    private static func parseReviewThreadsPage(_ json: String) throws -> ReviewThreadsPage {
+        let data = Data(json.utf8)
+        let response: ReviewThreadsResponse
+        do {
+            response = try JSONDecoder().decode(ReviewThreadsResponse.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh review threads output")
+        }
+
+        let connection = response.data.repository.pullRequest.reviewThreads
+        let threads: [ReviewThreadSummary] = try connection.nodes.compactMap { thread in
+            guard let comment = thread.comments.nodes.first(where: { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                return nil
+            }
+            let url = try parseOptionalHTTPURL(comment.url, context: "gh review threads returned an invalid URL")
+            return ReviewThreadSummary(
+                id: thread.id,
+                author: comment.author?.login,
+                body: comment.body,
+                url: url,
+                isResolved: thread.isResolved,
+                isActionable: !thread.isResolved && !thread.isOutdated
+            )
+        }
+        return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
+    }
+
+    private static func isNoChecksReported(_ result: ProcessResult) -> Bool {
+        let output = "\(result.stdout)\n\(result.stderr)".lowercased()
+        return output.contains("no checks reported")
+    }
+
+    static func parseLatestRunID(_ json: String) throws -> Int? {
+        try parseRunIDs(json).first
+    }
+
+    static func parseRunIDs(_ json: String) throws -> [Int] {
+        let data = Data(json.utf8)
+        let items: [RunItem]
+        do {
+            items = try JSONDecoder().decode([RunItem].self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh run list output")
+        }
+        return items.map(\.databaseId)
+    }
+
+    private static func mapState(_ value: String) -> ReviewRequestState {
+        switch value.uppercased() {
+        case "OPEN": .open
+        case "MERGED": .merged
+        case "CLOSED": .closed
+        default: .open
+        }
+    }
+
+    private static func mapReviewDecision(_ value: String?) -> ReviewDecision {
+        switch value?.uppercased() {
+        case "APPROVED": .approved
+        case "CHANGES_REQUESTED": .changesRequested
+        case "REVIEW_REQUIRED": .reviewRequired
+        default: .unknown
+        }
+    }
+
+    private static func mapMergeState(_ value: String?) -> ReviewMergeState {
+        switch value?.uppercased() {
+        case "CLEAN": .clean
+        case "BLOCKED": .blocked
+        case "DIRTY": .dirty
+        case "UNSTABLE": .unstable
+        default: .unknown
+        }
+    }
+
+    private static func mapBucket(_ value: String) -> ReviewCheckBucket {
+        ReviewCheckBucket(rawValue: value.lowercased()) ?? .unknown
+    }
+
+    private static func parseOptionalDate(_ value: String?) throws -> Date? {
+        guard let value else {
+            return nil
+        }
+        if let date = parseDate(value, formatOptions: [.withInternetDateTime]) {
+            return date
+        }
+        if let date = parseDate(value, formatOptions: [.withInternetDateTime, .withFractionalSeconds]) {
+            return date
+        }
+        throw CodeHostProviderError.malformedOutput("Unable to parse GitHub date")
+    }
+
+    private static func parseOptionalHTTPURL(_ value: String?, context: String) throws -> URL? {
+        guard let value,
+              !value.isEmpty
+        else { return nil }
+        guard let url = URL(string: value),
+              url.isHTTPOrHTTPS
+        else {
+            throw CodeHostProviderError.malformedOutput(context)
+        }
+        return url
+    }
+
+    private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = formatOptions
+        return formatter.date(from: value)
+    }
+
+    private static func checkID(for item: CheckItem) -> String {
+        let fields = [
+            "github-check",
+            item.workflow ?? "",
+            item.name,
+            item.bucket,
+            item.description ?? "",
+            item.event ?? "",
+            item.link ?? "",
+            item.state ?? "",
+            item.startedAt ?? "",
+            item.completedAt ?? "",
+        ]
+        return fields
+            .map { "\($0.utf8.count):\($0)" }
+            .joined(separator: "|")
+    }
+
+    private static func withThreads(_ threads: [ReviewThreadSummary], on request: ReviewRequest) -> ReviewRequest {
+        ReviewRequest(
+            remote: request.remote,
+            number: request.number,
+            title: request.title,
+            url: request.url,
+            state: request.state,
+            isDraft: request.isDraft,
+            headRefName: request.headRefName,
+            baseRefName: request.baseRefName,
+            reviewDecision: request.reviewDecision,
+            mergeState: request.mergeState,
+            checks: request.checks,
+            threads: threads
+        )
+    }
+}
+
+private struct PRListItem: Decodable {
+    let number: Int
+    let title: String
+    let url: String
+    let state: String
+    let isDraft: Bool
+    let headRefName: String
+    let headRepositoryOwner: HeadRepositoryOwner?
+    let baseRefName: String
+    let reviewDecision: String?
+    let mergeStateStatus: String?
+}
+
+private struct HeadRepositoryOwner: Decodable {
+    let login: String
+
+    init(from decoder: Decoder) throws {
+        let singleValue = try decoder.singleValueContainer()
+        if let login = try? singleValue.decode(String.self) {
+            self.login = login
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.login = try container.decode(String.self, forKey: .login)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case login
+    }
+}
+
+private struct CheckItem: Decodable {
+    let bucket: String
+    let completedAt: String?
+    let description: String?
+    let event: String?
+    let link: String?
+    let name: String
+    let startedAt: String?
+    let state: String?
+    let workflow: String?
+}
+
+private struct RunItem: Decodable {
+    let databaseId: Int
+}
+
+private struct ReviewThreadsResponse: Decodable {
+    let data: ReviewThreadsData
+}
+
+private struct ReviewThreadsData: Decodable {
+    let repository: ReviewThreadsRepository
+}
+
+private struct ReviewThreadsRepository: Decodable {
+    let pullRequest: ReviewThreadsPullRequest
+}
+
+private struct ReviewThreadsPullRequest: Decodable {
+    let reviewThreads: ReviewThreadsConnection
+}
+
+private struct ReviewThreadsConnection: Decodable {
+    let nodes: [ReviewThreadNode]
+    let pageInfo: ReviewThreadsPageInfo
+}
+
+private struct ReviewThreadsPage: Equatable {
+    let threads: [ReviewThreadSummary]
+    let pageInfo: ReviewThreadsPageInfo
+}
+
+private struct ReviewThreadsPageInfo: Decodable, Equatable {
+    let hasNextPage: Bool
+    let endCursor: String?
+}
+
+private struct ReviewThreadNode: Decodable {
+    let id: String
+    let isResolved: Bool
+    let isOutdated: Bool
+    let comments: ReviewThreadCommentsConnection
+}
+
+private struct ReviewThreadCommentsConnection: Decodable {
+    let nodes: [ReviewThreadCommentNode]
+}
+
+private struct ReviewThreadCommentNode: Decodable {
+    let body: String
+    let url: String?
+    let author: ReviewThreadAuthor?
+}
+
+private struct ReviewThreadAuthor: Decodable {
+    let login: String
+}
+
+private extension URL {
+    var isHTTPOrHTTPS: Bool {
+        scheme == "http" || scheme == "https"
+    }
+}

@@ -305,7 +305,7 @@ struct FolderIconView: View {
     }
 }
 
-private struct NerdFontGlyphView: NSViewRepresentable {
+struct NerdFontGlyphView: NSViewRepresentable {
     let symbol: String
     let hex: String
 
@@ -322,7 +322,7 @@ private struct NerdFontGlyphView: NSViewRepresentable {
     }
 }
 
-private final class GlyphDrawingView: NSView {
+final class GlyphDrawingView: NSView {
     var symbol: String = "" {
         didSet { needsDisplay = true }
     }

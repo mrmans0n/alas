@@ -362,6 +362,170 @@ struct TerminalServiceZmxTests {
         ])
     }
 
+    // MARK: sweepOrphans — boot-time cleanup
+
+    @Test
+    func orphanFilterKillsOnlyOurWorktreeWithUnknownLeaf() {
+        let mineWtA = "wt-A"
+        let mineWtB = "wt-B"
+        let mineLeaf = "leaf-keep"
+        let unknownLeaf = "leaf-stranded"
+
+        let mineWtAHash = ZmxSessionName.hash16(mineWtA)
+        let mineWtBHash = ZmxSessionName.hash16(mineWtB)
+        let foreignHash = ZmxSessionName.hash16("wt-not-ours")
+        let mineLeafHash = ZmxSessionName.hash16(mineLeaf)
+        let unknownLeafHash = ZmxSessionName.hash16(unknownLeaf)
+
+        let names = [
+            "alas-\(mineWtAHash)-\(mineLeafHash)",       // ours, still referenced — keep
+            "alas-\(mineWtAHash)-\(unknownLeafHash)",    // ours, orphan — kill
+            "alas-\(mineWtBHash)-\(unknownLeafHash)",    // different wt of ours, orphan — kill
+            "alas-\(foreignHash)-\(unknownLeafHash)",    // another Alas instance — never touch
+            "alas-leaf-legacy-uuid-shape",                // legacy form — sweep ignores
+            "not-an-alas-session",                        // unrelated — ignore
+        ]
+
+        let orphans = TerminalService.orphanSessionNames(
+            allSessionNames: names,
+            knownWorktreeIdHashes: [mineWtAHash, mineWtBHash],
+            knownLeafIdHashes: [mineLeafHash]
+        )
+
+        #expect(Set(orphans) == Set([
+            "alas-\(mineWtAHash)-\(unknownLeafHash)",
+            "alas-\(mineWtBHash)-\(unknownLeafHash)",
+        ]))
+    }
+
+    @Test
+    func orphanFilterStripsZmxSessionPrefixBeforeMatching() {
+        let mineWt = "wt-1"
+        let mineWtHash = ZmxSessionName.hash16(mineWt)
+        let foreignHash = ZmxSessionName.hash16("wt-not-ours")
+        let unknownLeafHash = ZmxSessionName.hash16("leaf-stranded")
+
+        // With ZMX_SESSION_PREFIX=team-, zmx ls prefixes every session
+        // name. The filter must strip the prefix before parseScoped, and
+        // return bare names so callers can hand them to zmx kill (which
+        // re-prepends the prefix itself).
+        let names = [
+            "team-alas-\(mineWtHash)-\(unknownLeafHash)",     // ours, orphan — kill (bare form)
+            "team-alas-\(foreignHash)-\(unknownLeafHash)",    // another instance — skip
+            "alas-\(mineWtHash)-\(unknownLeafHash)",          // no prefix — not from this run, skip
+            "team-not-alas",                                    // prefixed but not scoped — skip
+        ]
+
+        let orphans = TerminalService.orphanSessionNames(
+            allSessionNames: names,
+            knownWorktreeIdHashes: [mineWtHash],
+            knownLeafIdHashes: [],
+            sessionPrefix: "team-"
+        )
+
+        #expect(orphans == ["alas-\(mineWtHash)-\(unknownLeafHash)"])
+    }
+
+    @Test
+    func sweepOrphansIssuesKillsForFilteredNames() async {
+        let mineWt = "wt-1"
+        let mineLeaf = "leaf-keep"
+        let mineWtHash = ZmxSessionName.hash16(mineWt)
+        let foreignHash = ZmxSessionName.hash16("wt-not-ours")
+        let unknownLeafHash = ZmxSessionName.hash16("leaf-stranded")
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(
+            exitCode: 0,
+            stdout: """
+            alas-\(mineWtHash)-\(ZmxSessionName.hash16(mineLeaf))
+            alas-\(mineWtHash)-\(unknownLeafHash)
+            alas-\(foreignHash)-\(unknownLeafHash)
+            """,
+            stderr: ""
+        )
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        service.sweepOrphans(
+            knownWorktreeIds: [mineWt],
+            knownLeafIds: [mineLeaf]
+        )
+        await waitForCalls(recorder, count: 2) { $0.calls.count }
+
+        // Expect `ls --short` then exactly one kill for the our-wt-but-unknown-leaf entry.
+        #expect(recorder.calls.map(\.args) == [
+            ["ls", "--short"],
+            ["kill", "alas-\(mineWtHash)-\(unknownLeafHash)"],
+        ])
+    }
+
+    // MARK: waitForPendingKills — quit drain
+
+    @Test
+    func waitForPendingKillsBlocksUntilDispatchedKillCompletes() {
+        let started = DispatchSemaphore(value: 0)
+        let unblock = DispatchSemaphore(value: 0)
+        let recorder = RecordingRunner()
+        // Replace runner so the kill subprocess parks until we let it
+        // through, simulating a slow daemon round-trip. The drain MUST
+        // observe completion before returning, otherwise a Cmd-Q would
+        // again abandon the in-flight task.
+        let stallRunner = SubprocessRunner { exe, args, _, _ in
+            recorder.calls.append(.init(executable: exe, args: args))
+            started.signal()
+            _ = unblock.wait(timeout: .now() + 5.0)
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        }
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: stallRunner)
+        )
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        let session = TerminalSession(
+            id: "leaf-drain",
+            worktreeId: "wt-1",
+            projectId: "proj-1",
+            surface: surface,
+            executable: "/bin/zsh",
+            args: [],
+            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-drain")
+        )
+        svc.registry.register(session)
+        svc.closeSession(id: "leaf-drain", worktreeId: "wt-1")
+        // The detached task should have entered the runner by now.
+        _ = started.wait(timeout: .now() + 2.0)
+
+        // Drain runs on a background awaiter so the @MainActor task that
+        // removes the completed task from the tracking set can schedule
+        // even though the test thread is calling waitForPendingKills.
+        Thread.detachNewThread {
+            // Let the subprocess return shortly after the drain begins,
+            // proving the wait actually observed the task's completion
+            // (rather than just timing out).
+            Thread.sleep(forTimeInterval: 0.1)
+            unblock.signal()
+        }
+        let start = Date()
+        svc.waitForPendingKills(timeout: 2.0)
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(elapsed < 1.5, "drain should return when the kill completes, not at timeout")
+        #expect(recorder.calls.map(\.args) == [["kill", "alas-\(ZmxSessionName.hash16("wt-1"))-\(ZmxSessionName.hash16("leaf-drain"))"]])
+    }
+
+    @Test
+    func waitForPendingKillsReturnsImmediatelyWhenNothingPending() {
+        let recorder = RecordingRunner()
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        let start = Date()
+        svc.waitForPendingKills(timeout: 5.0)
+        #expect(Date().timeIntervalSince(start) < 0.1)
+    }
+
     // MARK: resolveLaunchPlan — keepSessionsAlive gating
 
     @Test func resolveLaunchPlanWrapsWhenKeepAliveTrueAndZmxAvailable() {
