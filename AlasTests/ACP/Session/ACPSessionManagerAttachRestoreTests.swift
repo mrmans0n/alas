@@ -126,6 +126,96 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("fresh attach exposes initializing phase while initialize is pending")
+    func freshAttachExposesInitializingPhaseWhileInitializeIsPending() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let gate = AttachPhaseGate()
+        client.scriptAsync(method: "initialize") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await gate.hasEntered }
+
+        #expect(session.firstRunConnectingPhase == .initializing)
+
+        await gate.release()
+        await attachTask.value
+        #expect(session.firstRunConnectingPhase == nil)
+        #expect(session.agentState == .ready)
+    }
+
+    @Test("fresh attach exposes creating session phase while session new is pending")
+    func freshAttachExposesCreatingSessionPhaseWhileNewIsPending() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        let gate = AttachPhaseGate()
+        client.scriptAsync(method: "session/new") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await gate.hasEntered }
+
+        #expect(session.firstRunConnectingPhase == .creatingSession)
+
+        await gate.release()
+        await attachTask.value
+        #expect(session.firstRunConnectingPhase == nil)
+        #expect(session.agentState == .ready)
+    }
+
+    @Test("restored attach does not expose first-run phase")
+    func restoredAttachDoesNotExposeFirstRunPhase() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        let gate = AttachPhaseGate()
+        client.scriptAsync(method: "session/load") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: false) }
+        try await waitUntilAsync { await gate.hasEntered }
+
+        #expect(session.firstRunConnectingPhase == nil)
+
+        await gate.release()
+        await attachTask.value
+    }
+
     @Test("fresh session keeps updates emitted during session new")
     func freshSessionKeepsUpdatesEmittedDuringNew() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -956,6 +1046,28 @@ struct ACPSessionManagerAttachRestoreTests {
                 currentMode: nil,
                 promptSuggestions: []
             ))
+        }
+    }
+
+    private actor AttachPhaseGate {
+        private var entered = false
+        private var released = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        var hasEntered: Bool { entered }
+
+        func enterAndWait() async {
+            if released { return }
+            entered = true
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func release() {
+            released = true
+            continuation?.resume()
+            continuation = nil
         }
     }
 

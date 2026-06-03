@@ -682,6 +682,20 @@ extension ACPSessionManager {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed: break
         }
+        let firstRunAttach = freshlyCreated
+            && !session.restoredFromPersistence
+            && session.transcript.messages.isEmpty
+        if firstRunAttach {
+            session.firstRunConnectingPhase = .checkingSetup
+        } else {
+            session.firstRunConnectingPhase = nil
+        }
+        defer {
+            if session.firstRunConnectingPhase != nil {
+                session.firstRunConnectingPhase = nil
+            }
+        }
+
         // Claim the spawn slot BEFORE awaiting backfill so a concurrent
         // attach (e.g. retry button while the first attempt is still in the
         // backfill wait) early-returns on the `.spawning` guard above
@@ -730,6 +744,9 @@ extension ACPSessionManager {
             return
         }
         session.setupState = .ready
+        if firstRunAttach {
+            session.firstRunConnectingPhase = .launchingAdapter
+        }
 
         let connection: ACPConnection
         do {
@@ -751,6 +768,9 @@ extension ACPSessionManager {
         }
         var startedRunner: ACPSessionRunner?
         do {
+            if firstRunAttach {
+                session.firstRunConnectingPhase = .initializing
+            }
             let initialized = try await connection.initialize()
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
@@ -797,6 +817,9 @@ extension ACPSessionManager {
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
             var shouldHoldQueueForRecovery = pendingRecovery && session.hasConversationTranscript
+            if firstRunAttach {
+                session.firstRunConnectingPhase = .creatingSession
+            }
             if freshlyCreated {
                 result = try await connection.newSession(cwd: worktreePath)
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
