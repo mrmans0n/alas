@@ -324,6 +324,24 @@ struct ReviewLoopStateTests {
         #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
     }
 
+    @Test func newForkBranchUsesOriginAsHeadRemoteWhenBaseIsUpstream() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "upstream/main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: Self.makeLocal(baseBranch: "upstream/main", needsPush: true), remotes: [
+            GitRemote(name: "origin", url: "git@github.com:nacho/alas.git"),
+            GitRemote(name: "upstream", url: "git@github.com:mrmans0n/alas.git"),
+        ])
+
+        #expect(state.snapshot?.remote?.remoteName == "upstream")
+        #expect(state.snapshot?.local.headRemoteName == "origin")
+        #expect(state.snapshot?.local.headRemoteOwner == "nacho")
+    }
+
     @Test func createReviewRequestUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         let state = ReviewLoopState(

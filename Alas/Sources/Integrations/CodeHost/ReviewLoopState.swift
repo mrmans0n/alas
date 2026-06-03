@@ -173,7 +173,7 @@ final class ReviewLoopState {
             )
             return
         }
-        let local = Self.withHeadRemoteOwner(baseLocal, remotes: remotes, baseRemote: remote)
+        let local = Self.withHeadRemote(baseLocal, remotes: remotes, baseRemote: remote)
 
         guard let provider = providerRegistry.provider(for: remote.kind) else {
             guard isCurrentRefresh(generation) else { return }
@@ -340,16 +340,14 @@ final class ReviewLoopState {
         remotes.first { baseBranch.hasPrefix("\($0.name)/") }?.name
     }
 
-    private static func withHeadRemoteOwner(
+    private static func withHeadRemote(
         _ local: ReviewLoopLocalState,
         remotes: [GitRemote],
         baseRemote: CodeHostRemote
     ) -> ReviewLoopLocalState {
-        guard let upstreamRemoteName = local.upstreamRemoteName,
-              let upstreamRemote = remotes.first(where: { $0.name == upstreamRemoteName && $0.direction == .push })
-                  ?? remotes.first(where: { $0.name == upstreamRemoteName && $0.direction == .fetch }),
+        guard let candidate = headRemoteCandidate(for: local, remotes: remotes),
               let headRemote = CodeHostRemoteDetector.detect(
-                  from: [GitRemote(name: upstreamRemote.name, url: upstreamRemote.url)],
+                  from: [GitRemote(name: candidate.name, url: candidate.url)],
                   supportedKinds: [baseRemote.kind]
               ),
               headRemote.kind == baseRemote.kind,
@@ -366,10 +364,24 @@ final class ReviewLoopState {
             hasUpstream: local.hasUpstream,
             upstreamRemoteName: local.upstreamRemoteName,
             upstreamBranchName: local.upstreamBranchName,
+            headRemoteName: candidate.name,
             headRemoteOwner: headRemote.owner,
             upstreamAheadCommitCount: local.upstreamAheadCommitCount,
             needsPush: local.needsPush
         )
+    }
+
+    private static func headRemoteCandidate(for local: ReviewLoopLocalState, remotes: [GitRemote]) -> GitRemote? {
+        if let upstreamRemoteName = local.upstreamRemoteName {
+            return remotes.first { $0.name == upstreamRemoteName && $0.direction == .push }
+                ?? remotes.first { $0.name == upstreamRemoteName && $0.direction == .fetch }
+        }
+        guard !local.hasUpstream else { return nil }
+
+        return remotes.first { $0.name == "origin" && $0.direction == .push }
+            ?? remotes.first { $0.name == "origin" && $0.direction == .fetch }
+            ?? remotes.first { $0.direction == .push }
+            ?? remotes.first { $0.direction == .fetch }
     }
 
     private func preservedReviewRequestForError(

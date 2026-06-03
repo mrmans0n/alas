@@ -30,6 +30,18 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(args == ["push", "-u", "fork", "HEAD:review/foo"])
     }
 
+    @Test func pushArgumentsPreferHeadRemoteWhenBranchHasNoUpstream() {
+        let snapshot = Self.makeSnapshot(
+            remoteName: "upstream",
+            hasUpstream: false,
+            headRemoteName: "origin"
+        )
+
+        let args = RightPaneState.reviewLoopPushArguments(snapshot: snapshot, forceWithLease: false)
+
+        #expect(args == ["push", "-u", "origin", "feature/review-loop"])
+    }
+
     @Test func forcePushArgumentsUseForceWithLease() {
         let snapshot = Self.makeSnapshot()
 
@@ -65,15 +77,18 @@ struct RightPaneStateReviewLoopPushTests {
     }
 
     private static func makeSnapshot(
+        remoteName: String = "origin",
+        hasUpstream: Bool = true,
         upstreamRemoteName: String? = nil,
-        upstreamBranchName: String? = nil
+        upstreamBranchName: String? = nil,
+        headRemoteName: String? = nil
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
             host: "github.com",
             owner: "mrmans0n",
             repository: "alas",
-            remoteName: "origin",
+            remoteName: remoteName,
             webURL: URL(string: "https://github.com/mrmans0n/alas")!
         )
         return ReviewLoopSnapshot(
@@ -84,9 +99,10 @@ struct RightPaneStateReviewLoopPushTests {
                 hasWorkingTreeChanges: false,
                 hasStagedChanges: false,
                 aheadCommitCount: 1,
-                hasUpstream: true,
+                hasUpstream: hasUpstream,
                 upstreamRemoteName: upstreamRemoteName,
                 upstreamBranchName: upstreamBranchName,
+                headRemoteName: headRemoteName,
                 upstreamAheadCommitCount: 0,
                 needsPush: true
             ),

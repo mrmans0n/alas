@@ -305,7 +305,10 @@ final class RightPaneState {
         if forceWithLease {
             args.append("--force-with-lease")
         }
-        let remoteName = snapshot.local.upstreamRemoteName ?? snapshot.remote?.remoteName ?? "origin"
+        let remoteName = snapshot.local.upstreamRemoteName
+            ?? snapshot.local.headRemoteName
+            ?? snapshot.remote?.remoteName
+            ?? "origin"
         let pushRef = snapshot.local.upstreamBranchName.map { "HEAD:\($0)" } ?? snapshot.local.branchName
         args.append(contentsOf: ["-u", remoteName, pushRef])
         return args

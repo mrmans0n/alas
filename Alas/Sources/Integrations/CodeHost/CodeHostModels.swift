@@ -160,6 +160,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
     let hasUpstream: Bool
     let upstreamRemoteName: String?
     let upstreamBranchName: String?
+    let headRemoteName: String?
     let headRemoteOwner: String?
     let upstreamAheadCommitCount: Int
     let needsPush: Bool
@@ -174,6 +175,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
         hasUpstream: Bool,
         upstreamRemoteName: String? = nil,
         upstreamBranchName: String? = nil,
+        headRemoteName: String? = nil,
         headRemoteOwner: String? = nil,
         needsPush: Bool
     ) {
@@ -187,6 +189,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
             hasUpstream: hasUpstream,
             upstreamRemoteName: upstreamRemoteName,
             upstreamBranchName: upstreamBranchName,
+            headRemoteName: headRemoteName,
             headRemoteOwner: headRemoteOwner,
             upstreamAheadCommitCount: 0,
             needsPush: needsPush
@@ -203,6 +206,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
         hasUpstream: Bool,
         upstreamRemoteName: String? = nil,
         upstreamBranchName: String? = nil,
+        headRemoteName: String? = nil,
         headRemoteOwner: String? = nil,
         upstreamAheadCommitCount: Int,
         needsPush: Bool
@@ -216,6 +220,7 @@ struct ReviewLoopLocalState: Equatable, Sendable {
         self.hasUpstream = hasUpstream
         self.upstreamRemoteName = upstreamRemoteName
         self.upstreamBranchName = upstreamBranchName
+        self.headRemoteName = headRemoteName
         self.headRemoteOwner = headRemoteOwner
         self.upstreamAheadCommitCount = upstreamAheadCommitCount
         self.needsPush = needsPush
