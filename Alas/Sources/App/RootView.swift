@@ -485,6 +485,14 @@ private struct RootBaseHandlers: ViewModifier {
                 // HarnessService, which is one of the candidates for the
                 // permission-prompt avalanche reported on quit.
                 state.harness.stop()
+                // Block briefly so any in-flight `zmx kill` subprocesses
+                // (dispatched from close-tab/delete-worktree paths) finish
+                // talking to the daemon before our process exits — they'd
+                // otherwise die with us mid-flight, leaving daemon-side
+                // sessions orphaned. The boot-time sweep eventually cleans
+                // those up, but only if the user relaunches Alas; meanwhile
+                // they'd accumulate across the lifetime of the daemon.
+                state.terminal.waitForPendingKills(timeout: 3.0)
             }
     }
 }

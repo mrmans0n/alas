@@ -34,9 +34,27 @@ final class TerminalService {
     @ObservationIgnored var onSessionProcessExited: ((_ leafId: String, _ worktreeId: String, _ processAlive: Bool) -> Void)?
     @ObservationIgnored let zmxClient: ZmxClient
 
+    /// In-flight zmx kill tasks. Tracked so `waitForPendingKills` can drain
+    /// them at app quit instead of dropping them on the floor when the
+    /// process exits. Tasks insert themselves on dispatch and self-remove on
+    /// completion via a MainActor follow-up Task.
+    @ObservationIgnored private var pendingKillTasks: Set<Task<Void, Never>> = []
+
     /// Default initializer used by production code paths (AppState).
     init(zmxClient: ZmxClient = ZmxClient(env: ZmxEnv.resolve())) {
         self.zmxClient = zmxClient
+    }
+
+    /// Spawn a detached zmx-related task (kill, ls+kill, sweep) and track it
+    /// so `waitForPendingKills` can drain on quit. Replaces the bare
+    /// `Task.detached { … }` callers used pre-tracking.
+    private func dispatchTrackedKill(_ body: @escaping @Sendable () -> Void) {
+        let task = Task.detached(operation: body)
+        pendingKillTasks.insert(task)
+        Task { @MainActor [weak self] in
+            _ = await task.value
+            self?.pendingKillTasks.remove(task)
+        }
     }
 
     /// Build the global config file for this app + theme combination, then
@@ -175,14 +193,16 @@ final class TerminalService {
         }
         registry.unregister(id: id)
         // `zmxClient.killSession` blocks up to ~5s on a hung daemon. We're
-        // on @MainActor here, so dispatch it off-main as fire-and-forget
-        // (the call is documented best-effort; we don't read the result).
+        // on @MainActor here, so dispatch it off-main, tracked so
+        // `waitForPendingKills` can drain it before the app exits —
+        // otherwise a quick close+Cmd-Q race would leak the daemon-side
+        // session, and the next launch would carry forward the orphan.
         if let existingName = existing?.zmxSessionName {
             let client = zmxClient
-            Task.detached { client.killSession(name: existingName) }
+            dispatchTrackedKill { client.killSession(name: existingName) }
         } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
             let client = zmxClient
-            Task.detached {
+            dispatchTrackedKill {
                 let sessionNames = Self.sessionNamesForCleanup(
                     worktreeId: worktreeId,
                     projectPath: projectPath,
@@ -225,7 +245,7 @@ final class TerminalService {
             $0.zmxSessionName ?? ZmxSessionName.derive(worktreeId: $0.worktreeId, leafId: $0.id)
         }
         let client = zmxClient
-        Task.detached {
+        dispatchTrackedKill {
             var allNames = Set(liveNames)
             for session in additionalSessions {
                 allNames.formUnion(Self.sessionNamesForCleanup(
@@ -239,6 +259,91 @@ final class TerminalService {
                 client.killSession(name: name)
             }
         }
+    }
+
+    /// Self-heal at boot. Enumerates `zmx ls`, then kills every scoped
+    /// `alas-<wtHash>-<leafHash>` session whose `wtHash` matches one of
+    /// `knownWorktreeIds` but whose `leafHash` is absent from
+    /// `knownLeafIds`. Multi-instance safe: another Alas process under the
+    /// same `ZMX_DIR` has its own (different) worktree ids, so its
+    /// `wtHash` won't be in our set and its sessions stay untouched.
+    /// Legacy `alas-<leafId>` shapes are skipped — the existing close-path
+    /// cleanup already handles those when the matching tab is closed.
+    ///
+    /// `ZMX_SESSION_PREFIX` is read from the current environment and applied
+    /// to ls-output stripping + kill-argument bare names, mirroring how the
+    /// rest of `ZmxClient` keeps the prefix transparent: zmx's CLI prepends
+    /// the env-set prefix on both create and kill, so we feed it the bare
+    /// `alas-…` name on either side.
+    func sweepOrphans(knownWorktreeIds: Set<String>, knownLeafIds: Set<String>) {
+        let wtHashes = Set(knownWorktreeIds.map(ZmxSessionName.hash16))
+        let leafHashes = Set(knownLeafIds.map(ZmxSessionName.hash16))
+        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+        let client = zmxClient
+        dispatchTrackedKill {
+            let names = client.listSessions()
+            let orphans = Self.orphanSessionNames(
+                allSessionNames: names,
+                knownWorktreeIdHashes: wtHashes,
+                knownLeafIdHashes: leafHashes,
+                sessionPrefix: prefix
+            )
+            for name in orphans {
+                client.killSession(name: name)
+            }
+        }
+    }
+
+    /// Pure filter exposed for tests: pick the scoped `alas-*` sessions
+    /// belonging to one of our worktrees that no known leaf claims.
+    /// Returns bare (unprefixed) names so callers can pass them straight to
+    /// `ZmxClient.killSession`, which lets the CLI re-prepend
+    /// `ZMX_SESSION_PREFIX` itself — matching the create/kill symmetry in
+    /// `ZmxClient.wrap` / `killSession`.
+    nonisolated static func orphanSessionNames(
+        allSessionNames: [String],
+        knownWorktreeIdHashes: Set<String>,
+        knownLeafIdHashes: Set<String>,
+        sessionPrefix: String = ""
+    ) -> [String] {
+        allSessionNames.compactMap { rawName in
+            // With a prefix set, ignore names that don't carry it — those
+            // belong to a different tool or a stale unprefixed run, and
+            // re-killing them with the prefix re-applied could hit the wrong
+            // session.
+            guard rawName.hasPrefix(sessionPrefix) else { return nil }
+            let bareName = String(rawName.dropFirst(sessionPrefix.count))
+            guard let parsed = ZmxSessionName.parseScoped(bareName),
+                  knownWorktreeIdHashes.contains(parsed.worktreeIdHash),
+                  !knownLeafIdHashes.contains(parsed.leafIdHash)
+            else { return nil }
+            return bareName
+        }
+    }
+
+    /// Block the caller for up to `timeout` while in-flight zmx kills
+    /// complete. Called from `applicationWillTerminate` so a Cmd-Q
+    /// immediately after a tab close still flushes the kill subprocess
+    /// to the daemon before Alas exits (the subprocess would otherwise
+    /// die with us, leaving an orphan that next launch couldn't easily
+    /// trace back). Uses a semaphore from a background-thread awaiter
+    /// rather than blocking the @MainActor Task's executor, so the
+    /// follow-up `pendingKillTasks.remove` MainActor work can still
+    /// schedule.
+    func waitForPendingKills(timeout: TimeInterval) {
+        let tasks = pendingKillTasks
+        guard !tasks.isEmpty else { return }
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached {
+            await withTaskGroup(of: Void.self) { group in
+                for task in tasks {
+                    group.addTask { await task.value }
+                }
+                for await _ in group {}
+            }
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + timeout)
     }
 
     /// Best-effort removal of the per-session rcfile artifacts written by
