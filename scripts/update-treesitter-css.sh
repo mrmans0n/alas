@@ -19,7 +19,14 @@ if [[ ! -f "$DEST/Package.swift" ]]; then
 fi
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+STAGE=""
+cleanup() {
+  rm -rf "$TMP"
+  if [[ -n "$STAGE" ]]; then
+    rm -rf "$STAGE"
+  fi
+}
+trap cleanup EXIT
 
 echo "-> cloning $REPO @ $TAG"
 git clone --depth 1 --branch "$TAG" "$REPO" "$TMP/src" >/dev/null 2>&1
@@ -38,20 +45,26 @@ do
   fi
 done
 
-rm -rf "$DEST/src" "$DEST/bindings" "$DEST/queries"
+STAGE="$(mktemp -d "$DEST/.update-treesitter-css.XXXXXX")"
 mkdir -p \
-  "$DEST/src/tree_sitter" \
-  "$DEST/bindings/swift/TreeSitterCSS" \
-  "$DEST/queries"
+  "$STAGE/src/tree_sitter" \
+  "$STAGE/bindings/swift/TreeSitterCSS" \
+  "$STAGE/queries"
 
-install -m 0644 "$SRC/src/parser.c"                         "$DEST/src/parser.c"
-install -m 0644 "$SRC/src/scanner.c"                        "$DEST/src/scanner.c"
-install -m 0644 "$SRC/src/tree_sitter/parser.h"             "$DEST/src/tree_sitter/parser.h"
-install -m 0644 "$SRC/src/tree_sitter/array.h"              "$DEST/src/tree_sitter/array.h"
-install -m 0644 "$SRC/src/tree_sitter/alloc.h"              "$DEST/src/tree_sitter/alloc.h"
-install -m 0644 "$SRC/bindings/swift/TreeSitterCSS/css.h"   "$DEST/bindings/swift/TreeSitterCSS/css.h"
-install -m 0644 "$SRC/queries/highlights.scm"               "$DEST/queries/highlights.scm"
-install -m 0644 "$SRC/LICENSE"                              "$DEST/LICENSE"
+install -m 0644 "$SRC/src/parser.c"                         "$STAGE/src/parser.c"
+install -m 0644 "$SRC/src/scanner.c"                        "$STAGE/src/scanner.c"
+install -m 0644 "$SRC/src/tree_sitter/parser.h"             "$STAGE/src/tree_sitter/parser.h"
+install -m 0644 "$SRC/src/tree_sitter/array.h"              "$STAGE/src/tree_sitter/array.h"
+install -m 0644 "$SRC/src/tree_sitter/alloc.h"              "$STAGE/src/tree_sitter/alloc.h"
+install -m 0644 "$SRC/bindings/swift/TreeSitterCSS/css.h"   "$STAGE/bindings/swift/TreeSitterCSS/css.h"
+install -m 0644 "$SRC/queries/highlights.scm"               "$STAGE/queries/highlights.scm"
+install -m 0644 "$SRC/LICENSE"                              "$STAGE/LICENSE"
+
+rm -rf "$DEST/src" "$DEST/bindings" "$DEST/queries"
+mv "$STAGE/src" "$DEST/src"
+mv "$STAGE/bindings" "$DEST/bindings"
+mv "$STAGE/queries" "$DEST/queries"
+mv "$STAGE/LICENSE" "$DEST/LICENSE"
 
 REV="$(git -C "$SRC" rev-parse HEAD)"
 echo "vendored $TAG ($REV) into ThirdParty/TreeSitterCSS"
