@@ -711,12 +711,12 @@ struct GitLabCLIProviderTests {
             ),
             FakeRunner.Command(
                 executable: "glab",
-                args: ["ci", "retry", "102", "-R", "platform/mobile/alas"],
+                args: ["ci", "retry", "102", "--pipeline-id", "778", "-R", "platform/mobile/alas"],
                 cwd: Self.cwd
             ),
             FakeRunner.Command(
                 executable: "glab",
-                args: ["ci", "retry", "103", "-R", "platform/mobile/alas"],
+                args: ["ci", "retry", "103", "--pipeline-id", "778", "-R", "platform/mobile/alas"],
                 cwd: Self.cwd
             ),
         ])
@@ -830,6 +830,44 @@ struct GitLabCLIProviderTests {
         await #expect(throws: CodeHostProviderError.commandFailed(
             command: "glab ci retry",
             stderr: "retry failed"
+        )) {
+            try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+                remote: Self.remote,
+                branch: "feature/gitlab-provider",
+                headSHA: "abc123",
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
+    @Test func rerunFailedChecksThrowsWhenFailedPipelineHasNoRetryableJobIDs() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.failedPipelineWithoutRetryableJobIDsOutput, stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        await #expect(throws: CodeHostProviderError.malformedOutput(
+            "glab ci get output did not include retryable failed job IDs"
+        )) {
+            try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+                remote: Self.remote,
+                branch: "feature/gitlab-provider",
+                headSHA: "abc123",
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
+    @Test func rerunFailedChecksThrowsWhenFailedPipelineIsMissingPipelineID() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.failedPipelineWithoutPipelineIDOutput, stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        await #expect(throws: CodeHostProviderError.malformedOutput(
+            "glab ci get output is missing a pipeline id for retry"
         )) {
             try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
                 remote: Self.remote,
@@ -1198,6 +1236,38 @@ struct GitLabCLIProviderTests {
           "name": "lint",
           "status": "failed",
           "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/103"
+        }
+      ]
+    }
+    """
+
+    private static let failedPipelineWithoutRetryableJobIDsOutput = """
+    {
+      "id": 781,
+      "status": "failed",
+      "ref": "feature/gitlab-provider",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/781",
+      "jobs": [
+        {
+          "name": "test",
+          "status": "failed",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/unknown"
+        }
+      ]
+    }
+    """
+
+    private static let failedPipelineWithoutPipelineIDOutput = """
+    {
+      "status": "failed",
+      "ref": "feature/gitlab-provider",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/unknown",
+      "jobs": [
+        {
+          "id": 108,
+          "name": "test",
+          "status": "failed",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/108"
         }
       ]
     }
