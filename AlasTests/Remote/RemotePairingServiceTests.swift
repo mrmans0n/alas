@@ -2,6 +2,14 @@ import Testing
 import Foundation
 @testable import Alas
 
+/// In-memory `RemoteDeviceStore` for tests across the Remote suite. Lives in the
+/// test target so it never ships in the production binary.
+final class InMemoryDeviceStore: RemoteDeviceStore {
+    private(set) var saved: [RemoteDevice] = []
+    func load() -> [RemoteDevice] { saved }
+    func save(_ devices: [RemoteDevice]) { saved = devices }
+}
+
 @MainActor
 struct RemotePairingServiceTests {
     private func make() -> RemotePairingService {
@@ -55,5 +63,35 @@ struct RemotePairingServiceTests {
     @Test func unknownTokenRejected() {
         let svc = make()
         #expect(svc.validate(token: "garbage") == nil)
+    }
+
+    @Test func touchUpdatesLastSeenAt() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let svc = RemotePairingService(store: InMemoryDeviceStore(), now: { clock })
+        let code = svc.beginPairing()
+        _ = try svc.redeem(code: code, deviceName: "iPad")
+        let id = svc.devices.first!.id
+        #expect(svc.devices.first?.lastSeenAt == nil)
+        clock = Date(timeIntervalSince1970: 2000)
+        svc.touch(deviceId: id)
+        #expect(svc.devices.first?.lastSeenAt == Date(timeIntervalSince1970: 2000))
+    }
+
+    @Test func twoDevicesValidateIndependently() throws {
+        let svc = make()
+        let t1 = try svc.redeem(code: svc.beginPairing(), deviceName: "A")
+        let t2 = try svc.redeem(code: svc.beginPairing(), deviceName: "B")
+        let id1 = try #require(svc.validate(token: t1))
+        let id2 = try #require(svc.validate(token: t2))
+        #expect(id1 != id2)
+        #expect(svc.validate(token: t1) == id1)  // still valid after a second device paired
+    }
+
+    @Test func lowercasedCodeStillRedeems() throws {
+        let svc = make()
+        let code = svc.beginPairing()
+        // Hex codes are case-insensitive; a lowercased submission must still work.
+        let token = try svc.redeem(code: code.lowercased(), deviceName: "iPhone")
+        #expect(svc.validate(token: token) != nil)
     }
 }

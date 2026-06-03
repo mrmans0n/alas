@@ -26,7 +26,8 @@ final class RemotePairingService {
 
     /// Exchanges a valid pairing code for a fresh per-device token. The code is consumed.
     func redeem(code: String, deviceName: String) throws -> String {
-        guard let p = pending, p.code == code else { throw RemoteServerError.unauthorized }
+        // Hex codes are case-insensitive; normalize, then compare in constant time.
+        guard let p = pending, Self.constantTimeEquals(p.code, code.uppercased()) else { throw RemoteServerError.unauthorized }
         guard now() <= p.expiresAt else { pending = nil; throw RemoteServerError.unauthorized }
         pending = nil
         let token = Self.randomToken(byteCount: 32)
@@ -58,7 +59,10 @@ final class RemotePairingService {
     // MARK: helpers
     private static func randomToken(byteCount: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: byteCount)
-        _ = SecRandomCopyBytes(kSecRandomDefault, byteCount, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, byteCount, &bytes)
+        // A CSPRNG failure would otherwise yield an all-zero, guessable secret.
+        // Fail hard rather than issue a weak token (precondition fires in release too).
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed: cannot generate a secure token")
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
     private static func hash(_ token: String) -> String {

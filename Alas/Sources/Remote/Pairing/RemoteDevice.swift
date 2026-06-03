@@ -9,14 +9,9 @@ struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
 }
 
 /// Persistence boundary for paired devices. Production uses a JSON file under
-/// Application Support; tests use an in-memory implementation.
+/// Application Support (see `FileDeviceStore`); tests use an in-memory
+/// implementation that lives in the test target.
 protocol RemoteDeviceStore: AnyObject {
     func load() -> [RemoteDevice]
     func save(_ devices: [RemoteDevice])
-}
-
-final class InMemoryDeviceStore: RemoteDeviceStore {
-    private(set) var saved: [RemoteDevice] = []
-    func load() -> [RemoteDevice] { saved }
-    func save(_ devices: [RemoteDevice]) { saved = devices }
 }
