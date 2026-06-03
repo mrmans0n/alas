@@ -45,6 +45,7 @@ final class ReviewLoopState {
                 aheadCommitCount: current.aheadCommitCount,
                 hasUpstream: current.hasUpstream,
                 upstreamRemoteName: current.upstreamRemoteName,
+                upstreamBranchName: current.upstreamBranchName,
                 headRemoteOwner: current.headRemoteOwner,
                 upstreamAheadCommitCount: current.upstreamAheadCommitCount,
                 needsPush: current.needsPush
@@ -364,6 +365,7 @@ final class ReviewLoopState {
             aheadCommitCount: local.aheadCommitCount,
             hasUpstream: local.hasUpstream,
             upstreamRemoteName: local.upstreamRemoteName,
+            upstreamBranchName: local.upstreamBranchName,
             headRemoteOwner: headRemote.owner,
             upstreamAheadCommitCount: local.upstreamAheadCommitCount,
             needsPush: local.needsPush
@@ -414,6 +416,7 @@ extension ReviewLoopState {
                     aheadCommitCount: current.aheadCommitCount,
                     hasUpstream: current.hasUpstream,
                     upstreamRemoteName: current.upstreamRemoteName,
+                    upstreamBranchName: current.upstreamBranchName,
                     needsPush: current.needsPush
                 ),
                 remote: snapshot?.remote,

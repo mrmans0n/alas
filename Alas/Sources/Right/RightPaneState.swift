@@ -306,7 +306,8 @@ final class RightPaneState {
             args.append("--force-with-lease")
         }
         let remoteName = snapshot.local.upstreamRemoteName ?? snapshot.remote?.remoteName ?? "origin"
-        args.append(contentsOf: ["-u", remoteName, snapshot.local.branchName])
+        let pushRef = snapshot.local.upstreamBranchName.map { "HEAD:\($0)" } ?? snapshot.local.branchName
+        args.append(contentsOf: ["-u", remoteName, pushRef])
         return args
     }
 
@@ -391,12 +392,16 @@ final class RightPaneState {
                 }
                 didInitDefaultTab = true
             }
+            let upstreamBranchName = resolvedUpstream.map {
+                String($0.ref.dropFirst($0.remote.count + 1))
+            }
             await refreshReviewLoop(
                 inspection: reviewLoopInspection,
                 changes: entries,
                 commits: commits,
                 headSHA: headSHA,
-                upstreamRemoteName: resolvedUpstream?.remote
+                upstreamRemoteName: resolvedUpstream?.remote,
+                upstreamBranchName: upstreamBranchName
             )
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
@@ -413,7 +418,8 @@ final class RightPaneState {
         changes: [ChangedFile],
         commits: [CommitInfo],
         headSHA: String,
-        upstreamRemoteName: String?
+        upstreamRemoteName: String?,
+        upstreamBranchName: String?
     ) async {
         async let needsPushProbe = git.needsPush(worktreePath: worktree.path)
         async let upstreamAheadProbe = git.upstreamAheadCommitCount(worktreePath: worktree.path)
@@ -428,6 +434,7 @@ final class RightPaneState {
             aheadCommitCount: commits.count,
             hasUpstream: upstreamRef != nil,
             upstreamRemoteName: upstreamRemoteName,
+            upstreamBranchName: upstreamBranchName,
             upstreamAheadCommitCount: upstreamAheadCommitCount,
             needsPush: needsPush
         )
