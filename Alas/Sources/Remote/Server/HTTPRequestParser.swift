@@ -17,7 +17,8 @@ enum HTTPRequestParser {
             throw RemoteServerError.badRequest("non-utf8 headers")
         }
         var lines = text.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { throw RemoteServerError.badRequest("empty") }
+        let requestLine = lines.first ?? ""
+        guard !requestLine.isEmpty else { throw RemoteServerError.badRequest("empty request line") }
         let parts = requestLine.split(separator: " ")
         guard parts.count >= 2 else { throw RemoteServerError.badRequest("bad request line") }
         let method = String(parts[0])
@@ -28,7 +29,10 @@ enum HTTPRequestParser {
             let qs = target[target.index(after: q)...]
             for pair in qs.split(separator: "&") {
                 let kv = pair.split(separator: "=", maxSplits: 1)
-                if kv.count == 2 { query[String(kv[0])] = String(kv[1]).removingPercentEncoding ?? String(kv[1]) }
+                if kv.count == 2 {
+                    let key = String(kv[0]).removingPercentEncoding ?? String(kv[0])
+                    query[key] = String(kv[1]).removingPercentEncoding ?? String(kv[1])
+                }
             }
         }
         var headers: [String: String] = [:]
