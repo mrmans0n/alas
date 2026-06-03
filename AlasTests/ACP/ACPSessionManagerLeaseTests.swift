@@ -49,4 +49,25 @@ import Foundation
         let mgrB = tempManager(instanceId: "B", store: storeB)
         #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
     }
+
+    @Test("a failed attach releases the writer lease")
+    func failedAttachReleasesLease() async throws {
+        struct StubError: Error {}
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-failattach-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt",
+            store: storeA, instanceId: "A", pid: Int64(getpid()),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _ in throw StubError() })
+        let session = mgrA.createSession(agentId: "claude")
+        await mgrA.attach(to: session.id, freshlyCreated: true)
+        // attach failed at connectionFactory; the defer must have released the lease.
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt",
+            store: storeB, instanceId: "B", pid: Int64(getpid()))
+        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
+    }
 }

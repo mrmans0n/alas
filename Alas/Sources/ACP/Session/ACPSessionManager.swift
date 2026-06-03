@@ -712,19 +712,32 @@ extension ACPSessionManager {
             && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
     }
 
+    /// Refresh the heartbeat timestamp for a lease we own. No-op if the
+    /// lease is no longer in `_ownedLeases` (e.g. already released).
+    private func refreshHeartbeatNow(sessionId: ACPSession.ID) {
+        guard _ownedLeases.contains(sessionId) else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        let status = runners[sessionId]?.session.transcript.streamingState == .streaming
+            ? "busy" : "idle"
+        try? store.refreshHeartbeat(
+            sessionId: sessionId, instanceId: instanceId, now: now, status: status)
+    }
+
     private func startHeartbeat(sessionId: ACPSession.ID) {
         _heartbeatTasks[sessionId]?.cancel()
         _heartbeatTasks[sessionId] = Task { [weak self] in
+            // Refresh immediately so the just-claimed lease doesn't rely on
+            // the first 5s tick (a slow initialize/newSession could otherwise
+            // let the heartbeat age past leaseStaleAfter mid-attach).
+            await MainActor.run {
+                guard let self else { return }
+                self.refreshHeartbeatNow(sessionId: sessionId)
+            }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
                 guard let self else { return }
                 await MainActor.run {
-                    guard self._ownedLeases.contains(sessionId) else { return }
-                    let now = Int64(Date().timeIntervalSince1970)
-                    let status = self.runners[sessionId]?.session.transcript.streamingState == .streaming
-                        ? "busy" : "idle"
-                    try? self.store.refreshHeartbeat(
-                        sessionId: sessionId, instanceId: self.instanceId, now: now, status: status)
+                    self.refreshHeartbeatNow(sessionId: sessionId)
                 }
             }
         }
@@ -760,6 +773,16 @@ extension ACPSessionManager {
             return
         }
         startHeartbeat(sessionId: sessionId)
+        // Any failure path below must hand the session back: release the
+        // lease and stop the heartbeat so another instance can claim it.
+        // Only a fully-registered runner (the success path) keeps them.
+        var attachSucceeded = false
+        defer {
+            if !attachSucceeded {
+                stopHeartbeat(sessionId: sessionId)
+                releaseWriterLease(sessionId: sessionId)
+            }
+        }
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
         // where `index` is the in-memory transcript position. Tail-first
         // hydration leaves `transcript.messages` shorter than the persisted
@@ -923,6 +946,7 @@ extension ACPSessionManager {
             persistSessionRemoteId(session)
             startRunnerIfNeeded()
             runners[sessionId] = runner
+            attachSucceeded = true
             session.agentState = .ready
             if !shouldHoldQueueForRecovery {
                 runner.flushQueueIfIdle()
