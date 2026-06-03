@@ -2,7 +2,7 @@
 
 **Every agent. Every worktree. One window.**
 
-Spin up agents across worktrees, hop between them like browser tabs, and keep the terminal, diff, and files in one place. Native macOS, built on [libghostty](https://github.com/ghostty-org/ghostty).
+Spin up agents across worktrees, hop between them like browser tabs, and keep the terminal, diff, and files in one place. Native macOS, terminal support built on [libghostty](https://github.com/ghostty-org/ghostty).
 
 ![Alas — agent session with worktree sidebar and changes panel](art/alas-acp.png)
 
