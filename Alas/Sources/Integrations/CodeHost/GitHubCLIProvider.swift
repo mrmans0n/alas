@@ -109,7 +109,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         if result.exitCode == 1, Self.isNoChecksReported(result) {
             return []
         }
-        guard result.exitCode == 0 || result.exitCode == 8 else {
+        guard result.exitCode == 0 || result.exitCode == 1 || result.exitCode == 8 else {
             throw CodeHostProviderError.commandFailed(command: "gh pr checks", stderr: result.stderr)
         }
 

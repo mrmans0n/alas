@@ -269,6 +269,22 @@ struct GitHubCLIProviderTests {
         #expect(checks[0].bucket == .pending)
     }
 
+    @Test func checksAcceptsExitCodeOneWhenJSONContainsFailedChecks() async throws {
+        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: Self.failedChecksOutput, stderr: "checks failed"),
+        ])
+
+        let checks = try await GitHubCLIProvider(runner: runner).checks(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(checks.count == 1)
+        #expect(checks[0].bucket == .fail)
+    }
+
     @Test func checksTreatNoChecksReportedAsEmptyChecks() async throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
@@ -453,6 +469,22 @@ struct GitHubCLIProviderTests {
         "name": "test",
         "startedAt": "2026-06-01T12:30:00Z",
         "state": "PENDING",
+        "workflow": "CI"
+      }
+    ]
+    """
+
+    private static let failedChecksOutput = """
+    [
+      {
+        "bucket": "fail",
+        "completedAt": "2026-06-01T12:35:56Z",
+        "description": "Unit tests failed",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/3",
+        "name": "test",
+        "startedAt": "2026-06-01T12:31:00Z",
+        "state": "FAILURE",
         "workflow": "CI"
       }
     ]
