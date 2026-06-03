@@ -229,7 +229,7 @@ private struct ACPSessionView: View {
                                 // pending permission request.
                                 policy: manager.runners[sessionId]?.policy,
                                 scopeKey: scopeKey(for: session.transcript.pendingPermission),
-                                onQueueEdit: { item in
+                                onQueueEdit: isMirror ? { _ in } : { item in
                                     // Pull the queued prompt back into the composer
                                     // for editing — appended after any text the user
                                     // has already typed so nothing is clobbered.
@@ -246,25 +246,25 @@ private struct ACPSessionView: View {
                                     // that was waiting behind a `lastError` head.
                                     manager.runners[sessionId]?.flushQueueIfIdle()
                                 },
-                                onQueueRemove: { id in
+                                onQueueRemove: isMirror ? { _ in } : { id in
                                     session.removeFromQueue(id: id)
                                     manager.persistQueue(for: session)
                                     manager.runners[sessionId]?.flushQueueIfIdle()
                                 },
-                                onQueueRetry: { id in
+                                onQueueRetry: isMirror ? { _ in } : { id in
                                     guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
                                     session.queue[idx].lastError = nil
                                     manager.persistQueue(for: session)
                                     manager.runners[sessionId]?.flushQueueIfIdle()
                                 },
-                                onQueueReorder: { src, dst in
+                                onQueueReorder: isMirror ? { _, _ in } : { src, dst in
                                     session.moveInQueue(from: src, to: dst)
                                     manager.persistQueue(for: session)
                                     // Reordering can move a clean prompt to the head
                                     // where it can finally drain.
                                     manager.runners[sessionId]?.flushQueueIfIdle()
                                 },
-                                onQueueClearAll: {
+                                onQueueClearAll: isMirror ? {} : {
                                     session.clearPendingQueue()
                                     manager.persistQueue(for: session)
                                     // No-op if the queue is now empty, but if a

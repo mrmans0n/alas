@@ -469,6 +469,10 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
+        // Stop any active mirror poll/subscription so the 2.5s poll task
+        // doesn't keep waking after a mirrored tab closes. Idempotent —
+        // no-op for writer sessions.
+        endMirroring(sessionId: id)
         session.transcript.resetMarkdownCaches()
         sessions[id] = nil
     }
@@ -497,7 +501,9 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Persist a session-level change (model/mode/title/autoRun) and bump updated_at.
+    /// No-ops when this instance does not hold the writer lease.
     func persist(_ s: ACPSession) {
+        guard _ownedLeases.contains(s.id) else { return }
         guard let row = try? store.loadSession(id: s.id) else { return }
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
@@ -534,8 +540,10 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Rename a session with the given title and source. Updates both
-    /// the in-memory session and SQLite in one call.
+    /// the in-memory session and SQLite in one call. No-ops when this
+    /// instance does not hold the writer lease.
     func renameSession(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) {
+        guard _ownedLeases.contains(id) else { return }
         guard let session = sessions[id] else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -609,7 +617,11 @@ final class ACPSessionManager: ObservableObject {
     /// store directly — otherwise removing or clearing queue items
     /// only mutates the cached `ACPSession`, and the supposedly-removed
     /// prompts reappear on relaunch.
+    ///
+    /// No-ops when this instance does not hold the writer lease — mirrors
+    /// must not overwrite the active owner's queue.
     func persistQueue(for session: ACPSession) {
+        guard _ownedLeases.contains(session.id) else { return }
         try? store.upsertQueue(sessionId: session.id, items: session.queue)
     }
 
@@ -831,6 +843,12 @@ extension ACPSessionManager {
 
     func heartbeatTickForTest(sessionId: ACPSession.ID) -> Bool {
         heartbeatTick(sessionId: sessionId)
+    }
+
+    /// True when a mirror poll task is active for `sessionId`. Used by
+    /// tests to verify that eviction cancels the poll.
+    func mirrorPollActiveForTest(sessionId: ACPSession.ID) -> Bool {
+        mirrorPoll[sessionId] != nil
     }
 }
 

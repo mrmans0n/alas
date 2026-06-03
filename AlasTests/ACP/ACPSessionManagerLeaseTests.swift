@@ -148,4 +148,79 @@ import Foundation
             store: storeB, instanceId: "B", pid: Int64(getpid()))
         #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
     }
+
+    // MARK: - P1: Queue-write lease guard
+
+    @Test("mirror cannot persist the queue; writer can")
+    func mirrorCannotPersistQueue() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-guard-\(UUID()).sqlite")
+        // Writer: instance A owns the lease.
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+
+        // Mirror: instance B fails to acquire.
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(mgrB.acquireWriterLease(sessionId: session.id) == false)
+
+        // Give mgrB a placeholder session so it has a local ACPSession to work with.
+        let mirrorSession = mgrB.placeholderSession(id: session.id)
+        #expect(mirrorSession != nil)
+
+        // Populate the mirror session's in-memory queue.
+        mirrorSession!.enqueue(blocks: [.text("mirror prompt")])
+        #expect(mirrorSession!.queue.count == 1)
+
+        // Mirror calls persistQueue — must be a no-op at the store level.
+        mgrB.persistQueue(for: mirrorSession!)
+        let storedAfterMirrorWrite = try storeB.loadQueue(sessionId: session.id)
+        #expect(storedAfterMirrorWrite.isEmpty,
+                "mirror must not write session_queue when it does not hold the lease")
+
+        // Positive case: writer can persist its queue.
+        session.enqueue(blocks: [.text("writer prompt")])
+        mgrA.persistQueue(for: session)
+        let storedAfterWriterWrite = try storeA.loadQueue(sessionId: session.id)
+        #expect(storedAfterWriterWrite.count == 1,
+                "writer must be able to persist the queue when it holds the lease")
+    }
+
+    // MARK: - P2: Mirror poll teardown on eviction
+
+    @Test("endMirroring is idempotent and evictIfIdle cancels the mirror poll")
+    func mirrorPollCancelledOnEvict() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("evict-mirror-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let sessionA = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: sessionA.id) == true)
+
+        // Instance B mirrors the session.
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(mgrB.acquireWriterLease(sessionId: sessionA.id) == false)
+        let mirrorSession = mgrB.placeholderSession(id: sessionA.id)
+        #expect(mirrorSession != nil)
+        mgrB.beginMirroring(sessionId: sessionA.id)
+
+        // Poll task is running.
+        #expect(mgrB.mirrorPollActiveForTest(sessionId: sessionA.id))
+
+        // Simulate the mirror tab closing: retain then release with refcount=1.
+        mgrB.retainSession(id: sessionA.id)
+        // Session is idle (no runner), so releaseSession → evictIfIdle.
+        mgrB.releaseSession(id: sessionA.id)
+
+        // After eviction the mirror poll task must be cancelled.
+        #expect(!mgrB.mirrorPollActiveForTest(sessionId: sessionA.id),
+                "mirror poll must be cancelled when the mirrored session is evicted")
+
+        // Calling endMirroring again must be safe (idempotent).
+        mgrB.endMirroring(sessionId: sessionA.id)
+        #expect(!mgrB.mirrorPollActiveForTest(sessionId: sessionA.id))
+    }
 }
