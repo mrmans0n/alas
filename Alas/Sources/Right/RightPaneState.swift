@@ -389,7 +389,12 @@ final class RightPaneState {
                 }
                 didInitDefaultTab = true
             }
-            await refreshReviewLoop(changes: entries, commits: commits, headSHA: headSHA)
+            await refreshReviewLoop(
+                inspection: reviewLoopInspection,
+                changes: entries,
+                commits: commits,
+                headSHA: headSHA
+            )
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
             // Surface failures via os.Logger so they're visible in Console.app
@@ -401,6 +406,7 @@ final class RightPaneState {
     }
 
     private func refreshReviewLoop(
+        inspection: ReviewLoopRefreshAttempt,
         changes: [ChangedFile],
         commits: [CommitInfo],
         headSHA: String
@@ -421,7 +427,9 @@ final class RightPaneState {
             needsPush: needsPush
         )
 
-        let attempt = reviewLoop.beginLocalRefresh(local: local)
+        guard let attempt = reviewLoop.beginLocalRefresh(from: inspection, local: local) else {
+            return
+        }
         do {
             let remotes = try await git.remotes(worktreePath: worktree.path)
             await reviewLoop.refresh(attempt, remotes: remotes)

@@ -66,6 +66,14 @@ final class ReviewLoopState {
         beginRefresh(local: local)
     }
 
+    func beginLocalRefresh(
+        from inspection: ReviewLoopRefreshAttempt,
+        local: ReviewLoopLocalState
+    ) -> ReviewLoopRefreshAttempt? {
+        guard isCurrentRefresh(inspection.generation) else { return nil }
+        return beginRefresh(local: local)
+    }
+
     private func beginRefresh(local: ReviewLoopLocalState?) -> ReviewLoopRefreshAttempt {
         refreshGeneration += 1
         let generation = refreshGeneration
@@ -116,7 +124,11 @@ final class ReviewLoopState {
             }
         }
 
-        guard let remote = CodeHostRemoteDetector.detect(from: remotes) else {
+        let supportedKinds = providerRegistry.supportedKinds
+        guard let remote = CodeHostRemoteDetector.detect(
+            from: remotes,
+            supportedKinds: supportedKinds.isEmpty ? nil : supportedKinds
+        ) else {
             guard isCurrentRefresh(generation) else { return }
             snapshot = ReviewLoopSnapshot(
                 local: local,

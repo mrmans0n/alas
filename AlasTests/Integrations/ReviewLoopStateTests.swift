@@ -56,6 +56,26 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.providerCapabilities == .readOnly)
     }
 
+    @Test func gitLabRemoteWithoutRegisteredProviderIsUnsupported() async throws {
+        let local = Self.makeLocal(branchName: "feature/gitlab", headSHA: "def456")
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: local, remotes: [
+            GitRemote(name: "origin", url: "https://gitlab.com/platform/mobile/alas.git"),
+        ])
+
+        #expect(state.snapshot?.local == local)
+        #expect(state.snapshot?.remote == nil)
+        #expect(state.snapshot?.providerAvailable == false)
+        #expect(state.snapshot?.providerAuthenticated == false)
+        #expect(state.snapshot?.providerCapabilities == .readOnly)
+    }
+
     @Test func emptyRemotesReturnNoneAndPreserveLocalSnapshot() async throws {
         let local = Self.makeLocal(branchName: "feature/no-remote", headSHA: "def456")
         let provider = FakeCodeHostProvider(kind: .github)
@@ -466,6 +486,24 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.reviewRequest?.headRefName == "feature/newer")
         #expect(state.snapshot?.errorMessage == nil)
         #expect(state.lastError == nil)
+    }
+
+    @Test func staleLocalInspectionCannotPromoteRefreshAfterNewerAttemptStarts() async throws {
+        let local = Self.makeLocal(branchName: "feature/stale", headSHA: "old123", needsPush: false)
+        let newerLocal = Self.makeLocal(branchName: "feature/newer", headSHA: "new456", needsPush: false)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: FakeCodeHostProvider(kind: .github)])
+        )
+
+        let staleInspection = state.beginLocalInspection()
+        let newerAttempt = state.beginLocalRefresh(local: newerLocal)
+        let staleAttempt = state.beginLocalRefresh(from: staleInspection, local: local)
+
+        #expect(staleAttempt == nil)
+        await state.refresh(newerAttempt, remotes: [Self.makeGitHubRemote()])
+        #expect(state.snapshot?.local == newerLocal)
     }
 
     @Test func staleLocalRefreshFailureDoesNotReplaceNewerRefresh() async throws {

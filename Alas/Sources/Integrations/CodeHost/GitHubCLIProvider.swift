@@ -285,7 +285,6 @@ struct GitHubCLIProvider: CodeHostProvider {
             .map { "\($0.utf8.count):\($0)" }
             .joined(separator: "|")
     }
-
 }
 
 private struct PRListItem: Decodable {

@@ -64,6 +64,10 @@ extension CodeHostProvider {
 struct CodeHostProviderRegistry: Sendable {
     let providers: [CodeHostKind: any CodeHostProvider]
 
+    var supportedKinds: Set<CodeHostKind> {
+        Set(providers.keys)
+    }
+
     static func live() -> CodeHostProviderRegistry {
         CodeHostProviderRegistry(providers: [.github: GitHubCLIProvider()])
     }

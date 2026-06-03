@@ -54,7 +54,7 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["No PR"])
         #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.muted])
-        #expect(model.actions.contains(Action(kind: .createReviewRequest, title: "Create PR", isEnabled: true)))
+        #expect(model.actions == [Action(kind: .createReviewRequest, title: "Create PR", isEnabled: true)])
     }
 
     @Test func noGitLabRequestExposesMRLabelsWhenCreateIsSupported() {
@@ -127,6 +127,19 @@ struct ReviewReadinessModelTests {
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Ready"])
         #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.success])
         #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.merge))
+        #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.refresh))
+    }
+
+    @Test func pendingChecksKeepRefreshAsFallback() {
+        let request = Self.makeReviewRequest(checks: [Self.makeCheck(bucket: .pending)])
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Checks running"])
+        #expect(model.actions.map(\ReviewReadinessModel.Action.kind).contains(.refresh))
     }
 
     @Test func actionsExposeCompactPresentationForDrawerButtons() {
@@ -163,8 +176,6 @@ struct ReviewReadinessModelTests {
             canOpenAgentHandoff: true
         )
         let actions = Dictionary(uniqueKeysWithValues: failedChecks.actions.map { ($0.kind, $0) })
-        #expect(actions[.refresh]?.iconName == "arrow.clockwise")
-        #expect(actions[.refresh]?.emphasis == .normal)
         #expect(actions[.openReviewRequest]?.iconName == "arrow.up.right.square")
         #expect(actions[.openReviewRequest]?.emphasis == .normal)
         #expect(actions[.rerunFailedChecks]?.iconName == "arrow.clockwise")

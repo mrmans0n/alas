@@ -179,15 +179,19 @@ struct ReviewReadinessModel: Equatable, Sendable {
         requestLabel: String,
         canOpenAgentHandoff: Bool
     ) -> [Action] {
-        var actions: [Action] = [Action(kind: .refresh, title: "Refresh", isEnabled: true)]
+        let refreshAction = Action(kind: .refresh, title: "Refresh", isEnabled: true)
+        var actions: [Action] = []
         guard snapshot.remote != nil, snapshot.providerAvailable, snapshot.providerAuthenticated else {
-            return actions
+            return [refreshAction]
         }
         if snapshot.local.pushState == .diverged {
             actions.append(Action(kind: .forcePushBranch, title: "Force push", isEnabled: true))
         } else if snapshot.local.needsPush {
             actions.append(Action(kind: .pushBranch, title: "Push", isEnabled: true))
         } else if let request = snapshot.reviewRequest {
+            if request.worstCheckBucket == .pending {
+                actions.append(refreshAction)
+            }
             if snapshot.providerCapabilities.canOpenReviewRequest {
                 actions.append(Action(kind: .openReviewRequest, title: request.provider.openReviewRequestTitle, isEnabled: true))
             }
@@ -200,7 +204,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
         } else if snapshot.providerCapabilities.canCreateReviewRequest {
             actions.append(Action(kind: .createReviewRequest, title: "Create \(requestLabel)", isEnabled: true))
         }
-        return actions
+        return actions.isEmpty ? [refreshAction] : actions
     }
 
     private static func checkText(_ bucket: ReviewCheckBucket) -> String {

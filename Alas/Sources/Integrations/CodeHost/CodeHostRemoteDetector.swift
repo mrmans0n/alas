@@ -6,7 +6,10 @@ struct GitRemote: Equatable, Sendable {
 }
 
 enum CodeHostRemoteDetector {
-    static func detect(from remotes: [GitRemote]) -> CodeHostRemote? {
+    static func detect(
+        from remotes: [GitRemote],
+        supportedKinds: Set<CodeHostKind>? = nil
+    ) -> CodeHostRemote? {
         remotes
             .sorted { lhs, rhs in
                 switch (lhs.name == "origin", rhs.name == "origin") {
@@ -19,14 +22,20 @@ enum CodeHostRemoteDetector {
                 }
             }
             .lazy
-            .compactMap(parse(remote:))
+            .compactMap { parse(remote: $0, supportedKinds: supportedKinds) }
             .first
     }
 
-    private static func parse(remote: GitRemote) -> CodeHostRemote? {
+    private static func parse(
+        remote: GitRemote,
+        supportedKinds: Set<CodeHostKind>?
+    ) -> CodeHostRemote? {
         guard let components = parseComponents(from: remote.url),
               let kind = kind(for: components.host)
         else {
+            return nil
+        }
+        if let supportedKinds, !supportedKinds.contains(kind) {
             return nil
         }
 

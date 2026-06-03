@@ -58,8 +58,8 @@ struct ReviewLoopDrawerTests {
             canOpenAgentHandoff: false
         )
 
-        #expect(model.actions.map(\.kind) == [.refresh, .createReviewRequest])
-        #expect(model.actions.map(\.title) == ["Refresh", "Create PR"])
+        #expect(model.actions.map(\.kind) == [.createReviewRequest])
+        #expect(model.actions.map(\.title) == ["Create PR"])
     }
 
     private typealias Action = ReviewReadinessModel.Action
