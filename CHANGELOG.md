@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-06-03
+
+### ✨ Features
+
+- Add AI-assisted GitHub draft PR generation (#464).
+- Add GitHub PRs integration on the Changes tab (#445).
+- Add ACP multi-instance session support with single-writer leases, live mirrors, and takeover (#461).
+- Add ACP first-run connecting state (#458).
+- Add an auto-run default setting for new chat sessions (#455).
+
+### 🐛 Fixes
+
+- Rebind search picker rows when the query changes (#463).
+- Hide the worktree empty state while worktree creation is in progress (#462).
+- Request the parameterized ACP model picker correctly (#460).
+- Self-heal orphaned zmx terminal sessions (#459).
+- Dismiss ACP composer pickers on tab switch (#457).
+- Improve ACP mention picker search and chip alignment (#456).
+- Distinguish behind-base and behind-upstream commit chips (#451).
+
+### 🏗️ Internal
+
+- Stage tree-sitter CSS updates atomically (#454).
+- Fail embed-ghostty-resources when zmx is missing (#452).
+
 ## [0.5.3] - 2026-06-02
 
 ### 🐛 Fixes
