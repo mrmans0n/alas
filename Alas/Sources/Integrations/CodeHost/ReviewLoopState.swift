@@ -209,6 +209,7 @@ final class ReviewLoopState {
             let request = try await provider.currentReviewRequest(
                 remote: remote,
                 branch: local.branchName,
+                headOwner: local.headRemoteOwner,
                 cwd: worktreePath
             )
             guard isCurrentRefresh(generation) else { return }

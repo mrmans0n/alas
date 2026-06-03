@@ -32,15 +32,15 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
-    func currentReviewRequest(remote: CodeHostRemote, branch: String, cwd: URL) async throws -> ReviewRequest? {
+    func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, cwd: URL) async throws -> ReviewRequest? {
         let result = try await runner.run(
             "gh",
             args: [
                 "pr", "list",
                 "--head", branch,
                 "--state", "open",
-                "--limit", "1",
-                "--json", "number,title,url,state,isDraft,headRefName,baseRefName,reviewDecision,mergeStateStatus",
+                "--limit", "20",
+                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
                 "-R", remote.repositorySlug,
             ],
             cwd: cwd
@@ -49,7 +49,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh pr list", stderr: result.stderr)
         }
 
-        return try Self.parsePRList(result.stdout, remote: remote)
+        return try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner)
     }
 
     func createReviewRequest(
@@ -146,7 +146,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
-    static func parsePRList(_ json: String, remote: CodeHostRemote) throws -> ReviewRequest? {
+    static func parsePRList(_ json: String, remote: CodeHostRemote, headOwner: String? = nil) throws -> ReviewRequest? {
         let data = Data(json.utf8)
         let items: [PRListItem]
         do {
@@ -155,7 +155,13 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh pr list output")
         }
 
-        guard let item = items.first else {
+        let item: PRListItem?
+        if let headOwner, !headOwner.isEmpty {
+            item = items.first { $0.headRepositoryOwner?.login == headOwner }
+        } else {
+            item = items.first
+        }
+        guard let item else {
             return nil
         }
         guard let url = URL(string: item.url), url.isHTTPOrHTTPS else {
@@ -312,9 +318,29 @@ private struct PRListItem: Decodable {
     let state: String
     let isDraft: Bool
     let headRefName: String
+    let headRepositoryOwner: HeadRepositoryOwner?
     let baseRefName: String
     let reviewDecision: String?
     let mergeStateStatus: String?
+}
+
+private struct HeadRepositoryOwner: Decodable {
+    let login: String
+
+    init(from decoder: Decoder) throws {
+        let singleValue = try decoder.singleValueContainer()
+        if let login = try? singleValue.decode(String.self) {
+            self.login = login
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.login = try container.decode(String.self, forKey: .login)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case login
+    }
 }
 
 private struct CheckItem: Decodable {

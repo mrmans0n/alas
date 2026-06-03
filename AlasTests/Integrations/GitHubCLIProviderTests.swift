@@ -184,6 +184,7 @@ struct GitHubCLIProviderTests {
         let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
             remote: Self.remote,
             branch: "feature/github-provider",
+            headOwner: nil,
             cwd: Self.cwd
         )
 
@@ -195,13 +196,61 @@ struct GitHubCLIProviderTests {
                     "pr", "list",
                     "--head", "feature/github-provider",
                     "--state", "open",
-                    "--limit", "1",
-                    "--json", "number,title,url,state,isDraft,headRefName,baseRefName,reviewDecision,mergeStateStatus",
+                    "--limit", "20",
+                    "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
                     "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
             ),
         ])
+    }
+
+    @Test func prListFiltersByHeadOwnerWhenProvided() throws {
+        let request = try #require(try GitHubCLIProvider.parsePRList(
+            """
+            [
+              {
+                "number": 41,
+                "title": "Other fork",
+                "url": "https://github.com/mrmans0n/alas/pull/41",
+                "state": "OPEN",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRepositoryOwner": { "login": "someone-else" },
+                "baseRefName": "main",
+                "reviewDecision": "REVIEW_REQUIRED",
+                "mergeStateStatus": "CLEAN"
+              },
+              {
+                "number": 42,
+                "title": "My fork",
+                "url": "https://github.com/mrmans0n/alas/pull/42",
+                "state": "OPEN",
+                "isDraft": false,
+                "headRefName": "fix-ci",
+                "headRepositoryOwner": { "login": "nacho" },
+                "baseRefName": "main",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN"
+              }
+            ]
+            """,
+            remote: Self.remote,
+            headOwner: "nacho"
+        ))
+
+        #expect(request.number == 42)
+        #expect(request.title == "My fork")
+    }
+
+    @Test func prListReturnsNilWhenHeadOwnerDoesNotMatch() throws {
+        let request = try GitHubCLIProvider.parsePRList(
+            Self.prListOutput,
+            remote: Self.remote,
+            headOwner: "nacho"
+        )
+
+        #expect(request == nil)
     }
 
     @Test func checksAcceptsExitCodeEight() async throws {
@@ -347,6 +396,7 @@ struct GitHubCLIProviderTests {
             _ = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
                 remote: Self.remote,
                 branch: "feature/github-provider",
+                headOwner: nil,
                 cwd: Self.cwd
             )
             Issue.record("Expected commandFailed")

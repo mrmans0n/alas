@@ -830,7 +830,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         authenticated
     }
 
-    func currentReviewRequest(remote: CodeHostRemote, branch: String, cwd: URL) async throws -> ReviewRequest? {
+    func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, cwd: URL) async throws -> ReviewRequest? {
         if let requestError { throw requestError }
         if let delay = delayForBranch[branch] {
             try? await Task.sleep(nanoseconds: delay)
