@@ -206,10 +206,30 @@ struct ReviewReadinessModel: Equatable, Sendable {
             if (request.worstCheckBucket == .fail || request.hasActionableFeedback), canOpenAgentHandoff {
                 actions.append(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true))
             }
-        } else if snapshot.providerCapabilities.canCreateReviewRequest {
+        } else if canCreateReviewRequest(snapshot) {
             actions.append(Action(kind: .createReviewRequest, title: "Create \(requestLabel)", isEnabled: true))
         }
         return actions.isEmpty ? [refreshAction] : actions
+    }
+
+    private static func canCreateReviewRequest(_ snapshot: ReviewLoopSnapshot) -> Bool {
+        snapshot.providerCapabilities.canCreateReviewRequest
+            && snapshot.local.aheadCommitCount > 0
+            && !isLocalBranchSelectedBase(snapshot)
+    }
+
+    private static func isLocalBranchSelectedBase(_ snapshot: ReviewLoopSnapshot) -> Bool {
+        snapshot.local.branchName == normalizedBranchName(
+            snapshot.local.baseBranch,
+            remoteName: snapshot.remote?.remoteName
+        )
+    }
+
+    private static func normalizedBranchName(_ branchName: String, remoteName: String?) -> String {
+        guard let remoteName else { return branchName }
+        let prefix = "\(remoteName)/"
+        guard branchName.hasPrefix(prefix) else { return branchName }
+        return String(branchName.dropFirst(prefix.count))
     }
 
     private static func checkText(_ bucket: ReviewCheckBucket) -> String {

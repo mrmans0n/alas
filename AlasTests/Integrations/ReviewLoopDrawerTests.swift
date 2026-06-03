@@ -64,14 +64,14 @@ struct ReviewLoopDrawerTests {
 
     private typealias Action = ReviewReadinessModel.Action
 
-    private static func makeLocal(needsPush: Bool = false) -> ReviewLoopLocalState {
+    private static func makeLocal(needsPush: Bool = false, aheadCommitCount: Int = 1) -> ReviewLoopLocalState {
         ReviewLoopLocalState(
             branchName: "feature/review-readiness",
             headSHA: "abc123",
             baseBranch: "main",
             hasWorkingTreeChanges: false,
             hasStagedChanges: false,
-            aheadCommitCount: needsPush ? 1 : 0,
+            aheadCommitCount: aheadCommitCount,
             hasUpstream: true,
             needsPush: needsPush
         )

@@ -70,6 +70,47 @@ struct ReviewReadinessModelTests {
         #expect(model.actions == [Action(kind: .createReviewRequest, title: "Create PR", isEnabled: true)])
     }
 
+    @Test func noRequestOnBaseBranchSuppressesCreatePR() {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(
+                local: Self.makeLocal(branchName: "main", baseBranch: "main", aheadCommitCount: 1),
+                reviewRequest: nil
+            ),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["No PR"])
+        #expect(model.actions.map(\.kind) == [ReviewReadinessActionKind.refresh])
+    }
+
+    @Test func remoteQualifiedBaseBranchSuppressesCreatePROnMatchingBranch() {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(
+                local: Self.makeLocal(branchName: "main", baseBranch: "origin/main", aheadCommitCount: 1),
+                reviewRequest: nil
+            ),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.actions.map(\.kind) == [ReviewReadinessActionKind.refresh])
+    }
+
+    @Test func noAheadCommitsSuppressesCreatePR() {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(
+                local: Self.makeLocal(aheadCommitCount: 0),
+                reviewRequest: nil
+            ),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["No PR"])
+        #expect(model.actions.map(\.kind) == [ReviewReadinessActionKind.refresh])
+    }
+
     @Test func noGitLabRequestExposesMRLabelsWhenCreateIsSupported() {
         let remote = Self.makeRemote(kind: .gitlab)
         let capabilities = CodeHostProviderCapabilities(
@@ -226,16 +267,19 @@ struct ReviewReadinessModelTests {
     }
 
     private static func makeLocal(
+        branchName: String = "feature/review-loop",
+        baseBranch: String = "main",
         needsPush: Bool = false,
-        upstreamAheadCommitCount: Int = 0
+        upstreamAheadCommitCount: Int = 0,
+        aheadCommitCount: Int = 1
     ) -> ReviewLoopLocalState {
         ReviewLoopLocalState(
-            branchName: "feature/review-loop",
+            branchName: branchName,
             headSHA: "abc123",
-            baseBranch: "main",
+            baseBranch: baseBranch,
             hasWorkingTreeChanges: false,
             hasStagedChanges: false,
-            aheadCommitCount: needsPush ? 1 : 0,
+            aheadCommitCount: aheadCommitCount,
             hasUpstream: true,
             upstreamAheadCommitCount: upstreamAheadCommitCount,
             needsPush: needsPush
