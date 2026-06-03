@@ -85,7 +85,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
             return nil
         }
-        let threads = try await reviewThreads(remote: remote, request: request, cwd: cwd)
+        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
         return Self.withThreads(threads, on: request)
     }
 

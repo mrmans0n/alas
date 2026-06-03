@@ -220,6 +220,25 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func currentReviewRequestKeepsRequestWhenReviewThreadFetchFails() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "GraphQL field unavailable"),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(request?.threads == [])
+        #expect(await runner.commands.count == 2)
+    }
+
     @Test func reviewThreadsJSONParsesActionableSummaries() throws {
         let threads = try GitHubCLIProvider.parseReviewThreads(Self.reviewThreadsOutput)
 

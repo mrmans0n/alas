@@ -2993,11 +2993,11 @@ final class AppState {
     }
 
     nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
-        if request?.worstCheckBucket == .fail {
-            return .prepareCheckFailureHandoff
-        }
         if request?.hasActionableFeedback == true {
             return .prepareReviewHandoff
+        }
+        if request?.worstCheckBucket == .fail {
+            return .prepareCheckFailureHandoff
         }
         return .prepareCheckFailureHandoff
     }

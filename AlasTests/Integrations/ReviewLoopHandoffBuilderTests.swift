@@ -33,7 +33,7 @@ struct ReviewLoopHandoffBuilderTests {
         #expect(prompt.count < 5_000)
     }
 
-    @Test func failedChecksWinOverReviewFeedbackWhenChoosingHandoffPromptKind() {
+    @Test func reviewFeedbackWinsOverFailedChecksWhenChoosingHandoffPromptKind() {
         let request = Self.makeReviewRequest(
             reviewDecision: .changesRequested,
             checks: [
@@ -45,10 +45,20 @@ struct ReviewLoopHandoffBuilderTests {
                     detailURL: nil,
                     completedAt: nil
                 ),
+            ],
+            threads: [
+                ReviewThreadSummary(
+                    id: "thread-1",
+                    author: "reviewer",
+                    body: "Please address this feedback.",
+                    url: nil,
+                    isResolved: false,
+                    isActionable: true
+                ),
             ]
         )
 
-        #expect(AppState.reviewLoopHandoffActionKind(for: request) == .prepareCheckFailureHandoff)
+        #expect(AppState.reviewLoopHandoffActionKind(for: request) == .prepareReviewHandoff)
     }
 
     @Test func gitlabPromptUsesMRLabel() {
