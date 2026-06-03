@@ -179,6 +179,7 @@ struct GitHubCLIProviderTests {
     @Test func currentReviewRequestUsesExpectedCommandArgs() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
 
         let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
@@ -190,6 +191,7 @@ struct GitHubCLIProviderTests {
         )
 
         #expect(request?.number == 42)
+        #expect(request?.threads.count == 2)
         #expect(await runner.commands == [
             FakeRunner.Command(
                 executable: "gh",
@@ -204,7 +206,32 @@ struct GitHubCLIProviderTests {
                 ],
                 cwd: Self.cwd
             ),
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "api", "graphql",
+                    "-f", "query=\(GitHubCLIProvider.reviewThreadsQuery)",
+                    "-F", "owner=mrmans0n",
+                    "-F", "repo=alas",
+                    "-F", "number=42",
+                ],
+                cwd: Self.cwd
+            ),
         ])
+    }
+
+    @Test func reviewThreadsJSONParsesActionableSummaries() throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(Self.reviewThreadsOutput)
+
+        #expect(threads.count == 2)
+        #expect(threads[0].id == "thread-1")
+        #expect(threads[0].author == "reviewer")
+        #expect(threads[0].body == "Please tighten this branch lookup.")
+        #expect(threads[0].url == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
+        #expect(threads[0].isResolved == false)
+        #expect(threads[0].isActionable == true)
+        #expect(threads[1].isResolved == false)
+        #expect(threads[1].isActionable == false)
     }
 
     @Test func prListFiltersByHeadOwnerWhenProvided() throws {
@@ -491,6 +518,63 @@ struct GitHubCLIProviderTests {
         "workflow": "CI"
       }
     ]
+    """
+
+    private static let reviewThreadsOutput = """
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "nodes": [
+                {
+                  "id": "thread-1",
+                  "isResolved": false,
+                  "isOutdated": false,
+                  "comments": {
+                    "nodes": [
+                      {
+                        "body": "Please tighten this branch lookup.",
+                        "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
+                        "author": { "login": "reviewer" }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "thread-2",
+                  "isResolved": false,
+                  "isOutdated": true,
+                  "comments": {
+                    "nodes": [
+                      {
+                        "body": "Old feedback.",
+                        "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r2",
+                        "author": { "login": "reviewer" }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "thread-3",
+                  "isResolved": true,
+                  "isOutdated": false,
+                  "comments": {
+                    "nodes": [
+                      {
+                        "body": "",
+                        "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r3",
+                        "author": { "login": "reviewer" }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
     """
 
     private actor FakeRunner: CodeHostCommandRunning {

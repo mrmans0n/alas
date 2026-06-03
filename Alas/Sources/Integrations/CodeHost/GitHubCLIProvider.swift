@@ -3,6 +3,31 @@ import Foundation
 struct GitHubCLIProvider: CodeHostProvider {
     let kind: CodeHostKind = .github
     let capabilities: CodeHostProviderCapabilities = .githubCLI
+    static let reviewThreadsQuery = """
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 50) {
+            nodes {
+              id
+              isResolved
+              isOutdated
+              comments(first: 50) {
+                nodes {
+                  id
+                  body
+                  url
+                  author {
+                    login
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
 
     private let runner: any CodeHostCommandRunning
 
@@ -57,7 +82,11 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh pr list", stderr: result.stderr)
         }
 
-        return try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner)
+        guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
+            return nil
+        }
+        let threads = try await reviewThreads(remote: remote, request: request, cwd: cwd)
+        return Self.withThreads(threads, on: request)
     }
 
     func createReviewRequest(
@@ -122,6 +151,29 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
 
         return try Self.parseChecks(result.stdout)
+    }
+
+    private func reviewThreads(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> [ReviewThreadSummary] {
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "api", "graphql",
+                "-f", "query=\(Self.reviewThreadsQuery)",
+                "-F", "owner=\(remote.owner)",
+                "-F", "repo=\(remote.repository)",
+                "-F", "number=\(request.number)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        }
+
+        return try Self.parseReviewThreads(result.stdout)
     }
 
     func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {
@@ -229,6 +281,32 @@ struct GitHubCLIProvider: CodeHostProvider {
         return url
     }
 
+    static func parseReviewThreads(_ json: String) throws -> [ReviewThreadSummary] {
+        let data = Data(json.utf8)
+        let response: ReviewThreadsResponse
+        do {
+            response = try JSONDecoder().decode(ReviewThreadsResponse.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh review threads output")
+        }
+
+        let nodes = response.data.repository.pullRequest.reviewThreads.nodes
+        return try nodes.compactMap { thread in
+            guard let comment = thread.comments.nodes.first(where: { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                return nil
+            }
+            let url = try parseOptionalHTTPURL(comment.url, context: "gh review threads returned an invalid URL")
+            return ReviewThreadSummary(
+                id: thread.id,
+                author: comment.author?.login,
+                body: comment.body,
+                url: url,
+                isResolved: thread.isResolved,
+                isActionable: !thread.isResolved && !thread.isOutdated
+            )
+        }
+    }
+
     private static func isNoChecksReported(_ result: ProcessResult) -> Bool {
         let output = "\(result.stdout)\n\(result.stderr)".lowercased()
         return output.contains("no checks reported")
@@ -294,6 +372,18 @@ struct GitHubCLIProvider: CodeHostProvider {
         throw CodeHostProviderError.malformedOutput("Unable to parse GitHub date")
     }
 
+    private static func parseOptionalHTTPURL(_ value: String?, context: String) throws -> URL? {
+        guard let value,
+              !value.isEmpty
+        else { return nil }
+        guard let url = URL(string: value),
+              url.isHTTPOrHTTPS
+        else {
+            throw CodeHostProviderError.malformedOutput(context)
+        }
+        return url
+    }
+
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = formatOptions
@@ -316,6 +406,23 @@ struct GitHubCLIProvider: CodeHostProvider {
         return fields
             .map { "\($0.utf8.count):\($0)" }
             .joined(separator: "|")
+    }
+
+    private static func withThreads(_ threads: [ReviewThreadSummary], on request: ReviewRequest) -> ReviewRequest {
+        ReviewRequest(
+            remote: request.remote,
+            number: request.number,
+            title: request.title,
+            url: request.url,
+            state: request.state,
+            isDraft: request.isDraft,
+            headRefName: request.headRefName,
+            baseRefName: request.baseRefName,
+            reviewDecision: request.reviewDecision,
+            mergeState: request.mergeState,
+            checks: request.checks,
+            threads: threads
+        )
     }
 }
 
@@ -365,6 +472,47 @@ private struct CheckItem: Decodable {
 
 private struct RunItem: Decodable {
     let databaseId: Int
+}
+
+private struct ReviewThreadsResponse: Decodable {
+    let data: ReviewThreadsData
+}
+
+private struct ReviewThreadsData: Decodable {
+    let repository: ReviewThreadsRepository
+}
+
+private struct ReviewThreadsRepository: Decodable {
+    let pullRequest: ReviewThreadsPullRequest
+}
+
+private struct ReviewThreadsPullRequest: Decodable {
+    let reviewThreads: ReviewThreadsConnection
+}
+
+private struct ReviewThreadsConnection: Decodable {
+    let nodes: [ReviewThreadNode]
+}
+
+private struct ReviewThreadNode: Decodable {
+    let id: String
+    let isResolved: Bool
+    let isOutdated: Bool
+    let comments: ReviewThreadCommentsConnection
+}
+
+private struct ReviewThreadCommentsConnection: Decodable {
+    let nodes: [ReviewThreadCommentNode]
+}
+
+private struct ReviewThreadCommentNode: Decodable {
+    let body: String
+    let url: String?
+    let author: ReviewThreadAuthor?
+}
+
+private struct ReviewThreadAuthor: Decodable {
+    let login: String
 }
 
 private extension URL {
