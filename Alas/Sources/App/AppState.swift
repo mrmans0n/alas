@@ -409,6 +409,28 @@ final class AppState {
         // waiting for `restoreTerminalTabIfNeeded` (driven by
         // TerminalTabView.task) to fire when the user opens the tab.
         refreshPersistedHookSymlinks()
+        sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
+    }
+
+    /// Compute (knownWorktreeIds, knownLeafIds) from in-memory state and
+    /// hand them to `TerminalService.sweepOrphans`. Run after `reloadTabs`
+    /// so persisted leaves are visible; without this, sessions leaked by
+    /// any prior bug (or quit race) would persist forever because nothing
+    /// would ever try to kill them on subsequent launches.
+    private func sweepOrphanZmxSessions(worktreeIds: [String]) {
+        var leafIds: Set<String> = []
+        for worktreeId in worktreeIds {
+            for tab in tabs.tabs(forWorktree: worktreeId) {
+                guard case .terminal(let state) = tab else { continue }
+                for leaf in state.root.leaves() {
+                    leafIds.insert(leaf.id)
+                }
+            }
+        }
+        terminal.sweepOrphans(
+            knownWorktreeIds: Set(worktreeIds),
+            knownLeafIds: leafIds
+        )
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
