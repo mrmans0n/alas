@@ -244,6 +244,8 @@ struct RootView: View {
                     pb.setString(message, forType: .string)
                 }
             )
+        case .creating(let wt):
+            CreatingWorktreeView(worktree: wt)
         case .empty:
             EmptyTabView(
                 onNewTerminal: {},
