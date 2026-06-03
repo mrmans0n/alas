@@ -1051,11 +1051,13 @@ struct ACPSessionManagerAttachRestoreTests {
 
     private actor AttachPhaseGate {
         private var entered = false
+        private var released = false
         private var continuation: CheckedContinuation<Void, Never>?
 
         var hasEntered: Bool { entered }
 
         func enterAndWait() async {
+            if released { return }
             entered = true
             await withCheckedContinuation { continuation in
                 self.continuation = continuation
@@ -1063,6 +1065,7 @@ struct ACPSessionManagerAttachRestoreTests {
         }
 
         func release() {
+            released = true
             continuation?.resume()
             continuation = nil
         }
