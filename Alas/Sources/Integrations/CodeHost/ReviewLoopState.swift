@@ -124,6 +124,19 @@ final class ReviewLoopState {
             }
         }
 
+        guard !local.branchName.isEmpty else {
+            snapshot = ReviewLoopSnapshot(
+                local: local,
+                remote: nil,
+                reviewRequest: nil,
+                providerAvailable: false,
+                providerAuthenticated: false,
+                providerCapabilities: .readOnly,
+                errorMessage: "No branch checked out."
+            )
+            return
+        }
+
         let supportedKinds = providerRegistry.supportedKinds
         guard let remote = CodeHostRemoteDetector.detect(
             from: remotes,

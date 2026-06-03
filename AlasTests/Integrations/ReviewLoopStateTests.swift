@@ -94,6 +94,25 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.providerCapabilities == .readOnly)
     }
 
+    @Test func emptyBranchNameBlocksReviewLoopActions() async throws {
+        let local = Self.makeLocal(branchName: "", headSHA: "detached123", needsPush: true)
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+
+        #expect(state.snapshot?.local == local)
+        #expect(state.snapshot?.remote == nil)
+        #expect(state.snapshot?.providerAvailable == false)
+        #expect(state.snapshot?.providerAuthenticated == false)
+        #expect(state.snapshot?.providerCapabilities == .readOnly)
+        #expect(state.snapshot?.errorMessage == "No branch checked out.")
+    }
+
     @Test func refreshStoresProviderCapabilitiesOnSnapshot() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         let state = ReviewLoopState(
