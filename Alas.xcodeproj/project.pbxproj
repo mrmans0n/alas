@@ -858,6 +858,7 @@
 		E9507AB389CE47A6A48C049B /* ACPProcessLiveness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DA695BB3D2901435BFF6C0E /* ACPProcessLiveness.swift */; };
 		E99E4DB46496707E7A3F044A /* PiACPInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6F36C31DB1C13D86416B4B /* PiACPInstaller.swift */; };
 		EA0EE2D3301F5D79E0C1A280 /* LanguageServerAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 949B319CFA57A23CE36F2AAE /* LanguageServerAvailability.swift */; };
+		EA2BAFA70ED22F6085EB1971 /* GitLabCLIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E2F83F9EAB77B96EBA152 /* GitLabCLIProvider.swift */; };
 		EA6EFDDEAE3FF9D878824EDC /* ACPProcessLivenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9797C4D8F5DCCC9563D79007 /* ACPProcessLivenessTests.swift */; };
 		EA9B2D81920F620209AB2C34 /* MasonSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97FBCF0F61C80FD8020B1ADD /* MasonSnapshotTests.swift */; };
 		EACD40C757361FC2C78F912A /* ACPCodeBlockHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 530767799372FE03C3695656 /* ACPCodeBlockHighlighter.swift */; };
@@ -1318,6 +1319,7 @@
 		6BDB3231FFACC0398F973876 /* ACPLaunchSpecNpmPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPLaunchSpecNpmPackageTests.swift; sourceTree = "<group>"; };
 		6C4309EDC99FC1F98C479115 /* SearchModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchModelTests.swift; sourceTree = "<group>"; };
 		6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeService.swift; sourceTree = "<group>"; };
+		6C4E2F83F9EAB77B96EBA152 /* GitLabCLIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitLabCLIProvider.swift; sourceTree = "<group>"; };
 		6CA51D49B1AE4C4E10D450C6 /* ACPFileWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFileWriterTests.swift; sourceTree = "<group>"; };
 		6CB9643BE01E416D3D2F4454 /* BaseBranchSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseBranchSelectorTests.swift; sourceTree = "<group>"; };
 		6D1AAAE396590865426C592A /* ACPSessionManagerRetentionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManagerRetentionTests.swift; sourceTree = "<group>"; };
@@ -2447,6 +2449,7 @@
 				031B1108F04B06EAC224AB5B /* CodeHostProvider.swift */,
 				82E98F9835497D830C12AA8F /* CodeHostRemoteDetector.swift */,
 				B5D2DA50E978EB0571D6A74C /* GitHubCLIProvider.swift */,
+				6C4E2F83F9EAB77B96EBA152 /* GitLabCLIProvider.swift */,
 				2D4CC3ED497796474F107EBE /* ReviewLoopDrawer.swift */,
 				17F7DB6F391F1AAA9FED1A86 /* ReviewLoopHandoffBuilder.swift */,
 				0299820D15A2A4C7838B2CE9 /* ReviewLoopState.swift */,
@@ -3924,6 +3927,7 @@
 				7D75AEB67376431930CB37E3 /* GitEventFilter.swift in Sources */,
 				C1D83EEBE3AF4ABC04B3F7EB /* GitHubCLIProvider.swift in Sources */,
 				B66EE6A2445C0DDA607788C2 /* GitIgnoreService.swift in Sources */,
+				EA2BAFA70ED22F6085EB1971 /* GitLabCLIProvider.swift in Sources */,
 				175951CE78A1446A9131BA1F /* GitNameValidator.swift in Sources */,
 				CD227C48AA85A5E74A92DF3F /* GitRefNameInputFilter.swift in Sources */,
 				6FA1659F464BE9C03C90F787 /* GitService+CommitEditing.swift in Sources */,

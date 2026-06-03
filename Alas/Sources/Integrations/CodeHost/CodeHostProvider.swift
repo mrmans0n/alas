@@ -77,7 +77,10 @@ struct CodeHostProviderRegistry: Sendable {
     }
 
     static func live() -> CodeHostProviderRegistry {
-        CodeHostProviderRegistry(providers: [.github: GitHubCLIProvider()])
+        CodeHostProviderRegistry(providers: [
+            .github: GitHubCLIProvider(),
+            .gitlab: GitLabCLIProvider(),
+        ])
     }
 
     func provider(for kind: CodeHostKind) -> (any CodeHostProvider)? {
