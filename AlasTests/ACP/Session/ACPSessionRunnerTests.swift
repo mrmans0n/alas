@@ -69,6 +69,47 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
+    @Test("question request waits for user answer and responds to client")
+    func questionRequestWaitsForUserAnswer() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+
+        let params = ACPQuestionRequestParams(
+            toolCallId: "call_123",
+            title: "Need input",
+            questions: [
+                .init(
+                    id: "q1",
+                    prompt: "Which implementation path should I take?",
+                    options: [
+                        .init(id: "cursor", label: "Implement Cursor first"),
+                        .init(id: "generic", label: "Wait for generic ACP")
+                    ],
+                    allowMultiple: false
+                )
+            ]
+        )
+
+        mock.emitQuestion(id: .number(42), params: params)
+
+        try await waitUntil {
+            runner.session.transcript.pendingQuestion?.params == params
+                && runner.session.transcript.streamingState == .awaitingInput
+        }
+
+        runner.answerQuestion(.init(outcome: .answered(answers: [
+            .init(questionId: "q1", selectedOptionIds: ["cursor"])
+        ])))
+
+        try await waitUntil {
+            mock.questionResponses[.number(42)] == .init(outcome: .answered(answers: [
+                .init(questionId: "q1", selectedOptionIds: ["cursor"])
+            ]))
+        }
+        #expect(runner.session.transcript.pendingQuestion == nil)
+        #expect(runner.session.transcript.streamingState == .idle)
+    }
+
     @Test("prompt completion waits for yielded updates before marking output boundary")
     func promptCompletionWaitsForYieldedUpdatesBeforeBoundary() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -820,6 +861,7 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
     let permissionRequests = AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)> { $0.finish() }
     let fileRequests = AsyncStream<ACPFileRequest> { $0.finish() }
     let terminalRequests = AsyncStream<ACPTerminalRequest> { $0.finish() }
+    let questionRequests = AsyncStream<ACPQuestionRequest> { $0.finish() }
 
     var yieldedUpdateCount: Int {
         updateCountLock.lock()
@@ -875,6 +917,7 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {}
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
     func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
+    func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {}
 
     func shutdown() async {
         updatesCont.finish()

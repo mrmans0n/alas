@@ -41,8 +41,10 @@ final class ACPSessionRunner {
     private let onPersist: (() -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
+    private var questionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
+    private var pendingQuestionContinuation: CheckedContinuation<ACPQuestionResponse, Never>?
     private var seq: Int64 = 0
     private var steerUndoExpiryTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -149,6 +151,16 @@ final class ACPSessionRunner {
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(scopeKey: scopeKey, options: params.options, params: params)
                 self.connection.client.respondToPermission(id: id, response: response)
+            }
+        }
+
+        questionsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await request in self.connection.client.questionRequests {
+                let response = await self.awaitQuestionResponse(request)
+                if Task.isCancelled { return }
+                self.connection.client.respondToQuestion(id: request.id, response: response)
+                self.flushQueueIfIdle()
             }
         }
 
@@ -269,14 +281,38 @@ final class ACPSessionRunner {
     func stop() {
         updatesTask?.cancel()
         permissionsTask?.cancel()
+        questionsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
+        resolvePendingQuestion(.init(outcome: .cancelled))
         // Kill agent-spawned subprocesses now. ACPSessionManager keeps
         // the ACPSession cached after detach, so the session's deinit-
         // time killAll() won't fire on tab close — without this an
         // active `npm test`/`sleep`/server outlives the agent.
         session.terminalHost.killAll()
         onPersist?()
+    }
+
+    private func awaitQuestionResponse(_ request: ACPQuestionRequest) async -> ACPQuestionResponse {
+        session.transcript.streamingState = .awaitingInput
+        session.transcript.pendingQuestion = .init(id: request.id, params: request.params)
+        return await withCheckedContinuation { continuation in
+            pendingQuestionContinuation = continuation
+        }
+    }
+
+    func answerQuestion(_ response: ACPQuestionResponse) {
+        resolvePendingQuestion(response)
+    }
+
+    private func resolvePendingQuestion(_ response: ACPQuestionResponse) {
+        guard let continuation = pendingQuestionContinuation else { return }
+        pendingQuestionContinuation = nil
+        session.transcript.pendingQuestion = nil
+        if session.transcript.streamingState == .awaitingInput {
+            session.transcript.streamingState = .idle
+        }
+        continuation.resume(returning: response)
     }
 
     private func handleTerminalRequest(_ req: ACPTerminalRequest) {
@@ -505,6 +541,7 @@ final class ACPSessionRunner {
                 }
             }
             policy.userCancelled()
+            resolvePendingQuestion(.init(outcome: .cancelled))
             let changedIndices = session.cancelInFlightToolCalls()
             session.terminalHost.killAll()
             if holdsLeaseForWrite() {

@@ -116,7 +116,7 @@ struct ACPInputField: NSViewRepresentable {
                             sendOnEnter: Bool) -> String {
         switch state {
         case .idle: return "Plan, ask, or build — type / for commands"
-        case .sending, .streaming, .awaitingPermission:
+        case .sending, .streaming, .awaitingPermission, .awaitingInput:
             return sendOnEnter
                 ? "Queue a follow-up… (⌥⏎ to steer)"
                 : "Steer the agent… (⌥⏎ to queue)"

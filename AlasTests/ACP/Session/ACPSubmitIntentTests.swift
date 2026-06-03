@@ -34,6 +34,12 @@ struct ACPSubmitRouteTests {
         #expect(r == .enqueue)
     }
 
+    @Test(".auto + awaitingInput → enqueue")
+    func awaitingInputAuto() {
+        let r = ACPSubmitRoute.resolve(intent: .auto, state: .awaitingInput, queueEmpty: true, blocksEmpty: false)
+        #expect(r == .enqueue)
+    }
+
     @Test(".steer + busy → steer")
     func steerWhileBusy() {
         let r = ACPSubmitRoute.resolve(intent: .steer, state: .streaming, queueEmpty: false, blocksEmpty: false)

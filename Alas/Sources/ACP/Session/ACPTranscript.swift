@@ -11,6 +11,7 @@ final class ACPTranscript: ObservableObject {
     @Published var messages: [ACPMessage] = []
     @Published var streamingState: ACPSession.StreamingState = .idle
     @Published var pendingPermission: ACPSession.PendingPermission?
+    @Published var pendingQuestion: ACPSession.PendingQuestion?
     /// Tick incremented on every streaming chunk that mutates an existing
     /// agent/thought buffer. The buffer itself publishes (so the row's
     /// inner Text re-renders), but the transcript array doesn't change —

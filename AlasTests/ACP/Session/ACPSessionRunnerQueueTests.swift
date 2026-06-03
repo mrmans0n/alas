@@ -109,6 +109,17 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" } == false)
     }
 
+    @Test("flushQueueIfIdle is a no-op while state is .awaitingInput")
+    func noopAwaitingInput() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.transcript.streamingState = .awaitingInput
+        session.enqueue(blocks: [.text("nope")])
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(session.queue.count == 1)
+        #expect(mock.sent.contains { $0.method == "session/prompt" } == false)
+    }
+
     @Test("flushQueueIfIdle skips a head with lastError; doesn't auto-retry")
     func skipsErroredHead() async throws {
         let (runner, mock, session, _) = try mkRunner()
