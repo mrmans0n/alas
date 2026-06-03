@@ -10,20 +10,21 @@ struct ReviewRequestDraftContext: Equatable {
 
 extension GitService {
     func reviewRequestDraftContext(worktreePath: URL, baseRef: String) async throws -> ReviewRequestDraftContext {
+        let diffRange = "\(baseRef)...HEAD"
         async let subjectsResult = Process.git(
             ["log", "\(baseRef)..HEAD", "--pretty=format:%s"],
             cwd: worktreePath
         )
         async let diffResult = Process.git(
-            ["diff", "--no-color", "-M", "\(baseRef)..HEAD"],
+            ["diff", "--no-color", "-M", diffRange],
             cwd: worktreePath
         )
         async let filesResult = Process.git(
-            ["diff", "--no-color", "-M", "--numstat", "\(baseRef)..HEAD"],
+            ["diff", "--no-color", "-M", "--numstat", diffRange],
             cwd: worktreePath
         )
         async let namesResult = Process.git(
-            ["diff", "--no-color", "-M", "--name-status", "\(baseRef)..HEAD"],
+            ["diff", "--no-color", "-M", "--name-status", diffRange],
             cwd: worktreePath
         )
         async let statusResult = Process.git(
@@ -55,7 +56,7 @@ extension GitService {
                     "diff",
                     "--no-color",
                     "-M",
-                    "\(baseRef)..HEAD",
+                    diffRange,
                     "--",
                 ] + file.diffPathspecs,
                 cwd: worktreePath

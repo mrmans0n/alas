@@ -64,6 +64,38 @@ struct GitServiceReviewRequestDraftTests {
         #expect(!bDiff.contains("Sources/A.swift"))
     }
 
+    @Test func loadsBranchDiffFromMergeBaseWhenBaseBranchHasAdvanced() async throws {
+        let repo = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await git(["init", "-b", "main"], cwd: repo)
+        try await git(["config", "user.email", "test@example.com"], cwd: repo)
+        try await git(["config", "user.name", "Test User"], cwd: repo)
+        try write("README.md", "Initial\n", in: repo)
+        try await git(["add", "README.md"], cwd: repo)
+        try await git(["commit", "-m", "chore: initial"], cwd: repo)
+        try await git(["checkout", "-b", "feature/stale-base"], cwd: repo)
+        try write("Sources/Feature.swift", "let feature = 1\n", in: repo)
+        try await git(["add", "Sources/Feature.swift"], cwd: repo)
+        try await git(["commit", "-m", "feat: add feature file"], cwd: repo)
+        try await git(["checkout", "main"], cwd: repo)
+        try write("Sources/MainOnly.swift", "let mainOnly = 1\n", in: repo)
+        try await git(["add", "Sources/MainOnly.swift"], cwd: repo)
+        try await git(["commit", "-m", "feat: advance main"], cwd: repo)
+        try await git(["checkout", "feature/stale-base"], cwd: repo)
+
+        let context = try await GitService().reviewRequestDraftContext(
+            worktreePath: repo,
+            baseRef: "main"
+        )
+
+        #expect(context.commitSubjects == ["feat: add feature file"])
+        #expect(context.changedFiles.map(\.path) == ["Sources/Feature.swift"])
+        #expect(context.diff.contains("Sources/Feature.swift"))
+        #expect(!context.diff.contains("Sources/MainOnly.swift"))
+        #expect(context.fileDiffsByPath["Sources/Feature.swift"]?.contains("Sources/Feature.swift") == true)
+    }
+
     @Test func loadsRenameDestinationOriginalPathAndCounts() async throws {
         let repo = try makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
