@@ -64,6 +64,10 @@ final class ACPSessionManager: ObservableObject {
     /// evict and later recreate the session object without losing whether
     /// the plan was last rendered inline or in the toolbar pill.
     private var planSidebarVisibility: [ACPSession.ID: Bool] = [:]
+    /// Set to true by `shutdownBackgroundTasks` so any in-flight `attach`
+    /// coroutine that resumes after dispose aborts at the pre-commit guard
+    /// rather than registering a runner for a session whose manager is dead.
+    private var isDisposed = false
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
          instanceId: String = UUID().uuidString,
@@ -919,6 +923,11 @@ extension ACPSessionManager {
 
     // MARK: - Test accessors
 
+    /// True once `shutdownBackgroundTasks` has been called. In-flight attach
+    /// coroutines check this flag at their pre-commit guard to avoid
+    /// registering a runner on a disposed manager.
+    func isDisposedForTest() -> Bool { isDisposed }
+
     func ownsLeaseForTest(sessionId: ACPSession.ID) -> Bool {
         (try? store.loadLease(sessionId: sessionId))?.ownerInstance == instanceId
     }
@@ -971,6 +980,7 @@ extension ACPSessionManager {
     /// by `detach`) and heartbeats. Called when the worktree's manager is
     /// disposed so nothing keeps waking after the manager is dropped.
     func shutdownBackgroundTasks() {
+        isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
         for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
@@ -1250,17 +1260,16 @@ extension ACPSessionManager {
                     canSendTranscript: session.hasConversationTranscript
                 )
             }
-            // A takeover may have landed while we were awaiting
-            // initialize/newSession/loadSession. If we no longer own the
-            // lease, abort the commit — don't persist the remote id or
-            // register a runner for a session another instance now owns.
+            // Abort the commit if we were taken over OR the manager was disposed
+            // while we awaited spawn/initialize — never register a runner or
+            // persist for a session we no longer (or never will) own.
             // `attachSucceeded` stays false so the defer releases the lease
             // and stops the heartbeat/writerWatch.
-            guard !anotherLiveInstanceOwnsLease(sessionId: sessionId) else {
+            if isDisposed || anotherLiveInstanceOwnsLease(sessionId: sessionId) {
                 await connection.shutdown()
                 startedRunner?.stop()
                 session.agentState = .idle
-                beginMirroring(sessionId: sessionId)
+                if !isDisposed { beginMirroring(sessionId: sessionId) }   // don't start a mirror on a disposed manager
                 return
             }
             session.remoteSessionId = result.sessionId

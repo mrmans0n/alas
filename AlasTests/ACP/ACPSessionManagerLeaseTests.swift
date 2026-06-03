@@ -608,6 +608,41 @@ import Foundation
                 "isMirror (== anotherLiveInstanceOwnsLease) must be true after B seizes; the attach re-check guard will abort the commit")
     }
 
+    @Test("attach does not commit after the manager is disposed")
+    func attachAbortsAfterDispose() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dispose-attach-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        // Wire a mock connection that would let attach reach its commit
+        // (initialize + session/new both succeed), so the disposed guard is
+        // the ONLY thing preventing runner registration.
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1, agentCapabilities: nil, authMethods: []))
+        }
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-disposed-test",
+                availableModels: [], availableModes: [],
+                currentModel: nil, currentMode: nil, promptSuggestions: []))
+        }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            instanceId: "A", pid: Int64(getpid()),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _ in ACPConnection(client: client) })
+        let session = mgr.createSession(agentId: "claude")
+        // Dispose the manager BEFORE attach so any in-flight attach finds
+        // isDisposed == true at the pre-commit guard.
+        mgr.shutdownBackgroundTasks()
+        #expect(mgr.isDisposedForTest())
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        // No runner must be registered — the disposed guard prevented the commit.
+        #expect(mgr.runners[session.id] == nil,
+                "attach must not register a runner after the manager is disposed")
+    }
+
     @Test("shutdownBackgroundTasks releases leases of pre-runner sessions")
     func shutdownReleasesOwnedLeases() async throws {
         let url = FileManager.default.temporaryDirectory
