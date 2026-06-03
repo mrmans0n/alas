@@ -212,7 +212,14 @@ struct GitHubCLIProvider: CodeHostProvider {
         return try Self.parseReviewThreadsPage(result.stdout)
     }
 
-    func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {
+    func rerunFailedChecks(
+        remote: CodeHostRemote,
+        branch: String,
+        headSHA: String,
+        request: ReviewRequest?,
+        cwd: URL
+    ) async throws {
+        _ = request
         let listResult = try await runner.run(
             "gh",
             args: [

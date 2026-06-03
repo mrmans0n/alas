@@ -17,15 +17,23 @@ struct CodeHostProviderTests {
         #expect(registry.provider(for: .gitlab) == nil)
     }
 
-    @Test func liveRegistryIncludesGitHubProvider() {
+    @Test func liveRegistryIncludesGitHubAndGitLabProviders() {
         let registry = CodeHostProviderRegistry.live()
 
         #expect(registry.provider(for: .github)?.kind == .github)
-        #expect(registry.provider(for: .gitlab) == nil)
+        #expect(registry.provider(for: .gitlab)?.kind == .gitlab)
     }
 
     @Test func liveGitHubProviderExposesDirectActionCapabilities() {
         let provider = CodeHostProviderRegistry.live().provider(for: .github)
+
+        #expect(provider?.capabilities.canCreateReviewRequest == true)
+        #expect(provider?.capabilities.canRerunFailedChecks == true)
+        #expect(provider?.capabilities.canOpenReviewRequest == true)
+    }
+
+    @Test func liveGitLabProviderExposesDirectActionCapabilities() {
+        let provider = CodeHostProviderRegistry.live().provider(for: .gitlab)
 
         #expect(provider?.capabilities.canCreateReviewRequest == true)
         #expect(provider?.capabilities.canRerunFailedChecks == true)
@@ -86,6 +94,12 @@ struct CodeHostProviderTests {
             []
         }
 
-        func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws {}
+        func rerunFailedChecks(
+            remote: CodeHostRemote,
+            branch: String,
+            headSHA: String,
+            request: ReviewRequest?,
+            cwd: URL
+        ) async throws {}
     }
 }

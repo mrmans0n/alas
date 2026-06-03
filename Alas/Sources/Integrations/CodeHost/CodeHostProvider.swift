@@ -62,7 +62,13 @@ protocol CodeHostProvider: Sendable {
         cwd: URL
     ) async throws -> URL
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck]
-    func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, cwd: URL) async throws
+    func rerunFailedChecks(
+        remote: CodeHostRemote,
+        branch: String,
+        headSHA: String,
+        request: ReviewRequest?,
+        cwd: URL
+    ) async throws
 }
 
 extension CodeHostProvider {
@@ -77,7 +83,10 @@ struct CodeHostProviderRegistry: Sendable {
     }
 
     static func live() -> CodeHostProviderRegistry {
-        CodeHostProviderRegistry(providers: [.github: GitHubCLIProvider()])
+        CodeHostProviderRegistry(providers: [
+            .github: GitHubCLIProvider(),
+            .gitlab: GitLabCLIProvider(),
+        ])
     }
 
     func provider(for kind: CodeHostKind) -> (any CodeHostProvider)? {

@@ -61,6 +61,12 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canRerunFailedChecks: true,
         canOpenReviewRequest: true
     )
+
+    static let gitlabCLI = CodeHostProviderCapabilities(
+        canCreateReviewRequest: true,
+        canRerunFailedChecks: true,
+        canOpenReviewRequest: true
+    )
 }
 
 enum ReviewRequestState: String, Codable, Equatable, Sendable {
