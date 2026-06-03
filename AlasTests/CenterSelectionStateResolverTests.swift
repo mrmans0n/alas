@@ -73,7 +73,7 @@ struct CenterSelectionStateResolverTests {
         }
     }
 
-    @Test func returnsEmptyForCreatingState() {
+    @Test func returnsCreatingForCreatingState() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
         let mgr = ProjectsManager(persistedProjects: [project])
@@ -85,7 +85,11 @@ struct CenterSelectionStateResolverTests {
             projectsManager: mgr
         )
         let result = resolver.resolve()
-        #expect(result == .empty)
+        if case .creating(let returned) = result {
+            #expect(returned.id == wt.id)
+        } else {
+            Issue.record("Expected .creating, got \(result)")
+        }
     }
 
     @Test func returnsEmptyForCreateFailedState() {
