@@ -145,4 +145,10 @@ struct ACPFirstRunConnectingPolicyTests {
             newEmptySession: false
         ) == .bottom)
     }
+
+    @Test("first-run connecting suppresses chrome")
+    func firstRunConnectingSuppressesChrome() {
+        #expect(ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: true) == false)
+        #expect(ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: false) == true)
+    }
 }

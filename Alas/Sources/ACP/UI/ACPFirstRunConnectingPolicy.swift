@@ -44,6 +44,10 @@ enum ACPFirstRunConnectingPolicy {
         return nil
     }
 
+    static func showsChrome(firstRunConnecting: Bool) -> Bool {
+        !firstRunConnecting
+    }
+
     static func composerPlacement(
         firstRunConnecting: Bool,
         newEmptySession: Bool
