@@ -38,6 +38,14 @@ enum ReviewRequestDraft {
         guard snapshot.reviewRequest == nil else { return "A PR already exists for this branch." }
         guard !isLocalBranchSelectedBase(snapshot) else { return "Switch to a feature branch before creating a PR." }
         guard snapshot.local.aheadCommitCount > 0 else { return "This branch has no committed changes to publish." }
+        switch snapshot.local.pushState {
+        case .diverged:
+            return "Remote has commits not in this branch. Pull, rebase, or force push before creating a PR."
+        case .stale:
+            return "Remote has commits not in this branch. Pull or rebase before creating a PR."
+        case .inSync, .missingUpstream, .unpushed:
+            break
+        }
         guard !snapshot.local.needsPush else { return "Push this branch before creating a PR." }
         return nil
     }

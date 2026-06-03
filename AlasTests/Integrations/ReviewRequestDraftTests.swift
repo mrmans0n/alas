@@ -36,6 +36,20 @@ struct ReviewRequestDraftTests {
             snapshot: Self.snapshot(needsPush: true, aheadCommitCount: 2)
         )
         #expect(ReviewRequestDraft.validationMessage(for: needsPush) == "Push this branch before creating a PR.")
+
+        let stale = ReviewRequestDraft.ValidationInput(
+            title: ready.title,
+            body: ready.body,
+            snapshot: Self.snapshot(needsPush: false, aheadCommitCount: 2, upstreamAheadCommitCount: 1)
+        )
+        #expect(ReviewRequestDraft.validationMessage(for: stale) == "Remote has commits not in this branch. Pull or rebase before creating a PR.")
+
+        let diverged = ReviewRequestDraft.ValidationInput(
+            title: ready.title,
+            body: ready.body,
+            snapshot: Self.snapshot(needsPush: true, aheadCommitCount: 2, upstreamAheadCommitCount: 1)
+        )
+        #expect(ReviewRequestDraft.validationMessage(for: diverged) == "Remote has commits not in this branch. Pull, rebase, or force push before creating a PR.")
     }
 
     @Test func validationBlocksExistingReviewRequest() {
@@ -69,12 +83,17 @@ struct ReviewRequestDraftTests {
         #expect(ReviewRequestDraft.validationMessage(for: input) == "Switch to a feature branch before creating a PR.")
     }
 
-    private static func snapshot(needsPush: Bool, aheadCommitCount: Int) -> ReviewLoopSnapshot {
+    private static func snapshot(
+        needsPush: Bool,
+        aheadCommitCount: Int,
+        upstreamAheadCommitCount: Int = 0
+    ) -> ReviewLoopSnapshot {
         snapshot(
             branchName: "feature/pr-drafts",
             baseBranch: "origin/main",
             needsPush: needsPush,
-            aheadCommitCount: aheadCommitCount
+            aheadCommitCount: aheadCommitCount,
+            upstreamAheadCommitCount: upstreamAheadCommitCount
         )
     }
 
@@ -83,6 +102,7 @@ struct ReviewRequestDraftTests {
         baseBranch: String = "origin/main",
         needsPush: Bool,
         aheadCommitCount: Int,
+        upstreamAheadCommitCount: Int = 0,
         reviewRequest: ReviewRequest? = nil
     ) -> ReviewLoopSnapshot {
         ReviewLoopSnapshot(
@@ -96,6 +116,7 @@ struct ReviewRequestDraftTests {
                 hasUpstream: true,
                 upstreamRemoteName: "origin",
                 upstreamBranchName: "feature/pr-drafts",
+                upstreamAheadCommitCount: upstreamAheadCommitCount,
                 needsPush: needsPush
             ),
             remote: CodeHostRemote(
