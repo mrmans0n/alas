@@ -2961,13 +2961,45 @@ final class AppState {
     }
 
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.
-    func openNewACPSession(agentID: String) {
+    func openNewACPSession(agentID: String, initialPrompt: String? = nil) {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
         let session = mgr.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
+        if let initialPrompt, !initialPrompt.isEmpty {
+            mgr.persistComposerDraft(
+                ACPComposerDraft(segments: [.text(initialPrompt)]),
+                for: session
+            )
+        }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    func openReviewLoopHandoff(from reviewLoop: ReviewLoopState, actionKind: ReviewReadinessActionKind) {
+        guard let snapshot = reviewLoop.snapshot else { return }
+        guard actionKind == .openAgentHandoff else { return }
+        let agentID = config.changes.aiToolId
+        guard agentID != "none", agent(id: agentID) != nil else { return }
+        let prompt = ReviewLoopHandoffBuilder.build(
+            snapshot: snapshot,
+            action: ReviewLoopAction(
+                kind: Self.reviewLoopHandoffActionKind(for: snapshot.reviewRequest),
+                title: "Open in Agent",
+                detail: "Prepare a focused agent handoff."
+            )
+        )
+        openNewACPSession(agentID: agentID, initialPrompt: prompt)
+    }
+
+    nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
+        if request?.hasActionableFeedback == true {
+            return .prepareReviewHandoff
+        }
+        if request?.worstCheckBucket == .fail {
+            return .prepareCheckFailureHandoff
+        }
+        return .prepareCheckFailureHandoff
     }
 
     /// Reopen a persisted ACP session as a center-pane tab. If a tab
