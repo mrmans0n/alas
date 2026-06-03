@@ -297,6 +297,7 @@ final class ReviewLoopState {
                 baseBranch: snapshot.local.baseBranch,
                 title: snapshot.local.branchName,
                 body: "Created from Alas.",
+                isDraft: false,
                 cwd: worktreePath
             )
             return true

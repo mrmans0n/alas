@@ -100,22 +100,24 @@ struct GitHubCLIProvider: CodeHostProvider {
         baseBranch: String,
         title: String,
         body: String,
+        isDraft: Bool,
         cwd: URL
     ) async throws -> URL {
         let head = Self.qualifiedHead(branch: branch, headOwner: headOwner, baseOwner: remote.owner)
         let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "pr", "create",
-                "--base", base,
-                "--head", head,
-                "--title", title,
-                "--body", body,
-                "-R", remote.repositorySlug,
-            ],
-            cwd: cwd
-        )
+        var args = [
+            "pr", "create",
+            "--base", base,
+            "--head", head,
+            "--title", title,
+            "--body", body,
+            "-R", remote.repositorySlug,
+        ]
+        if isDraft {
+            args.append("--draft")
+        }
+
+        let result = try await runner.run("gh", args: args, cwd: cwd)
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh pr create", stderr: result.stderr)
         }

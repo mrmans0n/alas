@@ -847,6 +847,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         let baseBranch: String
         let title: String
         let body: String
+        let isDraft: Bool
     }
 
     struct RerunFailedChecksRequest: Equatable {
@@ -923,6 +924,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         baseBranch: String,
         title: String,
         body: String,
+        isDraft: Bool,
         cwd: URL
     ) async throws -> URL {
         if let createError { throw createError }
@@ -931,7 +933,8 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
             headOwner: headOwner,
             baseBranch: baseBranch,
             title: title,
-            body: body
+            body: body,
+            isDraft: isDraft
         ))
         return remote.webURL
     }

@@ -76,6 +76,7 @@ struct CodeHostProviderTests {
             baseBranch: String,
             title: String,
             body: String,
+            isDraft: Bool,
             cwd: URL
         ) async throws -> URL {
             remote.webURL
