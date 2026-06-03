@@ -262,6 +262,7 @@ struct AppConfig: Codable, Equatable {
     struct Changes: Codable, Equatable {
         var aiToolId: String   // "claude" | "codex" | "cursor-agent" | "pi" | "none"
         var prompt: String
+        var reviewRequestPrompt: String
         /// Workspace-level "fix every merge conflict in this repo"
         /// prompt fed to the agent CWD'd at the worktree. The agent
         /// uses its own filesystem tools to enumerate + reconcile.
@@ -279,8 +280,8 @@ struct AppConfig: Codable, Equatable {
         var trackUpstreamForCommits: Bool
 
         enum CodingKeys: String, CodingKey {
-            case aiToolId, prompt, mergeBulkResolvePrompt, mergeSingleResolvePrompt,
-                 trackUpstreamForCommits
+            case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
+                 mergeSingleResolvePrompt, trackUpstreamForCommits
         }
     }
 
@@ -387,6 +388,7 @@ struct AppConfig: Codable, Equatable {
         changes: Changes(
             aiToolId: "none",
             prompt: AppConfig.defaultCommitPrompt,
+            reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
             mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
             mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
             trackUpstreamForCommits: false
@@ -429,6 +431,23 @@ extension AppConfig {
     When amending, the previous commit's message is provided — prefer
     refining it over starting from scratch unless the diff has materially
     changed.
+    """
+
+    static let defaultReviewRequestPrompt = """
+    You are writing a pull request title and description for the committed branch changes shown below.
+
+    Output format — strict:
+      Line 1: concise PR title, no trailing period.
+      Line 2: blank.
+      Line 3+: Markdown body with exactly these sections:
+               ## Summary
+               - 1-3 bullets describing the user-visible or reviewer-relevant changes.
+
+               ## Testing
+               - Bullets describing verification performed.
+               - Use "Not run (not provided)." only when no testing signal is present.
+
+    Use the branch diff and commit subjects as source material. Do not mention uncommitted working tree changes as implemented work. Do not include preamble, code fences, or extra headings.
     """
 
     static let defaultMergeBulkResolvePrompt = """
@@ -588,6 +607,8 @@ extension AppConfig {
         if let changesContainer = try? c.nestedContainer(keyedBy: AppConfig.Changes.CodingKeys.self, forKey: .changes) {
             let toolId = (try? changesContainer.decode(String.self, forKey: .aiToolId)) ?? "none"
             let prompt = (try? changesContainer.decode(String.self, forKey: .prompt)) ?? AppConfig.defaultCommitPrompt
+            let reviewRequestPrompt = (try? changesContainer.decode(String.self, forKey: .reviewRequestPrompt))
+                ?? AppConfig.defaultReviewRequestPrompt
             let bulkResolve = (try? changesContainer.decode(String.self, forKey: .mergeBulkResolvePrompt))
                 ?? AppConfig.defaultMergeBulkResolvePrompt
             let singleResolve = (try? changesContainer.decode(String.self, forKey: .mergeSingleResolvePrompt))
@@ -596,6 +617,7 @@ extension AppConfig {
             changes = Changes(
                 aiToolId: toolId,
                 prompt: prompt,
+                reviewRequestPrompt: reviewRequestPrompt,
                 mergeBulkResolvePrompt: bulkResolve,
                 mergeSingleResolvePrompt: singleResolve,
                 trackUpstreamForCommits: trackUpstream
@@ -604,6 +626,7 @@ extension AppConfig {
             changes = Changes(
                 aiToolId: "none",
                 prompt: AppConfig.defaultCommitPrompt,
+                reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
                 mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
                 mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
                 trackUpstreamForCommits: false

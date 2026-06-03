@@ -70,6 +70,13 @@ struct AlasApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 720, height: 560)
 
+        Window("Review Request Prompt", id: "review-request-prompt-editor") {
+            ReviewRequestPromptEditorWindow(state: state)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 560)
+
         Window("Merge: Resolve All Prompt", id: "merge-bulk-prompt-editor") {
             MergeBulkResolvePromptEditorWindow(state: state)
         }

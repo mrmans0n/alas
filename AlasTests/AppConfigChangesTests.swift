@@ -8,6 +8,14 @@ struct AppConfigChangesTests {
         #expect(!AppConfig.defaults.changes.prompt.isEmpty)
     }
 
+    @Test func defaultsHaveNonEmptyReviewRequestPrompt() {
+        #expect(!AppConfig.defaults.changes.reviewRequestPrompt.isEmpty)
+        #expect(AppConfig.defaults.changes.reviewRequestPrompt.contains("Line 1: concise PR title"))
+        #expect(AppConfig.defaults.changes.reviewRequestPrompt.contains("## Summary"))
+        #expect(AppConfig.defaults.changes.reviewRequestPrompt.contains("## Testing"))
+        #expect(AppConfig.defaults.changes.reviewRequestPrompt.contains("Do not mention uncommitted working tree changes"))
+    }
+
     @Test func decodesLegacyConfigWithoutChangesKey() throws {
         let json = """
         {
@@ -52,6 +60,56 @@ struct AppConfigChangesTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.changes.aiToolId == "claude")
         #expect(decoded.changes.prompt == "custom prompt")
+    }
+
+    @Test func decodesLegacyChangesWithoutReviewRequestPrompt() throws {
+        let json = """
+        {
+          "themeId": "cool-slate",
+          "accent": "teal",
+          "matchSystemTheme": false,
+          "sidebarWidth": 244,
+          "rightPaneWidth": 320,
+          "rightPaneVisible": true,
+          "general": {
+            "launchAtLogin": false, "closeToTray": true, "confirmQuit": true,
+            "autoUpdate": true, "updateChannel": "Stable",
+            "crashReports": false, "usageAnalytics": false
+          },
+          "worktrees": {
+            "rootPath": "~/.alas/worktrees",
+            "pathTemplate": "{worktreeRoot}/{repo}/{branch}",
+            "branchPrefix": "feature/", "baseBranch": "main",
+            "trackUpstream": true, "deleteBranchOnRemove": true,
+            "autoFetch": true, "fetchIntervalMinutes": 5, "pruneStale": false
+          },
+          "terminal": {
+            "shell": "/bin/zsh", "workingDirectory": "worktreeRoot",
+            "startupScript": "", "worktreeCreateScript": "",
+            "inheritParentEnv": true, "fontFamily": "JetBrains Mono",
+            "fontSize": 13, "cursorStyle": "beam", "cursorBlink": true,
+            "scrollbackLines": 10000, "bell": "visual"
+          },
+          "harness": {"notifyOnFinish": true, "notifyOnAwaiting": true},
+          "changes": {
+            "aiToolId": "none",
+            "prompt": "commit prompt",
+            "mergeBulkResolvePrompt": "bulk",
+            "mergeSingleResolvePrompt": "single",
+            "trackUpstreamForCommits": true
+          }
+        }
+        """
+        let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(cfg.changes.reviewRequestPrompt == AppConfig.defaultReviewRequestPrompt)
+    }
+
+    @Test func roundTripsReviewRequestPrompt() throws {
+        var cfg = AppConfig.defaults
+        cfg.changes.reviewRequestPrompt = "custom review request prompt"
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.changes.reviewRequestPrompt == "custom review request prompt")
     }
 
     @Test func defaultsHaveTrackUpstreamForCommitsOff() {
