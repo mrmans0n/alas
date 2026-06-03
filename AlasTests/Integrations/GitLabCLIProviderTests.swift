@@ -121,6 +121,63 @@ struct GitLabCLIProviderTests {
         #expect(request.mergeState == .blocked)
     }
 
+    @Test func discussionsJSONParsesActionableThreads() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.discussionsOutput,
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
+        )
+
+        #expect(threads.count == 2)
+        #expect(threads[0].id == "discussion-1")
+        #expect(threads[0].author == "reviewer")
+        #expect(threads[0].body == "Please surface this unresolved note.")
+        #expect(threads[0].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_501"))
+        #expect(threads[0].isResolved == false)
+        #expect(threads[0].isActionable)
+        #expect(threads[1].id == "discussion-2")
+        #expect(threads[1].author == "maintainer")
+        #expect(threads[1].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_503"))
+        #expect(threads[1].isResolved == false)
+        #expect(threads[1].isActionable)
+    }
+
+    @Test func discussionsJSONSkipsSystemOnlyDiscussions() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.systemOnlyDiscussionsOutput,
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
+        )
+
+        #expect(threads == [])
+    }
+
+    @Test func discussionsJSONRejectsMalformedURL() throws {
+        let output = """
+        [
+          {
+            "id": "discussion-1",
+            "notes": [
+              {
+                "id": 501,
+                "body": "Please surface this unresolved note.",
+                "system": false,
+                "resolvable": true,
+                "resolved": false,
+                "web_url": "file:///tmp/note",
+                "author": { "username": "reviewer" }
+              }
+            ]
+          }
+        ]
+        """
+
+        #expect(throws: CodeHostProviderError.malformedOutput("glab mr note list returned an invalid URL")) {
+            _ = try GitLabCLIProvider.parseDiscussions(
+                output,
+                requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
+            )
+        }
+    }
+
     @Test func mrListReturnsNilForNoItems() throws {
         #expect(try GitLabCLIProvider.parseMRList("[]", remote: Self.remote, headOwner: nil) == nil)
     }
@@ -392,6 +449,8 @@ struct GitLabCLIProviderTests {
         )
 
         #expect(request?.number == 42)
+        #expect(request?.threads.map(\.id) == ["discussion-1", "discussion-2"])
+        #expect(request?.hasActionableFeedback == true)
         #expect(await runner.commands.map(\.args.first) == ["mr", "mr", "mr", "ci"])
         #expect(await runner.commands.first == FakeRunner.Command(
             executable: "glab",
@@ -802,7 +861,71 @@ struct GitLabCLIProviderTests {
     }
     """
 
-    private static let discussionsOutput = "[]"
+    private static let discussionsOutput = """
+    [
+      {
+        "id": "discussion-1",
+        "notes": [
+          {
+            "id": 501,
+            "body": "Please surface this unresolved note.",
+            "system": false,
+            "resolvable": true,
+            "resolved": false,
+            "author": { "username": "reviewer" }
+          },
+          {
+            "id": 502,
+            "body": "changed the title",
+            "system": true,
+            "resolvable": false,
+            "resolved": false,
+            "author": { "username": "gitlab-bot" }
+          }
+        ]
+      },
+      {
+        "id": "discussion-2",
+        "resolved": false,
+        "notes": [
+          {
+            "id": 503,
+            "body": "This general note should also be actionable.",
+            "system": false,
+            "author": { "username": "maintainer" },
+            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_503"
+          }
+        ]
+      },
+      {
+        "id": "system-only",
+        "notes": [
+          {
+            "id": 504,
+            "body": "added 1 commit",
+            "system": true,
+            "author": { "username": "gitlab-bot" }
+          }
+        ]
+      }
+    ]
+    """
+
+    private static let systemOnlyDiscussionsOutput = """
+    [
+      {
+        "id": "system-only",
+        "notes": [
+          {
+            "id": 504,
+            "body": "added 1 commit",
+            "system": true,
+            "author": { "username": "gitlab-bot" }
+          }
+        ]
+      }
+    ]
+    """
 
     private static let pipelineOutput = """
     {

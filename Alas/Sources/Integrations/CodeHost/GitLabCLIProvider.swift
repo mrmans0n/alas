@@ -209,7 +209,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "glab mr note list", stderr: result.stderr)
         }
 
-        return []
+        return try Self.parseDiscussions(result.stdout, requestURL: request.url)
     }
 
     static func normalizedBaseBranch(_ baseBranch: String, remoteName: String) -> String {
@@ -278,6 +278,33 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
 
         return try reviewRequest(from: item, remote: remote, context: "glab mr view")
+    }
+
+    static func parseDiscussions(_ json: String, requestURL: URL) throws -> [ReviewThreadSummary] {
+        let data = Data(json.utf8)
+        let discussions: [GitLabDiscussion]
+        do {
+            discussions = try JSONDecoder().decode([GitLabDiscussion].self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab mr note list output")
+        }
+
+        return try discussions.compactMap { discussion in
+            guard let note = discussion.notes.first(where: { note in
+                !note.isSystem && !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }) else {
+                return nil
+            }
+
+            return ReviewThreadSummary(
+                id: discussion.id,
+                author: note.author?.username,
+                body: note.body,
+                url: try discussionURL(note: note, requestURL: requestURL),
+                isResolved: discussion.isResolved,
+                isActionable: !discussion.isResolved
+            )
+        }
     }
 
     static func parsePipeline(_ json: String) throws -> [ReviewCheck] {
@@ -460,6 +487,18 @@ struct GitLabCLIProvider: CodeHostProvider {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func discussionURL(note: GitLabDiscussionNote, requestURL: URL) throws -> URL? {
+        if let url = try parseOptionalHTTPURL(note.webURL, context: "glab mr note list returned an invalid URL") {
+            return url
+        }
+        guard let id = note.id else {
+            return nil
+        }
+        var components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
+        components?.fragment = "note_\(id)"
+        return components?.url
+    }
+
     private static func checkID(for pipeline: GitLabPipeline) -> String {
         encodedID([
             "gitlab-pipeline-check",
@@ -604,6 +643,51 @@ private struct GitLabJob: Decodable {
         case webURL = "web_url"
         case finishedAt = "finished_at"
     }
+}
+
+private struct GitLabDiscussion: Decodable {
+    let id: String
+    let resolved: Bool?
+    let notes: [GitLabDiscussionNote]
+
+    var isResolved: Bool {
+        if let resolved {
+            return resolved
+        }
+        let resolvableNotes = notes.filter { $0.resolvable ?? false }
+        guard !resolvableNotes.isEmpty else {
+            return false
+        }
+        return resolvableNotes.allSatisfy { $0.resolved ?? false }
+    }
+}
+
+private struct GitLabDiscussionNote: Decodable {
+    let id: Int?
+    let body: String
+    let author: GitLabDiscussionAuthor?
+    let system: Bool?
+    let resolvable: Bool?
+    let resolved: Bool?
+    let webURL: String?
+
+    var isSystem: Bool {
+        system ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case body
+        case author
+        case system
+        case resolvable
+        case resolved
+        case webURL = "web_url"
+    }
+}
+
+private struct GitLabDiscussionAuthor: Decodable {
+    let username: String?
 }
 
 private extension CharacterSet {
