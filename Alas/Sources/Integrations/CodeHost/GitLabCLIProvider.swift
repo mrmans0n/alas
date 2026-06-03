@@ -212,10 +212,6 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
 
         let items = try Self.decodeMRList(json)
-        guard items.count > 1 else {
-            return [:]
-        }
-
         var pathsByID: [Int: String] = [:]
         let idsToResolve = Set(items.compactMap { item -> Int? in
             guard item.sourceProjectNamespace(sourceProjectPathsByID: [:]) == nil else {

@@ -319,6 +319,23 @@ struct GitLabCLIProviderTests {
         #expect(request.title == "Fork MR")
     }
 
+    @Test func mrListFiltersSingleItemByResolvedSourceProjectID() throws {
+        let request = try #require(try GitLabCLIProvider.parseMRList(
+            Self.singleSourceProjectIDMRListOutput,
+            remote: Self.remote,
+            headOwner: "nacho",
+            sourceProjectPathsByID: [1002: "nacho/alas"]
+        ))
+
+        #expect(request.number == 43)
+        #expect(try GitLabCLIProvider.parseMRList(
+            Self.singleSourceProjectIDMRListOutput,
+            remote: Self.remote,
+            headOwner: "other",
+            sourceProjectPathsByID: [1002: "nacho/alas"]
+        ) == nil)
+    }
+
     @Test func projectPathParsingRequiresPathWithNamespace() throws {
         #expect(try GitLabCLIProvider.parseProjectPath(#"{"path_with_namespace":"nacho/alas"}"#) == "nacho/alas")
         #expect(throws: CodeHostProviderError.malformedOutput("glab api project output is missing path_with_namespace")) {
@@ -564,6 +581,42 @@ struct GitLabCLIProviderTests {
             args: ["mr", "view", "43", "--output", "json", "-R", "platform/mobile/alas"],
             cwd: Self.cwd
         ))
+    }
+
+    @Test func currentReviewRequestResolvesSingleSourceProjectIDBeforeFiltering() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.singleSourceProjectIDMRListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"path_with_namespace":"other/alas"}"#, stderr: ""),
+        ])
+
+        let request = try await GitLabCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headOwner: "nacho",
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        #expect(request == nil)
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "mr", "list",
+                    "--source-branch", "feature/gitlab-provider",
+                    "--target-branch", "main",
+                    "--output", "json",
+                    "--per-page", "20",
+                    "-R", "platform/mobile/alas",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "glab",
+                args: ["api", "projects/1002", "--hostname", "gitlab.example.com", "--output", "json"],
+                cwd: Self.cwd
+            ),
+        ])
     }
 
     @Test func checksLoadsMRHeadPipeline() async throws {
@@ -991,6 +1044,21 @@ struct GitLabCLIProviderTests {
         "target_branch": "main",
         "source_project_id": 1001
       },
+      {
+        "iid": 43,
+        "title": "Fork MR",
+        "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+        "state": "opened",
+        "draft": false,
+        "source_branch": "feature/gitlab-provider",
+        "target_branch": "main",
+        "source_project_id": 1002
+      }
+    ]
+    """
+
+    private static let singleSourceProjectIDMRListOutput = """
+    [
       {
         "iid": 43,
         "title": "Fork MR",
