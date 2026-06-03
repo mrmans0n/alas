@@ -5,6 +5,12 @@ import Testing
 @MainActor
 @Suite("ACP first-run connecting policy")
 struct ACPFirstRunConnectingPolicyTests {
+    @Test("first-run connecting view copy stays stable")
+    func firstRunConnectingViewCopyStaysStable() {
+        #expect(ACPFirstRunConnectingViewCopy.title == "Connecting...")
+        #expect(ACPFirstRunConnectingViewCopy.subtitle(agentDisplayName: "Codex") == "Preparing a new Codex chat.")
+    }
+
     @Test("phase labels stay stable")
     func phaseLabelsStayStable() {
         #expect(ACPFirstRunConnectingPhase.allCases.map(\.label) == [

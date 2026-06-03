@@ -348,6 +348,7 @@
 		6117C4AD7519BCD82EA0CF56 /* RightPaneTransitionalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C165BAAF80F9B4A5949BD39 /* RightPaneTransitionalView.swift */; };
 		6140E9DE848A53A37DFB8890 /* CodexInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F59C2CF9199EC099B1814AC /* CodexInstallerTests.swift */; };
 		61D33019E9AA23F5042C39B2 /* ACPSessionHydrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94D30693F45966ED1456811E /* ACPSessionHydrator.swift */; };
+		62055BD147E504C658B93E20 /* ACPFirstRunConnectingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 737A9A3D11EA28582CA5D061 /* ACPFirstRunConnectingView.swift */; };
 		6256EAEB315812ED4F4E9107 /* StageChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1874031C788ADB4398151FF1 /* StageChip.swift */; };
 		6291072E82FC282625FD1617 /* GitServiceCommitEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3AB3D6DF4A23648F0C45AC5 /* GitServiceCommitEditingTests.swift */; };
 		629B98E07ED9A159A695707D /* JetBrainsMonoNerdFont-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 9110E0F4F4EF24444FA0BE3A /* JetBrainsMonoNerdFont-Regular.ttf */; };
@@ -1288,6 +1289,7 @@
 		7294C0B27241ADEB9A95347A /* ACPNewChatEmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPNewChatEmptyStateView.swift; sourceTree = "<group>"; };
 		72970A1D2817539DB5243058 /* MergeWordDiffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeWordDiffTests.swift; sourceTree = "<group>"; };
 		73539FDFE4BDBD4D3B4DE546 /* ACPFirstRunConnectingPhase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFirstRunConnectingPhase.swift; sourceTree = "<group>"; };
+		737A9A3D11EA28582CA5D061 /* ACPFirstRunConnectingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFirstRunConnectingView.swift; sourceTree = "<group>"; };
 		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
 		73B17505E5DB94014B6FCB18 /* EditorLSPStatusOverridePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorLSPStatusOverridePicker.swift; sourceTree = "<group>"; };
 		73B4D726525024EBE47A0C7E /* AgentLifecycleEventMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLifecycleEventMapper.swift; sourceTree = "<group>"; };
@@ -2618,6 +2620,7 @@
 				BA6C7434D216D5C43A2FB921 /* ACPFileChip.swift */,
 				29D7631D754795D16E946440 /* ACPFileEditCard.swift */,
 				8B4BB6C10F3718F7D0A50BAE /* ACPFirstRunConnectingPolicy.swift */,
+				737A9A3D11EA28582CA5D061 /* ACPFirstRunConnectingView.swift */,
 				E2C5BD0110EB8EDE7BB4ED93 /* ACPHistorySidebar.swift */,
 				A7FB37A9430467B477E40819 /* ACPImageChipAttachment.swift */,
 				B1615F1953C6FE9D1A30A1A2 /* ACPImageEncoding.swift */,
@@ -3550,6 +3553,7 @@
 				DAA6F5DABE3214693628C730 /* ACPFilesystem.swift in Sources */,
 				AFD24C0A5D5625A1843751C1 /* ACPFirstRunConnectingPhase.swift in Sources */,
 				9AC7E08307DA010181E2DE58 /* ACPFirstRunConnectingPolicy.swift in Sources */,
+				62055BD147E504C658B93E20 /* ACPFirstRunConnectingView.swift in Sources */,
 				4E352BDC87A204DE2912F54F /* ACPHarnessBridge.swift in Sources */,
 				F73063B2384B650C227BD09E /* ACPHistorySidebar.swift in Sources */,
 				3D98C4F5EE2C0B1203C76752 /* ACPImageChipAttachment.swift in Sources */,
