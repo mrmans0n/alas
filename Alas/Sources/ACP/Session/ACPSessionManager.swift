@@ -1052,7 +1052,8 @@ extension ACPSessionManager {
                                                 sessionId: sessionId
                                               )
                                           },
-                                          onPersist: { [weak self] in self?.changeNotifier.post() })
+                                          onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          ownerInstanceId: instanceId)
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }

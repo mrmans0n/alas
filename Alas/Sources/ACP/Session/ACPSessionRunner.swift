@@ -36,6 +36,7 @@ final class ACPSessionRunner {
     /// CLAUDECODE/CLAUDE_SESSION_ID markers that would otherwise leak
     /// back in via a re-augment from `ProcessInfo`.
     private let agentEnv: [String: String]
+    private let ownerInstanceId: String?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
     private var updatesTask: Task<Void, Never>?
@@ -73,7 +74,8 @@ final class ACPSessionRunner {
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
-         onPersist: (() -> Void)? = nil)
+         onPersist: (() -> Void)? = nil,
+         ownerInstanceId: String? = nil)
     {
         self.session = session
         self.connection = connection
@@ -81,6 +83,7 @@ final class ACPSessionRunner {
         self.sessionId = sessionId
         self.worktreePath = worktreePath
         self.agentEnv = agentEnv
+        self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
         self.suppressingLoadReplay = suppressingLoadReplay
@@ -1066,6 +1069,14 @@ extension ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// True when this runner may write — it still holds the session lease.
+    /// When `ownerInstanceId` is nil (tests that construct a runner directly
+    /// without a lease), gating is disabled and writes always proceed.
+    private func holdsLeaseForWrite() -> Bool {
+        guard let ownerInstanceId else { return true }
+        return (try? store.loadLease(sessionId: sessionId))?.ownerInstance == ownerInstanceId
+    }
+
     /// Persist the specific message rows touched by an `apply()` call.
     /// Use this instead of `persistFromIndex` when the caller can name
     /// exactly which indices changed — a plan or tool-call update may
@@ -1073,6 +1084,7 @@ extension ACPSessionRunner {
     /// one, so the count-delta heuristic in `persistFromIndex` would
     /// write back the wrong row.
     func persistIndices(_ indices: Set<Int>) {
+        guard holdsLeaseForWrite() else { return }
         guard !indices.isEmpty else { return }
         let messages = session.transcript.messages
         let now = Int64(Date().timeIntervalSince1970)
@@ -1108,6 +1120,7 @@ extension ACPSessionRunner {
     /// text was visible in memory but never written, so reopening a
     /// session lost most of the conversation.
     func persistFromIndex(_ from: Int) {
+        guard holdsLeaseForWrite() else { return }
         let messages = session.transcript.messages
         guard messages.count > 0 else { return }
 

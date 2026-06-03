@@ -572,6 +572,71 @@ struct ACPSessionRunnerTests {
         #expect(posts >= 1)
     }
 
+    @Test("runner does not persist when it has lost the session lease")
+    func persistSkippedWhenLeaseLost() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-lease-lost-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId.
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+
+        // Put one message in the transcript, then attempt to persist.
+        session.appendSystemNotice("should not land")
+        runner.persistFromIndex(0)
+
+        // Nothing should have been written — the lease is held by "OTHER", not "ME".
+        #expect(try store.messageCount(sessionId: sid) == 0)
+    }
+
+    @Test("runner persists when it holds the session lease")
+    func persistProceedsWhenLeaseHeld() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-lease-held-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for "ME" — same as the runner's ownerInstanceId.
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+
+        session.appendSystemNotice("should land")
+        runner.persistFromIndex(0)
+
+        // The lease owner matches, so the message must be written.
+        #expect(try store.messageCount(sessionId: sid) == 1)
+    }
+
     private func waitUntil(
         timeoutNanoseconds: UInt64 = 1_000_000_000,
         _ condition: @escaping @MainActor () -> Bool
