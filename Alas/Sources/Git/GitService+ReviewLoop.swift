@@ -19,6 +19,9 @@ extension GitService {
 
             let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" })
             guard parts.count >= 2 else { continue }
+            if parts.count >= 3, parts[2] == "(push)" {
+                continue
+            }
 
             let remote = GitRemote(name: String(parts[0]), url: String(parts[1]))
             let key = "\(remote.name)\u{0}\(remote.url)"

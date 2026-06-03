@@ -580,6 +580,20 @@ struct ReviewLoopStateTests {
         #expect(remotes == [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")])
     }
 
+    @Test func parseRemotesIgnoresPushOnlyURLs() {
+        let remotes = GitService.parseRemotes("""
+        origin  git@github.com:mrmans0n/alas.git (fetch)
+        origin  git@github.com:nacho/alas.git (push)
+        fork    git@github.com:nacho/alas.git (fetch)
+        fork    git@github.com:nacho/alas.git (push)
+        """)
+
+        #expect(remotes == [
+            GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git"),
+            GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+        ])
+    }
+
     @Test func needsPushReturnsTrueWhenUpstreamIsMissing() async throws {
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
