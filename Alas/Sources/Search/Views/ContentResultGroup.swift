@@ -13,7 +13,7 @@ struct ContentResultGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ForEach(Array(group.hits.enumerated()), id: \.element.id) { offset, hit in
+            ForEach(Array(group.hits.enumerated()), id: \.offset) { offset, hit in
                 let absIndex = baseIndex + offset
                 hitRow(hit: hit, absIndex: absIndex, isSelected: absIndex == selectedIndex)
                     // Match the scroll-target id used by file rows so the

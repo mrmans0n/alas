@@ -152,7 +152,7 @@ struct AgentLauncherDialog: View {
                     if agents.isEmpty {
                         emptyState
                     } else {
-                        ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
+                        ForEach(Array(agents.enumerated()), id: \.offset) { idx, agent in
                             AgentLauncherRow(
                                 agent: agent,
                                 isSelected: idx == appState.agentLauncher.selectedIndex,

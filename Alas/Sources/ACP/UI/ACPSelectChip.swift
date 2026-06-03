@@ -180,7 +180,7 @@ private struct DropdownPanel: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, item in
+                        ForEach(Array(filtered.enumerated()), id: \.offset) { idx, item in
                             row(idx: idx, item: item)
                                 .id(idx)
                         }

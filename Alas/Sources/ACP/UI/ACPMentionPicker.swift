@@ -76,7 +76,7 @@ struct ACPMentionPickerView: View {
                             .foregroundStyle(theme.color("fg-faint"))
                             .padding(.horizontal, 10).padding(.vertical, 10)
                     } else {
-                        ForEach(Array(ranked.enumerated()), id: \.element) { idx, file in
+                        ForEach(Array(ranked.enumerated()), id: \.offset) { idx, file in
                             row(idx: idx, file: file).id(idx)
                         }
                     }
