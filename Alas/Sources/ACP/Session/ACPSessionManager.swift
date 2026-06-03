@@ -501,9 +501,10 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Persist a session-level change (model/mode/title/autoRun) and bump updated_at.
-    /// No-ops when this instance does not hold the writer lease.
+    /// No-ops only when another live instance owns the writer lease (this pane
+    /// is a mirror); the writer and not-yet-leased cases persist normally.
     func persist(_ s: ACPSession) {
-        guard _ownedLeases.contains(s.id) else { return }
+        guard !isMirror(sessionId: s.id) else { return }
         guard let row = try? store.loadSession(id: s.id) else { return }
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
@@ -540,10 +541,10 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Rename a session with the given title and source. Updates both
-    /// the in-memory session and SQLite in one call. No-ops when this
-    /// instance does not hold the writer lease.
+    /// the in-memory session and SQLite in one call. No-ops only when
+    /// another live instance owns the writer lease (this pane is a mirror).
     func renameSession(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) {
-        guard _ownedLeases.contains(id) else { return }
+        guard !isMirror(sessionId: id) else { return }
         guard let session = sessions[id] else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -618,10 +619,11 @@ final class ACPSessionManager: ObservableObject {
     /// only mutates the cached `ACPSession`, and the supposedly-removed
     /// prompts reappear on relaunch.
     ///
-    /// No-ops when this instance does not hold the writer lease — mirrors
-    /// must not overwrite the active owner's queue.
+    /// No-ops only when another live instance owns the writer lease — a
+    /// mirror must not overwrite the active owner's queue. The writer and
+    /// not-yet-leased cases persist normally.
     func persistQueue(for session: ACPSession) {
-        guard _ownedLeases.contains(session.id) else { return }
+        guard !isMirror(sessionId: session.id) else { return }
         try? store.upsertQueue(sessionId: session.id, items: session.queue)
     }
 
