@@ -157,6 +157,9 @@ struct ACPComposer: View {
                 if let thinking = session.chipState.thinking {
                     thinkingChip(thinking)
                 }
+                ForEach(session.chipState.parameters) { parameter in
+                    parameterChip(parameter)
+                }
                 if let mode = session.chipState.mode {
                     modeChip(mode)
                 }
@@ -347,6 +350,13 @@ struct ACPComposer: View {
                     ?? "Model",
              placeholder: "Model",
              accent: theme.color("syntax-keyword"))
+    }
+
+    private func parameterChip(_ parameter: ACPParameterChip) -> some View {
+        chip(spec: parameter.spec,
+             label: chipLabel(prefix: parameter.label, spec: parameter.spec),
+             placeholder: parameter.label,
+             accent: theme.color("fg-muted"))
     }
 
     private func chip(spec: ChipSpec,

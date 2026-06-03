@@ -6,7 +6,16 @@ struct ACPChipState: Equatable {
     var models: ChipSpec?
     var mode: ChipSpec?
     var thinking: ChipSpec?
+    var parameters: [ACPParameterChip]
     var autoRun: ACPAgentProfiles.AutoRunSupport
+}
+
+/// Additional select config options returned by parameterized model pickers.
+/// These are not canonical ACP chips, but still need to stay reachable.
+struct ACPParameterChip: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let spec: ChipSpec
 }
 
 /// A single chip's data, plus a tag remembering where it came from so the
@@ -65,8 +74,16 @@ extension ACPChipState {
                                 modes: availableModes,
                                 currentMode: currentMode,
                                 configOptions: configOptions)
+        let consumedConfigIds = Set([
+            configOptionId(from: models),
+            configOptionId(from: mode),
+            configOptionId(from: thinking),
+        ].compactMap { $0 })
+        let parameters = parameterChips(from: configOptions,
+                                        excluding: consumedConfigIds)
         var result = ACPChipState(models: models, mode: mode,
-                                  thinking: thinking, autoRun: routing.autoRun)
+                                  thinking: thinking, parameters: parameters,
+                                  autoRun: routing.autoRun)
 
         // Cursor encodes thinking as `[effort=…]` / `[thinking=…]` suffixes
         // on model variant ids. When the standard thinking heuristic finds
@@ -141,11 +158,50 @@ extension ACPChipState {
         category: String,
         in options: [ACPConfigOption]
     ) -> ChipSpec? {
-        let accepted: Set<String> = [category, category.prefix(1).uppercased() + category.dropFirst()]
         guard let opt = options.first(where: {
             guard let c = $0.category else { return false }
-            return accepted.contains(c)
+            return categoryMatches(c, category)
         }) else { return nil }
         return selectOption(id: opt.id, in: options)
+    }
+
+    private static func parameterChips(
+        from options: [ACPConfigOption],
+        excluding consumedIds: Set<String>
+    ) -> [ACPParameterChip] {
+        options.compactMap { opt in
+            guard opt.type == "select", !opt.options.isEmpty,
+                  !consumedIds.contains(opt.id),
+                  !isCanonicalCategory(opt.category) else {
+                return nil
+            }
+
+            return ACPParameterChip(
+                id: opt.id,
+                label: opt.name.isEmpty ? opt.id.capitalized : opt.name,
+                spec: ChipSpec(
+                    source: .configOption(id: opt.id),
+                    options: opt.options.map {
+                        ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
+                    },
+                    currentId: opt.currentValue))
+        }
+    }
+
+    private static func configOptionId(from spec: ChipSpec?) -> String? {
+        guard case .configOption(let id)? = spec?.source else { return nil }
+        return id
+    }
+
+    private static func isCanonicalCategory(_ category: String?) -> Bool {
+        guard let category else { return false }
+        return categoryMatches(category, "model")
+            || categoryMatches(category, "mode")
+            || categoryMatches(category, "thought_level")
+            || categoryMatches(category, "ThoughtLevel")
+    }
+
+    private static func categoryMatches(_ actual: String, _ expected: String) -> Bool {
+        actual == expected || actual == expected.prefix(1).uppercased() + expected.dropFirst()
     }
 }
