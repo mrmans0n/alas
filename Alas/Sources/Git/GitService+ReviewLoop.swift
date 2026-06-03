@@ -57,13 +57,6 @@ extension GitService {
             return 0
         }
 
-        let branchName = String(upstream.ref.dropFirst(upstream.remote.count + 1))
-        _ = try? await fetchRef(
-            worktreePath: worktreePath,
-            remote: upstream.remote,
-            branch: branchName
-        )
-
         let result = try await Process.git(["rev-list", "--count", "HEAD..\(upstream.ref)"], cwd: worktreePath)
         guard result.exitCode == 0 else {
             return 0

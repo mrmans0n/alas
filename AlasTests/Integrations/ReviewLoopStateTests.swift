@@ -529,7 +529,7 @@ struct ReviewLoopStateTests {
         #expect(needsPush)
     }
 
-    @Test func upstreamAheadCommitCountReturnsRemoteOnlyCommits() async throws {
+    @Test func upstreamAheadCommitCountUsesLocalTrackingRefWithoutFetching() async throws {
         let repo = try await Self.makeRepo()
         let remote = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-review-loop-remote-\(UUID().uuidString)")
@@ -554,9 +554,12 @@ struct ReviewLoopStateTests {
         _ = try await Process.git(["push", "-q", "origin", "main"], cwd: remoteClone)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "local update"], cwd: repo)
 
-        let upstreamAhead = try await GitService().upstreamAheadCommitCount(worktreePath: repo)
+        let staleTrackingCount = try await GitService().upstreamAheadCommitCount(worktreePath: repo)
+        _ = try await Process.git(["fetch", "origin", "main"], cwd: repo)
+        let fetchedTrackingCount = try await GitService().upstreamAheadCommitCount(worktreePath: repo)
 
-        #expect(upstreamAhead == 1)
+        #expect(staleTrackingCount == 0)
+        #expect(fetchedTrackingCount == 1)
     }
 
     private static func makeRepo() async throws -> URL {
