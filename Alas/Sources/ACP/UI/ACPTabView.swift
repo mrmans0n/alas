@@ -172,6 +172,7 @@ private struct ACPSessionView: View {
     }
 
     private var isMirror: Bool { manager.isMirror(sessionId: sessionId) }
+    private var mirrorIsBusy: Bool { manager.mirrorIsBusy(sessionId: sessionId) }
 
     private var composerPlacement: ACPComposerPlacement {
         isNewEmptySession ? .raisedEmpty : .bottom
@@ -434,8 +435,13 @@ private struct ACPSessionView: View {
     @ViewBuilder
     private func mirrorBanner() -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "eye")
-            Text("Open in another window — read-only")
+            if mirrorIsBusy {
+                ProgressView().controlSize(.small)
+                Text("Working in another window — read-only")
+            } else {
+                Image(systemName: "eye")
+                Text("Open in another window — read-only")
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)

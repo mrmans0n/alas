@@ -719,6 +719,14 @@ extension ACPSessionManager {
             && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
     }
 
+    /// Whether the instance currently writing this mirrored session is
+    /// actively streaming (drives the mirror's busy spinner). Reads the
+    /// lease status written by the owner's heartbeat.
+    func mirrorIsBusy(sessionId: ACPSession.ID) -> Bool {
+        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
+        return lease.status == "busy"
+    }
+
     /// Refresh the heartbeat timestamp for a lease we own. No-op if the
     /// lease is no longer in `_ownedLeases` (e.g. already released).
     private func refreshHeartbeatNow(sessionId: ACPSession.ID) {
