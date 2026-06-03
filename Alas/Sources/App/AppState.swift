@@ -2965,7 +2965,7 @@ final class AppState {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
-        let session = mgr.createSession(agentId: agentID)
+        let session = mgr.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
     }

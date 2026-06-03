@@ -85,6 +85,14 @@ struct AgentsPane: View {
                             state.saveConfig() }
                         ))
                     }
+                    SettingsRow(name: "⚡ Auto-run",
+                                desc: "New chat sessions start with auto-run on — the agent runs tools without asking for permission. Toggle per-session with the bolt in the composer.") {
+                        AlasToggle(on: Binding(
+                            get: { state.config.harness.acpAutoRunByDefault },
+                            set: { state.config.harness.acpAutoRunByDefault = $0
+                            state.saveConfig() }
+                        ))
+                    }
                 }
 
                 SettingsGroup(title: "Harness") {

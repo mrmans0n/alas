@@ -87,18 +87,19 @@ final class ACPSessionManager: ObservableObject {
         self.recent = (try? store.recentSessions()) ?? []
     }
 
-    func createSession(agentId: String) -> ACPSession {
+    func createSession(agentId: String, autoRunDefault: Bool = false) -> ACPSession {
         let id = UUID().uuidString
         let now = Int64(Date().timeIntervalSince1970)
         let row = ACPSessionRow(
             id: id, agentId: agentId, title: "New session",
             titleSource: .placeholder,
-            currentModel: nil, currentMode: nil, autoRun: false,
+            currentModel: nil, currentMode: nil, autoRun: autoRunDefault,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
         try? store.upsertSession(row)
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
             title: row.title, titleSource: .placeholder, hydrationState: .ready)
+        session.autoRunEnabled = autoRunDefault
         sessions[id] = session
         refreshRecent()
         return session
