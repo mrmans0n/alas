@@ -1,8 +1,20 @@
 import Foundation
 
 struct GitRemote: Equatable, Sendable {
+    enum Direction: Equatable, Sendable {
+        case fetch
+        case push
+    }
+
     let name: String
     let url: String
+    let direction: Direction
+
+    init(name: String, url: String, direction: Direction = .fetch) {
+        self.name = name
+        self.url = url
+        self.direction = direction
+    }
 }
 
 enum CodeHostRemoteDetector {
@@ -12,6 +24,7 @@ enum CodeHostRemoteDetector {
         preferredRemoteName: String? = nil
     ) -> CodeHostRemote? {
         remotes
+            .filter { $0.direction == .fetch }
             .sorted { lhs, rhs in
                 let lhsPriority = priority(for: lhs.name, preferredRemoteName: preferredRemoteName)
                 let rhsPriority = priority(for: rhs.name, preferredRemoteName: preferredRemoteName)

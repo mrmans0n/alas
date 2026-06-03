@@ -113,6 +113,15 @@ struct CodeHostRemoteDetectorTests {
         #expect(remote?.repository == "alas")
     }
 
+    @Test func ignoresPushURLsForReviewRemoteDetection() {
+        let remote = CodeHostRemoteDetector.detect(from: [
+            GitRemote(name: "origin", url: "https://github.com/mrmans0n/alas.git"),
+            GitRemote(name: "origin", url: "https://github.com/nacho/alas.git", direction: .push),
+        ])
+
+        #expect(remote?.owner == "mrmans0n")
+    }
+
     @Test func unsupportedLocalPathReturnsNil() {
         let remote = CodeHostRemoteDetector.detect(from: [
             GitRemote(name: "origin", url: "../alas.git"),

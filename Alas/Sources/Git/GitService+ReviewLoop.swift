@@ -19,12 +19,10 @@ extension GitService {
 
             let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" })
             guard parts.count >= 2 else { continue }
-            if parts.count >= 3, parts[2] == "(push)" {
-                continue
-            }
+            let direction: GitRemote.Direction = parts.count >= 3 && parts[2] == "(push)" ? .push : .fetch
 
-            let remote = GitRemote(name: String(parts[0]), url: String(parts[1]))
-            let key = "\(remote.name)\u{0}\(remote.url)"
+            let remote = GitRemote(name: String(parts[0]), url: String(parts[1]), direction: direction)
+            let key = "\(remote.name)\u{0}\(remote.url)\u{0}\(remote.direction)"
             guard seen.insert(key).inserted else { continue }
             remotes.append(remote)
         }

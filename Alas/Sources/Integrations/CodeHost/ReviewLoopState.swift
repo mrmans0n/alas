@@ -332,9 +332,10 @@ final class ReviewLoopState {
         baseRemote: CodeHostRemote
     ) -> ReviewLoopLocalState {
         guard let upstreamRemoteName = local.upstreamRemoteName,
-              let upstreamRemote = remotes.first(where: { $0.name == upstreamRemoteName }),
+              let upstreamRemote = remotes.first(where: { $0.name == upstreamRemoteName && $0.direction == .push })
+                  ?? remotes.first(where: { $0.name == upstreamRemoteName && $0.direction == .fetch }),
               let headRemote = CodeHostRemoteDetector.detect(
-                  from: [upstreamRemote],
+                  from: [GitRemote(name: upstreamRemote.name, url: upstreamRemote.url)],
                   supportedKinds: [baseRemote.kind]
               ),
               headRemote.kind == baseRemote.kind,

@@ -275,6 +275,36 @@ struct ReviewLoopStateTests {
         #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
     }
 
+    @Test func createReviewRequestUsesPushURLForSplitFetchPushForkOwner() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        let local = ReviewLoopLocalState(
+            branchName: "feature/review-loop",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 0,
+            hasUpstream: true,
+            upstreamRemoteName: "origin",
+            needsPush: false
+        )
+
+        await state.refresh(local: local, remotes: [
+            GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git"),
+            GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
+        ])
+        let didRun = await state.createReviewRequest()
+
+        #expect(didRun)
+        #expect(state.snapshot?.remote?.owner == "mrmans0n")
+        #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
+    }
+
     @Test func createReviewRequestUsesCapturedSnapshotInsteadOfCurrentSnapshot() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         let state = ReviewLoopState(
@@ -628,10 +658,13 @@ struct ReviewLoopStateTests {
 
         let remotes = try await GitService().remotes(worktreePath: repo)
 
-        #expect(remotes == [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")])
+        #expect(remotes == [
+            GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git"),
+            GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git", direction: .push),
+        ])
     }
 
-    @Test func parseRemotesIgnoresPushOnlyURLs() {
+    @Test func parseRemotesPreservesPushURLsWithDirection() {
         let remotes = GitService.parseRemotes("""
         origin  git@github.com:mrmans0n/alas.git (fetch)
         origin  git@github.com:nacho/alas.git (push)
@@ -641,7 +674,9 @@ struct ReviewLoopStateTests {
 
         #expect(remotes == [
             GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git"),
+            GitRemote(name: "origin", url: "git@github.com:nacho/alas.git", direction: .push),
             GitRemote(name: "fork", url: "git@github.com:nacho/alas.git"),
+            GitRemote(name: "fork", url: "git@github.com:nacho/alas.git", direction: .push),
         ])
     }
 
