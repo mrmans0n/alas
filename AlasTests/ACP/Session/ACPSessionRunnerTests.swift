@@ -637,6 +637,74 @@ struct ACPSessionRunnerTests {
         #expect(try store.messageCount(sessionId: sid) == 1)
     }
 
+    @Test("persistQueue skipped when lease is held by another instance")
+    func persistQueueSkippedWhenLeaseHeldByOther() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-queue-lease-lost-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance.
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+
+        // Enqueue a prompt item on the in-memory session and attempt to persist it.
+        session.queue.append(QueuedPrompt(id: UUID(), blocks: [], status: .pending))
+        runner.persistQueue()
+
+        // The lease is held by "OTHER", so nothing must have been written.
+        #expect(try store.loadQueue(sessionId: sid).isEmpty)
+    }
+
+    @Test("persistSessionRow skipped when lease is held by another instance")
+    func persistSessionRowSkippedWhenLeaseHeldByOther() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-session-row-lease-lost-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        let seedTitle = "original-title"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: seedTitle,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance.
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: seedTitle)
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+
+        // Mutate the in-memory title and attempt to flush it to the store.
+        session.title = "new-title-should-not-land"
+        runner.persistSessionRow()
+
+        // The stored row must still have the original title.
+        let row = try store.loadSession(id: sid)
+        #expect(row?.title == seedTitle)
+    }
+
     private func waitUntil(
         timeoutNanoseconds: UInt64 = 1_000_000_000,
         _ condition: @escaping @MainActor () -> Bool

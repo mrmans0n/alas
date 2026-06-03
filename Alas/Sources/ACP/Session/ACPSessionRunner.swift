@@ -90,11 +90,20 @@ final class ACPSessionRunner {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.persistedMessageCount = (try? store.messageCount(sessionId: sessionId)) ?? 0
+        self.seq = Int64(persistedMessageCount)
+        // Capture the three values holdsLeaseForWrite() reads so the closure
+        // can be formed before `self` is fully initialised (policy is the
+        // last stored property). The logic is identical to holdsLeaseForWrite.
+        let _store = store
+        let _sessionId = sessionId
+        let _ownerInstanceId = ownerInstanceId
         self.policy = ACPPermissionPolicy(
             session: session,
-            log: ACPPermissionDecisionLog(store: store)
+            log: ACPPermissionDecisionLog(store: store, canWrite: {
+                guard let id = _ownerInstanceId else { return true }
+                return (try? _store.loadLease(sessionId: _sessionId))?.ownerInstance == id
+            })
         )
-        self.seq = Int64(persistedMessageCount)
     }
 
     func start() {
@@ -355,6 +364,7 @@ final class ACPSessionRunner {
     /// list refresh; the runner skips that because it has no manager
     /// handle, and the next open via the manager picks up the new row.
     func persistSessionRow() {
+        guard holdsLeaseForWrite() else { return }
         guard let row = try? store.loadSession(id: sessionId) else { return }
         let now = Int64(Date().timeIntervalSince1970)
         try? store.upsertSession(.init(
@@ -445,11 +455,13 @@ final class ACPSessionRunner {
             policy.userCancelled()
             let changedIndices = session.cancelInFlightToolCalls()
             session.terminalHost.killAll()
-            for i in changedIndices {
-                let m = session.transcript.messages[i]
-                if let payload = try? ACPMessageCodec.encode(m) {
-                    let id = "msg-\(sessionId)-\(i)"
-                    try? store.updateMessagePayload(id: id, payload: payload)
+            if holdsLeaseForWrite() {
+                for i in changedIndices {
+                    let m = session.transcript.messages[i]
+                    if let payload = try? ACPMessageCodec.encode(m) {
+                        let id = "msg-\(sessionId)-\(i)"
+                        try? store.updateMessagePayload(id: id, payload: payload)
+                    }
                 }
             }
             // Pop the head ONLY if it's the same `.sending` item we
@@ -679,6 +691,7 @@ extension ACPSessionRunner {
     /// would block the UI for a transient SQLite error and we'd rather
     /// lose a queue snapshot than the user's draft.
     func persistQueue() {
+        guard holdsLeaseForWrite() else { return }
         try? store.upsertQueue(sessionId: sessionId, items: session.queue)
     }
 
