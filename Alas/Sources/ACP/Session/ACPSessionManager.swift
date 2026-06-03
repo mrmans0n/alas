@@ -992,6 +992,11 @@ extension ACPSessionManager {
     /// by-index mutation avoids violating those invariants.
     func refreshMirror(sessionId: ACPSession.ID) async {
         guard let session = sessions[sessionId] else { return }
+        // Always sync the queue — it can change (drain/clear) with no new
+        // transcript rows, so this must run before any early-return below.
+        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+        session.restoreQueue(queue)
+        // Sync transcript messages; early-return when nothing new to apply.
         let stored = (try? store.loadMessages(sessionId: sessionId)) ?? []
         guard !stored.isEmpty else { return }
         let decoder = JSONDecoder()
@@ -1003,11 +1008,6 @@ extension ACPSessionManager {
             messages.append(wire.toMessage())
         }
         session.replaceTranscriptMessages(messages)
-        // Sync the mirror's cached queue so a stale in-memory queue does not
-        // survive into a potential takeover. Without this a writer that drains
-        // or clears queued prompts would leave this mirror holding stale items.
-        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
-        session.restoreQueue(queue)
         // Anchor the visible window to the tail so new content is visible,
         // but only when the session is following the tail (user hasn't scrolled up).
         if session.followsTranscriptTail {

@@ -472,6 +472,45 @@ import Foundation
                 "mirror must reflect an empty queue after the writer clears it")
     }
 
+    // MARK: - Fix: Mirror queue syncs even with no new transcript messages
+
+    @Test("refreshMirror syncs queue when writer changes queue but adds no transcript messages")
+    func mirrorQueueSyncsWithNoNewMessages() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-queue-no-msgs-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        _ = mgrA.acquireWriterLease(sessionId: session.id)
+
+        // Mirror instance creates a placeholder (queue starts empty, no transcript rows).
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        let mirrorSession = mgrB.placeholderSession(id: session.id)
+        #expect(mirrorSession != nil)
+        #expect(mirrorSession!.queue.isEmpty,
+                "precondition: mirror placeholder queue is empty")
+
+        // Writer persists a queue item WITHOUT adding any transcript messages.
+        session.enqueue(blocks: [.text("writer queued item")])
+        mgrA.persistQueue(for: session)
+        let storedQueue = try storeA.loadQueue(sessionId: session.id)
+        #expect(storedQueue.count == 1, "precondition: writer persisted one queue item")
+        #expect((try? storeA.loadMessages(sessionId: session.id))?.isEmpty != false,
+                "precondition: no transcript messages in the store")
+
+        // refreshMirror must sync the queue even though there are no transcript messages.
+        await mgrB.refreshMirror(sessionId: session.id)
+        #expect(mgrB.sessions[session.id]?.queue.count == 1,
+                "mirror must reload the queue even when there are no new transcript messages")
+
+        // Writer clears the queue (still no transcript messages).
+        try storeA.upsertQueue(sessionId: session.id, items: [])
+        await mgrB.refreshMirror(sessionId: session.id)
+        #expect(mgrB.sessions[session.id]?.queue.isEmpty == true,
+                "mirror must reflect an empty queue after the writer clears it (no transcript messages)")
+    }
+
     // MARK: - Fix 2 (P2): standDown on closed session doesn't start mirroring
 
     @Test("beginMirroring on a non-existent session is a no-op (no poll started)")

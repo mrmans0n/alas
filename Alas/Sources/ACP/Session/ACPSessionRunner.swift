@@ -731,6 +731,7 @@ extension ACPSessionRunner {
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
+        guard holdsLeaseForWrite() else { return }
         guard !steerInProgress,
               session.agentState == .ready,
               session.transcript.streamingState == .idle,
