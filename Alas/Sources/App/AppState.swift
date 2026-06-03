@@ -2035,8 +2035,16 @@ final class AppState {
         // (other tabs may share it), so the global flush from
         // disposeACPManager wouldn't fire here.
         manager.flushPendingDraftWrite(forSession: sessionId)
-        guard let runner = manager.runners[sessionId] else { return }
-        runner.stop()
+        // Call detach unconditionally — a session can hold a writer lease
+        // + heartbeat + writer-watch before its runner is registered (the
+        // "attach window"). If we returned early when no runner was present,
+        // closing the tab during that window would leak all of those
+        // resources. detach is idempotent: releaseWriterLease is owner-
+        // scoped, and endMirroring / stopHeartbeat / stopWriterWatch are
+        // all no-ops when not active.
+        if let runner = manager.runners[sessionId] {
+            runner.stop()
+        }
         Task { @MainActor in
             await manager.detach(sessionId: sessionId)
         }

@@ -670,6 +670,58 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadQueue(sessionId: sid).isEmpty)
     }
 
+    // MARK: - Fix 3 (P2): Terminal-create lease gate
+
+    @Test("terminal create denied when lease is held by another instance")
+    func terminalCreateDeniedWhenLeaseLost() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-terminal-lease-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId.
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        // Request a terminal/create while the lease is held by "OTHER".
+        let params = ACPTerminalCreateParams(
+            sessionId: sid, command: "/bin/echo",
+            args: ["hi"], env: nil, cwd: nil, outputByteLimit: nil)
+        mock.emitTerminal(.create(id: .number(99), params: params))
+
+        // Wait for a response.
+        for _ in 0..<50 {
+            if mock.terminalResponses[.number(99)] != nil { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .failure(let err)? = mock.terminalResponses[.number(99)] else {
+            Issue.record("expected a failure response from the terminal-create gate")
+            return
+        }
+        // Must be denied with the lease-lost error code, not a spawn error.
+        #expect(err.code == -32003,
+                "terminal create must respond with code -32003 (lease lost) not a spawn error")
+        // No terminal must have been created on the host.
+        #expect(runner.session.terminalHost.terminals.isEmpty,
+                "no terminal must be created when the lease is held by another instance")
+    }
+
     @Test("persistSessionRow skipped when lease is held by another instance")
     func persistSessionRowSkippedWhenLeaseHeldByOther() throws {
         let url = FileManager.default.temporaryDirectory

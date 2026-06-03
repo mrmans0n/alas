@@ -283,6 +283,17 @@ final class ACPSessionRunner {
         let host = self.session.terminalHost
         switch req {
         case .create(let id, let p):
+            // Gate terminal creation on the lease: a runner that has lost
+            // the writer lease must not start new terminal side effects in
+            // the brief window before stand-down tears it down. This is
+            // defense-in-depth alongside the heartbeat/stand-down path
+            // (which calls stop() → terminalHost.killAll() within ~100ms
+            // of a takeover ping). Matches the existing file-write gate.
+            guard holdsLeaseForWrite() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
             do {
                 let res = try host.create(p)
                 self.connection.client.respondToTerminalRequest(

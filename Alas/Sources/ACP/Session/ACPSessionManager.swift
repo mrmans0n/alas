@@ -875,6 +875,18 @@ extension ACPSessionManager {
         startHeartbeat(sessionId: sessionId)
         startWriterWatch(sessionId: sessionId)
         if let session = sessions[sessionId] {
+            // Refresh the cached remoteSessionId from the store so the
+            // re-attach uses session/load (resuming the existing agent
+            // conversation) rather than session/new (creating a fresh one).
+            // A mirror that was opened before the writer persisted
+            // remote_session_id has a stale/nil in-memory value; reading
+            // the store row here fixes that before attach branches on it.
+            // Only overwrite when the store has a non-empty value so we
+            // don't clobber a good in-memory id with a missing row.
+            if let row = try? store.loadSession(id: sessionId),
+               let remote = row.remoteSessionId, !remote.isEmpty {
+                session.remoteSessionId = remote
+            }
             session.agentState = .idle   // allow attach's agentState guard to proceed
             Task { await attach(to: sessionId, freshlyCreated: false) }
         }

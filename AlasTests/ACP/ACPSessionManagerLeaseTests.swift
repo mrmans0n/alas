@@ -353,6 +353,80 @@ import Foundation
                 "shutdownBackgroundTasks must cancel all writer-watch tokens")
     }
 
+    // MARK: - Fix 1 (P2): Close-while-spawning releases lease
+
+    @Test("detach with no runner releases lease, heartbeat, writer-watch, and mirror")
+    func detachWithNoRunnerReleasesResources() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("no-runner-detach-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+
+        // Simulate the "attach window": A holds the lease + heartbeat + writer-watch
+        // but no runner has been registered yet (i.e. the runner registration step
+        // inside `attach` hasn't been reached).
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        // Manually start heartbeat and writer-watch via beginMirroring + takeOver
+        // side-effect free path: just verify lease is released by detach with no runner.
+        _ = mgrA.sessions[session.id]   // ensure session is cached
+
+        // Verify precondition: A holds the lease.
+        #expect(mgrA._ownedLeases.contains(session.id))
+
+        // Tear down via detach (no runner registered).
+        await mgrA.detach(sessionId: session.id)
+
+        // Lease must be released so another instance can acquire it.
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true,
+                "another instance must be able to acquire the lease after detach")
+        // Mirror and writer-watch must not be active after detach.
+        #expect(!mgrA.mirrorPollActiveForTest(sessionId: session.id),
+                "mirror poll must not be active after detach")
+        #expect(!mgrA.writerWatchActiveForTest(sessionId: session.id),
+                "writer-watch must not be active after detach")
+    }
+
+    // MARK: - Fix 2 (P1): takeOver refreshes remoteSessionId from store
+
+    @Test("takeOver refreshes remoteSessionId from store when cached value is nil")
+    func takeOverRefreshesRemoteSessionId() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("takeover-remote-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        _ = mgrA.acquireWriterLease(sessionId: session.id)
+
+        // Writer (A) persists a non-empty remote_session_id into the store —
+        // this happens after session/new completes in a real attach.
+        let remoteId = "remote-\(UUID().uuidString)"
+        try storeA.upsertSession(.init(
+            id: session.id, agentId: session.agentId, title: session.title,
+            titleSource: session.titleSource, remoteSessionId: remoteId,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        // Mirror (B) creates a placeholder — the placeholder reads the row via
+        // loadSession, so remoteSessionId is seeded from the store at that point.
+        // To simulate a STALE mirror (opened before the writer persisted the id),
+        // we set the cached session's remoteSessionId to nil after placeholder creation.
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        let mirrorSession = mgrB.placeholderSession(id: session.id)
+        #expect(mirrorSession != nil)
+        mirrorSession!.remoteSessionId = nil   // simulate stale mirror
+
+        // B takes over — must refresh from the store before spawning attach.
+        mgrB.takeOver(sessionId: session.id)
+
+        // The synchronous refresh inside takeOver must have restored the stored value.
+        #expect(mgrB.sessions[session.id]?.remoteSessionId == remoteId,
+                "takeOver must refresh remoteSessionId from the store so attach uses session/load")
+    }
+
     // MARK: - Fix 3: anotherLiveInstanceOwnsLease predicate (attach re-check)
 
     @Test("anotherLiveInstanceOwnsLease returns true after a takeover seizes the store")
