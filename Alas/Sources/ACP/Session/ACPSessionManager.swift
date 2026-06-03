@@ -5,6 +5,8 @@ final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
     typealias ACPConnectionFactory = @MainActor (_ spec: ACPLaunchSpec) throws -> ACPConnection
 
+    let instanceId: String
+    let pid: Int64
     let worktreeId: String
     let worktreePath: String
     let store: ACPSessionStore
@@ -52,12 +54,16 @@ final class ACPSessionManager: ObservableObject {
     private var planSidebarVisibility: [ACPSession.ID: Bool] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
+         instanceId: String = UUID().uuidString,
+         pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
          hydratorPath: String? = nil,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
          connectionFactory: ACPConnectionFactory? = nil)
     {
+        self.instanceId = instanceId
+        self.pid = pid
         self.worktreeId = worktreeId
         self.worktreePath = worktreePath
         self.store = store

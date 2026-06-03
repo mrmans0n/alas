@@ -6,6 +6,10 @@ import os
 @Observable
 @MainActor
 final class AppState {
+    /// Stable for this process; identifies this app instance to the ACP
+    /// session-lease layer so two running Alas builds don't fight over a
+    /// shared per-worktree database.
+    let instanceId: String = UUID().uuidString
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
@@ -2911,6 +2915,8 @@ final class AppState {
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 store: store,
+                instanceId: instanceId,
+                pid: Int64(ProcessInfo.processInfo.processIdentifier),
                 hydratorPath: dbURL.path,
                 onDirtyCheck: { [weak self] path in
                     self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
