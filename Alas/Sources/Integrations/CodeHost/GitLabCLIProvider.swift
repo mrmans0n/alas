@@ -394,7 +394,7 @@ struct GitLabCLIProvider: CodeHostProvider {
                     id: checkID(for: job, pipeline: pipeline),
                     name: job.name,
                     workflow: workflow,
-                    bucket: mapCheckBucket(job.status),
+                    bucket: mapCheckBucket(job.status, allowFailure: job.allowFailure),
                     detailURL: detailURL,
                     completedAt: try parseOptionalGitLabDate(job.finishedAt)
                 )
@@ -431,7 +431,7 @@ struct GitLabCLIProvider: CodeHostProvider {
     private static func failedJobIDs(fromPipelineJSON json: String) throws -> [Int] {
         let pipeline = try decodePipeline(json)
         return pipeline.jobs?.compactMap { job in
-            job.status.lowercased() == "failed" ? job.id : nil
+            job.status.lowercased() == "failed" && job.allowFailure != true ? job.id : nil
         } ?? []
     }
 
@@ -500,19 +500,26 @@ struct GitLabCLIProvider: CodeHostProvider {
     }
 
     private static func mapCheckBucket(_ status: String) -> ReviewCheckBucket {
+        mapCheckBucket(status, allowFailure: false)
+    }
+
+    private static func mapCheckBucket(_ status: String, allowFailure: Bool?) -> ReviewCheckBucket {
+        if status.lowercased() == "failed", allowFailure == true {
+            return .skipping
+        }
         switch status.lowercased() {
         case "success":
-            .pass
+            return .pass
         case "failed":
-            .fail
+            return .fail
         case "running", "pending", "created", "preparing", "waiting_for_resource", "manual", "scheduled":
-            .pending
+            return .pending
         case "canceled", "cancelled":
-            .cancel
+            return .cancel
         case "skipped":
-            .skipping
+            return .skipping
         default:
-            .unknown
+            return .unknown
         }
     }
 
@@ -719,6 +726,7 @@ private struct GitLabJob: Decodable {
     let id: Int?
     let name: String
     let status: String
+    let allowFailure: Bool?
     let webURL: String?
     let finishedAt: String?
 
@@ -726,6 +734,7 @@ private struct GitLabJob: Decodable {
         case id
         case name
         case status
+        case allowFailure = "allow_failure"
         case webURL = "web_url"
         case finishedAt = "finished_at"
     }

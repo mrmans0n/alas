@@ -386,6 +386,14 @@ struct GitLabCLIProviderTests {
         #expect(checks[0].id != checks[1].id)
     }
 
+    @Test func pipelineJSONTreatsAllowedFailureJobsAsNonBlocking() throws {
+        let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithAllowedFailureJobsOutput)
+
+        #expect(checks.map(\.name) == ["build", "lint"])
+        #expect(checks.map(\.bucket) == [.pass, .skipping])
+        #expect(checks.max { $0.bucket.severity < $1.bucket.severity }?.bucket == .pass)
+    }
+
     @Test func pipelineJSONFallsBackToPipelineLevelCheckWhenJobsAreMissing() throws {
         let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineOutput)
 
@@ -656,6 +664,36 @@ struct GitLabCLIProviderTests {
             FakeRunner.Command(
                 executable: "glab",
                 args: ["ci", "retry", "103", "-R", "platform/mobile/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func rerunFailedChecksSkipsAllowedFailureJobs() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithAllowedFailureJobsOutput, stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
+            remote: Self.remote,
+            branch: "feature/gitlab-provider",
+            headSHA: "abc123",
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "ci", "get",
+                    "--merge-request", "42",
+                    "--status", "failed",
+                    "--with-job-details",
+                    "--output", "json",
+                    "-R", "platform/mobile/alas",
+                ],
                 cwd: Self.cwd
             ),
         ])
@@ -1092,6 +1130,31 @@ struct GitLabCLIProviderTests {
           "name": "lint",
           "status": "failed",
           "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/103"
+        }
+      ]
+    }
+    """
+
+    private static let pipelineWithAllowedFailureJobsOutput = """
+    {
+      "id": 780,
+      "status": "success",
+      "ref": "feature/gitlab-provider",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/780",
+      "jobs": [
+        {
+          "id": 106,
+          "name": "build",
+          "status": "success",
+          "allow_failure": false,
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/106"
+        },
+        {
+          "id": 107,
+          "name": "lint",
+          "status": "failed",
+          "allow_failure": true,
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/107"
         }
       ]
     }
