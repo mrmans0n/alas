@@ -128,6 +128,12 @@ struct GitHubCLIProviderTests {
         ) == "feature/github-provider")
     }
 
+    @Test func normalizedBaseBranchStripsDetectedRemotePrefixOnly() {
+        #expect(GitHubCLIProvider.normalizedBaseBranch("origin/main", remoteName: "origin") == "main")
+        #expect(GitHubCLIProvider.normalizedBaseBranch("upstream/main", remoteName: "origin") == "upstream/main")
+        #expect(GitHubCLIProvider.normalizedBaseBranch("release/1.0", remoteName: "origin") == "release/1.0")
+    }
+
     @Test func latestRunIDParsesFirstAndEmptyList() throws {
         let id = try GitHubCLIProvider.parseLatestRunID(
             """
@@ -261,6 +267,33 @@ struct GitHubCLIProviderTests {
                 ],
                 cwd: Self.cwd
             ),
+        ])
+    }
+
+    @Test func createReviewRequestNormalizesRemoteQualifiedBaseBranch() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "https://github.com/mrmans0n/alas/pull/43\n", stderr: ""),
+        ])
+
+        _ = try await GitHubCLIProvider(runner: runner).createReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            title: "feature/github-provider",
+            body: "Created from Alas.",
+            cwd: Self.cwd
+        )
+
+        let commands = await runner.commands
+        #expect(commands.first?.args.contains("origin/main") == false)
+        #expect(commands.first?.args == [
+            "pr", "create",
+            "--base", "main",
+            "--head", "feature/github-provider",
+            "--title", "feature/github-provider",
+            "--body", "Created from Alas.",
+            "-R", "mrmans0n/alas",
         ])
     }
 

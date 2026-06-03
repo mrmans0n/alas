@@ -62,11 +62,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         cwd: URL
     ) async throws -> URL {
         let head = Self.qualifiedHead(branch: branch, headOwner: headOwner, baseOwner: remote.owner)
+        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
         let result = try await runner.run(
             "gh",
             args: [
                 "pr", "create",
-                "--base", baseBranch,
+                "--base", base,
                 "--head", head,
                 "--title", title,
                 "--body", body,
@@ -87,6 +88,12 @@ struct GitHubCLIProvider: CodeHostProvider {
               headOwner != baseOwner
         else { return branch }
         return "\(headOwner):\(branch)"
+    }
+
+    static func normalizedBaseBranch(_ baseBranch: String, remoteName: String) -> String {
+        let prefix = "\(remoteName)/"
+        guard baseBranch.hasPrefix(prefix) else { return baseBranch }
+        return String(baseBranch.dropFirst(prefix.count))
     }
 
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] {
