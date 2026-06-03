@@ -210,6 +210,7 @@ final class ReviewLoopState {
                 remote: remote,
                 branch: local.branchName,
                 headOwner: local.headRemoteOwner,
+                baseBranch: local.baseBranch,
                 cwd: worktreePath
             )
             guard isCurrentRefresh(generation) else { return }

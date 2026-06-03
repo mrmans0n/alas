@@ -44,7 +44,13 @@ protocol CodeHostProvider: Sendable {
 
     func isAvailable() async -> Bool
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool
-    func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, cwd: URL) async throws -> ReviewRequest?
+    func currentReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest?
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,

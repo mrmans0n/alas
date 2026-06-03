@@ -32,12 +32,20 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
-    func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, cwd: URL) async throws -> ReviewRequest? {
+    func currentReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        let base = Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
         let result = try await runner.run(
             "gh",
             args: [
                 "pr", "list",
                 "--head", branch,
+                "--base", base,
                 "--state", "open",
                 "--limit", "20",
                 "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",

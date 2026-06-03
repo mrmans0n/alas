@@ -185,6 +185,7 @@ struct GitHubCLIProviderTests {
             remote: Self.remote,
             branch: "feature/github-provider",
             headOwner: nil,
+            baseBranch: "origin/main",
             cwd: Self.cwd
         )
 
@@ -195,6 +196,7 @@ struct GitHubCLIProviderTests {
                 args: [
                     "pr", "list",
                     "--head", "feature/github-provider",
+                    "--base", "main",
                     "--state", "open",
                     "--limit", "20",
                     "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
@@ -413,6 +415,7 @@ struct GitHubCLIProviderTests {
                 remote: Self.remote,
                 branch: "feature/github-provider",
                 headOwner: nil,
+                baseBranch: "main",
                 cwd: Self.cwd
             )
             Issue.record("Expected commandFailed")
