@@ -4,6 +4,7 @@ struct ReviewRequestDraftContext: Equatable {
     let commitSubjects: [String]
     let changedFiles: [CommitChangedFile]
     let diff: String
+    let fileDiffsByPath: [String: String]
     let hasUncommittedChanges: Bool
 }
 
@@ -47,11 +48,27 @@ extension GitService {
             .map(String.init)
 
         let changedFiles = Self.reviewRequestChangedFiles(numstat: files.stdout, nameStatus: names.stdout)
+        var fileDiffsByPath: [String: String] = [:]
+        for file in changedFiles {
+            let fileDiff = try await Process.git(
+                [
+                    "diff",
+                    "--no-color",
+                    "-M",
+                    "\(baseRef)..HEAD",
+                    "--",
+                ] + file.diffPathspecs,
+                cwd: worktreePath
+            )
+            try Self.assertReviewRequestSuccess(fileDiff)
+            fileDiffsByPath[file.path] = fileDiff.stdout
+        }
 
         return ReviewRequestDraftContext(
             commitSubjects: commitSubjects,
             changedFiles: changedFiles,
             diff: diff.stdout,
+            fileDiffsByPath: fileDiffsByPath,
             hasUncommittedChanges: !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
@@ -82,5 +99,14 @@ extension GitService {
                     del: stat.del
                 )
             }
+    }
+}
+
+private extension CommitChangedFile {
+    var diffPathspecs: [String] {
+        if let originalPath, originalPath != path {
+            return [originalPath, path]
+        }
+        return [path]
     }
 }

@@ -283,6 +283,26 @@ final class ReviewLoopState {
         body: String,
         isDraft: Bool
     ) async throws -> URL {
+        try await createReviewRequest(
+            snapshot: snapshot,
+            branch: snapshot.local.branchName,
+            headOwner: snapshot.local.headRemoteOwner,
+            baseBranch: snapshot.local.baseBranch,
+            title: title,
+            body: body,
+            isDraft: isDraft
+        )
+    }
+
+    func createReviewRequest(
+        snapshot: ReviewLoopSnapshot,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        title: String,
+        body: String,
+        isDraft: Bool
+    ) async throws -> URL {
         guard let remote = snapshot.remote,
               let provider = providerRegistry.provider(for: remote.kind)
         else {
@@ -290,9 +310,9 @@ final class ReviewLoopState {
         }
         return try await provider.createReviewRequest(
             remote: remote,
-            branch: snapshot.local.branchName,
-            headOwner: snapshot.local.headRemoteOwner,
-            baseBranch: snapshot.local.baseBranch,
+            branch: branch,
+            headOwner: headOwner,
+            baseBranch: baseBranch,
             title: title,
             body: body,
             isDraft: isDraft,

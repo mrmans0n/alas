@@ -388,6 +388,36 @@ struct ReviewLoopStateTests {
         #expect(provider.createdReviewRequests.first?.branch == "feature/captured")
     }
 
+    @Test func createReviewRequestUsesExplicitDraftTarget() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(
+            local: Self.makeLocal(branchName: "feature/current", baseBranch: "main", needsPush: false),
+            remotes: [Self.makeGitHubRemote()]
+        )
+        let snapshot = try #require(state.snapshot)
+
+        _ = try await state.createReviewRequest(
+            snapshot: snapshot,
+            branch: "feature/captured",
+            headOwner: "nacho",
+            baseBranch: "release",
+            title: "Review loop title",
+            body: "Review loop body",
+            isDraft: true
+        )
+
+        #expect(provider.createdReviewRequests.first?.branch == "feature/captured")
+        #expect(provider.createdReviewRequests.first?.headOwner == "nacho")
+        #expect(provider.createdReviewRequests.first?.baseBranch == "release")
+        #expect(provider.createdReviewRequests.first?.isDraft == true)
+    }
+
     @Test func createReviewRequestRecordsProviderError() async throws {
         let provider = FakeCodeHostProvider(
             kind: .github,

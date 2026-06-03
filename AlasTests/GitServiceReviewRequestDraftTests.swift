@@ -28,8 +28,40 @@ struct GitServiceReviewRequestDraftTests {
         #expect(context.commitSubjects == ["feat: add committed file"])
         #expect(context.changedFiles.map(\.path) == ["Sources/A.swift"])
         #expect(context.diff.contains("Sources/A.swift"))
+        #expect(context.fileDiffsByPath["Sources/A.swift"]?.contains("Sources/A.swift") == true)
         #expect(!context.diff.contains("Uncommitted.swift"))
+        #expect(!context.fileDiffsByPath["Sources/A.swift", default: ""].contains("Uncommitted.swift"))
         #expect(context.hasUncommittedChanges)
+    }
+
+    @Test func loadsDiffForEachChangedFile() async throws {
+        let repo = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await git(["init", "-b", "main"], cwd: repo)
+        try await git(["config", "user.email", "test@example.com"], cwd: repo)
+        try await git(["config", "user.name", "Test User"], cwd: repo)
+        try write("Sources/A.swift", "let a = 1\n", in: repo)
+        try write("Sources/B.swift", "let b = 1\n", in: repo)
+        try await git(["add", "."], cwd: repo)
+        try await git(["commit", "-m", "chore: initial"], cwd: repo)
+        try await git(["checkout", "-b", "feature/file-diffs"], cwd: repo)
+        try write("Sources/A.swift", "let a = 2\n", in: repo)
+        try write("Sources/B.swift", "let b = 2\n", in: repo)
+        try await git(["add", "."], cwd: repo)
+        try await git(["commit", "-m", "feat: update files"], cwd: repo)
+
+        let context = try await GitService().reviewRequestDraftContext(
+            worktreePath: repo,
+            baseRef: "main"
+        )
+
+        let aDiff = try #require(context.fileDiffsByPath["Sources/A.swift"])
+        let bDiff = try #require(context.fileDiffsByPath["Sources/B.swift"])
+        #expect(aDiff.contains("Sources/A.swift"))
+        #expect(!aDiff.contains("Sources/B.swift"))
+        #expect(bDiff.contains("Sources/B.swift"))
+        #expect(!bDiff.contains("Sources/A.swift"))
     }
 
     @Test func loadsRenameDestinationOriginalPathAndCounts() async throws {
@@ -85,6 +117,7 @@ struct GitServiceReviewRequestDraftTests {
         #expect(file.status.hasPrefix("R"))
         #expect(file.add > 0)
         #expect(file.del > 0)
+        #expect(context.fileDiffsByPath["Sources/New.swift"]?.contains("rename from Sources/Old.swift") == true)
     }
 
     private func makeRepo() throws -> URL {

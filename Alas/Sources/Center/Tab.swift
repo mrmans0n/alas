@@ -173,6 +173,14 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         headOwner = snapshot.local.headRemoteOwner
         headSHA = snapshot.local.headSHA
     }
+
+    func matchesTarget(_ snapshot: ReviewLoopSnapshot) -> Bool {
+        snapshot.remote?.kind == provider
+            && snapshot.remote?.repositorySlug == repositorySlug
+            && snapshot.local.branchName == branchName
+            && snapshot.local.baseBranch == baseBranch
+            && snapshot.local.headSHA == headSHA
+    }
 }
 
 struct TerminalTabState: Codable, Equatable, Identifiable {

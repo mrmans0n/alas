@@ -31,8 +31,20 @@ struct DraftReviewRequestTabView: View {
         appState.rightPaneStore.activeState(worktreeId: worktreeId)?.reviewLoop.snapshot
     }
 
+    private var matchingSnapshot: ReviewLoopSnapshot? {
+        guard let snapshot, tabState.matchesTarget(snapshot) else { return nil }
+        return snapshot
+    }
+
+    private var targetMismatchMessage: String? {
+        guard let snapshot else { return nil }
+        guard !tabState.matchesTarget(snapshot) else { return nil }
+        return "This draft targets \(tabState.branchName) at \(tabState.headSHA.prefix(7)). Switch back to that branch state before creating it."
+    }
+
     private var validationMessage: String? {
-        ReviewRequestDraft.validationMessage(
+        if let targetMismatchMessage { return targetMismatchMessage }
+        return ReviewRequestDraft.validationMessage(
             for: ReviewRequestDraft.ValidationInput(
                 title: title,
                 body: bodyText,
@@ -46,8 +58,8 @@ struct DraftReviewRequestTabView: View {
     }
 
     private var contextKey: String {
-        let head = snapshot?.local.headSHA ?? tabState.headSHA
-        let base = snapshot?.local.baseBranch ?? tabState.baseBranch
+        let head = matchingSnapshot?.local.headSHA ?? tabState.headSHA
+        let base = matchingSnapshot?.local.baseBranch ?? tabState.baseBranch
         return "\(head):\(base)"
     }
 
@@ -86,6 +98,18 @@ struct DraftReviewRequestTabView: View {
             }
             if let error {
                 InlineErrorStrip(message: error, onDismiss: { self.error = nil })
+            }
+            if let createdURL = tabState.createdURL {
+                HStack(spacing: 6) {
+                    Icon(name: "link", size: 11, color: theme.color("accent"))
+                    Text(createdURL.absoluteString)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(12)
@@ -307,6 +331,7 @@ struct DraftReviewRequestTabView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let context {
                 VStack(alignment: .leading, spacing: 8) {
+                    let preview = selectedDiffPreview(in: context)
                     if let selectedPath,
                        let file = context.changedFiles.first(where: { $0.path == selectedPath }) {
                         HStack(spacing: 8) {
@@ -326,7 +351,7 @@ struct DraftReviewRequestTabView: View {
                             .foregroundColor(theme.color("fg"))
                     }
                     ScrollView([.horizontal, .vertical]) {
-                        Text(context.diff.isEmpty ? "No committed diff." : context.diff)
+                        Text(preview.diff.isEmpty ? "No committed diff." : preview.diff)
                             .font(.system(
                                 size: CGFloat(appState.config.code.fontSize),
                                 design: .monospaced
@@ -394,7 +419,6 @@ struct DraftReviewRequestTabView: View {
 
     private func loadContext() async {
         let key = contextKey
-        let baseRef = snapshot?.local.baseBranch ?? tabState.baseBranch
         loadingContext = true
         context = nil
         loadedContextKey = nil
@@ -405,10 +429,14 @@ struct DraftReviewRequestTabView: View {
                 loadingContext = false
             }
         }
+        guard matchingSnapshot != nil else {
+            warning = targetMismatchMessage
+            return
+        }
         do {
             let loaded = try await git.reviewRequestDraftContext(
                 worktreePath: worktreePath,
-                baseRef: baseRef
+                baseRef: tabState.baseBranch
             )
             guard !Task.isCancelled, key == contextKey else { return }
             context = loaded
@@ -435,6 +463,10 @@ struct DraftReviewRequestTabView: View {
             error = "Select an AI tool to generate a \(tabState.provider.reviewRequestLabel) description."
             return
         }
+        guard matchingSnapshot != nil else {
+            error = targetMismatchMessage
+            return
+        }
         guard !loadingContext, loadedContextKey == contextKey, let context else {
             error = "Branch context is still loading."
             return
@@ -444,14 +476,12 @@ struct DraftReviewRequestTabView: View {
         error = nil
         let provider = tabState.provider.displayName
         let repository = tabState.repositorySlug
-        let branch = snapshot?.local.branchName ?? tabState.branchName
-        let base = snapshot?.local.baseBranch ?? tabState.baseBranch
         let prompt = appState.config.changes.reviewRequestPrompt
         let payload = ReviewRequestContextBuilder.build(
             provider: provider,
             repository: repository,
-            branch: branch,
-            base: base,
+            branch: tabState.branchName,
+            base: tabState.baseBranch,
             hasUncommittedChanges: context.hasUncommittedChanges,
             commitSubjects: context.commitSubjects,
             diff: context.diff
@@ -482,7 +512,7 @@ struct DraftReviewRequestTabView: View {
     }
 
     private func createReviewRequest() {
-        guard !busy, let snapshot, validationMessage == nil else { return }
+        guard !busy, let snapshot = matchingSnapshot, validationMessage == nil else { return }
         busy = true
         error = nil
         let titleSnapshot = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -496,6 +526,9 @@ struct DraftReviewRequestTabView: View {
                     .reviewLoop
                     .createReviewRequest(
                         snapshot: snapshot,
+                        branch: tabState.branchName,
+                        headOwner: tabState.headOwner,
+                        baseBranch: tabState.baseBranch,
                         title: titleSnapshot,
                         body: bodySnapshot,
                         isDraft: draftSnapshot
@@ -510,6 +543,15 @@ struct DraftReviewRequestTabView: View {
                 self.error = (error as NSError).localizedDescription
             }
         }
+    }
+
+    private func selectedDiffPreview(in context: ReviewRequestDraftContext) -> (path: String?, diff: String) {
+        guard let selectedPath,
+              let diff = context.fileDiffsByPath[selectedPath]
+        else {
+            return (nil, context.diff)
+        }
+        return (selectedPath, diff)
     }
 
     private func statusColor(_ status: String) -> Color {
