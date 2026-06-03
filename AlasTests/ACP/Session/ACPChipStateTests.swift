@@ -256,6 +256,12 @@ extension ACPChipStateTests {
                              options: [("none", "None"), ("low", "Low"), ("medium", "Medium"),
                                        ("high", "High"), ("extra-high", "Extra High")],
                              category: "thought_level"),
+                configOption("context",
+                             current: "272k",
+                             options: [("272k", "272k"), ("1m", "1m")]),
+                configOption("fast",
+                             current: "false",
+                             options: [("false", "Off"), ("true", "On")]),
             ])
 
         #expect(state.models?.currentId == "gpt-5.5")
@@ -264,6 +270,8 @@ extension ACPChipStateTests {
         } else { Issue.record("expected configOption source") }
         #expect(state.thinking?.currentId == "medium")
         #expect(state.thinking?.options.map { $0.name } == ["None", "Low", "Medium", "High", "Extra High"])
+        #expect(state.parameters.map { $0.label } == ["Context", "Fast"])
+        #expect(state.parameters.map { $0.spec.currentId } == ["272k", "false"])
     }
 
     @Test("cursor-agent: no brackets -> no synthesized chips")
