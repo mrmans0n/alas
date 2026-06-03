@@ -114,7 +114,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
     private static func localBlockingText(_ snapshot: ReviewLoopSnapshot) -> String? {
         switch snapshot.local.pushState {
         case .diverged:
-            "Remote has commits not in this branch. Force push uses --force-with-lease."
+            "Remote has commits not in this branch. Pull, rebase, or force push from the terminal if intentional."
         case .inSync, .missingUpstream, .unpushed:
             nil
         }
@@ -185,7 +185,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             return [refreshAction]
         }
         if snapshot.local.pushState == .diverged {
-            actions.append(Action(kind: .forcePushBranch, title: "Force push", isEnabled: true))
+            return [refreshAction]
         } else if snapshot.local.needsPush {
             actions.append(Action(kind: .pushBranch, title: "Push", isEnabled: true))
         } else if let request = snapshot.reviewRequest {

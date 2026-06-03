@@ -44,6 +44,7 @@ final class ReviewLoopState {
                 hasStagedChanges: current.hasStagedChanges,
                 aheadCommitCount: current.aheadCommitCount,
                 hasUpstream: current.hasUpstream,
+                upstreamRemoteName: current.upstreamRemoteName,
                 needsPush: current.needsPush
             )
             snapshot = ReviewLoopSnapshot(
@@ -356,6 +357,7 @@ extension ReviewLoopState {
                     hasStagedChanges: current.hasStagedChanges,
                     aheadCommitCount: current.aheadCommitCount,
                     hasUpstream: current.hasUpstream,
+                    upstreamRemoteName: current.upstreamRemoteName,
                     needsPush: current.needsPush
                 ),
                 remote: snapshot?.remote,

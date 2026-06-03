@@ -305,7 +305,8 @@ final class RightPaneState {
         if forceWithLease {
             args.append("--force-with-lease")
         }
-        args.append(contentsOf: ["-u", snapshot.remote?.remoteName ?? "origin", snapshot.local.branchName])
+        let remoteName = snapshot.local.upstreamRemoteName ?? snapshot.remote?.remoteName ?? "origin"
+        args.append(contentsOf: ["-u", remoteName, snapshot.local.branchName])
         return args
     }
 
@@ -343,7 +344,8 @@ final class RightPaneState {
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
-            self.upstreamRef = (try? await upstream)?.ref
+            let resolvedUpstream = try? await upstream
+            self.upstreamRef = resolvedUpstream?.ref
             _ = await mergeRefresh
             self.changes = entries
             if let lsResult = try? await Process.git(
@@ -393,7 +395,8 @@ final class RightPaneState {
                 inspection: reviewLoopInspection,
                 changes: entries,
                 commits: commits,
-                headSHA: headSHA
+                headSHA: headSHA,
+                upstreamRemoteName: resolvedUpstream?.remote
             )
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
@@ -409,7 +412,8 @@ final class RightPaneState {
         inspection: ReviewLoopRefreshAttempt,
         changes: [ChangedFile],
         commits: [CommitInfo],
-        headSHA: String
+        headSHA: String,
+        upstreamRemoteName: String?
     ) async {
         async let needsPushProbe = git.needsPush(worktreePath: worktree.path)
         async let upstreamAheadProbe = git.upstreamAheadCommitCount(worktreePath: worktree.path)
@@ -423,6 +427,7 @@ final class RightPaneState {
             hasStagedChanges: changes.contains { $0.stage == .staged },
             aheadCommitCount: commits.count,
             hasUpstream: upstreamRef != nil,
+            upstreamRemoteName: upstreamRemoteName,
             upstreamAheadCommitCount: upstreamAheadCommitCount,
             needsPush: needsPush
         )

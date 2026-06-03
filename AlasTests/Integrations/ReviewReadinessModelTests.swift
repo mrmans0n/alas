@@ -39,8 +39,8 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Remote diverged"])
         #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.warning])
-        #expect(model.blockingText == "Remote has commits not in this branch. Force push uses --force-with-lease.")
-        #expect(model.actions.contains(Action(kind: .forcePushBranch, title: "Force push", isEnabled: true)))
+        #expect(model.blockingText == "Remote has commits not in this branch. Pull, rebase, or force push from the terminal if intentional.")
+        #expect(!model.actions.map(\.kind).contains(.forcePushBranch))
         #expect(!model.actions.map(\.kind).contains(.pushBranch))
         #expect(!model.actions.map(\.kind).contains(.createReviewRequest))
     }
@@ -151,15 +151,6 @@ struct ReviewReadinessModelTests {
         let push = unpushed.actions.first { $0.kind == .pushBranch }
         #expect(push?.iconName == "arrow.up")
         #expect(push?.emphasis == .primary)
-
-        let diverged = ReviewReadinessModel(
-            snapshot: Self.makeSnapshot(local: Self.makeLocal(needsPush: true, upstreamAheadCommitCount: 2), reviewRequest: nil),
-            lastError: nil,
-            canOpenAgentHandoff: false
-        )
-        let forcePush = diverged.actions.first { $0.kind == .forcePushBranch }
-        #expect(forcePush?.iconName == "exclamationmark.arrow.triangle.2.circlepath")
-        #expect(forcePush?.emphasis == .primary)
 
         let noRequest = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: nil),

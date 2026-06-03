@@ -11,6 +11,14 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(args == ["push", "-u", "origin", "feature/review-loop"])
     }
 
+    @Test func pushArgumentsPreferUpstreamRemote() {
+        let snapshot = Self.makeSnapshot(upstreamRemoteName: "fork")
+
+        let args = RightPaneState.reviewLoopPushArguments(snapshot: snapshot, forceWithLease: false)
+
+        #expect(args == ["push", "-u", "fork", "feature/review-loop"])
+    }
+
     @Test func forcePushArgumentsUseForceWithLease() {
         let snapshot = Self.makeSnapshot()
 
@@ -45,7 +53,7 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(RightPaneState.reviewLoopPushFailureMessage(result) == "git push failed with exit code 1.")
     }
 
-    private static func makeSnapshot() -> ReviewLoopSnapshot {
+    private static func makeSnapshot(upstreamRemoteName: String? = nil) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
             host: "github.com",
@@ -63,6 +71,7 @@ struct RightPaneStateReviewLoopPushTests {
                 hasStagedChanges: false,
                 aheadCommitCount: 1,
                 hasUpstream: true,
+                upstreamRemoteName: upstreamRemoteName,
                 upstreamAheadCommitCount: 0,
                 needsPush: true
             ),
