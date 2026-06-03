@@ -202,6 +202,21 @@ final class ACPSessionRunner {
                         )
                     }
                 case .write(let id, let params):
+                    // Guard the actual disk write: if this runner has lost
+                    // the session lease (takeover), deny the request rather
+                    // than modifying the working tree on behalf of a session
+                    // another instance now owns.
+                    // Note: terminal execution is also covered — Fix 1's
+                    // prompt stand-down tears the runner down within ~100 ms
+                    // of a takeover ping, and runner.stop() calls
+                    // terminalHost.killAll(), so in-flight terminal commands
+                    // are already gated by that path.
+                    guard self.holdsLeaseForWrite() else {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                        break
+                    }
                     if self.onDirtyCheck?(params.path) == true {
                         self.appendAndPersistSystemNotice("Agent wrote to \(URL(fileURLWithPath: params.path).lastPathComponent) — you have unsaved changes in this file.")
                     }

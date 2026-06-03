@@ -56,6 +56,9 @@ final class ACPSessionManager: ObservableObject {
     private var mirrorTokens: [ACPSession.ID: Int32] = [:]
     private var mirrorDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
     private var mirrorPoll: [ACPSession.ID: Task<Void, Never>] = [:]
+    // MARK: Writer-watch state (prompt stand-down when a takeover ping arrives)
+    private var writerWatchTokens: [ACPSession.ID: Int32] = [:]
+    private var writerWatchDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Runtime-only layout memory for the plan sidebar. This intentionally
     /// lives on the manager rather than `ACPSession` so a tab switch can
     /// evict and later recreate the session object without losing whether
@@ -725,13 +728,11 @@ extension ACPSessionManager {
     }
 
     /// True when this session is open here but owned by another live
-    /// instance (read-only mirror).
+    /// instance (read-only mirror). Delegates to `anotherLiveInstanceOwnsLease`
+    /// so a stale former owner (still in `_ownedLeases`) is immediately treated
+    /// as read-only after a takeover ping, without waiting for the heartbeat.
     func isMirror(sessionId: ACPSession.ID) -> Bool {
-        if _ownedLeases.contains(sessionId) { return false }
-        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
-        return lease.ownerInstance != instanceId
-            && ACPProcessLiveness.pidAlive(lease.pid)
-            && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
+        anotherLiveInstanceOwnsLease(sessionId: sessionId)
     }
 
     /// True when a DIFFERENT, live instance currently owns this session's
@@ -812,6 +813,52 @@ extension ACPSessionManager {
         _heartbeatTasks.removeValue(forKey: sessionId)?.cancel()
     }
 
+    // MARK: - Writer watch (prompt stand-down on takeover ping)
+
+    /// Subscribe to the change notifier while we own a session so a
+    /// takeover ping triggers an immediate ownership re-check and stand-down
+    /// rather than waiting up to 5 s for the heartbeat.
+    private func startWriterWatch(sessionId: ACPSession.ID) {
+        guard writerWatchTokens[sessionId] == nil else { return }
+        let token = changeNotifier.subscribe { [weak self] in
+            // The Darwin notifier delivers off the main thread; hop back.
+            Task { @MainActor [weak self] in
+                self?.scheduleWriterOwnershipCheck(sessionId: sessionId)
+            }
+        }
+        writerWatchTokens[sessionId] = token
+    }
+
+    private func scheduleWriterOwnershipCheck(sessionId: ACPSession.ID) {
+        writerWatchDebounce[sessionId]?.cancel()
+        writerWatchDebounce[sessionId] = Task { [weak self] in
+            // 100 ms coalesce window: the writer itself posts a ping on every
+            // persist, so we debounce to avoid checking on each of those.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let self else { return }
+            await MainActor.run {
+                guard self._ownedLeases.contains(sessionId) else { return }
+                if self.heartbeatTick(sessionId: sessionId) {
+                    self._ownedLeases.remove(sessionId)
+                    Task { await self.standDown(sessionId: sessionId) }
+                }
+            }
+        }
+    }
+
+    private func stopWriterWatch(sessionId: ACPSession.ID) {
+        if let t = writerWatchTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
+        writerWatchDebounce.removeValue(forKey: sessionId)?.cancel()
+    }
+
+    // MARK: - Test accessors for writer watch
+
+    /// True when a writer-watch change-notifier subscription is active for
+    /// `sessionId`. Used by tests to verify start/stop symmetry.
+    func writerWatchActiveForTest(sessionId: ACPSession.ID) -> Bool {
+        writerWatchTokens[sessionId] != nil
+    }
+
     // MARK: - Takeover (mirror seizes writer role)
 
     /// Explicit user takeover from a mirror: seize the lease, nudge the
@@ -826,6 +873,7 @@ extension ACPSessionManager {
         changeNotifier.post()
         endMirroring(sessionId: sessionId)
         startHeartbeat(sessionId: sessionId)
+        startWriterWatch(sessionId: sessionId)
         if let session = sessions[sessionId] {
             session.agentState = .idle   // allow attach's agentState guard to proceed
             Task { await attach(to: sessionId, freshlyCreated: false) }
@@ -837,6 +885,7 @@ extension ACPSessionManager {
     /// Does NOT release the lease — we no longer own it.
     private func standDown(sessionId: ACPSession.ID) async {
         stopHeartbeat(sessionId: sessionId)
+        stopWriterWatch(sessionId: sessionId)
         _ownedLeases.remove(sessionId)
         if let runner = runners.removeValue(forKey: sessionId) {
             runner.invalidateActivePrompt()
@@ -904,6 +953,7 @@ extension ACPSessionManager {
     /// disposed so nothing keeps waking after the manager is dropped.
     func shutdownBackgroundTasks() {
         for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
+        for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
         _heartbeatTasks.removeAll()
     }
@@ -983,6 +1033,7 @@ extension ACPSessionManager {
         }
         endMirroring(sessionId: sessionId)
         startHeartbeat(sessionId: sessionId)
+        startWriterWatch(sessionId: sessionId)
         // Any failure path below must hand the session back: release the
         // lease and stop the heartbeat so another instance can claim it.
         // Only a fully-registered runner (the success path) keeps them.
@@ -990,6 +1041,7 @@ extension ACPSessionManager {
         defer {
             if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
+                stopWriterWatch(sessionId: sessionId)
                 releaseWriterLease(sessionId: sessionId)
             }
         }
@@ -1155,6 +1207,19 @@ extension ACPSessionManager {
                     message: "Agent context could not be restored.",
                     canSendTranscript: session.hasConversationTranscript
                 )
+            }
+            // A takeover may have landed while we were awaiting
+            // initialize/newSession/loadSession. If we no longer own the
+            // lease, abort the commit — don't persist the remote id or
+            // register a runner for a session another instance now owns.
+            // `attachSucceeded` stays false so the defer releases the lease
+            // and stops the heartbeat/writerWatch.
+            guard !anotherLiveInstanceOwnsLease(sessionId: sessionId) else {
+                await connection.shutdown()
+                startedRunner?.stop()
+                session.agentState = .idle
+                beginMirroring(sessionId: sessionId)
+                return
             }
             session.remoteSessionId = result.sessionId
             session.availableModels = result.availableModels
@@ -1378,6 +1443,7 @@ extension ACPSessionManager {
             await runner.connection.shutdown()
         }
         stopHeartbeat(sessionId: sessionId)
+        stopWriterWatch(sessionId: sessionId)
         releaseWriterLease(sessionId: sessionId)
         endMirroring(sessionId: sessionId)
         // SwiftUI's `.onDisappear` retain release for a closing tab can
