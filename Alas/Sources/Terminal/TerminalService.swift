@@ -269,16 +269,24 @@ final class TerminalService {
     /// `wtHash` won't be in our set and its sessions stay untouched.
     /// Legacy `alas-<leafId>` shapes are skipped — the existing close-path
     /// cleanup already handles those when the matching tab is closed.
+    ///
+    /// `ZMX_SESSION_PREFIX` is read from the current environment and applied
+    /// to ls-output stripping + kill-argument bare names, mirroring how the
+    /// rest of `ZmxClient` keeps the prefix transparent: zmx's CLI prepends
+    /// the env-set prefix on both create and kill, so we feed it the bare
+    /// `alas-…` name on either side.
     func sweepOrphans(knownWorktreeIds: Set<String>, knownLeafIds: Set<String>) {
         let wtHashes = Set(knownWorktreeIds.map(ZmxSessionName.hash16))
         let leafHashes = Set(knownLeafIds.map(ZmxSessionName.hash16))
+        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
         let client = zmxClient
         dispatchTrackedKill {
             let names = client.listSessions()
             let orphans = Self.orphanSessionNames(
                 allSessionNames: names,
                 knownWorktreeIdHashes: wtHashes,
-                knownLeafIdHashes: leafHashes
+                knownLeafIdHashes: leafHashes,
+                sessionPrefix: prefix
             )
             for name in orphans {
                 client.killSession(name: name)
@@ -288,17 +296,28 @@ final class TerminalService {
 
     /// Pure filter exposed for tests: pick the scoped `alas-*` sessions
     /// belonging to one of our worktrees that no known leaf claims.
+    /// Returns bare (unprefixed) names so callers can pass them straight to
+    /// `ZmxClient.killSession`, which lets the CLI re-prepend
+    /// `ZMX_SESSION_PREFIX` itself — matching the create/kill symmetry in
+    /// `ZmxClient.wrap` / `killSession`.
     nonisolated static func orphanSessionNames(
         allSessionNames: [String],
         knownWorktreeIdHashes: Set<String>,
-        knownLeafIdHashes: Set<String>
+        knownLeafIdHashes: Set<String>,
+        sessionPrefix: String = ""
     ) -> [String] {
-        allSessionNames.compactMap { name in
-            guard let parsed = ZmxSessionName.parseScoped(name),
+        allSessionNames.compactMap { rawName in
+            // With a prefix set, ignore names that don't carry it — those
+            // belong to a different tool or a stale unprefixed run, and
+            // re-killing them with the prefix re-applied could hit the wrong
+            // session.
+            guard rawName.hasPrefix(sessionPrefix) else { return nil }
+            let bareName = String(rawName.dropFirst(sessionPrefix.count))
+            guard let parsed = ZmxSessionName.parseScoped(bareName),
                   knownWorktreeIdHashes.contains(parsed.worktreeIdHash),
                   !knownLeafIdHashes.contains(parsed.leafIdHash)
             else { return nil }
-            return name
+            return bareName
         }
     }
 

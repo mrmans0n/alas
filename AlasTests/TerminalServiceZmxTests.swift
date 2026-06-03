@@ -399,6 +399,34 @@ struct TerminalServiceZmxTests {
     }
 
     @Test
+    func orphanFilterStripsZmxSessionPrefixBeforeMatching() {
+        let mineWt = "wt-1"
+        let mineWtHash = ZmxSessionName.hash16(mineWt)
+        let foreignHash = ZmxSessionName.hash16("wt-not-ours")
+        let unknownLeafHash = ZmxSessionName.hash16("leaf-stranded")
+
+        // With ZMX_SESSION_PREFIX=team-, zmx ls prefixes every session
+        // name. The filter must strip the prefix before parseScoped, and
+        // return bare names so callers can hand them to zmx kill (which
+        // re-prepends the prefix itself).
+        let names = [
+            "team-alas-\(mineWtHash)-\(unknownLeafHash)",     // ours, orphan — kill (bare form)
+            "team-alas-\(foreignHash)-\(unknownLeafHash)",    // another instance — skip
+            "alas-\(mineWtHash)-\(unknownLeafHash)",          // no prefix — not from this run, skip
+            "team-not-alas",                                    // prefixed but not scoped — skip
+        ]
+
+        let orphans = TerminalService.orphanSessionNames(
+            allSessionNames: names,
+            knownWorktreeIdHashes: [mineWtHash],
+            knownLeafIdHashes: [],
+            sessionPrefix: "team-"
+        )
+
+        #expect(orphans == ["alas-\(mineWtHash)-\(unknownLeafHash)"])
+    }
+
+    @Test
     func sweepOrphansIssuesKillsForFilteredNames() async {
         let mineWt = "wt-1"
         let mineLeaf = "leaf-keep"
