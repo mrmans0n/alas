@@ -94,6 +94,32 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(state.body == "## Summary\n- Adds a tab")
     }
 
+    @Test func sameDraftTargetClearsCreatedURLWhenHeadChanges() {
+        let worktreeId = "review-request-draft-clear-created-url"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId,
+            snapshot: Self.snapshot(headSHA: "abc123")
+        )
+
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: first.id) { state in
+            state.createdURL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        }
+
+        let second = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId,
+            snapshot: Self.snapshot(headSHA: "def456")
+        )
+
+        guard case .draftReviewRequest(let state) = second else {
+            Issue.record("Expected draft review request tab")
+            return
+        }
+        #expect(state.headSHA == "def456")
+        #expect(state.createdURL == nil)
+    }
+
     @Test func updatesDraftReviewRequestFields() {
         let worktreeId = "review-request-draft-update"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
