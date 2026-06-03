@@ -26,6 +26,10 @@ final class ACPSessionManager: ObservableObject {
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
     var runnerCountForDiagnostics: Int { runners.count }
     #endif
+    /// Sessions for which THIS instance holds the writer lease (backing store).
+    var _ownedLeases: Set<ACPSession.ID> = []
+    /// Per-session periodic heartbeat tasks (backing store).
+    var _heartbeatTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session debounced write tasks for `composer_drafts`. The
     /// in-memory `session.composerDraft` updates on every keystroke;
     /// the SQLite write only fires after a brief idle (or a forced
@@ -674,6 +678,63 @@ final class ACPSessionManager: ObservableObject {
     }
 }
 
+// MARK: - Writer lease + heartbeat
+
+extension ACPSessionManager {
+    /// Seconds after which a lease whose owner stopped heart-beating is
+    /// considered abandoned and reclaimable.
+    static let leaseStaleAfter: Int64 = 15
+
+    /// Attempt to become the writer for `sessionId`. Returns true if we
+    /// now hold the lease. Idempotent for a lease we already own.
+    @discardableResult
+    func acquireWriterLease(sessionId: ACPSession.ID) -> Bool {
+        let now = Int64(Date().timeIntervalSince1970)
+        let won = (try? store.claimLease(
+            sessionId: sessionId, instanceId: instanceId, pid: pid,
+            now: now, staleAfter: Self.leaseStaleAfter)) ?? false
+        if won { _ownedLeases.insert(sessionId) } else { _ownedLeases.remove(sessionId) }
+        return won
+    }
+
+    func releaseWriterLease(sessionId: ACPSession.ID) {
+        try? store.releaseLease(sessionId: sessionId, instanceId: instanceId)
+        _ownedLeases.remove(sessionId)
+    }
+
+    /// True when this session is open here but owned by another live
+    /// instance (read-only mirror).
+    func isMirror(sessionId: ACPSession.ID) -> Bool {
+        if _ownedLeases.contains(sessionId) { return false }
+        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
+        return lease.ownerInstance != instanceId
+            && ACPProcessLiveness.pidAlive(lease.pid)
+            && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
+    }
+
+    private func startHeartbeat(sessionId: ACPSession.ID) {
+        _heartbeatTasks[sessionId]?.cancel()
+        _heartbeatTasks[sessionId] = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
+                guard let self else { return }
+                await MainActor.run {
+                    guard self._ownedLeases.contains(sessionId) else { return }
+                    let now = Int64(Date().timeIntervalSince1970)
+                    let status = self.runners[sessionId]?.session.transcript.streamingState == .streaming
+                        ? "busy" : "idle"
+                    try? self.store.refreshHeartbeat(
+                        sessionId: sessionId, instanceId: self.instanceId, now: now, status: status)
+                }
+            }
+        }
+    }
+
+    private func stopHeartbeat(sessionId: ACPSession.ID) {
+        _heartbeatTasks.removeValue(forKey: sessionId)?.cancel()
+    }
+}
+
 // MARK: - Process lifecycle
 
 extension ACPSessionManager {
@@ -692,6 +753,13 @@ extension ACPSessionManager {
         // backfill wait) early-returns on the `.spawning` guard above
         // instead of racing into a duplicate runner.
         session.agentState = .spawning
+        // Only the lease holder runs a live agent + writes. If another
+        // live instance owns this session, stay a read-only mirror.
+        guard acquireWriterLease(sessionId: sessionId) else {
+            session.agentState = .idle
+            return
+        }
+        startHeartbeat(sessionId: sessionId)
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
         // where `index` is the in-memory transcript position. Tail-first
         // hydration leaves `transcript.messages` shorter than the persisted
@@ -1064,6 +1132,8 @@ extension ACPSessionManager {
             runner.stop()
             await runner.connection.shutdown()
         }
+        stopHeartbeat(sessionId: sessionId)
+        releaseWriterLease(sessionId: sessionId)
         // SwiftUI's `.onDisappear` retain release for a closing tab can
         // arrive BEFORE this async detach starts, so the release runs while
         // agentState is still `.ready` and short-circuits eviction. Re-check

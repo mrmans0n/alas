@@ -17,4 +17,36 @@ import Foundation
         #expect(mgr.instanceId == "INST-A")
         #expect(mgr.pid == Int64(getpid()))
     }
+
+    @Test("second instance attaching the same session becomes a mirror")
+    func secondInstanceMirrors() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-mirror-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(mgrA.isMirror(sessionId: session.id) == false)
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(mgrB.acquireWriterLease(sessionId: session.id) == false)
+        #expect(mgrB.isMirror(sessionId: session.id) == true)
+    }
+
+    @Test("releasing the lease lets another instance claim it")
+    func releaseAllowsReclaim() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-release-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        mgrA.releaseWriterLease(sessionId: session.id)
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
+    }
 }
