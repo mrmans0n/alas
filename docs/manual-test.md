@@ -229,3 +229,12 @@ Inside an Alas-spawned terminal:
 5. On a branch with an open PR, confirm the drawer shows `GitHub #<number>` and compact check/review/merge status.
 6. For a failing check, confirm "Open in agent" creates an ACP tab with a focused handoff prompt.
 7. Confirm merge, comment posting, review-thread resolution, force-push, and editing-agent runs are not executed without explicit user action.
+
+### Draft PR generation
+
+1. Open a worktree branch with committed changes ahead of the selected base branch and no existing PR.
+2. Expand the review readiness drawer and click Create PR.
+3. Confirm a Draft PR tab opens with normal PR mode selected and Draft unchecked.
+4. Click the sparkle button with an enabled AI tool.
+5. Confirm title/body are filled with Summary and Testing sections.
+6. Toggle Draft, then create the PR from a disposable branch or cancel before submission during local-only testing.
