@@ -703,6 +703,85 @@ import Foundation
                 "takeOver must refresh queue from the store before spawning attach")
     }
 
+    // MARK: - Fix 1 (P1): releaseAllOwnedLeases skips attaching sessions
+
+    @Test("releaseAllOwnedLeases skips attaching sessions but releases non-attaching ones")
+    func releaseAllOwnedLeasesSkipsAttachingSessions() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("release-attaching-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+
+        // Drive a partial attach for one session: the attach coroutine acquires
+        // the lease (inserts into attachingSessions) and then suspends inside the
+        // async setupEvaluator. A second session is added to _ownedLeases directly
+        // to verify that non-attaching leases ARE released.
+        //
+        // Note: connectionFactory is synchronous so we cannot `await` inside it;
+        // instead we suspend in setupEvaluator (which IS async) using an AsyncGate.
+        let setupGate = LeaseTestGate()
+        let mgr = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt",
+            store: store, instanceId: "A", pid: Int64(getpid()),
+            setupEvaluator: { _ in
+                await setupGate.wait()   // block until test releases
+                return .ready
+            },
+            connectionFactory: { _ throws -> ACPConnection in
+                throw CancellationError()  // attach will fail here, but attach's defer still runs
+            })
+
+        // Session that will go through a real (blocked) attach.
+        let attachingSession = mgr.createSession(agentId: "claude")
+        // Session whose lease is owned but NOT attaching (plain _ownedLeases entry).
+        let ownedSession = mgr.createSession(agentId: "claude")
+        #expect(mgr.acquireWriterLease(sessionId: ownedSession.id) == true,
+                "precondition: ownedSession lease acquired")
+
+        // Start attach in background — blocks inside setupEvaluator.
+        let attachTask = Task { await mgr.attach(to: attachingSession.id, freshlyCreated: true) }
+        // Wait for attach to have acquired the lease and entered attachingSessions
+        // (i.e. it reached the setupEvaluator await and is parked there).
+        var waited = 0
+        while !mgr.isAttachingForTest(attachingSession.id) && waited < 50 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            waited += 1
+        }
+        #expect(mgr.isAttachingForTest(attachingSession.id),
+                "precondition: attach must have inserted attachingSession into attachingSessions")
+        #expect(mgr._ownedLeases.contains(attachingSession.id),
+                "precondition: attaching session is in _ownedLeases")
+        #expect(mgr._ownedLeases.contains(ownedSession.id),
+                "precondition: owned session is in _ownedLeases")
+
+        // Dispose + release. The attaching session must be skipped.
+        mgr.shutdownBackgroundTasks()
+        mgr.releaseAllOwnedLeases()
+
+        // Non-attaching owned session must have been released.
+        #expect(!mgr._ownedLeases.contains(ownedSession.id),
+                "non-attaching owned session must be removed from _ownedLeases by releaseAllOwnedLeases")
+        let storeC = try ACPSessionStore(path: url.path)
+        let mgrC = tempManager(instanceId: "C", store: storeC)
+        #expect(mgrC.acquireWriterLease(sessionId: ownedSession.id) == true,
+                "non-attaching owned session lease must be claimable after releaseAllOwnedLeases")
+
+        // Attaching session's lease must still be held in the store.
+        #expect(mgr._ownedLeases.contains(attachingSession.id),
+                "attaching session must remain in _ownedLeases after releaseAllOwnedLeases")
+        #expect(try store.loadLease(sessionId: attachingSession.id)?.ownerInstance == "A",
+                "attaching session lease must not be released in the store by releaseAllOwnedLeases")
+
+        // Unblock the setup evaluator so the attach coroutine proceeds and its defer runs.
+        await setupGate.open()
+        await attachTask.value
+
+        // After the attach defer runs, the lease must be freed so another instance can claim it.
+        let storeD = try ACPSessionStore(path: url.path)
+        let mgrD = tempManager(instanceId: "D", store: storeD)
+        #expect(mgrD.acquireWriterLease(sessionId: attachingSession.id) == true,
+                "attaching session lease must be released by attach's own defer after the coroutine exits")
+    }
+
     // MARK: - Fix 3: Terminal kill/release gate
 
     @Test("terminal kill denied when lease is held by another instance")
@@ -791,5 +870,30 @@ import Foundation
         }
         #expect(err.code == -32003,
                 "terminal release must respond with code -32003 (lease lost) not a release error")
+    }
+}
+
+// MARK: - Helpers
+
+/// Simple async gate used by lease tests to suspend an in-flight `attach`
+/// at the setupEvaluator await so we can inspect and manipulate state while
+/// it is parked there.
+private actor LeaseTestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        for c in pending { c.resume() }
     }
 }

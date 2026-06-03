@@ -68,6 +68,12 @@ final class ACPSessionManager: ObservableObject {
     /// coroutine that resumes after dispose aborts at the pre-commit guard
     /// rather than registering a runner for a session whose manager is dead.
     private var isDisposed = false
+    /// Sessions for which an `attach` coroutine has acquired the writer
+    /// lease but has not yet registered a runner (the pre-runner window).
+    /// `releaseAllOwnedLeases` skips these so their own `defer` block can
+    /// release the lease after `connection.shutdown` — preserving the
+    /// correct shutdown order (connection down before lease freed).
+    private var attachingSessions: Set<ACPSession.ID> = []
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
          instanceId: String = UUID().uuidString,
@@ -939,6 +945,13 @@ extension ACPSessionManager {
         (try? store.loadLease(sessionId: sessionId))?.ownerInstance == instanceId
     }
 
+    /// True while an `attach` coroutine holds the lease for `sessionId`
+    /// but has not yet registered a runner. Used by tests to verify that
+    /// `releaseAllOwnedLeases` skips attaching sessions.
+    func isAttachingForTest(_ sessionId: ACPSession.ID) -> Bool {
+        attachingSessions.contains(sessionId)
+    }
+
     func heartbeatTickForTest(sessionId: ACPSession.ID) -> Bool {
         heartbeatTick(sessionId: sessionId)
     }
@@ -1002,11 +1015,17 @@ extension ACPSessionManager {
     /// Release every lease this manager still owns. Call AFTER runner
     /// connections are shut down so a freed lease is never claimable while
     /// the old agent is still alive.
+    ///
+    /// Sessions that are still in the pre-runner attach window (`attachingSessions`)
+    /// are intentionally skipped: their `attach` defer releases the lease AFTER
+    /// `connection.shutdown`, preserving the correct teardown order. The lease
+    /// is never leaked — it is either released by the attach defer on abort, or
+    /// goes stale in 15 s if the attach coroutine is permanently wedged.
     func releaseAllOwnedLeases() {
-        for sid in Array(_ownedLeases) {
+        for sid in Array(_ownedLeases) where !attachingSessions.contains(sid) {
             try? store.releaseLease(sessionId: sid, instanceId: instanceId)
+            _ownedLeases.remove(sid)
         }
-        _ownedLeases.removeAll()
     }
 
     private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {
@@ -1090,11 +1109,15 @@ extension ACPSessionManager {
         endMirroring(sessionId: sessionId)
         startHeartbeat(sessionId: sessionId)
         startWriterWatch(sessionId: sessionId)
+        // Mark this session as attaching so `releaseAllOwnedLeases` skips it.
+        // The remove runs on every exit (success, abort, throw) via the defer below.
+        attachingSessions.insert(sessionId)
         // Any failure path below must hand the session back: release the
         // lease and stop the heartbeat so another instance can claim it.
         // Only a fully-registered runner (the success path) keeps them.
         var attachSucceeded = false
         defer {
+            attachingSessions.remove(sessionId)
             if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)

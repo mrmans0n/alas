@@ -487,6 +487,12 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
+        // A former writer that lost the lease must not send a cancel RPC to
+        // the agent for a session another instance now owns. The local
+        // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
+        // it only affects this runner's own sendNow catch path and has no
+        // cross-instance side effects.
+        guard holdsLeaseForWrite() else { return }
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
         await MainActor.run {
