@@ -97,6 +97,37 @@ import Foundation
         #expect(mgrA.ownsLeaseForTest(sessionId: session.id) == false)
     }
 
+    @Test("heartbeat re-asserts ownership when the lease row went missing")
+    func heartbeatReassertsMissingRow() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hb-missing-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = tempManager(instanceId: "A", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        #expect(mgr.acquireWriterLease(sessionId: session.id) == true)
+        // Simulate a failed-takeover deleting the row out from under us.
+        try store.releaseLease(sessionId: session.id, instanceId: "A")
+        #expect(try store.loadLease(sessionId: session.id) == nil)
+        // A heartbeat tick should re-assert our ownership, not stand down.
+        let standDown = mgr.heartbeatTickForTest(sessionId: session.id)
+        #expect(standDown == false)
+        #expect(try store.loadLease(sessionId: session.id)?.ownerInstance == "A")
+    }
+
+    @Test("heartbeat signals stand-down when another instance owns the lease")
+    func heartbeatStandsDownOnTakeover() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hb-takeover-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        // B seizes it.
+        let now = Int64(Date().timeIntervalSince1970)
+        try storeA.seizeLease(sessionId: session.id, instanceId: "B", pid: Int64(getpid()), now: now)
+        #expect(mgrA.heartbeatTickForTest(sessionId: session.id) == true)   // A should stand down
+    }
+
     @Test("a failed attach releases the writer lease")
     func failedAttachReleasesLease() async throws {
         struct StubError: Error {}

@@ -727,15 +727,34 @@ extension ACPSessionManager {
         return lease.status == "busy"
     }
 
-    /// Refresh the heartbeat timestamp for a lease we own. No-op if the
-    /// lease is no longer in `_ownedLeases` (e.g. already released).
-    private func refreshHeartbeatNow(sessionId: ACPSession.ID) {
-        guard _ownedLeases.contains(sessionId) else { return }
+    /// One heartbeat tick for an owned session. Returns true if the
+    /// caller should stand down (we lost the lease to another instance).
+    /// Side effects: refreshes our heartbeat when we still own the row,
+    /// or re-asserts ownership (re-inserts) when the row has gone missing
+    /// while we still believe we own it (e.g. a failed concurrent takeover
+    /// deleted it) — preventing a rowless session another instance could
+    /// claim out from under us.
+    // exposed for tests
+    @discardableResult
+    func heartbeatTick(sessionId: ACPSession.ID) -> Bool {
+        guard _ownedLeases.contains(sessionId) else { return false }
         let now = Int64(Date().timeIntervalSince1970)
-        let status = runners[sessionId]?.session.transcript.streamingState == .streaming
-            ? "busy" : "idle"
-        try? store.refreshHeartbeat(
-            sessionId: sessionId, instanceId: instanceId, now: now, status: status)
+        if let lease = try? store.loadLease(sessionId: sessionId) {
+            if lease.ownerInstance != instanceId {
+                return true   // taken over → stand down
+            }
+            // Still ours — refresh heartbeat + status.
+            let status = runners[sessionId]?.session.transcript.streamingState == .streaming
+                ? "busy" : "idle"
+            try? store.refreshHeartbeat(
+                sessionId: sessionId, instanceId: instanceId, now: now, status: status)
+            return false
+        } else {
+            // Row missing but we believe we own it — re-assert ownership so
+            // the session isn't left rowless and claimable by another instance.
+            try? store.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid, now: now)
+            return false
+        }
     }
 
     private func startHeartbeat(sessionId: ACPSession.ID) {
@@ -746,22 +765,16 @@ extension ACPSessionManager {
             // let the heartbeat age past leaseStaleAfter mid-attach).
             await MainActor.run {
                 guard let self else { return }
-                self.refreshHeartbeatNow(sessionId: sessionId)
+                if self.heartbeatTick(sessionId: sessionId) {
+                    Task { await self.standDown(sessionId: sessionId) }
+                }
             }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
                 guard let self else { return }
-                await MainActor.run {
-                    guard self._ownedLeases.contains(sessionId) else { return }
-                    // Detect an explicit takeover: if the lease now belongs to
-                    // another instance, stand down rather than re-stamping it.
-                    if let lease = try? self.store.loadLease(sessionId: sessionId),
-                       lease.ownerInstance != self.instanceId {
-                        self._ownedLeases.remove(sessionId)
-                        Task { await self.standDown(sessionId: sessionId) }
-                        return
-                    }
-                    self.refreshHeartbeatNow(sessionId: sessionId)
+                let shouldStandDown = await MainActor.run { self.heartbeatTick(sessionId: sessionId) }
+                if shouldStandDown {
+                    await self.standDown(sessionId: sessionId)
                 }
             }
         }
@@ -813,6 +826,10 @@ extension ACPSessionManager {
 
     func ownsLeaseForTest(sessionId: ACPSession.ID) -> Bool {
         (try? store.loadLease(sessionId: sessionId))?.ownerInstance == instanceId
+    }
+
+    func heartbeatTickForTest(sessionId: ACPSession.ID) -> Bool {
+        heartbeatTick(sessionId: sessionId)
     }
 }
 
