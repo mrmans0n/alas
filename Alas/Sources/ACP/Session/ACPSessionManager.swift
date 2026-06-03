@@ -975,6 +975,14 @@ extension ACPSessionManager {
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
         _heartbeatTasks.removeAll()
+        // Release any lease this manager still owns — including sessions in
+        // the pre-runner attach window that disposeACPManager's runner-based
+        // detach loop never reaches — so another instance can reclaim them
+        // immediately instead of waiting for the lease to go stale.
+        for sid in Array(_ownedLeases) {
+            try? store.releaseLease(sessionId: sid, instanceId: instanceId)
+        }
+        _ownedLeases.removeAll()
     }
 
     private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {

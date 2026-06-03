@@ -607,4 +607,22 @@ import Foundation
         #expect(mgrA.isMirror(sessionId: session.id) == true,
                 "isMirror (== anotherLiveInstanceOwnsLease) must be true after B seizes; the attach re-check guard will abort the commit")
     }
+
+    @Test("shutdownBackgroundTasks releases leases of pre-runner sessions")
+    func shutdownReleasesOwnedLeases() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dispose-lease-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        // A owns the lease but has no runner (the pre-runner attach window).
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+
+        // Disposing the manager must release the lease even with no runner.
+        mgrA.shutdownBackgroundTasks()
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
+    }
 }
