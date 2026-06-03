@@ -370,7 +370,7 @@ final class RightPaneState {
             let previousBranch = self.currentBranch
             self.currentBranch = (try? await br) ?? self.currentBranch
             let previousHeadSHA = self.currentHeadSHA
-            let headSHA = (try? await self.git.revParseHEAD(worktreePath: self.worktree.path)) ?? self.currentHeadSHA
+            let headSHA = (try? await self.git.revParseHEAD(worktreePath: self.worktree.path)) ?? ""
             self.currentHeadSHA = headSHA
             if previousBranch != self.currentBranch || previousHeadSHA != self.currentHeadSHA {
                 // Branch or HEAD changed (checkout, rebase, reset, amend, …).
