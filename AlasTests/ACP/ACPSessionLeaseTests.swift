@@ -68,7 +68,7 @@ import Foundation
         let store = try tempStore()
         try seedSession(store, id: "s1")
         let now = Int64(Date().timeIntervalSince1970)
-        _ = try store.claimLease(sessionId: "s1", instanceId: "A", pid: 999_999_99, now: now, staleAfter: 15)
+        _ = try store.claimLease(sessionId: "s1", instanceId: "A", pid: 99_999_999, now: now, staleAfter: 15)
         #expect(try store.claimLease(sessionId: "s1", instanceId: "B", pid: Int64(getpid()), now: now, staleAfter: 15) == true)
         #expect(try store.loadLease(sessionId: "s1")?.ownerInstance == "B")
     }
@@ -90,5 +90,28 @@ import Foundation
         _ = try store.claimLease(sessionId: "s1", instanceId: "A", pid: Int64(getpid()), now: now, staleAfter: 15)
         try store.releaseLease(sessionId: "s1", instanceId: "A")
         #expect(try store.loadLease(sessionId: "s1") == nil)
+    }
+
+    @Test("seize wins over a live, fresh lease")
+    func seizeOverLive() throws {
+        let store = try tempStore()
+        try seedSession(store, id: "s1")
+        let now = Int64(Date().timeIntervalSince1970)
+        _ = try store.claimLease(sessionId: "s1", instanceId: "A", pid: Int64(getpid()), now: now, staleAfter: 15)
+        try store.seizeLease(sessionId: "s1", instanceId: "B", pid: Int64(getpid()), now: now)
+        #expect(try store.loadLease(sessionId: "s1")?.ownerInstance == "B")
+    }
+
+    @Test("dead-pid reclaim works across two connections")
+    func deadPidReclaimTwoHandles() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lease-\(UUID()).sqlite")
+        let a = try ACPSessionStore(path: url.path)
+        try seedSession(a, id: "s1")
+        let now = Int64(Date().timeIntervalSince1970)
+        _ = try a.claimLease(sessionId: "s1", instanceId: "A", pid: 99_999_999, now: now, staleAfter: 15)
+        let b = try ACPSessionStore(path: url.path)
+        #expect(try b.claimLease(sessionId: "s1", instanceId: "B", pid: Int64(getpid()), now: now, staleAfter: 15) == true)
+        #expect(try b.loadLease(sessionId: "s1")?.ownerInstance == "B")
     }
 }
