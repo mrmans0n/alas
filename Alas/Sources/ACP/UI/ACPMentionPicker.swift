@@ -169,6 +169,7 @@ struct ACPMentionPickerView: View {
         let gen = rankGeneration
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = allFiles
+        let root = worktreeRoot
         rankTask = Task.detached(priority: .userInitiated) {
             try? await Task.sleep(nanoseconds: 16_000_000)
             if Task.isCancelled { return }
@@ -176,7 +177,7 @@ struct ACPMentionPickerView: View {
             if q.isEmpty {
                 result = Array(files.prefix(maxDisplay))
             } else {
-                result = MentionFuzzy.rank(files: files, query: q, limit: maxDisplay)
+                result = MentionFuzzy.rank(files: files, query: q, limit: maxDisplay, relativeTo: root)
             }
             if Task.isCancelled { return }
             await MainActor.run {
@@ -221,47 +222,50 @@ enum MentionFuzzy {
         return out
     }
 
-    static func rank(files: [URL], query: String, limit: Int) -> [URL] {
-        let q = query.lowercased()
-        var scored: [(URL, Int)] = []
+    static func rank(files: [URL], query: String, limit: Int, relativeTo root: URL) -> [URL] {
+        let tokens = query
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        guard !tokens.isEmpty else { return Array(files.prefix(limit)) }
+
+        var scored: [(url: URL, score: Double, relativePath: String)] = []
         for f in files {
-            let name = f.lastPathComponent.lowercased()
-            let path = f.path.lowercased()
-            var score = 0
-            if name.hasPrefix(q) {
-                score = 1000 - name.count
-            } else if name.contains(q) {
-                score = 500 - name.count
-            } else if path.contains(q) {
-                score = 200
-            } else if let sub = subsequenceScore(in: name, query: q) {
-                score = 300 - (name.count - q.count) - sub
-            } else if let sub = subsequenceScore(in: path, query: q) {
-                score = 100 - sub
-            } else {
+            let relativePath = relativePath(for: f, root: root)
+            guard let score = score(file: f, relativePath: relativePath, tokens: tokens) else {
                 continue
             }
-            scored.append((f, score))
+            scored.append((f, score, relativePath))
         }
-        scored.sort { ($0.1, -$0.0.path.count) > ($1.1, -$1.0.path.count) }
-        return Array(scored.prefix(limit).map(\.0))
+        scored.sort {
+            if $0.score != $1.score { return $0.score > $1.score }
+            if $0.relativePath.count != $1.relativePath.count {
+                return $0.relativePath.count < $1.relativePath.count
+            }
+            return $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+        }
+        return Array(scored.prefix(limit).map(\.url))
     }
 
-    private static func subsequenceScore(in haystack: String, query: String) -> Int? {
-        var gap = 0, total = 0
-        var qIdx = query.startIndex
-        var lastMatch: String.Index?
-        for i in haystack.indices {
-            if qIdx == query.endIndex { break }
-            if haystack[i] == query[qIdx] {
-                if let last = lastMatch {
-                    gap = haystack.distance(from: last, to: i) - 1
-                    total += gap
-                }
-                lastMatch = i
-                qIdx = query.index(after: qIdx)
+    private static func score(file: URL, relativePath: String, tokens: [String]) -> Double? {
+        var total = 0.0
+        for token in tokens {
+            let nameScore = FuzzyMatch.score(query: token, target: file.lastPathComponent)?
+                .score
+                .advanced(by: 8)
+            let pathScore = FuzzyMatch.score(query: token, target: relativePath)?.score
+            guard let best = [nameScore, pathScore].compactMap(\.self).max() else {
+                return nil
             }
+            total += best
         }
-        return qIdx == query.endIndex ? total : nil
+        return total - Double(relativePath.count) * 0.001
+    }
+
+    private static func relativePath(for file: URL, root: URL) -> String {
+        let commonRoot = root.standardizedFileURL.path
+        let path = file.standardizedFileURL.path
+        let prefix = commonRoot.hasSuffix("/") ? commonRoot : commonRoot + "/"
+        guard path.hasPrefix(prefix) else { return path }
+        return String(path.dropFirst(prefix.count))
     }
 }
