@@ -238,6 +238,34 @@ extension ACPChipStateTests {
         #expect(state.thinking?.options.map { $0.name } == ["Low", "High"])
     }
 
+    @Test("cursor-agent: parameterized config options expose Thinking chip")
+    func cursorParameterizedConfigOptionsExposeThinking() {
+        let state = ACPChipState.normalize(
+            agentId: "cursor-agent",
+            availableModels: [model("gpt-5.5", "GPT-5.5")],
+            currentModel: "gpt-5.5",
+            availableModes: [mode("agent", "Agent")],
+            currentMode: "agent",
+            configOptions: [
+                configOption("model",
+                             current: "gpt-5.5",
+                             options: [("default", "Auto"), ("gpt-5.5", "GPT-5.5")],
+                             category: "model"),
+                configOption("reasoning",
+                             current: "medium",
+                             options: [("none", "None"), ("low", "Low"), ("medium", "Medium"),
+                                       ("high", "High"), ("extra-high", "Extra High")],
+                             category: "thought_level"),
+            ])
+
+        #expect(state.models?.currentId == "gpt-5.5")
+        if case .configOption(let id)? = state.thinking?.source {
+            #expect(id == "reasoning")
+        } else { Issue.record("expected configOption source") }
+        #expect(state.thinking?.currentId == "medium")
+        #expect(state.thinking?.options.map { $0.name } == ["None", "Low", "Medium", "High", "Extra High"])
+    }
+
     @Test("cursor-agent: no brackets -> no synthesized chips")
     func cursorNoBracketsNoOverlay() {
         let state = ACPChipState.normalize(

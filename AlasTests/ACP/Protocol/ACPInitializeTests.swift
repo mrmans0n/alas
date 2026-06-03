@@ -63,6 +63,7 @@ struct ACPInitializeTests {
 
         #expect(auth["terminal"] as? Bool == true)
         #expect(meta["terminal-auth"] as? Bool == true)
+        #expect(meta["parameterizedModelPicker"] as? Bool == true)
         #expect(capabilities["terminal"] as? Bool == true)
         let fs = try #require(capabilities["fs"] as? [String: Any])
         #expect(fs["readTextFile"] as? Bool == true)

@@ -106,21 +106,27 @@ struct ACPAuthCapabilities: Codable, Equatable {
 }
 
 struct ACPClientCapabilitiesMeta: Codable, Equatable {
-    static let terminalAuth = ACPClientCapabilitiesMeta(terminalAuth: true)
+    static let terminalAuth = ACPClientCapabilitiesMeta(
+        terminalAuth: true,
+        parameterizedModelPicker: true)
 
     let terminalAuth: Bool
+    let parameterizedModelPicker: Bool
 
-    init(terminalAuth: Bool) {
+    init(terminalAuth: Bool, parameterizedModelPicker: Bool = false) {
         self.terminalAuth = terminalAuth
+        self.parameterizedModelPicker = parameterizedModelPicker
     }
 
     enum CodingKeys: String, CodingKey {
         case terminalAuth = "terminal-auth"
+        case parameterizedModelPicker
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         terminalAuth = try c.decodeIfPresent(Bool.self, forKey: .terminalAuth) ?? false
+        parameterizedModelPicker = try c.decodeIfPresent(Bool.self, forKey: .parameterizedModelPicker) ?? false
     }
 }
 
