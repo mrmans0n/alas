@@ -38,15 +38,20 @@ extension RemoteClientMessage: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .listSessions: try c.encode("listSessions", forKey: .type)
-        case .subscribe(let s): try c.encode("subscribe", forKey: .type); try c.encode(s, forKey: .sessionId)
-        case .unsubscribe(let s): try c.encode("unsubscribe", forKey: .type); try c.encode(s, forKey: .sessionId)
+        case .subscribe(let s): try c.encode("subscribe", forKey: .type)
+        try c.encode(s, forKey: .sessionId)
+        case .unsubscribe(let s): try c.encode("unsubscribe", forKey: .type)
+        try c.encode(s, forKey: .sessionId)
         case .permissionDecision(let s, let r, let o, let p):
             try c.encode("permissionDecision", forKey: .type)
-            try c.encode(s, forKey: .sessionId); try c.encode(r, forKey: .requestId)
-            try c.encode(o, forKey: .optionId); try c.encodeIfPresent(p, forKey: .persistScope)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
+            try c.encode(o, forKey: .optionId)
+            try c.encodeIfPresent(p, forKey: .persistScope)
         case .questionAnswer(let s, let r, let a):
             try c.encode("questionAnswer", forKey: .type)
-            try c.encode(s, forKey: .sessionId); try c.encode(r, forKey: .requestId)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
             try c.encode(a, forKey: .answers)
         }
     }
@@ -110,27 +115,38 @@ extension RemoteServerMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .sessionList(let s): try c.encode("sessionList", forKey: .type); try c.encode(s, forKey: .sessions)
+        case .sessionList(let s): try c.encode("sessionList", forKey: .type)
+        try c.encode(s, forKey: .sessions)
         case .transcriptSnapshot(let id, let st, let m):
-            try c.encode("transcriptSnapshot", forKey: .type); try c.encode(id, forKey: .sessionId)
-            try c.encode(st, forKey: .streamingState); try c.encode(m, forKey: .messages)
+            try c.encode("transcriptSnapshot", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(st, forKey: .streamingState)
+            try c.encode(m, forKey: .messages)
         case .transcriptDelta(let id, let st, let u):
-            try c.encode("transcriptDelta", forKey: .type); try c.encode(id, forKey: .sessionId)
-            try c.encode(st, forKey: .streamingState); try c.encode(u, forKey: .upserts)
+            try c.encode("transcriptDelta", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(st, forKey: .streamingState)
+            try c.encode(u, forKey: .upserts)
         case .permissionRequest(let id, let p):
-            try c.encode("permissionRequest", forKey: .type); try c.encode(id, forKey: .sessionId)
+            try c.encode("permissionRequest", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
             try c.encode(p, forKey: .payload)
         case .permissionResolved(let id, let r):
-            try c.encode("permissionResolved", forKey: .type); try c.encode(id, forKey: .sessionId)
+            try c.encode("permissionResolved", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
             try c.encode(r, forKey: .requestId)
         case .questionRequest(let id, let p):
-            try c.encode("questionRequest", forKey: .type); try c.encode(id, forKey: .sessionId)
+            try c.encode("questionRequest", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
             try c.encode(p, forKey: .payload)
         case .questionResolved(let id, let r):
-            try c.encode("questionResolved", forKey: .type); try c.encode(id, forKey: .sessionId)
+            try c.encode("questionResolved", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
             try c.encode(r, forKey: .requestId)
-        case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type); try c.encode(id, forKey: .sessionId)
-        case .error(let m): try c.encode("error", forKey: .type); try c.encode(m, forKey: .message)
+        case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type)
+        try c.encode(id, forKey: .sessionId)
+        case .error(let m): try c.encode("error", forKey: .type)
+        try c.encode(m, forKey: .message)
         }
     }
 }

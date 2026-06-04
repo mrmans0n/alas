@@ -21,7 +21,8 @@ struct WebSocketFrame: Equatable {
             out.append(UInt8(len))
         } else if len <= 0xFFFF {
             out.append(126)
-            out.append(UInt8((len >> 8) & 0xFF)); out.append(UInt8(len & 0xFF))
+            out.append(UInt8((len >> 8) & 0xFF))
+            out.append(UInt8(len & 0xFF))
         } else {
             out.append(127)
             for shift in stride(from: 56, through: 0, by: -8) { out.append(UInt8((len >> shift) & 0xFF)) }
@@ -70,7 +71,8 @@ struct WebSocketFrame: Equatable {
         var mask: [UInt8] = [0, 0, 0, 0]
         if masked {
             guard bytes.count >= idx + 4 else { return nil }
-            mask = Array(bytes[idx..<idx + 4]); idx += 4
+            mask = Array(bytes[idx..<idx + 4])
+            idx += 4
         }
         guard bytes.count >= idx + len else { return nil }
         var payload = [UInt8](bytes[idx..<idx + len])

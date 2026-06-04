@@ -29,7 +29,8 @@ final class RemoteSessionGateway {
         case .subscribe(let id):
             await provider.hydrateIfNeeded(id: id)
             guard let session = provider.session(for: id) else {
-                send(.sessionClosed(sessionId: id)); return
+                send(.sessionClosed(sessionId: id))
+                return
             }
             sendSnapshot(id: id, session: session)
             observe(id: id, session: session)

@@ -88,7 +88,8 @@ final class RemoteConnection: @unchecked Sendable {
     // MARK: HTTP / upgrade
 
     private func drain() {
-        if isWebSocket { drainFrames(); return }
+        if isWebSocket { drainFrames()
+        return }
 
         // Peek headers on a copy WITHOUT consuming `inbound`, so we can wait for
         // the full Content-Length body before committing. Parse once, here.
@@ -155,7 +156,8 @@ final class RemoteConnection: @unchecked Sendable {
         // Token from Sec-WebSocket-Protocol (web client sends it as a
         // subprotocol) or, as a fallback, a ?token= query parameter.
         let token = req.headers["sec-websocket-protocol"] ?? req.query["token"] ?? ""
-        guard let key = req.headers["sec-websocket-key"] else { teardown(); return }
+        guard let key = req.headers["sec-websocket-key"] else { teardown()
+        return }
 
         Task { @MainActor [weak self] in
             guard let self else { return }

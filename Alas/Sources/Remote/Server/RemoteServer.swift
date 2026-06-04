@@ -55,7 +55,8 @@ final class RemoteServer {
             switch state {
             case .ready:
                 let assigned = listener.port?.rawValue
-                Task { @MainActor in self?.port = assigned; self?.onPortChange?(assigned) }
+                Task { @MainActor in self?.port = assigned
+                self?.onPortChange?(assigned) }
             case .failed:
                 Task { @MainActor in
                     guard let self else { return }
@@ -63,11 +64,13 @@ final class RemoteServer {
                         self.didFallback = true
                         try? self.start(port: 0)   // preferred port taken — fall back to OS-assigned
                     } else {
-                        self.port = nil; self.onPortChange?(nil)
+                        self.port = nil
+                        self.onPortChange?(nil)
                     }
                 }
             case .cancelled:
-                Task { @MainActor in self?.port = nil; self?.onPortChange?(nil) }
+                Task { @MainActor in self?.port = nil
+                self?.onPortChange?(nil) }
             default:
                 break
             }
@@ -99,7 +102,8 @@ final class RemoteServer {
     }
 
     private func accept(_ nwConn: NWConnection) {
-        guard connections.count < maxConnections else { nwConn.cancel(); return }
+        guard connections.count < maxConnections else { nwConn.cancel()
+        return }
         let responder = RemoteHTTPResponder(pairing: pairing, assets: assets)
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
         let conn = RemoteConnection(

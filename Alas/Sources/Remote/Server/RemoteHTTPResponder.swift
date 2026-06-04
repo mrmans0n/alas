@@ -21,7 +21,8 @@ struct RemoteHTTPResponder {
     }
 
     private func pairResponse(body: Data) -> Data {
-        struct PairRequest: Decodable { let code: String; let deviceName: String }
+        struct PairRequest: Decodable { let code: String
+        let deviceName: String }
         guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body),
               let token = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else {
             return Self.http(status: "401 Unauthorized", contentType: "application/json",
@@ -50,7 +51,8 @@ struct RemoteHTTPResponder {
 /// `RemoteWeb/` in production; a temp dir in tests). `asset(forPath:)` is
 /// path-traversal-safe: it only serves regular files resolving under `root`.
 struct RemoteWebAssets {
-    struct Asset { let data: Data; let contentType: String }
+    struct Asset { let data: Data
+    let contentType: String }
     let root: URL   // directory inside the app bundle: RemoteWeb/
 
     func asset(forPath path: String) -> Asset? {

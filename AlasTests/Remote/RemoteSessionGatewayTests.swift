@@ -102,7 +102,8 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         guard case .transcriptSnapshot(let id, _, let msgs)? = sent.first else {
-            Issue.record("expected snapshot, got \(sent)"); return
+            Issue.record("expected snapshot, got \(sent)")
+            return
         }
         #expect(id == "s1")
         #expect(msgs.contains { $0.kind == "agent" && $0.text == "hello" })
@@ -178,7 +179,8 @@ struct RemoteSessionGatewayTests {
         #expect(last.response == .init(outcome: .answered(answers: [
             ACPQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])
         ])))
-        #expect(sent.contains { if case .questionResolved(_, 0) = $0 { return true }; return false })
+        #expect(sent.contains { if case .questionResolved(_, 0) = $0 { return true }
+        return false })
     }
 
     @Test func staleQuestionAnswerIsNoOp() async throws {
@@ -209,7 +211,8 @@ struct RemoteSessionGatewayTests {
             requestId: 0,
             answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: [])]))
         #expect(provider.lastQuestionResponse == nil)
-        #expect(!sent.contains { if case .questionResolved = $0 { return true }; return false })
+        #expect(!sent.contains { if case .questionResolved = $0 { return true }
+        return false })
     }
 
     @Test func transcriptMutationEmitsCoalescedDelta() async throws {
@@ -239,6 +242,7 @@ struct RemoteSessionGatewayTests {
         gw.close()
         s.transcript.messages.append(.agent(id: UUID(), StreamingText("after-close")))
         try await Task.sleep(nanoseconds: 250_000_000)
-        #expect(!sent.contains { if case .transcriptDelta = $0 { return true }; return false })
+        #expect(!sent.contains { if case .transcriptDelta = $0 { return true }
+        return false })
     }
 }
