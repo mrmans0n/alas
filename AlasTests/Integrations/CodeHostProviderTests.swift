@@ -139,6 +139,45 @@ struct CodeHostProviderTests {
         #expect(feedback.first?.status == .actionable)
     }
 
+    @Test func defaultFeedbackEvidenceSynthesizesChangesRequestedWhenThreadsAreMissing() async throws {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+        let request = ReviewRequest(
+            remote: remote,
+            number: 42,
+            title: "Review evidence",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/evidence",
+            baseRefName: "main",
+            reviewDecision: .changesRequested,
+            mergeState: .blocked,
+            checks: [],
+            threads: []
+        )
+        let provider = FakeCodeHostProvider(kind: .github)
+
+        let feedback = try await provider.feedbackEvidence(remote: remote, request: request, cwd: URL(fileURLWithPath: "/tmp/alas"))
+        let detail = try await provider.feedbackEvidenceDetail(
+            remote: remote,
+            request: request,
+            item: #require(feedback.first),
+            cwd: URL(fileURLWithPath: "/tmp/alas")
+        )
+
+        #expect(feedback.map(\.id) == [ReviewEvidenceFallbacks.changesRequestedID])
+        #expect(feedback.first?.status == .actionable)
+        #expect(detail.body.contains("review decision is changes requested"))
+        #expect(detail.item.providerURL == request.url)
+    }
+
     private struct FakeCodeHostProvider: CodeHostProvider {
         let kind: CodeHostKind
         let capabilities: CodeHostProviderCapabilities = .readOnly

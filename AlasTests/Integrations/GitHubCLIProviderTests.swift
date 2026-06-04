@@ -461,6 +461,27 @@ struct GitHubCLIProviderTests {
         #expect(detail.item.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
     }
 
+    @Test func feedbackEvidenceDetailUsesChangesRequestedFallback() async throws {
+        let request = Self.makeRequest(reviewDecision: .changesRequested)
+        let provider = GitHubCLIProvider()
+        let item = try #require(try await provider.feedbackEvidence(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        ).first)
+
+        let detail = try await provider.feedbackEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(item.id == ReviewEvidenceFallbacks.changesRequestedID)
+        #expect(detail.body.contains("review decision is changes requested"))
+        #expect(detail.item.providerURL == request.url)
+    }
+
     @Test func checksTreatNoChecksReportedAsEmptyChecks() async throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
@@ -664,7 +685,8 @@ struct GitHubCLIProviderTests {
 
     private static func makeRequest(
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = []
+        threads: [ReviewThreadSummary] = [],
+        reviewDecision: ReviewDecision = .approved
     ) -> ReviewRequest {
         ReviewRequest(
             remote: Self.remote,
@@ -675,7 +697,7 @@ struct GitHubCLIProviderTests {
             isDraft: false,
             headRefName: "feature/github-provider",
             baseRefName: "main",
-            reviewDecision: .approved,
+            reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,
             threads: threads

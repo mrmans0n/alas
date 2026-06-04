@@ -80,6 +80,35 @@ struct ReviewEvidenceDetail: Codable, Equatable, Sendable {
     }
 }
 
+enum ReviewEvidenceFallbacks {
+    static let changesRequestedID = "review-decision:changes-requested"
+
+    static func changesRequestedItem(request: ReviewRequest) -> ReviewEvidenceItem {
+        ReviewEvidenceItem(
+            id: changesRequestedID,
+            section: .feedback,
+            title: "Changes requested",
+            subtitle: "No unresolved review thread summaries were loaded.",
+            status: .actionable,
+            providerURL: request.url
+        )
+    }
+
+    static func changesRequestedDetail(item: ReviewEvidenceItem, request: ReviewRequest) -> ReviewEvidenceDetail {
+        ReviewEvidenceDetail(
+            item: item,
+            body: """
+            The \(request.provider.reviewRequestLabel) review decision is changes requested, but Alas did not load any unresolved review thread summaries for this request.
+
+            Open the \(request.provider.reviewRequestLabel) in \(request.provider.displayName) to inspect the full review, or send this context to an agent with the review request URL.
+            """,
+            filePath: nil,
+            line: nil,
+            isTruncated: false
+        )
+    }
+}
+
 enum ReviewEvidenceContextFormatter {
     static func format(_ detail: ReviewEvidenceDetail) -> String {
         var lines: [String] = [

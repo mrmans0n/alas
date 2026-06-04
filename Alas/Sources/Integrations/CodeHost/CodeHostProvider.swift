@@ -119,7 +119,7 @@ extension CodeHostProvider {
     }
 
     func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        request.threads
+        let items = request.threads
             .filter { !$0.isResolved && $0.isActionable }
             .map {
                 ReviewEvidenceItem(
@@ -131,6 +131,10 @@ extension CodeHostProvider {
                     providerURL: $0.url
                 )
             }
+        if items.isEmpty, request.reviewDecision == .changesRequested {
+            return [ReviewEvidenceFallbacks.changesRequestedItem(request: request)]
+        }
+        return items
     }
 
     func feedbackEvidenceDetail(
@@ -139,6 +143,9 @@ extension CodeHostProvider {
         item: ReviewEvidenceItem,
         cwd: URL
     ) async throws -> ReviewEvidenceDetail {
+        if item.id == ReviewEvidenceFallbacks.changesRequestedID {
+            return ReviewEvidenceFallbacks.changesRequestedDetail(item: item, request: request)
+        }
         let thread = request.threads.first { $0.id == item.id }
         return ReviewEvidenceDetail(
             item: item,

@@ -216,6 +216,9 @@ struct GitHubCLIProvider: CodeHostProvider {
     ) async throws -> ReviewEvidenceDetail {
         _ = remote
         _ = cwd
+        if item.id == ReviewEvidenceFallbacks.changesRequestedID {
+            return ReviewEvidenceFallbacks.changesRequestedDetail(item: item, request: request)
+        }
         let thread = request.threads.first { $0.id == item.id }
         return ReviewEvidenceDetail(
             item: item,
