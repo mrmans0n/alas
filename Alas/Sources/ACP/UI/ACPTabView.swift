@@ -310,12 +310,21 @@ private struct ACPSessionView: View {
                                 let url = root.appendingPathComponent(entry.relativePath)
                                 guard (try? url.checkResourceIsReachable()) ?? false else { continue }
                                 if let isDir = try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory, isDir {
+                                    // Untracked directory collapsed by `git ls-files`;
+                                    // expand it so its files and subdirectories show.
                                     let sub = MentionFuzzy.collectFiles(under: url, limit: 5000)
                                     result.append(contentsOf: sub)
                                 } else {
                                     result.append(url)
                                 }
                             }
+                            // `git ls-files` lists files only — reconstruct every
+                            // directory (tracked included) so directories are
+                            // pickable in the @ menu, flagged for the folder icon.
+                            result += MentionFuzzy.ancestorDirectories(
+                                forRelativePaths: entries.map(\.relativePath),
+                                root: root
+                            )
                             return result
                         }
                     ) { text, attachments, intent, draft, onPromptFinished -> Bool in
