@@ -387,13 +387,13 @@ function sendPrompt() {
 // only if the user hasn't started composing a new one.
 function restoreRejectedPrompt() {
   const ta = $("prompt");
-  if (lastSentText && !ta.value) {
-    ta.value = lastSentText;
-    autoGrowPrompt();
-  }
-  if (lastSentAttachments.length && pendingAttachments.length === 0) {
-    pendingAttachments = lastSentAttachments.slice();
-    renderChips();
+  // Only restore if the user hasn't started a new message — no new text AND no
+  // newly-staged images — otherwise we'd splice the failed prompt's content
+  // into their new draft.
+  const composingNew = !!ta.value || pendingAttachments.length > 0;
+  if (!composingNew) {
+    if (lastSentText) { ta.value = lastSentText; autoGrowPrompt(); }
+    if (lastSentAttachments.length) { pendingAttachments = lastSentAttachments.slice(); renderChips(); }
   }
   lastSentText = null;
   lastSentAttachments = [];
