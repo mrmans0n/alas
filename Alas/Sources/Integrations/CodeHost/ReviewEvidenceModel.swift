@@ -28,13 +28,15 @@ final class ReviewEvidenceModel {
         snapshot: ReviewLoopSnapshot,
         provider: any CodeHostProvider,
         cwd: URL,
-        initialSection: ReviewEvidenceSection?
+        initialSection: ReviewEvidenceSection?,
+        initialItemID: String? = nil
     ) {
         self.snapshot = snapshot
         self.provider = provider
         self.cwd = cwd
         self.initialSection = initialSection
         self.selectedSection = initialSection ?? .ci
+        self.selectedItemID = initialItemID
     }
 
     func load() async {
@@ -132,6 +134,28 @@ final class ReviewEvidenceModel {
         case .feedback:
             feedbackItems
         }
+    }
+
+    func showSelectedDetailError(_ message: String) {
+        guard let item = selectedItem else {
+            errorMessage = message
+            return
+        }
+        errorMessage = message
+        let existingBody = selectedDetail?.body
+        let body: String
+        if let existingBody, !existingBody.isEmpty {
+            body = "\(message)\n\n\(existingBody)"
+        } else {
+            body = message
+        }
+        selectedDetail = ReviewEvidenceDetail(
+            item: item,
+            body: body,
+            filePath: selectedDetail?.filePath,
+            line: selectedDetail?.line,
+            isTruncated: selectedDetail?.isTruncated ?? false
+        )
     }
 
     private func chooseInitialSelection() {

@@ -324,7 +324,8 @@ struct ReviewEvidenceTabView: View {
             snapshot: snapshot,
             provider: provider,
             cwd: worktreePath,
-            initialSection: initialSection
+            initialSection: initialSection,
+            initialItemID: tabState.selectedItemID
         )
         model = loaded
         await loaded.load()
@@ -477,6 +478,9 @@ struct ReviewEvidenceTabView: View {
             if await rightPaneState.reviewLoop.rerunFailedChecks(snapshot: snapshot) {
                 await rightPaneState.refresh()
                 loadNonce += 1
+            } else {
+                let message = rightPaneState.reviewLoop.lastError ?? "Rerun failed."
+                model?.showSelectedDetailError(message)
             }
             isRerunningFailedChecks = false
         }

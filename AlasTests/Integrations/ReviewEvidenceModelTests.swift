@@ -41,6 +41,43 @@ struct ReviewEvidenceModelTests {
         #expect(model.selectedDetail?.body == "Please simplify this.")
     }
 
+    @Test func loadRestoresPersistedSelectedItemWhenStillPresent() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: FakeCodeHostProvider(feedbackItems: [
+                Self.feedbackItem(id: "feedback:thread-1", title: "reviewer", body: "First comment."),
+                Self.feedbackItem(id: "feedback:thread-2", title: "maintainer", body: "Second comment."),
+            ]),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: .feedback,
+            initialItemID: "feedback:thread-2"
+        )
+
+        await model.load()
+
+        #expect(model.selectedSection == .feedback)
+        #expect(model.selectedItem?.id == "feedback:thread-2")
+    }
+
+    @Test func selectedDetailErrorPreservesSelectedItem() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: FakeCodeHostProvider(),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: .ci
+        )
+
+        await model.load()
+        await model.loadSelectedDetail()
+        model.showSelectedDetailError("Rerun failed: permission denied")
+
+        #expect(model.selectedSection == .ci)
+        #expect(model.selectedItem?.id == "ci:test")
+        #expect(model.selectedDetail?.item.id == "ci:test")
+        #expect(model.selectedDetail?.body.contains("Rerun failed: permission denied") == true)
+        #expect(model.selectedDetail?.body.contains("Assertion failed in Tests.swift") == true)
+    }
+
     @Test func staleDetailResponseDoesNotOverwriteCurrentSelection() async {
         let provider = SuspendedDetailProvider()
         let model = ReviewEvidenceModel(
@@ -134,6 +171,17 @@ struct ReviewEvidenceModelTests {
         )
         return request
     }
+
+    private static func feedbackItem(id: String, title: String, body: String) -> ReviewEvidenceItem {
+        ReviewEvidenceItem(
+            id: id,
+            section: .feedback,
+            title: title,
+            subtitle: body,
+            status: .actionable,
+            providerURL: URL(string: "https://github.com/discussion/\(id)")
+        )
+    }
 }
 
 private actor EvidenceProviderRecorder {
@@ -155,9 +203,35 @@ private actor EvidenceProviderRecorder {
 
 private struct FakeCodeHostProvider: CodeHostProvider {
     let recorder: EvidenceProviderRecorder?
+    let ciItems: [ReviewEvidenceItem]
+    let feedbackItems: [ReviewEvidenceItem]
 
-    init(recorder: EvidenceProviderRecorder? = nil) {
+    init(
+        recorder: EvidenceProviderRecorder? = nil,
+        ciItems: [ReviewEvidenceItem] = [
+            ReviewEvidenceItem(
+                id: "ci:test",
+                section: .ci,
+                title: "Tests",
+                subtitle: "CI",
+                status: .failed,
+                providerURL: URL(string: "https://github.com/run")
+            ),
+        ],
+        feedbackItems: [ReviewEvidenceItem] = [
+            ReviewEvidenceItem(
+                id: "feedback:thread-1",
+                section: .feedback,
+                title: "reviewer",
+                subtitle: "Please simplify this.",
+                status: .actionable,
+                providerURL: URL(string: "https://github.com/discussion")
+            ),
+        ]
+    ) {
         self.recorder = recorder
+        self.ciItems = ciItems
+        self.feedbackItems = feedbackItems
     }
 
     var kind: CodeHostKind { .github }
@@ -195,16 +269,7 @@ private struct FakeCodeHostProvider: CodeHostProvider {
     }
 
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        [
-            ReviewEvidenceItem(
-                id: "ci:test",
-                section: .ci,
-                title: "Tests",
-                subtitle: "CI",
-                status: .failed,
-                providerURL: URL(string: "https://github.com/run")
-            ),
-        ]
+        ciItems
     }
 
     func checkEvidenceDetail(
@@ -224,16 +289,7 @@ private struct FakeCodeHostProvider: CodeHostProvider {
     }
 
     func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        [
-            ReviewEvidenceItem(
-                id: "feedback:thread-1",
-                section: .feedback,
-                title: "reviewer",
-                subtitle: "Please simplify this.",
-                status: .actionable,
-                providerURL: URL(string: "https://github.com/discussion")
-            ),
-        ]
+        feedbackItems
     }
 
     func feedbackEvidenceDetail(
