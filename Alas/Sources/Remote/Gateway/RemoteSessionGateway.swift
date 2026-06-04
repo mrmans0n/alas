@@ -194,8 +194,12 @@ final class RemoteSessionGateway {
         var acpAnswers: [ACPQuestionAnswer] = []
         for question in pending.params.questions {
             let selected = selectionByQuestion[question.id] ?? []
-            guard !selected.isEmpty else { return }   // incomplete — keep the question pending
+            // Keep only ids that are real options for this question. If none
+            // survive (empty, or unknown ids from a stale/malicious client),
+            // treat the answer as incomplete rather than resuming the agent with
+            // a vacuous selection.
             let ordered = question.options.map(\.id).filter { selected.contains($0) }
+            guard !ordered.isEmpty else { return }
             acpAnswers.append(ACPQuestionAnswer(questionId: question.id, selectedOptionIds: ordered))
         }
         provider.answerQuestion(for: sessionId, .init(outcome: .answered(answers: acpAnswers)))

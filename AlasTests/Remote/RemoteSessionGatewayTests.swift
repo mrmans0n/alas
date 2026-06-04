@@ -235,6 +235,23 @@ struct RemoteSessionGatewayTests {
         return false })
     }
 
+    @Test func questionAnswerWithUnknownOptionsIsNoOp() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        // Non-empty selection, but the ids aren't real options ("o1"/"o2") — must
+        // not resume the agent with a vacuous (empty after filtering) answer.
+        await gw.handle(.questionAnswer(
+            sessionId: "s1",
+            requestId: 0,
+            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["bogus"])]))
+        #expect(provider.lastQuestionResponse == nil)
+    }
+
     @Test func transcriptMutationEmitsCoalescedDelta() async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("hello")
