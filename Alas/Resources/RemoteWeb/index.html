@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=8" />
+  <link rel="stylesheet" href="/style.css?v=9" />
 </head>
 <body>
   <header id="bar"><span id="status">connecting…</span><span id="ver"></span></header>
@@ -30,6 +30,14 @@
       <button id="question-close" class="sheet-close">Close</button>
     </div>
   </div>
-  <script src="/app.js?v=8"></script>
+  <div id="gate" class="hidden">
+    <div class="gate-card">
+      <div class="gate-icon" id="gate-icon">⚠</div>
+      <h2 id="gate-title">Pair this device</h2>
+      <p id="gate-msg"></p>
+      <button id="gate-retry" class="hidden">Try again</button>
+    </div>
+  </div>
+  <script src="/app.js?v=9"></script>
 </body>
 </html>

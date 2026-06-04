@@ -63,6 +63,14 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .m-tool[open] .tool-chev { transform: rotate(180deg); }
 .tool-body { margin: 0; padding: 9px 11px; border-top: 0.5px solid var(--line-soft); background: color-mix(in oklab, var(--bg-0) 55%, transparent); font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.45; color: var(--fg-muted); white-space: pre; overflow-x: auto; max-height: 46vh; overflow-y: auto; }
 
+/* Pair / error gate (full screen) */
+#gate { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 28px; background: linear-gradient(180deg, var(--bg-1), var(--bg-0)); }
+.gate-card { text-align: center; max-width: 320px; }
+.gate-icon { font-size: 38px; line-height: 1; margin-bottom: 14px; }
+.gate-card h2 { font-size: 19px; font-weight: 700; margin: 0 0 10px; color: var(--fg); }
+.gate-card p { font-size: 14.5px; line-height: 1.55; color: var(--fg-dim); margin: 0; }
+#gate-retry { margin-top: 18px; padding: 11px 20px; border: 0.5px solid var(--line); border-radius: 10px; background: var(--bg-2); color: var(--fg); font-size: 15px; cursor: pointer; }
+
 /* Bottom sheets (permission / question) */
 .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 10; }
 .sheet-card { background: var(--bg-2); width: 100%; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; border-top: 0.5px solid var(--line); }

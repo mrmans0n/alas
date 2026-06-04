@@ -1,4 +1,4 @@
-const APP_BUILD = "v8";   // visible in the top bar to confirm the phone has fresh JS
+const APP_BUILD = "v9";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
@@ -9,6 +9,13 @@ let lastMsgDbg = "";               // diagnostic: last server message, shown in 
 
 function setStatus(s) { $("status").textContent = s; }
 function setBar() { const e = $("ver"); if (e) e.textContent = " · " + APP_BUILD + (lastMsgDbg ? " · " + lastMsgDbg : ""); }
+function showGate(title, msg, retry) {
+  $("gate-title").textContent = title;
+  $("gate-msg").textContent = msg;
+  $("gate-retry").classList.toggle("hidden", !retry);
+  $("gate").classList.remove("hidden");
+}
+function hideGate() { $("gate").classList.add("hidden"); }
 
 async function ensureToken() {
   // A freshly-scanned QR (?code present) always re-pairs, REPLACING any stored
@@ -16,8 +23,18 @@ async function ensureToken() {
   // recover by scanning a new code (it would keep reusing the dead token).
   const code = new URLSearchParams(location.search).get("code");
   if (code) {
-    const res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }) });
-    if (!res.ok) { localStorage.removeItem(tokenKey); setStatus("pairing failed — get a fresh QR"); throw new Error("pair failed"); }
+    let res;
+    try {
+      res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }) });
+    } catch (_) {
+      showGate("Can’t reach Alas", "Make sure your Mac is awake and on the same Wi-Fi, then scan the QR again.", true);
+      throw new Error("net");
+    }
+    if (!res.ok) {
+      localStorage.removeItem(tokenKey);
+      showGate("Pairing link expired", "That code timed out. In Alas, open Settings → Remote, tap “New code”, and scan the fresh QR.");
+      throw new Error("pair failed");
+    }
     const token = (await res.json()).token;
     localStorage.setItem(tokenKey, token);
     history.replaceState({}, "", "/");   // strip code from URL (history + referrer)
@@ -25,7 +42,7 @@ async function ensureToken() {
   }
   const token = localStorage.getItem(tokenKey);
   if (token) return token;
-  setStatus("open the QR link from Alas to pair");
+  showGate("Pair this device", "On your Mac, open Alas → Settings → Remote and scan the QR code shown there.");
   throw new Error("no code");
 }
 
@@ -40,6 +57,7 @@ async function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`, [token]);   // token as subprotocol
   ws.onopen = () => {
     setStatus("connected");
+    hideGate();
     reconnectDelay = 1500;   // reset back-off after a good connection
     send({ type: "listSessions" });
     if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
@@ -292,5 +310,6 @@ $("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 
 $("back").onclick = showSessions;
+$("gate-retry").onclick = () => location.reload();
 setBar();
 connect();
