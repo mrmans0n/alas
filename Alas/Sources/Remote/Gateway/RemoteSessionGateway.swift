@@ -98,7 +98,13 @@ final class RemoteSessionGateway {
             // later — so the client restores the user's text instead of losing
             // it.
             provider.sendPrompt(for: id, text: trimmed, attachments: materialized) { [weak self] accepted in
-                if !accepted { self?.send(.promptRejected(sessionId: id)) }
+                guard let self else { return }
+                if !accepted {
+                    self.send(.promptRejected(sessionId: id))
+                    // Refused after we wrote the files (needs-auth, or a takeover
+                    // landed mid-flight) — clean them up so they don't orphan.
+                    self.discardAttachmentFiles(materialized)
+                }
             }
         case .stop(let id):
             guard provider.isWriter(for: id) else { return }
@@ -122,19 +128,41 @@ final class RemoteSessionGateway {
 
     /// Decode wire attachments to files under acp-attachments/. Returns nil if the
     /// batch violates the size cap or mimeType allowlist (caller rejects the send).
+    ///
+    /// The whole batch is validated + decoded BEFORE any file is written, so a
+    /// later bad/oversize entry can't leave earlier files orphaned on disk; a
+    /// mid-batch write failure rolls back the files already written.
     private func materialize(_ wire: [RemoteAttachment], for sessionId: String) -> [ACPMessage.Attachment]? {
+        var decoded: [(data: Data, mimeType: String, name: String?)] = []
         var total = 0
-        var out: [ACPMessage.Attachment] = []
         for a in wire {
             guard a.mimeType.hasPrefix(Self.allowedAttachmentPrefix),
                   let data = Data(base64Encoded: a.dataBase64) else { return nil }
             total += data.count
             guard total <= Self.maxAttachmentsBytes else { return nil }
-            guard let url = provider.writeAttachment(data, mimeType: a.mimeType, name: a.name, for: sessionId)
-            else { return nil }
-            out.append(.init(uri: url.absoluteString, name: a.name, mimeType: a.mimeType))
+            decoded.append((data, a.mimeType, a.name))
+        }
+        var written: [URL] = []
+        var out: [ACPMessage.Attachment] = []
+        for d in decoded {
+            guard let url = provider.writeAttachment(d.data, mimeType: d.mimeType, name: d.name, for: sessionId) else {
+                written.forEach { try? FileManager.default.removeItem(at: $0) }
+                return nil
+            }
+            written.append(url)
+            out.append(.init(uri: url.absoluteString, name: d.name, mimeType: d.mimeType))
         }
         return out
+    }
+
+    /// Best-effort delete of attachment files we wrote but that never made it
+    /// into the conversation (the manager refused the prompt after materialize).
+    private func discardAttachmentFiles(_ attachments: [ACPMessage.Attachment]) {
+        for a in attachments {
+            if let url = URL(string: a.uri), url.isFileURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
     }
 
     /// Tear down all observation (called when the connection closes).

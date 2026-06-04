@@ -41,10 +41,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         onResult(accepted)
     }
 
+    var writtenAttachmentURLs: [URL] = []
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
         let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).\(ext)")
         do { try data.write(to: url) } catch { return nil }
+        writtenAttachmentURLs.append(url)
         return url
     }
 
@@ -493,5 +495,22 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
         #expect(provider.lastAttachments.count == 1)
         #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
+    }
+
+    @Test func refusedSendDiscardsAttachmentFiles() async {
+        // Writer at gateway time, but the manager refuses the submit (e.g. a
+        // takeover landed mid-flight / needs auth). The files we wrote during
+        // materialize must be cleaned up rather than orphaned on disk.
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        provider.sendPromptAccepts = false
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(!provider.writtenAttachmentURLs.isEmpty)
+        for url in provider.writtenAttachmentURLs {
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+        }
     }
 }
