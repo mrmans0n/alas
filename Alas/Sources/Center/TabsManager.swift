@@ -680,6 +680,59 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func openOrFocusReviewEvidence(
+        worktreeId: String,
+        snapshot: ReviewLoopSnapshot,
+        initialSection: ReviewEvidenceSection?
+    ) -> Tab {
+        let baseState = ReviewEvidenceTabState(
+            worktreeId: worktreeId,
+            snapshot: snapshot,
+            initialSection: initialSection
+        )
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           case .reviewEvidence(var existing) = file.tabs[idx] {
+            existing.refreshSnapshotMetadata(from: snapshot)
+            if let initialSection {
+                if existing.selectedSection != initialSection {
+                    existing.selectedItemID = nil
+                }
+                existing.selectedSection = initialSection
+            }
+            let tab = Tab.reviewEvidence(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+        let tab = Tab.reviewEvidence(baseState)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func updateReviewEvidenceSelection(
+        worktreeId: String,
+        tabId: TabID,
+        selectedSection: ReviewEvidenceSection,
+        selectedItemID: String?
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .reviewEvidence(var state) = file.tabs[idx]
+        else { return nil }
+        state.selectedSection = selectedSection
+        state.selectedItemID = selectedItemID
+        let tab = Tab.reviewEvidence(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
     /// Clear any stashed draft commit state for the given worktree.
     /// Used when the user explicitly discards the draft (via tab context
     /// menu) or after a successful commit consumes the draft.

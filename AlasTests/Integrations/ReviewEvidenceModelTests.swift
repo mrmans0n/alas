@@ -63,8 +63,50 @@ struct ReviewEvidenceModelTests {
         #expect(!model.isLoadingDetail)
     }
 
+    @Test func modelReportsMissingReviewRequest() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(reviewRequest: nil),
+            provider: FakeCodeHostProvider(),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        #expect(model.errorMessage == "Review request not found.")
+        #expect(model.ciItems.isEmpty)
+        #expect(model.feedbackItems.isEmpty)
+    }
+
     private static func snapshot() -> ReviewLoopSnapshot {
-        let remote = CodeHostRemote(
+        snapshot(reviewRequest: Self.reviewRequest())
+    }
+
+    private static func snapshot(reviewRequest: ReviewRequest?) -> ReviewLoopSnapshot {
+        let remote = Self.remote()
+
+        return ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "feature/review-loop",
+                headSHA: "abc",
+                baseBranch: "main",
+                hasWorkingTreeChanges: false,
+                hasStagedChanges: false,
+                aheadCommitCount: 2,
+                hasUpstream: true,
+                needsPush: false
+            ),
+            remote: remote,
+            reviewRequest: reviewRequest,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .githubCLI,
+            errorMessage: nil
+        )
+    }
+
+    private static func remote() -> CodeHostRemote {
+        CodeHostRemote(
             kind: .github,
             host: "github.com",
             owner: "mrmans0n",
@@ -72,6 +114,10 @@ struct ReviewEvidenceModelTests {
             remoteName: "origin",
             webURL: URL(string: "https://github.com/mrmans0n/alas")!
         )
+    }
+
+    private static func reviewRequest() -> ReviewRequest {
+        let remote = Self.remote()
         let request = ReviewRequest(
             remote: remote,
             number: 428,
@@ -86,25 +132,7 @@ struct ReviewEvidenceModelTests {
             checks: [],
             threads: []
         )
-
-        return ReviewLoopSnapshot(
-            local: ReviewLoopLocalState(
-                branchName: "feature/review-loop",
-                headSHA: "abc",
-                baseBranch: "main",
-                hasWorkingTreeChanges: false,
-                hasStagedChanges: false,
-                aheadCommitCount: 2,
-                hasUpstream: true,
-                needsPush: false
-            ),
-            remote: remote,
-            reviewRequest: request,
-            providerAvailable: true,
-            providerAuthenticated: true,
-            providerCapabilities: .githubCLI,
-            errorMessage: nil
-        )
+        return request
     }
 }
 
