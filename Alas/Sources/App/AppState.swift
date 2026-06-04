@@ -3026,6 +3026,32 @@ final class AppState {
         tabs.append(acpSession: state, to: worktree.id)
     }
 
+    /// Route a prepared handoff into the active ACP tab when its composer is
+    /// safely empty; otherwise preserve the current draft and open a new tab.
+    func openACPHandoff(agentID: String, initialPrompt: String) {
+        guard !initialPrompt.isEmpty else {
+            openNewACPSession(agentID: agentID, initialPrompt: nil)
+            return
+        }
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId),
+              let manager = acpManager(for: worktree)
+        else { return }
+
+        if case .acpSession(let tabState) = tabs.activeTab(forWorktree: worktree.id),
+           let session = manager.placeholderSession(id: tabState.sessionId),
+           !session.composerDraft.hasContent {
+            manager.persistComposerDraft(
+                ACPComposerDraft(segments: [.text(initialPrompt)]),
+                for: session
+            )
+            tabs.activate(worktreeId: worktree.id, tabId: tabState.id)
+            return
+        }
+
+        openNewACPSession(agentID: agentID, initialPrompt: initialPrompt)
+    }
+
     func openReviewLoopHandoff(from reviewLoop: ReviewLoopState, actionKind: ReviewReadinessActionKind) {
         guard let snapshot = reviewLoop.snapshot else { return }
         guard actionKind == .openAgentHandoff else { return }
@@ -3039,7 +3065,7 @@ final class AppState {
                 detail: "Prepare a focused agent handoff."
             )
         )
-        openNewACPSession(agentID: agentID, initialPrompt: prompt)
+        openACPHandoff(agentID: agentID, initialPrompt: prompt)
     }
 
     nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
