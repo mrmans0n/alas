@@ -17,7 +17,7 @@ struct CommitInfo: Identifiable, Hashable {
 extension CommitInfo {
     static let recognisedTypes: Set<String> = [
         "feat", "fix", "chore", "refactor", "perf", "docs", "test", "ci", "build",
-        "style", "revert", "tune", "harden",
+        "style", "revert", "tune", "harden", "polish",
     ]
 
     /// Splits a commit subject of the form
