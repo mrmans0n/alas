@@ -1,5 +1,20 @@
 import Foundation
 
+struct RemoteModelInfo: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+}
+
+struct RemoteSessionConfig: Codable, Equatable, Sendable {
+    let sessionId: String
+    let models: [RemoteModelInfo]
+    let modes: [RemoteModelInfo]
+    let currentModel: String?
+    let currentMode: String?
+    let autoRunEnabled: Bool
+    let acceptsImages: Bool
+}
+
 /// Client → server. `type` discriminates.
 enum RemoteClientMessage: Equatable, Sendable {
     case listSessions

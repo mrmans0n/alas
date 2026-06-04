@@ -3298,4 +3298,40 @@ extension AppState: RemoteSessionsProvider {
             return
         }
     }
+
+    func setModel(for id: String, modelId: String) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.setModel(for: id, modelId: modelId)
+            return
+        }
+    }
+
+    func setMode(for id: String, modeId: String) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.setMode(for: id, modeId: modeId)
+            return
+        }
+    }
+
+    func setAutoRun(for id: String, enabled: Bool) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.setAutoRun(for: id, enabled: enabled)
+            return
+        }
+    }
+
+    func sessionConfig(for id: String) -> RemoteSessionConfig? {
+        for mgr in acpManagers.values {
+            guard let s = mgr.liveSession(for: id) else { continue }
+            return RemoteSessionConfig(
+                sessionId: id,
+                models: s.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
+                modes: s.availableModes.map { RemoteModelInfo(id: $0.id, name: $0.name) },
+                currentModel: s.currentModel,
+                currentMode: s.currentMode,
+                autoRunEnabled: s.autoRunEnabled,
+                acceptsImages: s.promptCapabilities.image)
+        }
+        return nil
+    }
 }

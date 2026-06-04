@@ -13,6 +13,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var prompts: [(id: String, text: String)] = []
     var sendPromptAccepts = true   // simulate the manager refusing a submit (e.g. needs auth)
     var stopped: [String] = []
+    var models: [(id: String, model: String)] = []
+    var modes: [(id: String, mode: String)] = []
+    var autoRuns: [(id: String, enabled: Bool)] = []
+    var configs: [String: RemoteSessionConfig] = [:]
     func sessionSummaries() -> [RemoteSessionSummary] { summaries }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
@@ -32,7 +36,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         if accepted { prompts.append((id, text)) }
         onResult(accepted)
     }
+
     func stop(for id: String) { stopped.append(id) }
+    func setModel(for id: String, modelId: String) { models.append((id, modelId)) }
+    func setMode(for id: String, modeId: String) { modes.append((id, modeId)) }
+    func setAutoRun(for id: String, enabled: Bool) { autoRuns.append((id, enabled)) }
+    func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
 }
 
 #if DEBUG

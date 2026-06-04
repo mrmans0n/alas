@@ -16,4 +16,10 @@ protocol RemoteSessionsProvider: AnyObject {
     /// the client can restore the text instead of losing it.
     func sendPrompt(for id: String, text: String, onResult: @escaping @MainActor (Bool) -> Void)
     func stop(for id: String)
+    func setModel(for id: String, modelId: String)
+    func setMode(for id: String, modeId: String)
+    func setAutoRun(for id: String, enabled: Bool)
+    /// Projection of the session's config for the `sessionConfig` wire message,
+    /// or nil if the session isn't live.
+    func sessionConfig(for id: String) -> RemoteSessionConfig?
 }
