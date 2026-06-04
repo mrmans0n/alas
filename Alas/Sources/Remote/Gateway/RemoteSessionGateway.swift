@@ -15,6 +15,10 @@ final class RemoteSessionGateway {
     private let send: (RemoteServerMessage) -> Void
     private var subscriptions: [String: AnyCancellable] = [:]
     private var coalesce: [String: Task<Void, Never>] = [:]
+    // Per-session request id of the permission/question prompt we last surfaced,
+    // so we can tell the client to dismiss it if it gets resolved elsewhere.
+    private var lastPermissionReq: [String: Int] = [:]
+    private var lastQuestionReq: [String: Int] = [:]
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
     init(provider: RemoteSessionsProvider, send: @escaping (RemoteServerMessage) -> Void) {
@@ -38,6 +42,8 @@ final class RemoteSessionGateway {
             subscriptions[id] = nil
             coalesce[id]?.cancel()
             coalesce[id] = nil
+            lastPermissionReq[id] = nil
+            lastQuestionReq[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
             applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
@@ -50,6 +56,8 @@ final class RemoteSessionGateway {
         subscriptions.removeAll()
         coalesce.values.forEach { $0.cancel() }
         coalesce.removeAll()
+        lastPermissionReq.removeAll()
+        lastQuestionReq.removeAll()
     }
 
     // MARK: snapshot / delta
@@ -97,35 +105,47 @@ final class RemoteSessionGateway {
         // Only surface a prompt when the session is genuinely awaiting it. A
         // read-only mirror (no runner) can carry a stale pending* while idle —
         // surfacing that would show a prompt the remote can't actually answer.
-        guard session.transcript.streamingState == .awaitingPermission,
-              let pending = session.transcript.pendingPermission else { return }
-        let tc = pending.params.toolCall
-        let payload = RemotePermissionPayload(
-            requestId: Self.requestIdInt(pending.id),
-            toolName: tc.title ?? tc.kind ?? "tool",
-            options: pending.params.options.map {
-                RemotePermissionOption(optionId: $0.optionId, name: $0.name, kind: $0.kind)
-            })
-        send(.permissionRequest(sessionId: id, payload: payload))
+        if session.transcript.streamingState == .awaitingPermission,
+           let pending = session.transcript.pendingPermission {
+            let rid = Self.requestIdInt(pending.id)
+            lastPermissionReq[id] = rid
+            let tc = pending.params.toolCall
+            let payload = RemotePermissionPayload(
+                requestId: rid,
+                toolName: tc.title ?? tc.kind ?? "tool",
+                options: pending.params.options.map {
+                    RemotePermissionOption(optionId: $0.optionId, name: $0.name, kind: $0.kind)
+                })
+            send(.permissionRequest(sessionId: id, payload: payload))
+        } else if let rid = lastPermissionReq.removeValue(forKey: id) {
+            // A prompt we surfaced was resolved elsewhere (the Mac or another
+            // client) — tell the client to dismiss it so it doesn't hang.
+            send(.permissionResolved(sessionId: id, requestId: rid))
+        }
     }
 
     private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
         // Only when the session is actually awaiting input (see the permission
         // note above) and there's something answerable.
-        guard session.transcript.streamingState == .awaitingInput,
-              let pending = session.transcript.pendingQuestion,
-              !pending.params.questions.isEmpty else { return }
-        let payload = RemoteQuestionPayload(
-            requestId: Self.requestIdInt(pending.id),
-            title: pending.params.title,
-            questions: pending.params.questions.map { q in
-                RemoteQuestion(
-                    id: q.id,
-                    prompt: q.prompt,
-                    options: q.options.map { RemoteQuestionOption(id: $0.id, label: $0.label) },
-                    allowMultiple: q.allowMultiple == true)
-            })
-        send(.questionRequest(sessionId: id, payload: payload))
+        if session.transcript.streamingState == .awaitingInput,
+           let pending = session.transcript.pendingQuestion,
+           !pending.params.questions.isEmpty {
+            let rid = Self.requestIdInt(pending.id)
+            lastQuestionReq[id] = rid
+            let payload = RemoteQuestionPayload(
+                requestId: rid,
+                title: pending.params.title,
+                questions: pending.params.questions.map { q in
+                    RemoteQuestion(
+                        id: q.id,
+                        prompt: q.prompt,
+                        options: q.options.map { RemoteQuestionOption(id: $0.id, label: $0.label) },
+                        allowMultiple: q.allowMultiple == true)
+                })
+            send(.questionRequest(sessionId: id, payload: payload))
+        } else if let rid = lastQuestionReq.removeValue(forKey: id) {
+            send(.questionResolved(sessionId: id, requestId: rid))
+        }
     }
 
     // MARK: decision
@@ -156,6 +176,7 @@ final class RemoteSessionGateway {
         // Same scopeKey derivation as ACPTabView.scopeKey(for:).
         let scopeKey = Self.scopeKey(for: pending.params)
         policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
+        lastPermissionReq[sessionId] = nil
         send(.permissionResolved(sessionId: sessionId, requestId: requestId))
     }
 
@@ -178,6 +199,7 @@ final class RemoteSessionGateway {
             acpAnswers.append(ACPQuestionAnswer(questionId: question.id, selectedOptionIds: ordered))
         }
         provider.answerQuestion(for: sessionId, .init(outcome: .answered(answers: acpAnswers)))
+        lastQuestionReq[sessionId] = nil
         send(.questionResolved(sessionId: sessionId, requestId: requestId))
     }
 

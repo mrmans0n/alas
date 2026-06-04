@@ -136,6 +136,26 @@ struct RemoteSessionGatewayTests {
         #expect(s.transcript.pendingPermission != nil)  // unchanged: stale requestId ignored
     }
 
+    @Test func resolvesPermissionWhenClearedElsewhere() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.streamingState = .awaitingPermission
+        s.transcript.pendingPermission = .init(id: .number(0), params: .stub())
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))   // surfaces the prompt
+        #expect(sent.contains { if case .permissionRequest = $0 { return true }
+        return false })
+        // Resolve it "on the Mac": clear the pending prompt, then nudge the transcript.
+        s.transcript.pendingPermission = nil
+        s.transcript.streamingState = .idle
+        s.transcript.messages.append(.agent(id: UUID(), StreamingText("done")))
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.contains { if case .permissionResolved(_, 0) = $0 { return true }
+        return false })
+    }
+
     @Test func subscribeEmitsQuestionRequest() async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("x")

@@ -127,6 +127,16 @@ final class RemoteConnection: @unchecked Sendable {
         // Non-upgrade request: wait until the full declared body is buffered,
         // then consume headers + body in one shot and parse the body once.
         let needed = Int(req.headers["content-length"] ?? "0") ?? 0
+        // A negative Content-Length parses as a valid Int but would later trap in
+        // `inbound.prefix(needed)`. Reject it (and it's reachable unauthenticated).
+        guard needed >= 0 else {
+            inbound.removeFirst(headerByteCount)
+            send(RemoteHTTPResponder.http(status: "400 Bad Request",
+                                          contentType: "text/plain", body: Data())) {
+                [weak self] in self?.teardown()
+            }
+            return
+        }
         // Reject an oversized declared (or already-buffered) body before we
         // commit to buffering it — auth only happens at WS upgrade, so this is
         // reachable unauthenticated.
