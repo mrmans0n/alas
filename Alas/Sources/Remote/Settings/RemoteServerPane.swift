@@ -6,6 +6,10 @@ struct RemoteServerPane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
     @State private var pairingCode: String?
+    /// Rotates the displayed pairing code well within its 120s TTL so the QR on
+    /// screen is never stale. Prior codes stay valid until they expire, so a
+    /// device that scanned just before a rotation still pairs.
+    private let rotateTimer = Timer.publish(every: 45, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ScrollView {
@@ -54,7 +58,11 @@ struct RemoteServerPane: View {
                         if let code = pairingCode {
                             QRView(text: "\(Self.reachableURL(port: port))/?code=\(code)")
                                 .frame(width: 180, height: 180)
-                                .padding(.vertical, 8)
+                                .padding(.top, 8)
+                            Text("Refreshes automatically — scan anytime.")
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.color("fg-dim"))
+                                .padding(.bottom, 8)
                         }
                     }
                 }
@@ -93,6 +101,10 @@ struct RemoteServerPane: View {
         }
         .onChange(of: state.config.remote.enabled) { _, enabled in
             if !enabled { pairingCode = nil }   // don't show a stale code after re-enabling
+        }
+        .onReceive(rotateTimer) { _ in
+            // While a QR is on screen, keep it fresh by minting a new code.
+            if pairingCode != nil { pairingCode = state.remotePairing.beginPairing() }
         }
     }
 

@@ -8,7 +8,10 @@ final class RemotePairingService {
     private struct PendingCode { let code: String; let expiresAt: Date }
     private let store: RemoteDeviceStore
     private let now: () -> Date
-    private var pending: PendingCode?
+    // Multiple codes can be valid at once: rotating the displayed QR mints a new
+    // code without invalidating the previous one (which a device may have just
+    // scanned) — each stays valid until its own expiry.
+    private var pendingCodes: [PendingCode] = []
     private(set) var devices: [RemoteDevice]
 
     private static let codeTTL: TimeInterval = 120
@@ -25,11 +28,22 @@ final class RemotePairingService {
         self.devices = store.load()
     }
 
-    /// Mints a single-use, short-lived pairing code. Replaces any prior pending code.
+    /// Mints a short-lived single-use pairing code. Previously-issued codes stay
+    /// valid until their own expiry, so rotating the displayed QR never
+    /// invalidates a code a device may have just scanned.
     func beginPairing() -> String {
+        prunePendingCodes()
         let code = Self.randomToken(byteCount: 6).uppercased()
-        pending = PendingCode(code: code, expiresAt: now().addingTimeInterval(Self.codeTTL))
+        pendingCodes.append(PendingCode(code: code, expiresAt: now().addingTimeInterval(Self.codeTTL)))
+        // Bound growth — rotation could otherwise accumulate codes indefinitely;
+        // only the most recent few are ever displayed.
+        if pendingCodes.count > 8 { pendingCodes.removeFirst(pendingCodes.count - 8) }
         return code
+    }
+
+    private func prunePendingCodes() {
+        let t = now()
+        pendingCodes.removeAll { $0.expiresAt < t }
     }
 
     /// Exchanges a valid pairing code for a fresh per-device token. The code is consumed.
@@ -39,17 +53,14 @@ final class RemotePairingService {
         guard recentFailedRedeems.count < Self.maxFailedRedeems else {
             throw RemoteServerError.unauthorized
         }
-        // Hex codes are case-insensitive; normalize, then compare in constant time.
-        guard let p = pending, Self.constantTimeEquals(p.code, code.uppercased()) else {
+        prunePendingCodes()
+        // Hex codes are case-insensitive; normalize, then match any live code in constant time.
+        let candidate = code.uppercased()
+        guard let idx = pendingCodes.firstIndex(where: { Self.constantTimeEquals($0.code, candidate) }) else {
             recentFailedRedeems.append(now())
             throw RemoteServerError.unauthorized
         }
-        guard now() <= p.expiresAt else {
-            pending = nil
-            recentFailedRedeems.append(now())
-            throw RemoteServerError.unauthorized
-        }
-        pending = nil
+        pendingCodes.remove(at: idx)   // consume only the matched code
         recentFailedRedeems.removeAll()   // a successful pair clears the failure window
         let token = Self.randomToken(byteCount: 32)
         let device = RemoteDevice(id: UUID().uuidString, name: deviceName,

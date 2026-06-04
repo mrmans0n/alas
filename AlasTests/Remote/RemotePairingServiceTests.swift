@@ -110,4 +110,29 @@ struct RemotePairingServiceTests {
         let token = try svc.redeem(code: code, deviceName: "x")
         #expect(svc.validate(token: token) != nil)
     }
+
+    @Test func priorCodeStaysValidAfterRotation() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let svc = RemotePairingService(store: InMemoryDeviceStore(), now: { clock })
+        let first = svc.beginPairing()
+        clock = Date(timeIntervalSince1970: 1045)   // 45s later, still within the 120s TTL
+        let second = svc.beginPairing()              // rotation mints a fresh code
+        // The freshly-rotated code works...
+        let t2 = try svc.redeem(code: second, deviceName: "B")
+        #expect(svc.validate(token: t2) != nil)
+        // ...and so does the prior code a device may have scanned just before rotation.
+        let t1 = try svc.redeem(code: first, deviceName: "A")
+        #expect(svc.validate(token: t1) != nil)
+    }
+
+    @Test func expiredPriorCodeIsPrunedOnRotation() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let svc = RemotePairingService(store: InMemoryDeviceStore(), now: { clock })
+        let first = svc.beginPairing()
+        clock = Date(timeIntervalSince1970: 1000 + 121)   // first code has now expired
+        let second = svc.beginPairing()
+        #expect(throws: RemoteServerError.self) { _ = try svc.redeem(code: first, deviceName: "X") }
+        let t = try svc.redeem(code: second, deviceName: "Y")   // the fresh code still works
+        #expect(svc.validate(token: t) != nil)
+    }
 }
