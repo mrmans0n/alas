@@ -492,6 +492,16 @@ struct RemoteSessionGatewayTests {
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
+    @Test func imageOnlyUserMessageRendersPlaceholder() {
+        // An image-only prompt (empty text) must not serialize to a blank bubble.
+        let msg = ACPMessage.user(id: UUID(), text: "",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")])
+        let wire = RemoteSessionGateway.toWire(msg, index: 0)
+        #expect(wire.kind == "user")
+        #expect(wire.text?.contains("shot.png") == true)
+        #expect((wire.text ?? "").isEmpty == false)
+    }
+
     @Test func renamedNonImageWithImageMimeRejected() async {
         // Client claims image/png but the bytes aren't a real image — the byte
         // sniff must reject it rather than trusting the MIME, and write no file.
