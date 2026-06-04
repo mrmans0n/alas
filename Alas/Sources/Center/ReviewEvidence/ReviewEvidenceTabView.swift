@@ -347,6 +347,8 @@ struct ReviewEvidenceTabView: View {
             selectedItemID = loaded.selectedItemID
         }
         persistSelection(section: selectedSection, itemID: selectedItemID)
+        guard selectedItemID != nil else { return }
+        await loaded.loadSelectedDetail()
     }
 
     private func isSelected(_ item: ReviewEvidenceItem, in model: ReviewEvidenceModel) -> Bool {
