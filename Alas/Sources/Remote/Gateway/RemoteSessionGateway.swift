@@ -131,23 +131,26 @@ final class RemoteSessionGateway {
     // MARK: attachment materialization
 
     private static let maxAttachmentsBytes = 10_000_000
-    private static let allowedAttachmentPrefix = "image/"
 
     /// Decode wire attachments to files under acp-attachments/. Returns nil if the
-    /// batch violates the size cap or mimeType allowlist (caller rejects the send).
+    /// batch violates the size cap or any entry isn't a real image (caller rejects
+    /// the send).
     ///
-    /// The whole batch is validated + decoded BEFORE any file is written, so a
-    /// later bad/oversize entry can't leave earlier files orphaned on disk; a
-    /// mid-batch write failure rolls back the files already written.
+    /// The bytes are sniffed for real PNG/JPEG/GIF/WebP magic — parity with the
+    /// native composer's `ACPImageStaging`, instead of trusting the client MIME —
+    /// and the sniffed type is what we store. The whole batch is validated +
+    /// decoded BEFORE any file is written, so a later bad/oversize entry can't
+    /// leave earlier files orphaned; a mid-batch write failure rolls back what
+    /// it wrote.
     private func materialize(_ wire: [RemoteAttachment], for sessionId: String) -> [ACPMessage.Attachment]? {
         var decoded: [(data: Data, mimeType: String, name: String?)] = []
         var total = 0
         for a in wire {
-            guard a.mimeType.hasPrefix(Self.allowedAttachmentPrefix),
-                  let data = Data(base64Encoded: a.dataBase64) else { return nil }
+            guard let data = Data(base64Encoded: a.dataBase64) else { return nil }
             total += data.count
             guard total <= Self.maxAttachmentsBytes else { return nil }
-            decoded.append((data, a.mimeType, a.name))
+            guard let mime = ACPImageStaging.sniffMIME(data) else { return nil }   // real image only
+            decoded.append((data, mime, a.name))
         }
         var written: [URL] = []
         var out: [ACPMessage.Attachment] = []

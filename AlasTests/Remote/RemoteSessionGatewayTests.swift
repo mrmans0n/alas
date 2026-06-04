@@ -492,6 +492,18 @@ struct RemoteSessionGatewayTests {
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
+    @Test func renamedNonImageWithImageMimeRejected() async {
+        // Client claims image/png but the bytes aren't a real image — the byte
+        // sniff must reject it rather than trusting the MIME, and write no file.
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")]))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(provider.writtenAttachmentURLs.isEmpty)
+    }
+
     @Test func validImageAttachmentSends() async {
         let provider = FakeSessionsProvider()
         provider.writers.insert("s1")
