@@ -32,13 +32,18 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         writers.insert(id)
     }
 
+    var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)
     func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         let accepted = writers.contains(id) && sendPromptAccepts
         if accepted {
             prompts.append((id, text))
             lastAttachments = attachments
         }
-        onResult(accepted)
+        if sendPromptResultIsAsync {
+            Task { @MainActor in onResult(accepted) }
+        } else {
+            onResult(accepted)
+        }
     }
 
     var writtenAttachmentURLs: [URL] = []
@@ -512,5 +517,26 @@ struct RemoteSessionGatewayTests {
         for url in provider.writtenAttachmentURLs {
             #expect(!FileManager.default.fileExists(atPath: url.path))
         }
+    }
+
+    @Test func lateFailureKeepsAttachmentFiles() async throws {
+        // A LATE (async) delivery failure means sendNow already recorded the
+        // user message referencing these file URIs — the gateway must NOT
+        // delete them (only synchronous refusals, never recorded, are cleaned).
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        provider.sendPromptAccepts = false
+        provider.sendPromptResultIsAsync = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        try await Task.sleep(nanoseconds: 30_000_000)   // let the async onResult land
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(!provider.writtenAttachmentURLs.isEmpty)
+        for url in provider.writtenAttachmentURLs {
+            #expect(FileManager.default.fileExists(atPath: url.path))   // kept
+        }
+        // cleanup
+        for url in provider.writtenAttachmentURLs { try? FileManager.default.removeItem(at: url) }
     }
 }

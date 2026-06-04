@@ -97,15 +97,22 @@ final class RemoteSessionGateway {
             // now (not writer / needs auth) OR a session/prompt RPC that fails
             // later — so the client restores the user's text instead of losing
             // it.
+            // True only while the call below is still on the stack. A refusal
+            // observed in that window is SYNCHRONOUS — the manager refused
+            // before recording the user message (no live session / needs auth),
+            // so its attachment files are orphans to delete. A refusal that
+            // arrives LATER means `sendNow` already recorded the message with
+            // these file URIs (the transcript bubble references them), so we
+            // must keep the files.
+            var refusalIsSynchronous = true
             provider.sendPrompt(for: id, text: trimmed, attachments: materialized) { [weak self] accepted in
                 guard let self else { return }
                 if !accepted {
                     self.send(.promptRejected(sessionId: id))
-                    // Refused after we wrote the files (needs-auth, or a takeover
-                    // landed mid-flight) — clean them up so they don't orphan.
-                    self.discardAttachmentFiles(materialized)
+                    if refusalIsSynchronous { self.discardAttachmentFiles(materialized) }
                 }
             }
+            refusalIsSynchronous = false
         case .stop(let id):
             guard provider.isWriter(for: id) else { return }
             provider.stop(for: id)
