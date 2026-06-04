@@ -19,10 +19,27 @@
   --del: oklch(0.72 0.16 25);
 }
 * { box-sizing: border-box; }
-body { margin: 0; color: var(--fg); background: linear-gradient(180deg, var(--bg-1), var(--bg-0)) fixed; -webkit-font-smoothing: antialiased; }
+/* Fixed-height app shell: header + scrolling body + pinned footer, sized to the
+   *dynamic* viewport (dvh) so it tracks iOS's collapsing toolbar instead of
+   overflowing past the visible screen the way 100vh does. */
+html, body { height: 100%; }
+/* position:fixed locks the shell to the viewport so iOS can't scroll the
+   document when the keyboard opens; JS then drives height from
+   window.visualViewport so the shell tracks the keyboard exactly. The
+   100dvh is the no-JS fallback. */
+body { margin: 0; position: fixed; top: 0; left: 0; right: 0; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; color: var(--fg); background: linear-gradient(180deg, var(--bg-1), var(--bg-0)) fixed; -webkit-font-smoothing: antialiased; }
+main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
-#bar { position: sticky; top: 0; z-index: 5; padding: calc(env(safe-area-inset-top) + 6px) 14px 8px; background: color-mix(in oklab, var(--bg-1), transparent 6%); backdrop-filter: blur(8px); font-size: 13px; color: var(--fg-faint); border-bottom: 0.5px solid var(--line-soft); }
-.view { padding: 6px 12px 28px; }
+#bar { flex: 0 0 auto; z-index: 5; display: flex; align-items: center; gap: 10px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; background: color-mix(in oklab, var(--bg-1), transparent 6%); backdrop-filter: blur(8px); border-bottom: 0.5px solid var(--line-soft); }
+#nav-title { font-size: 16px; font-weight: 600; color: var(--fg); }
+/* Connection chip: dot + label, color driven by [data-state]. */
+#status.chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--fg-muted); background: color-mix(in oklab, var(--bg-3) 70%, transparent); border: 0.5px solid var(--line); white-space: nowrap; }
+#status.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); flex-shrink: 0; }
+#status[data-state="ok"]::before { background: var(--add); box-shadow: 0 0 6px color-mix(in oklab, var(--add) 70%, transparent); }
+#status[data-state="bad"]::before { background: var(--del); }
+#status[data-state="connecting"]::before { background: oklch(0.82 0.13 90); }
+/* The active view fills the shell; long content scrolls inside it, not the page. */
+.view { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 12px calc(28px + env(safe-area-inset-bottom)); }
 .hidden { display: none !important; }   /* !important: beats .sheet's later display:flex */
 
 /* Sessions list */
@@ -31,10 +48,11 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .session-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; padding: 15px 10px; border: none; border-bottom: 0.5px solid var(--line-soft); background: none; color: var(--fg); font: inherit; font-size: 15px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .session-row:active { background: var(--bg-2); }
 .session-row .status { color: var(--accent); font-size: 11px; flex-shrink: 0; }
-#back { background: none; border: none; color: var(--accent); font-size: 15px; padding: 6px 2px 10px; cursor: pointer; }
+#back { background: none; border: none; color: var(--accent); font-size: 15px; padding: 4px 2px; margin: -4px 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
-/* Transcript */
-#messages { display: flex; flex-direction: column; }
+/* Transcript: a non-scrolling column — only #messages scrolls, #drivebar pins. */
+#transcript { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+#messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 2px 12px 8px; display: flex; flex-direction: column; }
 .msg { margin: 5px 0; line-height: 1.5; font-size: 15px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .m-agent { align-self: stretch; color: var(--fg); padding: 1px 2px; }
 .m-user { align-self: flex-end; max-width: 82%; padding: 9px 13px; color: var(--fg); background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 32%, transparent), color-mix(in oklab, var(--accent) 20%, transparent)); border: 0.5px solid color-mix(in oklab, var(--accent) 50%, transparent); border-radius: 13px 13px 4px 13px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
@@ -83,11 +101,19 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .tool-body { margin: 0; padding: 9px 11px; border-top: 0.5px solid var(--line-soft); background: color-mix(in oklab, var(--bg-0) 55%, transparent); font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.45; color: var(--fg-muted); white-space: pre; overflow-x: auto; max-height: 46vh; overflow-y: auto; }
 
 /* Composer / drive bar */
-#drivebar { position: sticky; bottom: 0; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in oklab, var(--bg-1), transparent 4%); backdrop-filter: blur(8px); border-top: 0.5px solid var(--line-soft); }
-#takeover { width: 100%; padding: 12px; border: 0.5px solid var(--accent); border-radius: 10px; background: color-mix(in oklab, var(--accent) 16%, transparent); color: var(--fg); font-size: 15px; cursor: pointer; }
-#composer { display: flex; gap: 8px; align-items: flex-end; }
-#prompt { flex: 1; min-height: 38px; max-height: 40vh; padding: 9px 12px; border: 0.5px solid var(--line); border-radius: 12px; background: var(--bg-0); color: var(--fg); font: inherit; font-size: 15px; resize: none; }
-#composer button { padding: 0 16px; height: 38px; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; }
+#drivebar { flex: 0 0 auto; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in oklab, var(--bg-1), transparent 4%); backdrop-filter: blur(8px); border-top: 0.5px solid var(--line-soft); }
+#takeover { width: 100%; padding: 13px; border: 0.5px solid color-mix(in oklab, var(--accent) 55%, transparent); border-radius: 21px; background: color-mix(in oklab, var(--accent) 16%, transparent); color: var(--fg); font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+#takeover:active { background: color-mix(in oklab, var(--accent) 24%, transparent); }
+/* One rounded field; the action button docks bottom-right and the textarea
+   grows above it. align-items:flex-end keeps the button pinned to the last line. */
+#composer { display: flex; gap: 7px; align-items: flex-end; padding: 5px 5px 5px 15px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 22px; }
+#composer:focus-within { border-color: color-mix(in oklab, var(--accent) 60%, var(--line)); }
+/* font-size MUST be ≥16px: iOS auto-zooms (and inflates the viewport) on focus
+   of any smaller field. */
+#prompt { flex: 1; min-height: 24px; max-height: 40vh; padding: 7px 0; border: none; background: none; color: var(--fg); font: inherit; font-size: 16px; line-height: 1.35; resize: none; outline: none; }
+#prompt::placeholder { color: var(--fg-faint); }
+#composer button { flex-shrink: 0; width: 34px; height: 34px; padding: 0; border: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform .08s; }
+#composer button:active { transform: scale(0.92); }
 #send { background: var(--accent); color: var(--bg-0); }
 #stop { background: var(--del); color: var(--fg); }
 

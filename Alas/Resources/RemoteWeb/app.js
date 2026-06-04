@@ -6,7 +6,8 @@ let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 
-function setStatus(s) { $("status").textContent = s; }
+// state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
+function setStatus(s, state) { const e = $("status"); e.textContent = s; e.dataset.state = state || "connecting"; }
 function showGate(title, msg, retry) {
   $("gate-title").textContent = title;
   $("gate-msg").textContent = msg;
@@ -54,14 +55,14 @@ async function connect() {
   if (ws) { try { ws.close(); } catch (_) {} }   // drop any prior (possibly half-open) socket
   ws = new WebSocket(`ws://${location.host}/ws`, [token]);   // token as subprotocol
   ws.onopen = () => {
-    setStatus("connected");
+    setStatus("Connected", "ok");
     hideGate();
     reconnectDelay = 1500;   // reset back-off after a good connection
     send({ type: "listSessions" });
     if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
   };
   ws.onclose = () => {
-    setStatus("disconnected — reconnecting…");
+    setStatus("Reconnecting…", "bad");
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);   // capped exponential back-off
   };
@@ -84,7 +85,7 @@ function handle(msg) {
     case "questionRequest": if (msg.sessionId === currentSession) showQuestion(msg.sessionId, msg.payload); break;
     case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
-    case "error": setStatus("error: " + (msg.message ?? "(unknown)")); break;
+    case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
     default: console.warn("unknown message type", msg.type);
   }
 }
@@ -110,6 +111,7 @@ function renderSessions(sessions) {
 
 function openSession(id) {
   currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false; canDriveKnown = false;
+  $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("messages").innerHTML = ""; renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
@@ -117,6 +119,7 @@ function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
   hidePermission(); hideQuestion();          // never leave a sheet over the list
+  $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   send({ type: "listSessions" });
@@ -124,14 +127,14 @@ function showSessions() {
 
 function renderMessages(forceBottom) {
   const box = $("messages");
-  // The page itself scrolls (sticky bar + body), so use window scroll metrics.
-  const atBottom = forceBottom || (window.innerHeight + window.scrollY >= document.body.scrollHeight - 120);
+  // #messages is the scroll container (fixed shell), so use its own metrics.
+  const atBottom = forceBottom || (box.scrollTop + box.clientHeight >= box.scrollHeight - 120);
   // Preserve which tool/thought cards the user expanded across re-renders.
   const open = new Set();
   box.querySelectorAll("details[open]").forEach(d => { if (d.dataset.sid) open.add(d.dataset.sid); });
   box.innerHTML = "";
   for (const [sid, m] of messages) box.appendChild(renderMessage(m, sid, open));
-  if (atBottom) requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
+  if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
 }
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -371,4 +374,25 @@ $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermiss
 
 $("back").onclick = showSessions;
 $("gate-retry").onclick = () => location.reload();
+
+// iOS overlays the keyboard without shrinking the layout viewport, so a
+// 100dvh shell ends up taller than the visible area when the field is focused.
+// Drive the shell height from the *visual* viewport (which does shrink for the
+// keyboard) and keep the transcript pinned to the bottom as it resizes.
+const vp = window.visualViewport;
+if (vp) {
+  const syncViewport = () => {
+    // Pin the fixed shell to the visual viewport's box: height shrinks for the
+    // keyboard, and top follows offsetTop so the shell doesn't slide off-screen
+    // when iOS scrolls the page to reveal the focused field.
+    document.body.style.height = vp.height + "px";
+    document.body.style.top = vp.offsetTop + "px";
+    const box = $("messages");
+    if (box) box.scrollTop = box.scrollHeight;
+  };
+  vp.addEventListener("resize", syncViewport);
+  vp.addEventListener("scroll", syncViewport);
+  syncViewport();
+}
+
 connect();
