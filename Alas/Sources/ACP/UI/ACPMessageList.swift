@@ -15,6 +15,7 @@ struct ACPMessageList: View {
     let onQueueRetry: (UUID) -> Void
     let onQueueReorder: (Int, Int) -> Void
     let onQueueClearAll: () -> Void
+    let onRetryContextRecovery: () -> Void
     /// Resolves the full persisted content of a tool call by id when an
     /// expanded card's in-memory content was truncated. Wired by the host
     /// to `ACPSessionManager.reloadFullToolCallContent`. Returns nil when
@@ -62,6 +63,7 @@ struct ACPMessageList: View {
         hasher.combine(transcript.messages.count)
         hasher.combine(session.queue.count)
         hasher.combine(session.queue.first?.status)
+        hasher.combine(session.contextRecoveryStatus)
         hasher.combine(transcript.pendingQuestion?.id)
         // Streaming chunks mutate the buffer in place without re-publishing
         // the transcript array; the tick gives the body a reason to re-eval
@@ -147,6 +149,10 @@ struct ACPMessageList: View {
                                 .id("__queue_\(item.id)")
                             }
                         }
+                        if let status = session.contextRecoveryStatus {
+                            contextRecoveryRow(status)
+                                .id("__context_recovery__")
+                        }
                         // Invisible tail spacer that the auto-scroll pins to
                         // the viewport bottom; this guarantees the streaming
                         // caret / last message sits above the composer pill.
@@ -227,6 +233,59 @@ struct ACPMessageList: View {
             DispatchQueue.main.async {
                 releaseRestoring()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func contextRecoveryRow(_ status: ACPSession.ContextRecoveryStatus) -> some View {
+        HStack(spacing: 8) {
+            switch status {
+            case .restoring, .sendingTranscript:
+                Spinner(lineWidth: 1.5)
+                    .frame(width: 12, height: 12)
+            case .restored:
+                Image(systemName: "checkmark.circle")
+                    .foregroundStyle(theme.color("accent"))
+            case .failed:
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                    .foregroundStyle(theme.color("warn"))
+            }
+
+            Text(contextRecoveryText(status))
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-muted"))
+
+            if case .failed = status {
+                Button("Retry") {
+                    onRetryContextRecovery()
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(theme.color("bg-1").opacity(0.65))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(theme.color("line").opacity(0.8), lineWidth: 0.5)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func contextRecoveryText(_ status: ACPSession.ContextRecoveryStatus) -> String {
+        switch status {
+        case .restoring:
+            return "Restoring model context..."
+        case .sendingTranscript:
+            return "Restoring model context from transcript..."
+        case .restored:
+            return "Transcript restored as model context."
+        case .failed(let message):
+            return message
         }
     }
 

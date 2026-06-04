@@ -284,8 +284,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(text == "queued prompt")
     }
 
-    @Test("load failure falls back to session/new with transcript warning")
-    func loadFailureFallsBackToNewWithWarning() async throws {
+    @Test("load failure falls back to session/new and auto-sends transcript context")
+    func loadFailureFallsBackToNewAndAutoSendsTranscriptContext() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-old"))
         let priorPrompt: ACPMessage = .user(id: UUID(), text: "prior prompt", attachments: [])
@@ -299,20 +299,32 @@ struct ACPSessionManagerAttachRestoreTests {
             throw JSONRPCError(code: -32601, message: "Method not found", data: nil)
         }
         scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.script(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            #expect(params.sessionId == "remote-new")
+            let block = try #require(params.prompt.first)
+            guard case .text(let text) = block else {
+                Issue.record("Expected text prompt block")
+                return Data("null".utf8)
+            }
+            #expect(text.contains("prior prompt"))
+            return Data("null".utf8)
+        }
         let manager = manager(store: store, client: client)
 
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
 
-        let methods = client.sent.map(\.method)
-        #expect(methods == ["initialize", "session/load", "session/new"])
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/new", "session/prompt"]
+                && session.contextRestoreWarning == nil
+        }
         #expect(session.remoteSessionId == "remote-new")
-        let warning = try #require(session.contextRestoreWarning)
-        #expect(warning.canSendTranscript)
+        #expect(session.contextRecoveryStatus == .restored)
         let row = try #require(try store.loadSession(id: "local"))
         #expect(row.remoteSessionId == "remote-new")
-        #expect(row.contextRecoveryPending)
+        #expect(!row.contextRecoveryPending)
     }
 
     @Test("new auth failure enters needsAuth with initialized auth method")
@@ -501,8 +513,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.setupState == .needsAuth(methods: [method], reason: "login required"))
     }
 
-    @Test("pending queued prompt waits for transcript recovery after load fallback")
-    func queuedPromptWaitsForTranscriptRecoveryAfterLoadFallback() async throws {
+    @Test("load fallback automatically sends transcript recovery before queued prompt")
+    func loadFallbackAutomaticallySendsTranscriptRecoveryBeforeQueuedPrompt() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-old"))
         try appendMessage(
@@ -527,19 +539,12 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
 
-        #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/new"])
-        #expect(session.queue.count == 1)
-        #expect(session.contextRestoreWarning?.canSendTranscript == true)
-        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == true)
-
-        let accepted = manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent")
-
-        #expect(accepted)
         try await waitUntil {
             client.sent.filter { $0.method == "session/prompt" }.count == 2
                 && session.queue.isEmpty
-                && session.contextRestoreWarning == nil
         }
+        #expect(session.contextRestoreWarning == nil)
+        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
         let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
         #expect(prompts.count == 2)
         let firstBlock = try #require(prompts.first?.prompt.first)
@@ -575,8 +580,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!row.contextRecoveryPending)
     }
 
-    @Test("pending context recovery survives restart after fallback remote id is persisted")
-    func pendingContextRecoverySurvivesRestart() async throws {
+    @Test("pending context recovery auto-sends after restart")
+    func pendingContextRecoveryAutoSendsAfterRestart() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-new"))
         try store.setContextRecoveryPending(sessionId: "local", pending: true)
@@ -588,16 +593,29 @@ struct ACPSessionManagerAttachRestoreTests {
         let client = ACPMockClient()
         scriptInitialize(client)
         scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
+        client.script(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            #expect(params.sessionId == "remote-new")
+            let block = try #require(params.prompt.first)
+            guard case .text(let text) = block else {
+                Issue.record("Expected text prompt block")
+                return Data("null".utf8)
+            }
+            #expect(text.contains("Context before restart"))
+            return Data("null".utf8)
+        }
         let manager = manager(store: store, client: client)
 
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
 
-        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
-        let warning = try #require(session.contextRestoreWarning)
-        #expect(warning.canSendTranscript)
-        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == true)
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/prompt"]
+                && session.contextRestoreWarning == nil
+        }
+        #expect(session.contextRecoveryStatus == .restored)
+        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
     @Test("attach retry clears stale warning before setup failure")
@@ -709,7 +727,6 @@ struct ACPSessionManagerAttachRestoreTests {
     func sendTranscriptContextClearsPersistedPendingFlag() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-new"))
-        try store.setContextRecoveryPending(sessionId: "local", pending: true)
         try appendMessage(
             .user(id: UUID(), text: "What changed?", attachments: []),
             to: store,
@@ -724,6 +741,11 @@ struct ACPSessionManagerAttachRestoreTests {
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
+        try store.setContextRecoveryPending(sessionId: "local", pending: true)
+        session.contextRestoreWarning = .init(
+            message: "Agent context could not be restored.",
+            canSendTranscript: true
+        )
 
         #expect(session.contextRestoreWarning?.canSendTranscript == true)
         #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
@@ -766,6 +788,7 @@ struct ACPSessionManagerAttachRestoreTests {
                 && session.transcript.streamingState == .idle
         }
         #expect(session.contextRestoreWarning == warning)
+        #expect(session.contextRecoveryStatus == .failed("Transcript recovery failed."))
         #expect(session.transcript.messages.count == messageCountBefore)
     }
 

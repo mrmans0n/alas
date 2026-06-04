@@ -277,6 +277,12 @@ private struct ACPSessionView: View {
                                     // needs to fire from this path.
                                     manager.runners[sessionId]?.flushQueueIfIdle()
                                 },
+                                onRetryContextRecovery: {
+                                    _ = manager.sendTranscriptAsContext(
+                                        sessionId: sessionId,
+                                        agentName: state.agent(id: session.agentId)?.displayName
+                                    )
+                                },
                                 onLoadFullToolCallContent: { toolCallId in
                                     manager.reloadFullToolCallContent(
                                         sessionId: sessionId, toolCallId: toolCallId)
@@ -480,7 +486,7 @@ private struct ACPSessionView: View {
 
     @ViewBuilder
     private func contextRestoreBanner() -> some View {
-        if let warning = session.contextRestoreWarning {
+        if session.contextRecoveryStatus == nil, let warning = session.contextRestoreWarning {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
                     .foregroundStyle(theme.color("warn"))
