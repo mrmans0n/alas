@@ -50,6 +50,12 @@ extension Paths {
 }
 
 extension Paths {
+    static var remoteDevicesFile: URL {
+        appSupportRoot.appendingPathComponent("remote-devices.json")
+    }
+}
+
+extension Paths {
     static var acpAttachmentsRoot: URL { appSupportRoot.appendingPathComponent("acp-attachments", isDirectory: true) }
 
     static func acpAttachmentsDir(forWorktreeId id: String) -> URL {

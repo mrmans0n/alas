@@ -1,0 +1,152 @@
+import Foundation
+
+/// Client → server. `type` discriminates.
+enum RemoteClientMessage: Equatable, Sendable {
+    case listSessions
+    case subscribe(sessionId: String)
+    case unsubscribe(sessionId: String)
+    case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
+    case questionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer])
+}
+
+extension RemoteClientMessage: Codable {
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "listSessions": self = .listSessions
+        case "subscribe": self = .subscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "unsubscribe": self = .unsubscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "permissionDecision":
+            self = .permissionDecision(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(Int.self, forKey: .requestId),
+                optionId: try c.decode(String.self, forKey: .optionId),
+                persistScope: try c.decodeIfPresent(String.self, forKey: .persistScope))
+        case "questionAnswer":
+            self = .questionAnswer(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(Int.self, forKey: .requestId),
+                answers: try c.decode([RemoteQuestionAnswer].self, forKey: .answers))
+        case let other:
+            throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .listSessions: try c.encode("listSessions", forKey: .type)
+        case .subscribe(let s): try c.encode("subscribe", forKey: .type)
+        try c.encode(s, forKey: .sessionId)
+        case .unsubscribe(let s): try c.encode("unsubscribe", forKey: .type)
+        try c.encode(s, forKey: .sessionId)
+        case .permissionDecision(let s, let r, let o, let p):
+            try c.encode("permissionDecision", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
+            try c.encode(o, forKey: .optionId)
+            try c.encodeIfPresent(p, forKey: .persistScope)
+        case .questionAnswer(let s, let r, let a):
+            try c.encode("questionAnswer", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
+            try c.encode(a, forKey: .answers)
+        }
+    }
+}
+
+/// Server → client. `type` discriminates.
+enum RemoteServerMessage: Equatable, Sendable {
+    case sessionList(sessions: [RemoteSessionSummary])
+    case transcriptSnapshot(sessionId: String, streamingState: String, messages: [RemoteWireMessage])
+    case transcriptDelta(sessionId: String, streamingState: String, upserts: [RemoteWireMessage])
+    case permissionRequest(sessionId: String, payload: RemotePermissionPayload)
+    case permissionResolved(sessionId: String, requestId: Int)
+    case questionRequest(sessionId: String, payload: RemoteQuestionPayload)
+    case questionResolved(sessionId: String, requestId: Int)
+    case sessionClosed(sessionId: String)
+    case error(message: String)
+}
+
+extension RemoteServerMessage: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type, sessions, sessionId, streamingState, messages, upserts, payload, requestId, message
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "sessionList": self = .sessionList(sessions: try c.decode([RemoteSessionSummary].self, forKey: .sessions))
+        case "transcriptSnapshot":
+            self = .transcriptSnapshot(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                streamingState: try c.decode(String.self, forKey: .streamingState),
+                messages: try c.decode([RemoteWireMessage].self, forKey: .messages))
+        case "transcriptDelta":
+            self = .transcriptDelta(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                streamingState: try c.decode(String.self, forKey: .streamingState),
+                upserts: try c.decode([RemoteWireMessage].self, forKey: .upserts))
+        case "permissionRequest":
+            self = .permissionRequest(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                payload: try c.decode(RemotePermissionPayload.self, forKey: .payload))
+        case "permissionResolved":
+            self = .permissionResolved(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(Int.self, forKey: .requestId))
+        case "questionRequest":
+            self = .questionRequest(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                payload: try c.decode(RemoteQuestionPayload.self, forKey: .payload))
+        case "questionResolved":
+            self = .questionResolved(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(Int.self, forKey: .requestId))
+        case "sessionClosed": self = .sessionClosed(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "error": self = .error(message: try c.decode(String.self, forKey: .message))
+        case let other:
+            throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .sessionList(let s): try c.encode("sessionList", forKey: .type)
+        try c.encode(s, forKey: .sessions)
+        case .transcriptSnapshot(let id, let st, let m):
+            try c.encode("transcriptSnapshot", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(st, forKey: .streamingState)
+            try c.encode(m, forKey: .messages)
+        case .transcriptDelta(let id, let st, let u):
+            try c.encode("transcriptDelta", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(st, forKey: .streamingState)
+            try c.encode(u, forKey: .upserts)
+        case .permissionRequest(let id, let p):
+            try c.encode("permissionRequest", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(p, forKey: .payload)
+        case .permissionResolved(let id, let r):
+            try c.encode("permissionResolved", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
+        case .questionRequest(let id, let p):
+            try c.encode("questionRequest", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(p, forKey: .payload)
+        case .questionResolved(let id, let r):
+            try c.encode("questionResolved", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
+        case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type)
+        try c.encode(id, forKey: .sessionId)
+        case .error(let m): try c.encode("error", forKey: .type)
+        try c.encode(m, forKey: .message)
+        }
+    }
+}

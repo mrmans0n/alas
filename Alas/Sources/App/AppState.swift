@@ -51,6 +51,64 @@ final class AppState {
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
+
+    // MARK: Remote control
+    /// Paired-device registry backed by an on-disk JSON store. Lazy so the
+    /// file isn't touched unless the remote feature is actually exercised.
+    @ObservationIgnored
+    private(set) lazy var remotePairing = RemotePairingService(store: FileDeviceStore())
+    /// The live server, or nil when remote control is disabled. Mutated only
+    /// by `syncRemoteServer()`.
+    @ObservationIgnored
+    private(set) var remoteServer: RemoteServer?
+    /// Last bind/start failure, surfaced by the Settings pane. Nil when the
+    /// server is running or intentionally stopped. Observable so the pane
+    /// reacts when a bind fails.
+    private(set) var lastRemoteError: String?
+    /// The server's bound port once the listener is ready, else nil. Observable
+    /// so the pane reveals the address/QR as soon as the server comes up (the
+    /// listener binds asynchronously, so the value arrives after `start`).
+    private(set) var remotePort: UInt16?
+
+    /// Starts or stops the remote server to match `config.remote`. Idempotent;
+    /// call at launch and after toggling the config. A bind failure is captured
+    /// in `lastRemoteError` rather than thrown — the app must not crash because
+    /// a port is busy.
+    func syncRemoteServer() {
+        if config.remote.enabled {
+            guard remoteServer == nil else { return }
+            let root = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
+                .appendingPathComponent("RemoteWeb")
+            let assets = RemoteWebAssets(root: root)
+            let server = RemoteServer(pairing: remotePairing, assets: assets, provider: self)
+            server.onPortChange = { [weak self] p in self?.remotePort = p }
+            do {
+                // Pin a stable default port so a paired phone's URL survives app
+                // restarts (config 0 means "use the default", not OS-assigned).
+                let boundPort: UInt16 = config.remote.port != 0 ? config.remote.port : 8765
+                try server.start(port: boundPort)
+                remoteServer = server
+                lastRemoteError = nil
+            } catch {
+                remoteServer = nil
+                remotePort = nil
+                lastRemoteError = error.localizedDescription
+            }
+        } else {
+            remoteServer?.stop()
+            remoteServer = nil
+            remotePort = nil
+            lastRemoteError = nil
+        }
+    }
+
+    /// Revokes a paired device and immediately drops any live connection(s) it
+    /// holds, so an already-connected phone stops streaming at once rather than
+    /// when its socket happens to close.
+    func revokeRemoteDevice(_ deviceId: String) {
+        remotePairing.revoke(deviceId: deviceId)
+        remoteServer?.disconnectDevice(deviceId)
+    }
     @ObservationIgnored
     private var lspManager: WorkspaceLSPManager?
     @ObservationIgnored lazy var updates = UpdateController(
@@ -1251,6 +1309,11 @@ final class AppState {
         // Symlink refresh runs from `reloadTabs()` instead of here —
         // `startHarness()` is called before the tab JSONs have been read,
         // so projectsManager.worktrees(...) would be empty.
+
+        // Bring the remote-control server up if the user has it enabled. Safe
+        // to call here: it reads live managers lazily, so no session state is
+        // required at this point.
+        syncRemoteServer()
     }
 
     /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
@@ -3134,6 +3197,65 @@ final class AppState {
                 staged: staged
             )
             tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+        }
+    }
+}
+
+// MARK: - RemoteSessionsProvider
+//
+// Lives in this file (not a separate one) so it can reach the private
+// `acpManagers` dictionary. Aggregates across every live per-worktree manager;
+// worktrees not opened this run simply don't appear (documented v1 behavior).
+extension AppState: RemoteSessionsProvider {
+    func sessionSummaries() -> [RemoteSessionSummary] {
+        var out: [RemoteSessionSummary] = []
+        for mgr in acpManagers.values {
+            for row in mgr.sessionRows where !row.archived {
+                let state = mgr.runners[row.id]?.session.transcript.streamingState
+                out.append(RemoteSessionSummary(
+                    id: row.id,
+                    title: row.title,
+                    agentId: row.agentId,
+                    status: state.map(RemoteSessionGateway.stateString) ?? "idle"
+                ))
+            }
+        }
+        return out
+    }
+
+    func session(for id: String) -> ACPSession? {
+        for mgr in acpManagers.values {
+            if let s = mgr.liveSession(for: id) { return s }
+        }
+        return nil
+    }
+
+    func permissionPolicy(for id: String) -> ACPPermissionPolicy? {
+        for mgr in acpManagers.values {
+            if let p = mgr.permissionPolicy(for: id) { return p }
+        }
+        return nil
+    }
+
+    func hydrateIfNeeded(id: String) async {
+        // The remote list includes recent sessions that aren't currently open
+        // on the Mac (no live ACPSession yet). Materialize the session in its
+        // owning manager — same read-only path the UI uses (placeholderSession
+        // does a single indexed lookup; no writer lease / attach) — so a remote
+        // client can open any listed session, not just already-open ones.
+        for mgr in acpManagers.values {
+            guard mgr.liveSession(for: id) != nil
+                    || mgr.sessionRows.contains(where: { $0.id == id }) else { continue }
+            _ = mgr.placeholderSession(id: id)
+            await mgr.hydrateIfNeeded(id: id)
+            return
+        }
+    }
+
+    func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.answerQuestion(for: id, response)
+            return
         }
     }
 }

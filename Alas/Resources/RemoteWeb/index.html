@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Alas Remote</title>
+  <link rel="stylesheet" href="/style.css?v=14" />
+</head>
+<body>
+  <header id="bar"><span id="status">connecting…</span></header>
+  <main>
+    <section id="sessions" class="view"><h1>Sessions</h1><div id="session-list"></div></section>
+    <section id="transcript" class="view hidden">
+      <button id="back">‹ Sessions</button>
+      <div id="messages"></div>
+    </section>
+  </main>
+  <div id="permission" class="sheet hidden">
+    <div class="sheet-card">
+      <p id="perm-tool"></p>
+      <div id="perm-options"></div>
+      <button id="perm-close" class="sheet-close">Close</button>
+    </div>
+  </div>
+  <div id="question" class="sheet hidden">
+    <div class="sheet-card">
+      <p id="question-title" class="sheet-title hidden"></p>
+      <div id="question-body"></div>
+      <button id="question-submit" class="btn-submit" disabled>Submit</button>
+      <button id="question-close" class="sheet-close">Close</button>
+    </div>
+  </div>
+  <div id="gate" class="hidden">
+    <div class="gate-card">
+      <div class="gate-icon" id="gate-icon">⚠</div>
+      <h2 id="gate-title">Pair this device</h2>
+      <p id="gate-msg"></p>
+      <button id="gate-retry" class="hidden">Try again</button>
+    </div>
+  </div>
+  <script src="/marked.min.js?v=14"></script>
+  <script src="/purify.min.js?v=14"></script>
+  <script src="/app.js?v=14"></script>
+</body>
+</html>

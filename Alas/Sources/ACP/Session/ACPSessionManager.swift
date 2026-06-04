@@ -27,6 +27,22 @@ final class ACPSessionManager: ObservableObject {
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
     var runnerCountForDiagnostics: Int { runners.count }
     #endif
+
+    /// Live session object if cached (does not trigger hydration).
+    func liveSession(for id: ACPSession.ID) -> ACPSession? { sessions[id] }
+
+    /// Permission policy for a session that currently has an attached runner.
+    /// Returns nil if no runner is attached (session not actively connected).
+    func permissionPolicy(for id: ACPSession.ID) -> ACPPermissionPolicy? { runners[id]?.policy }
+
+    /// Answers a pending question for a session that currently has an attached runner.
+    func answerQuestion(for id: ACPSession.ID, _ response: ACPQuestionResponse) {
+        runners[id]?.answerQuestion(response)
+    }
+
+    /// Lightweight summaries for the remote sessions list.
+    var sessionRows: [ACPSessionRow] { recent }
+
     /// Sessions for which THIS instance holds the writer lease (backing store).
     var _ownedLeases: Set<ACPSession.ID> = []
     /// Per-session periodic heartbeat tasks (backing store).
