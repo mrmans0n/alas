@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Alas Remote</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header id="bar"><span id="status">connecting…</span></header>
+  <main>
+    <section id="sessions" class="view"><h1>Sessions</h1><ul id="session-list"></ul></section>
+    <section id="transcript" class="view hidden">
+      <button id="back">‹ Sessions</button>
+      <div id="messages"></div>
+    </section>
+  </main>
+  <div id="permission" class="sheet hidden">
+    <div class="sheet-card">
+      <p id="perm-tool"></p>
+      <div id="perm-options"></div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

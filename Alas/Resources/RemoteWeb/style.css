@@ -1,0 +1,18 @@
+:root { color-scheme: dark; font-family: -apple-system, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #14151a; color: #e7e7ea; }
+#bar { padding: env(safe-area-inset-top) 12px 8px; background: #1c1d24; font-size: 13px; color: #9aa; }
+.view { padding: 12px; }
+.hidden { display: none; }
+#session-list { list-style: none; padding: 0; margin: 0; }
+#session-list li { padding: 14px 12px; border-bottom: 1px solid #2a2b33; display: flex; justify-content: space-between; }
+#session-list li .status { color: #7bd; font-size: 12px; }
+#messages > div { padding: 10px 12px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; line-height: 1.4; }
+.m-user { background: #243; } .m-agent { background: #222530; } .m-thought { background: #1a1b22; color: #99a; font-style: italic; }
+.m-toolCall, .m-fileEdit, .m-plan { background: #1d2733; font-family: ui-monospace, monospace; font-size: 12px; }
+.m-systemNotice { color: #c97; font-size: 12px; }
+#back { background: none; border: none; color: #7bd; font-size: 16px; padding: 8px 0; }
+.sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; }
+.sheet-card { background: #20212a; width: 100%; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; }
+.sheet-card button { display: block; width: 100%; padding: 14px; margin: 8px 0; border: none; border-radius: 10px; font-size: 16px; }
+.btn-allow { background: #2a7; color: #021; } .btn-deny { background: #a33; color: #fee; }

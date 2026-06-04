@@ -121,6 +121,9 @@ targets:
         optional: true
       - path: Alas/Resources/mason-lsps.json
         buildPhase: resources
+      - path: Alas/Resources/RemoteWeb
+        buildPhase: resources
+        type: folder
     info:
       path: Alas/Resources/Info.plist
       properties:
