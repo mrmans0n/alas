@@ -93,7 +93,11 @@ final class RemoteSessionGateway {
     }
 
     private func emitPendingPermissionIfAny(id: String, session: ACPSession) {
-        guard let pending = session.transcript.pendingPermission else { return }
+        // Only surface a prompt when the session is genuinely awaiting it. A
+        // read-only mirror (no runner) can carry a stale pending* while idle —
+        // surfacing that would show a prompt the remote can't actually answer.
+        guard session.transcript.streamingState == .awaitingPermission,
+              let pending = session.transcript.pendingPermission else { return }
         let tc = pending.params.toolCall
         let payload = RemotePermissionPayload(
             requestId: Self.requestIdInt(pending.id),
@@ -105,8 +109,11 @@ final class RemoteSessionGateway {
     }
 
     private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
-        guard let pending = session.transcript.pendingQuestion,
-              !pending.params.questions.isEmpty else { return }   // nothing answerable — don't surface a sheet
+        // Only when the session is actually awaiting input (see the permission
+        // note above) and there's something answerable.
+        guard session.transcript.streamingState == .awaitingInput,
+              let pending = session.transcript.pendingQuestion,
+              !pending.params.questions.isEmpty else { return }
         let payload = RemoteQuestionPayload(
             requestId: Self.requestIdInt(pending.id),
             title: pending.params.title,

@@ -19,6 +19,7 @@ body { margin: 0; background: #14151a; color: #e7e7ea; }
 .sheet-card { background: #20212a; width: 100%; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; }
 .sheet-card button { display: block; width: 100%; padding: 14px; margin: 8px 0; border: none; border-radius: 10px; font-size: 16px; }
 .btn-allow { background: #2a7; color: #021; } .btn-deny { background: #a33; color: #fee; }
+.sheet-close { background: #2a2b36; color: #c5c5cc; }
 .sheet-title { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: #e7e7ea; }
 .question-block { margin-bottom: 18px; }
 .question-prompt { margin: 0 0 8px; font-size: 14px; color: #c5c5cc; }

@@ -1,4 +1,4 @@
-const APP_BUILD = "v4";   // visible in the top bar to confirm the phone has fresh JS
+const APP_BUILD = "v5";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
@@ -228,7 +228,9 @@ function hideQuestion() {
 }
 
 $("question-submit").onclick = submitQuestion;
-// Tap the dimmed backdrop (outside the card) to dismiss a sheet — never trap.
+// Explicit Close + backdrop tap — a sheet can always be dismissed, never trap.
+$("question-close").onclick = hideQuestion;
+$("perm-close").onclick = hidePermission;
 $("question").onclick = (e) => { if (e.target.id === "question") hideQuestion(); };
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 

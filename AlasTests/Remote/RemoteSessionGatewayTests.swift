@@ -139,6 +139,7 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("x")
         provider.sessions["s1"] = s
+        s.transcript.streamingState = .awaitingInput   // gateway only surfaces prompts when actually awaiting
         s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
