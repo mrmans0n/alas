@@ -92,6 +92,7 @@ function openSession(id) {
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null;
+  hidePermission(); hideQuestion();          // never leave a sheet over the list
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   send({ type: "listSessions" });
 }
@@ -140,6 +141,8 @@ let questionState = null;
 let questionSelections = new Map();
 
 function showQuestion(sessionId, payload) {
+  const questions = payload.questions || [];
+  if (questions.length === 0) { hideQuestion(); return; }   // nothing to answer — don't show a trapping empty sheet
   questionState = { sessionId, requestId: payload.requestId };
   questionSelections = new Map();
 
@@ -155,7 +158,7 @@ function showQuestion(sessionId, payload) {
   const body = $("question-body");
   body.innerHTML = "";
 
-  payload.questions.forEach(q => {
+  questions.forEach(q => {
     questionSelections.set(q.id, new Set());
 
     const block = document.createElement("div");
@@ -224,6 +227,9 @@ function hideQuestion() {
 }
 
 $("question-submit").onclick = submitQuestion;
+// Tap the dimmed backdrop (outside the card) to dismiss a sheet — never trap.
+$("question").onclick = (e) => { if (e.target.id === "question") hideQuestion(); };
+$("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 
 $("back").onclick = showSessions;
 connect();
