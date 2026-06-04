@@ -3284,12 +3284,23 @@ extension AppState: RemoteSessionsProvider {
 
     /// `onResult` fires once (false when no manager owns the id, the manager
     /// refuses, or delivery later fails) so the gateway can restore the text.
-    func sendPrompt(for id: String, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.sendPrompt(for: id, text: text, onResult: onResult)
+            mgr.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
             return
         }
         onResult(false)
+    }
+
+    func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
+        guard let mgr = acpManagers.values.first(where: { $0.liveSession(for: id) != nil }),
+              let session = mgr.liveSession(for: id) else { return nil }
+        let dir = Paths.acpAttachmentsDir(forWorktreeId: session.worktreeId)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
+        let url = dir.appendingPathComponent("\(UUID().uuidString).\(ext)")
+        do { try data.write(to: url) } catch { return nil }
+        return url
     }
 
     func stop(for id: String) {

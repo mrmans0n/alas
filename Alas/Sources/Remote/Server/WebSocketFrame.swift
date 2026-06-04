@@ -7,10 +7,9 @@ struct WebSocketFrame: Equatable {
 
     /// Hard cap on a single inbound frame's declared payload length. Larger
     /// frames are rejected rather than buffered, bounding memory and closing
-    /// off a trivial "declare a huge length" denial-of-service. The remote
-    /// protocol's messages (transcript deltas, decisions) are small, so 10 MB
-    /// sits comfortably above any legitimate frame.
-    static let maxPayloadLength = 10_000_000
+    /// off a trivial "declare a huge length" denial-of-service.
+    /// ~16 MB: fits a ~10 MB image base64-encoded (~13.3 MB) plus JSON overhead.
+    static let maxPayloadLength = 16_000_000
 
     /// Server→client frames are never masked (RFC 6455 §5.1).
     static func encode(opcode: Opcode, payload: Data) -> Data {

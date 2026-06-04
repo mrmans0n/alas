@@ -73,12 +73,12 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         guard isWriter(for: id) else {
             onResult(false)
             return
         }
-        let accepted = submit(sessionId: id, text: text, attachments: [], intent: .auto,
+        let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
                               onCompleted: { ok in onResult(ok) })
         if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
     }

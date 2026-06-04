@@ -134,7 +134,7 @@ struct RemoteProtocolTests {
     @Test func clientMessageDecodesSendPrompt() throws {
         let json = #"{"type":"sendPrompt","sessionId":"s1","text":"hello"}"#.data(using: .utf8)!
         let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
-        #expect(msg == .sendPrompt(sessionId: "s1", text: "hello"))
+        #expect(msg == .sendPrompt(sessionId: "s1", text: "hello", attachments: []))
     }
 
     @Test func clientMessageDecodesTakeOverAndStop() throws {
@@ -160,7 +160,7 @@ struct RemoteProtocolTests {
 
     @Test func clientDriveVerbsRoundTrip() throws {
         #expect(try roundTrip(RemoteClientMessage.takeOver(sessionId: "s1")) == .takeOver(sessionId: "s1"))
-        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello")) == .sendPrompt(sessionId: "s1", text: "hello"))
+        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello", attachments: [])) == .sendPrompt(sessionId: "s1", text: "hello", attachments: []))
         #expect(try roundTrip(RemoteClientMessage.stop(sessionId: "s1")) == .stop(sessionId: "s1"))
     }
 
@@ -200,5 +200,13 @@ struct RemoteProtocolTests {
             currentModel: nil, currentMode: nil,
             autoRunEnabled: false, acceptsImages: false))
         #expect(try roundTrip(cfg) == cfg)
+    }
+
+    @Test func sendPromptWithAttachmentsRoundTrips() throws {
+        let msg = RemoteClientMessage.sendPrompt(
+            sessionId: "s1",
+            text: "look",
+            attachments: [RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "AAAA")])
+        #expect(try roundTrip(msg) == msg)
     }
 }

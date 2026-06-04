@@ -70,10 +70,26 @@ final class RemoteSessionGateway {
             if let session = provider.session(for: id) {
                 sendSnapshot(id: id, session: session)
             }
-        case .sendPrompt(let id, let text):
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
+        case .sendPrompt(let id, let text, let attachments):
+            // Pre-check the lease BEFORE materializing — `materialize` writes the
+            // decoded images to disk, and a non-writer must be rejected without
+            // leaving orphan files under acp-attachments/. The manager re-checks
+            // isWriter too (TOCTOU defense for a takeover that lands mid-flight),
+            // so this is an early-out, not the authoritative gate. Auto-takeover
+            // still works: the client sends `takeOver` (synchronous lease seize)
+            // before `sendPrompt`, so isWriter is already true here.
+            guard provider.isWriter(for: id) else {
                 send(.promptRejected(sessionId: id))
+                return
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasContent = !trimmed.isEmpty || !attachments.isEmpty
+            guard hasContent else {
+                send(.promptRejected(sessionId: id))
+                return
+            }
+            guard let materialized = materialize(attachments, for: id) else {
+                send(.promptRejected(sessionId: id))   // oversize / non-image
                 return
             }
             // The manager owns the writer/lease re-check and the eventual
@@ -81,7 +97,7 @@ final class RemoteSessionGateway {
             // now (not writer / needs auth) OR a session/prompt RPC that fails
             // later — so the client restores the user's text instead of losing
             // it.
-            provider.sendPrompt(for: id, text: trimmed) { [weak self] accepted in
+            provider.sendPrompt(for: id, text: trimmed, attachments: materialized) { [weak self] accepted in
                 if !accepted { self?.send(.promptRejected(sessionId: id)) }
             }
         case .stop(let id):
@@ -97,6 +113,28 @@ final class RemoteSessionGateway {
             guard provider.isWriter(for: id) else { return }
             provider.setAutoRun(for: id, enabled: enabled)
         }
+    }
+
+    // MARK: attachment materialization
+
+    private static let maxAttachmentsBytes = 10_000_000
+    private static let allowedAttachmentPrefix = "image/"
+
+    /// Decode wire attachments to files under acp-attachments/. Returns nil if the
+    /// batch violates the size cap or mimeType allowlist (caller rejects the send).
+    private func materialize(_ wire: [RemoteAttachment], for sessionId: String) -> [ACPMessage.Attachment]? {
+        var total = 0
+        var out: [ACPMessage.Attachment] = []
+        for a in wire {
+            guard a.mimeType.hasPrefix(Self.allowedAttachmentPrefix),
+                  let data = Data(base64Encoded: a.dataBase64) else { return nil }
+            total += data.count
+            guard total <= Self.maxAttachmentsBytes else { return nil }
+            guard let url = provider.writeAttachment(data, mimeType: a.mimeType, name: a.name, for: sessionId)
+            else { return nil }
+            out.append(.init(uri: url.absoluteString, name: a.name, mimeType: a.mimeType))
+        }
+        return out
     }
 
     /// Tear down all observation (called when the connection closes).

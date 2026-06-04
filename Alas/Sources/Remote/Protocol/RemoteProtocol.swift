@@ -5,6 +5,12 @@ struct RemoteModelInfo: Codable, Equatable, Sendable {
     let name: String
 }
 
+struct RemoteAttachment: Codable, Equatable, Sendable {
+    let name: String?
+    let mimeType: String
+    let dataBase64: String
+}
+
 struct RemoteSessionConfig: Codable, Equatable, Sendable {
     let sessionId: String
     let models: [RemoteModelInfo]
@@ -23,7 +29,7 @@ enum RemoteClientMessage: Equatable, Sendable {
     case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
     case questionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer])
     case takeOver(sessionId: String)
-    case sendPrompt(sessionId: String, text: String)
+    case sendPrompt(sessionId: String, text: String, attachments: [RemoteAttachment])
     case stop(sessionId: String)
     case setModel(sessionId: String, modelId: String)
     case setMode(sessionId: String, modeId: String)
@@ -31,7 +37,7 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text, modelId, modeId, enabled }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text, attachments, modelId, modeId, enabled }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -55,7 +61,8 @@ extension RemoteClientMessage: Codable {
         case "sendPrompt":
             self = .sendPrompt(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
-                text: try c.decode(String.self, forKey: .text))
+                text: try c.decode(String.self, forKey: .text),
+                attachments: try c.decodeIfPresent([RemoteAttachment].self, forKey: .attachments) ?? [])
         case "stop":
             self = .stop(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "setModel":
@@ -91,10 +98,11 @@ extension RemoteClientMessage: Codable {
         case .takeOver(let s):
             try c.encode("takeOver", forKey: .type)
             try c.encode(s, forKey: .sessionId)
-        case .sendPrompt(let s, let t):
+        case .sendPrompt(let s, let t, let a):
             try c.encode("sendPrompt", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(t, forKey: .text)
+            try c.encode(a, forKey: .attachments)
         case .stop(let s):
             try c.encode("stop", forKey: .type)
             try c.encode(s, forKey: .sessionId)
