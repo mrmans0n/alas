@@ -150,6 +150,16 @@ struct AlasApp: App {
                 Button("Check for Updates…") {
                     state.updates.checkManually()
                 }
+                Divider()
+                Button(AppQuitAction.terminateSessionsTitle) {
+                    AppQuitAction.quitAfterTerminatingSessions(
+                        terminateSessions: { state.terminateAllTerminalSessions() }
+                    )
+                }
+                .keyboardShortcut(
+                    AppQuitAction.terminateSessionsShortcutKey,
+                    modifiers: AppQuitAction.terminateSessionsShortcutModifiers
+                )
             }
         }
         CommandMenu("Spaces") {

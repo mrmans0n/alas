@@ -1541,7 +1541,8 @@ final class AppState {
     /// then closes every terminal tab across every worktree (which kills
     /// the underlying zmx session) and sweeps any persisted-but-not-yet-
     /// restored leaves this instance owns.
-    func terminateAllTerminalSessions() {
+    @discardableResult
+    func terminateAllTerminalSessions() -> Bool {
         // Snapshot which terminal tabs exist so the confirm sheet count stays
         // accurate even if state changes between rendering and confirming.
         let terminalTabs: [(worktreeId: String, tabId: TabID)] = projects
@@ -1568,7 +1569,7 @@ final class AppState {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Terminate")
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
 
         for (worktreeId, tabId) in terminalTabs {
             closeTab(worktreeId: worktreeId, tabId: tabId)
@@ -1579,6 +1580,7 @@ final class AppState {
         // leaves so we don't trample sessions owned by a concurrently-
         // running Alas process under the same ZMX_DIR.
         terminal.terminateAll(additionalSessions: persistedSessions)
+        return true
     }
 
     /// All terminal sessions persisted under this Alas instance's projects.
