@@ -47,8 +47,8 @@ final class ACPSessionManager: ObservableObject {
     func isWriter(for id: ACPSession.ID) -> Bool { _ownedLeases.contains(id) }
 
     /// Submit a prompt using the same path the local composer uses (`.auto`
-    /// intent resolves to send-now or enqueue based on agent state). No-op
-    /// returns false if the session isn't live.
+    /// intent resolves to send-now or enqueue based on agent state). Returns
+    /// false if the session isn't live or needs auth (the `submit` guards).
     @discardableResult
     func sendPrompt(for id: ACPSession.ID, text: String) -> Bool {
         submit(sessionId: id, text: text, attachments: [], intent: .auto, onCompleted: { _ in })
