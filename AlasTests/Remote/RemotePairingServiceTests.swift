@@ -94,4 +94,20 @@ struct RemotePairingServiceTests {
         let token = try svc.redeem(code: code.lowercased(), deviceName: "iPhone")
         #expect(svc.validate(token: token) != nil)
     }
+
+    @Test func tooManyFailedRedeemsAreThrottled() throws {
+        var clock = Date(timeIntervalSince1970: 1000)
+        let svc = RemotePairingService(store: InMemoryDeviceStore(), now: { clock })
+        let code = svc.beginPairing()
+        // 5 wrong-code attempts exhaust the window (a failed redeem keeps the code pending).
+        for _ in 0..<5 {
+            #expect(throws: RemoteServerError.self) { _ = try svc.redeem(code: "WRONGCODE", deviceName: "x") }
+        }
+        // The 6th attempt is throttled even with the CORRECT code.
+        #expect(throws: RemoteServerError.self) { _ = try svc.redeem(code: code, deviceName: "x") }
+        // Once the rate window passes (code TTL is longer), the correct code works again.
+        clock = Date(timeIntervalSince1970: 1000 + 61)
+        let token = try svc.redeem(code: code, deviceName: "x")
+        #expect(svc.validate(token: token) != nil)
+    }
 }
