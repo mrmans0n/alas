@@ -96,6 +96,27 @@ struct ACPMentionPickerTests {
         #expect(dirs.allSatisfy { $0.hasDirectoryPath })
     }
 
+    @Test("pickerDirectories surfaces submodule folders despite missing trailing slash")
+    func pickerDirectoriesIncludesSubmodules() {
+        let root = URL(fileURLWithPath: "/tmp/project")
+        // `git ls-files` gives untracked collapsed dirs a trailing slash but
+        // emits submodule gitlinks like a file path (no slash) — the caller
+        // resolves directory-ness from disk and passes it through.
+        let entries: [(path: String, isDirectory: Bool)] = [
+            ("README.md", false),
+            ("Sources/App.swift", false),
+            ("ThirdParty/ghostty", true),   // nested submodule gitlink, no slash
+            ("build/", true),               // untracked dir collapsed by git
+            ("sub", true),                  // root-level submodule gitlink
+        ]
+
+        let dirs = MentionFuzzy.pickerDirectories(forEntries: entries, root: root)
+        let rels = Set(dirs.map { $0.path.replacingOccurrences(of: root.path + "/", with: "") })
+
+        #expect(rels == ["Sources", "ThirdParty", "ThirdParty/ghostty", "build", "sub"])
+        #expect(dirs.allSatisfy { $0.hasDirectoryPath })
+    }
+
     private func makeTempTree(_ relativeFiles: [String]) throws -> URL {
         let fm = FileManager.default
         let root = fm.temporaryDirectory

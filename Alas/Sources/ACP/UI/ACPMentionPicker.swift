@@ -246,6 +246,19 @@ enum MentionFuzzy {
         return ordered.map { root.appendingPathComponent($0, isDirectory: true) }
     }
 
+    /// Directory URLs to add to the picker for a `git ls-files`-style listing.
+    /// The caller resolves each entry's on-disk directory-ness: untracked
+    /// directories arrive collapsed with git's trailing slash, but submodule
+    /// gitlinks arrive like a file path (no slash). Normalizing directory
+    /// entries to a trailing slash lets `ancestorDirectories` emit the entry
+    /// itself — not just its parent — so submodule folders stay pickable.
+    static func pickerDirectories(forEntries entries: [(path: String, isDirectory: Bool)], root: URL) -> [URL] {
+        let normalized = entries.map { entry -> String in
+            entry.isDirectory && !entry.path.hasSuffix("/") ? entry.path + "/" : entry.path
+        }
+        return ancestorDirectories(forRelativePaths: normalized, root: root)
+    }
+
     static func rank(files: [URL], query: String, limit: Int, relativeTo root: URL) -> [URL] {
         let tokens = query
             .split(whereSeparator: \.isWhitespace)
