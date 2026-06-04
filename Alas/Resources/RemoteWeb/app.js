@@ -336,7 +336,12 @@ function renderDriveBar(streamingState) {
   $("takeover").classList.toggle("hidden", canDrive);
   $("composer").classList.toggle("hidden", !canDrive);
   if (canDrive) {
-    const busy = streamingState === "streaming" || streamingState === "sending";
+    // A turn is interruptible in every non-idle state — including while it's
+    // blocked on a permission/question prompt — mirroring the native composer
+    // (composerAction returns .stop for sending/streaming/awaiting*). Without
+    // the awaiting states, dismissing a prompt sheet would strand the user on
+    // Send with no way to cancel the running turn.
+    const busy = streamingState !== "idle";
     $("send").classList.toggle("hidden", busy);
     $("stop").classList.toggle("hidden", !busy);
   }
