@@ -36,4 +36,13 @@ struct ACPManagerAccessorsTests {
         let session = mgr.createSession(agentId: "claude")
         #expect(mgr.sessionRows.contains { $0.id == session.id })
     }
+
+    @Test func isWriterReflectsOwnedLeases() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-writer-\(UUID()).sqlite")
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: try ACPSessionStore(path: url.path))
+        let s = mgr.createSession(agentId: "claude")
+        #expect(mgr.isWriter(for: s.id) == false)
+        mgr._ownedLeases.insert(s.id)
+        #expect(mgr.isWriter(for: s.id) == true)
+    }
 }

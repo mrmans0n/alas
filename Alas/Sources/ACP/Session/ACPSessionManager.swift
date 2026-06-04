@@ -43,6 +43,23 @@ final class ACPSessionManager: ObservableObject {
     /// Lightweight summaries for the remote sessions list.
     var sessionRows: [ACPSessionRow] { recent }
 
+    /// Whether this instance currently holds the writer lease for the session.
+    func isWriter(for id: ACPSession.ID) -> Bool { _ownedLeases.contains(id) }
+
+    /// Submit a prompt using the same path the local composer uses (`.auto`
+    /// intent resolves to send-now or enqueue based on agent state). No-op
+    /// returns false if the session isn't live.
+    @discardableResult
+    func sendPrompt(for id: ACPSession.ID, text: String) -> Bool {
+        submit(sessionId: id, text: text, attachments: [], intent: .auto, onCompleted: { _ in })
+    }
+
+    /// Interrupt the in-flight turn (same as the composer Stop / Esc).
+    func interrupt(for id: ACPSession.ID) {
+        guard let runner = runners[id] else { return }
+        Task { await runner.userCancel() }
+    }
+
     /// Sessions for which THIS instance holds the writer lease (backing store).
     var _ownedLeases: Set<ACPSession.ID> = []
     /// Per-session periodic heartbeat tasks (backing store).
