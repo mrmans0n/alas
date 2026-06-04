@@ -105,7 +105,8 @@ final class RemoteSessionGateway {
     }
 
     private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
-        guard let pending = session.transcript.pendingQuestion else { return }
+        guard let pending = session.transcript.pendingQuestion,
+              !pending.params.questions.isEmpty else { return }   // nothing answerable — don't surface a sheet
         let payload = RemoteQuestionPayload(
             requestId: Self.requestIdInt(pending.id),
             title: pending.params.title,
