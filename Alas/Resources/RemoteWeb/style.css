@@ -22,7 +22,6 @@
 body { margin: 0; color: var(--fg); background: linear-gradient(180deg, var(--bg-1), var(--bg-0)) fixed; -webkit-font-smoothing: antialiased; }
 
 #bar { position: sticky; top: 0; z-index: 5; padding: calc(env(safe-area-inset-top) + 6px) 14px 8px; background: color-mix(in oklab, var(--bg-1), transparent 6%); backdrop-filter: blur(8px); font-size: 13px; color: var(--fg-faint); border-bottom: 0.5px solid var(--line-soft); }
-#ver { opacity: .55; }
 .view { padding: 6px 12px 28px; }
 .hidden { display: none !important; }   /* !important: beats .sheet's later display:flex */
 

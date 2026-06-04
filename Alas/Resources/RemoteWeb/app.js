@@ -1,14 +1,11 @@
-const APP_BUILD = "v11";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
 let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestionReq = null;   // requestId the user closed; suppress re-shows
-let lastMsgDbg = "";               // diagnostic: last server message, shown in the bar
 
 function setStatus(s) { $("status").textContent = s; }
-function setBar() { const e = $("ver"); if (e) e.textContent = " · " + APP_BUILD + (lastMsgDbg ? " · " + lastMsgDbg : ""); }
 function showGate(title, msg, retry) {
   $("gate-title").textContent = title;
   $("gate-msg").textContent = msg;
@@ -73,12 +70,6 @@ async function connect() {
 function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); }
 
 function handle(msg) {
-  lastMsgDbg = msg.type === "questionRequest" ? ("Q#" + msg.payload.requestId + " n=" + (msg.payload.questions || []).length)
-             : msg.type === "permissionRequest" ? ("P:" + (msg.payload.toolName || ""))
-             : msg.type === "transcriptSnapshot" ? ("snap " + msg.messages.length + " st=" + msg.streamingState)
-             : msg.type === "transcriptDelta" ? ("delta " + msg.upserts.length + " st=" + msg.streamingState)
-             : msg.type;
-  setBar();
   switch (msg.type) {
     case "sessionList": renderSessions(msg.sessions); break;
     case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(true); break;
@@ -338,5 +329,4 @@ $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermiss
 
 $("back").onclick = showSessions;
 $("gate-retry").onclick = () => location.reload();
-setBar();
 connect();
