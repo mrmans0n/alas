@@ -43,7 +43,7 @@ struct CommitInfoTests {
     @Test func recognisesAllExpectedTypes() {
         for type in [
             "feat", "fix", "chore", "refactor", "perf", "docs", "test", "ci", "build",
-            "style", "revert", "tune", "harden",
+            "style", "revert", "tune", "harden", "polish",
         ] {
             let (tag, _) = CommitInfo.parseConventional(subject: "\(type): something")
             #expect(tag == type, "expected \(type) to be recognised")
@@ -78,6 +78,12 @@ struct CommitInfoTests {
         let (tag, stripped) = CommitInfo.parseConventional(subject: "tune(sidebar): tweak row spacing")
         #expect(tag == "tune")
         #expect(stripped == "tweak row spacing")
+    }
+
+    @Test func extractsPolishPrefix() {
+        let (tag, stripped) = CommitInfo.parseConventional(subject: "polish: refine commit chips")
+        #expect(tag == "polish")
+        #expect(stripped == "refine commit chips")
     }
 
     @Test func initialsEmpty() {
