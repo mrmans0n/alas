@@ -77,4 +77,26 @@ struct ACPManagerAccessorsTests {
         #expect(result == false)   // refused synchronously
         #expect(s.queue.isEmpty)   // nothing enqueued/persisted as a mirror
     }
+
+    @Test func setAutoRunRequiresWriter() throws {
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        mgr.setAutoRun(for: s.id, enabled: true)
+        #expect(s.autoRunEnabled == false)          // not writer → ignored
+        mgr._ownedLeases.insert(s.id)
+        mgr.setAutoRun(for: s.id, enabled: true)
+        #expect(s.autoRunEnabled == true)
+    }
+
+    @Test func setModelOptimisticallyUpdatesAndRequiresWriter() throws {
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        mgr.setModel(for: s.id, modelId: "opus")
+        #expect(s.currentModel == nil)              // not writer → ignored
+        mgr._ownedLeases.insert(s.id)
+        mgr.setModel(for: s.id, modelId: "opus")
+        #expect(s.currentModel == "opus")           // optimistic update even with no runner
+        mgr.setMode(for: s.id, modeId: "ask")
+        #expect(s.currentMode == "ask")
+    }
 }
