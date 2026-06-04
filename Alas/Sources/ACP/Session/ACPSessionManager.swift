@@ -43,8 +43,19 @@ final class ACPSessionManager: ObservableObject {
     /// Lightweight summaries for the remote sessions list.
     var sessionRows: [ACPSessionRow] { recent }
 
-    /// Whether this instance currently holds the writer lease for the session.
-    func isWriter(for id: ACPSession.ID) -> Bool { _ownedLeases.contains(id) }
+    /// Whether this instance is the legitimate current writer for the session —
+    /// gates every remote drive action (`canDrive`, `sendPrompt`, `stop`).
+    ///
+    /// Requires BOTH the in-memory claim AND store agreement: after another
+    /// window takes over, the former owner keeps the id in `_ownedLeases` until
+    /// its heartbeat stands down (~5s). Trusting the in-memory set alone would
+    /// let a phone connected to the old owner keep writing into a session
+    /// another instance now drives — corrupting the active conversation. So we
+    /// also consult the store row via `anotherLiveInstanceOwnsLease`, the same
+    /// guard the local write path (`holdsLeaseForWrite`) relies on.
+    func isWriter(for id: ACPSession.ID) -> Bool {
+        _ownedLeases.contains(id) && !anotherLiveInstanceOwnsLease(sessionId: id)
+    }
 
     /// Submit a prompt using the same path the local composer uses (`.auto`
     /// intent resolves to send-now or enqueue based on agent state). Returns
