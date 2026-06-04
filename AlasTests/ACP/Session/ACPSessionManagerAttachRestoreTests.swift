@@ -357,6 +357,11 @@ struct ACPSessionManagerAttachRestoreTests {
     func loadAuthFailureDoesNotFallBackToSessionNew() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-old"))
+        try appendMessage(
+            .user(id: UUID(), text: "prior prompt", attachments: []),
+            to: store,
+            seq: 0
+        )
         let client = ACPMockClient()
         let method = terminalAuthMethod()
         scriptInitialize(client, authMethods: [method])
@@ -378,6 +383,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.authMethods == [method])
         #expect(session.setupState == .needsAuth(methods: [method], reason: "auth_required: 401"))
         #expect(session.lastError?.contains("auth_required: 401") == true)
+        #expect(session.contextRecoveryStatus == nil)
         if case .failed(let message) = session.agentState {
             #expect(message == "auth_required: 401")
         } else {

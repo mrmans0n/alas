@@ -1358,6 +1358,7 @@ extension ACPSessionManager {
             let base = "ACP initialize/new failed: \(baseMessage)"
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
+            session.contextRecoveryStatus = nil
             if let authReason {
                 session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
                 session.agentState = .failed(authReason)
