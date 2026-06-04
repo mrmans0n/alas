@@ -3204,7 +3204,15 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func hydrateIfNeeded(id: String) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+        // The remote list includes recent sessions that aren't currently open
+        // on the Mac (no live ACPSession yet). Materialize the session in its
+        // owning manager — same read-only path the UI uses (placeholderSession
+        // does a single indexed lookup; no writer lease / attach) — so a remote
+        // client can open any listed session, not just already-open ones.
+        for mgr in acpManagers.values {
+            guard mgr.liveSession(for: id) != nil
+                    || mgr.sessionRows.contains(where: { $0.id == id }) else { continue }
+            _ = mgr.placeholderSession(id: id)
             await mgr.hydrateIfNeeded(id: id)
             return
         }
