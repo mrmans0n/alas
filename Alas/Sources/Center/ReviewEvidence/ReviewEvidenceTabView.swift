@@ -118,7 +118,7 @@ struct ReviewEvidenceTabView: View {
                     .frame(width: 14, height: 14)
             }
             AlasButton(title: "Refresh", icon: "arrow.clockwise") {
-                loadNonce += 1
+                refreshEvidence()
             }
             if let url = reviewRequestURL {
                 AlasButton(title: snapshotProvider.openReviewRequestTitle, icon: "arrow.up.right.square") {
@@ -620,10 +620,19 @@ struct ReviewEvidenceTabView: View {
                 .multilineTextAlignment(.center)
                 .textSelection(.enabled)
             AlasButton(title: "Refresh", icon: "arrow.clockwise") {
-                loadNonce += 1
+                refreshEvidence()
             }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func refreshEvidence() {
+        Task { @MainActor in
+            if let rightPaneState = appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId) {
+                await rightPaneState.refresh()
+            }
+            loadNonce += 1
+        }
     }
 }
