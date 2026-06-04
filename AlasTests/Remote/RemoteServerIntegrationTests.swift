@@ -11,6 +11,17 @@ struct RemoteServerIntegrationTests {
         return ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
     }
 
+    private func startServer(pairing: RemotePairingService,
+                             provider: RemoteSessionsProvider = FakeSessionsProvider()) async throws -> (RemoteServer, UInt16) {
+        let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
+        let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        try server.start(port: 0)
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return (server, try #require(server.port))
+    }
+
     @Test func pairThenWebSocketSubscribeReceivesSnapshot() async throws {
         // Provider with one session containing one agent message.
         let provider = FakeSessionsProvider()
@@ -65,5 +76,41 @@ struct RemoteServerIntegrationTests {
 
         task.cancel(with: .goingAway, reason: nil)
         server.stop()
+    }
+
+    @Test func unknownPathReturns404() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let (_, resp) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/nope")!)
+        #expect((resp as? HTTPURLResponse)?.statusCode == 404)
+    }
+
+    @Test func badPairCodeReturns401() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        _ = pairing.beginPairing()  // a valid code exists, but the client sends the wrong one
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        req.httpMethod = "POST"
+        req.httpBody = Data(#"{"code":"WRONGCODE","deviceName":"x"}"#.utf8)
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as? HTTPURLResponse)?.statusCode == 401)
+    }
+
+    @Test func webSocketWithBadTokenIsRejected() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+        let task = URLSession.shared.webSocketTask(
+            with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: ["bogus-token"])
+        task.resume()
+        do {
+            _ = try await task.receive()
+            Issue.record("expected the WS upgrade to be rejected for an unpaired token")
+        } catch {
+            // Expected: the server returns 401 instead of 101, so receive fails.
+        }
+        task.cancel(with: .goingAway, reason: nil)
     }
 }

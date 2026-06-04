@@ -42,9 +42,19 @@ final class RemoteConnection: @unchecked Sendable {
         self.onClose = onClose
     }
 
+    // Bounds on the unauthenticated HTTP path (auth happens at WS upgrade).
+    private static let maxHeaderBytes = 64 * 1024
+    private static let maxBodyBytes = 1 << 20   // 1 MB
+
     func start() {
         conn.start(queue: queue)
         receive()
+    }
+
+    /// External request to close this connection (e.g. server `stop()`). Hops
+    /// onto the serial queue so teardown touches queue-confined state safely.
+    func cancel() {
+        onQueue { [weak self] in self?.teardown() }
     }
 
     /// Hops a block back onto the connection's serial queue so it can safely
@@ -86,7 +96,18 @@ final class RemoteConnection: @unchecked Sendable {
             }
             return
         }
-        guard let req else { return }   // headers not complete yet; keep buffering
+        guard let req else {
+            // Headers not complete yet; keep buffering — but bound the header
+            // block so an unauthenticated peer can't grow memory by dribbling
+            // bytes with no CRLFCRLF terminator.
+            if inbound.count > Self.maxHeaderBytes {
+                send(RemoteHTTPResponder.http(status: "431 Request Header Fields Too Large",
+                                              contentType: "text/plain", body: Data())) {
+                    [weak self] in self?.teardown()
+                }
+            }
+            return
+        }
 
         let headerByteCount = inbound.count - peek.count   // bytes through CRLFCRLF
         if req.headers["upgrade"]?.lowercased() == "websocket" {
@@ -98,6 +119,17 @@ final class RemoteConnection: @unchecked Sendable {
         // Non-upgrade request: wait until the full declared body is buffered,
         // then consume headers + body in one shot and parse the body once.
         let needed = Int(req.headers["content-length"] ?? "0") ?? 0
+        // Reject an oversized declared (or already-buffered) body before we
+        // commit to buffering it — auth only happens at WS upgrade, so this is
+        // reachable unauthenticated.
+        if needed > Self.maxBodyBytes || inbound.count - headerByteCount > Self.maxBodyBytes {
+            inbound.removeFirst(headerByteCount)
+            send(RemoteHTTPResponder.http(status: "413 Payload Too Large",
+                                          contentType: "text/plain", body: Data())) {
+                [weak self] in self?.teardown()
+            }
+            return
+        }
         guard inbound.count - headerByteCount >= needed else { return }   // wait for more
         inbound.removeFirst(headerByteCount)
         let body = Data(inbound.prefix(needed))
@@ -202,7 +234,12 @@ final class RemoteConnection: @unchecked Sendable {
     // MARK: lifecycle / io
 
     private func send(_ data: Data, completion: @escaping @Sendable () -> Void) {
-        conn.send(content: data, completion: .contentProcessed { _ in completion() })
+        // NWConnection delivers this completion on our serial queue. On a send
+        // error, tear down rather than running the follow-up (which would touch
+        // a dead connection).
+        conn.send(content: data, completion: .contentProcessed { [weak self] error in
+            if error != nil { self?.teardown() } else { completion() }
+        })
     }
 
     private func teardown() {

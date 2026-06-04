@@ -13,6 +13,9 @@ final class RemoteServer {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "io.alas.remote.server")
     private var connections: [ObjectIdentifier: RemoteConnection] = [:]
+    /// Cap on simultaneous sockets. An unauthenticated peer can open a socket
+    /// (auth only happens at WS upgrade), so bound the count defensively.
+    private let maxConnections = 64
 
     let pairing: RemotePairingService
     private let assets: RemoteWebAssets
@@ -33,9 +36,14 @@ final class RemoteServer {
         let endpointPort: NWEndpoint.Port = desired == 0 ? .any : (NWEndpoint.Port(rawValue: desired) ?? .any)
         let listener = try NWListener(using: params, on: endpointPort)
         listener.stateUpdateHandler = { [weak self] state in
-            if case .ready = state {
+            switch state {
+            case .ready:
                 let assigned = listener.port?.rawValue
                 Task { @MainActor in self?.port = assigned }
+            case .failed, .cancelled:
+                Task { @MainActor in self?.port = nil }
+            default:
+                break
             }
         }
         listener.newConnectionHandler = { [weak self] nwConn in
@@ -49,11 +57,16 @@ final class RemoteServer {
         listener?.cancel()
         listener = nil
         port = nil
+        // Deterministically close in-flight sockets rather than relying on ARC
+        // to drop the NWConnections when the table clears.
+        for conn in connections.values { conn.cancel() }
         connections.removeAll()
     }
 
     private func accept(_ nwConn: NWConnection) {
+        guard connections.count < maxConnections else { nwConn.cancel(); return }
         let responder = RemoteHTTPResponder(pairing: pairing, assets: assets)
+        let provider = self.provider   // captured strongly; the server owns it for its lifetime
         let conn = RemoteConnection(
             conn: nwConn,
             queue: queue,
@@ -63,11 +76,8 @@ final class RemoteServer {
                 self.pairing.touch(deviceId: id)
                 return true
             },
-            makeGateway: { [weak self] send in
-                // Provider is only nil-checked here defensively; the server owns
-                // it for its whole lifetime, so this closure is never reached
-                // after deinit (connections are dropped in stop()).
-                RemoteSessionGateway(provider: self!.provider, send: send)
+            makeGateway: { send in
+                RemoteSessionGateway(provider: provider, send: send)
             },
             onClose: { [weak self] conn in
                 Task { @MainActor in self?.connections[ObjectIdentifier(conn)] = nil }
