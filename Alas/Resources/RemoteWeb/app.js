@@ -1,4 +1,4 @@
-const APP_BUILD = "v10";   // visible in the top bar to confirm the phone has fresh JS
+const APP_BUILD = "v11";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
@@ -141,6 +141,15 @@ function renderMessages(forceBottom) {
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function jparse(s) { try { return JSON.parse(s); } catch { return null; } }
+// Render markdown to sanitized HTML (agent/user prose is untrusted — DOMPurify
+// strips any script/event-handler injection). Falls back to escaped plain text
+// if the libraries didn't load.
+function md(text) {
+  if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+    const d = document.createElement("div"); d.textContent = text || ""; return d.innerHTML;
+  }
+  return DOMPurify.sanitize(marked.parse(text || "", { gfm: true, breaks: true }));
+}
 function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 const TOOL_VERB = { read: "Read", search: "Searched", execute: "Ran", run: "Ran", edit: "Edit" };
@@ -150,8 +159,11 @@ const TOOL_STATUS = { completed: ["✓", "ok"], failed: ["✕", "err"], in_progr
 // collapsed "Thinking…" row, and collapsed tool/structured cards.
 function renderMessage(m, sid, open) {
   let node;
-  if (m.kind === "user" || m.kind === "agent" || m.kind === "systemNotice") {
-    node = el("div", "msg m-" + m.kind, m.text || "");
+  if (m.kind === "user" || m.kind === "agent") {
+    node = el("div", "msg md m-" + m.kind);
+    node.innerHTML = md(m.text);            // markdown-rendered like the native pane
+  } else if (m.kind === "systemNotice") {
+    node = el("div", "msg m-systemNotice", m.text || "");
   } else if (m.kind === "thought") {
     node = el("details", "msg m-thought");
     node.append(el("summary", null, "Thinking…"), el("div", "thought-body", m.text || ""));

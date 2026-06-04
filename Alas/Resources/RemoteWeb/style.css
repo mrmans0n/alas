@@ -41,6 +41,26 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .m-user { align-self: flex-end; max-width: 82%; padding: 9px 13px; color: var(--fg); background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 32%, transparent), color-mix(in oklab, var(--accent) 20%, transparent)); border: 0.5px solid color-mix(in oklab, var(--accent) 50%, transparent); border-radius: 13px 13px 4px 13px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
 .m-systemNotice { align-self: center; color: var(--fg-faint); font-size: 12.5px; text-align: center; padding: 4px; }
 
+/* Markdown-rendered prose (agent/user) */
+.md { white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; }
+.md h1, .md h2, .md h3, .md h4, .md h5 { margin: 12px 0 6px; line-height: 1.3; font-weight: 700; }
+.md h1 { font-size: 19px; } .md h2 { font-size: 17px; } .md h3 { font-size: 15.5px; } .md h4 { font-size: 14px; }
+.md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md li { margin: 3px 0; }
+.md li > p { margin: 0; }
+.md a { color: var(--accent); }
+.md strong { font-weight: 700; } .md em { font-style: italic; }
+.md code { font-family: ui-monospace, monospace; font-size: .88em; background: color-mix(in oklab, var(--bg-0) 70%, transparent); padding: 1px 5px; border-radius: 5px; }
+.md pre { margin: 8px 0; padding: 10px 12px; background: color-mix(in oklab, var(--bg-0) 60%, transparent); border: 0.5px solid var(--line-soft); border-radius: 8px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; font-size: 12px; line-height: 1.45; }
+.md blockquote { margin: 6px 0; padding-left: 12px; border-left: 2px solid var(--bg-4); color: var(--fg-dim); }
+.md hr { border: none; border-top: 0.5px solid var(--line); margin: 10px 0; }
+.md table { border-collapse: collapse; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
+.md th, .md td { border: 0.5px solid var(--line); padding: 5px 9px; }
+
 /* Thinking — collapsed by default, left accent rule */
 .m-thought { align-self: stretch; border-left: 1.5px solid var(--bg-4); padding-left: 11px; margin: 6px 0; }
 .m-thought > summary { list-style: none; cursor: pointer; color: var(--fg-faint); font-size: 11px; padding: 3px 0; }
