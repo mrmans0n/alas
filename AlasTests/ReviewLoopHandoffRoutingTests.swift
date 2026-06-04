@@ -162,6 +162,35 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
     }
 
+    @Test func handoffOpensNewACPChatWhenActiveSessionIsMirror() throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "test-agent")
+        let existing = try #require(acpTabs(in: state).first)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let mirrorOwner = ACPSessionManager(
+            worktreeId: worktreeId,
+            worktreePath: "/tmp/mirror-owner",
+            store: try ACPSessionStore(path: Paths.acpSessionsDB(forWorktreeId: worktreeId).path),
+            instanceId: "mirror-owner",
+            pid: Int64(getpid())
+        )
+        #expect(mirrorOwner.acquireWriterLease(sessionId: existing.sessionId))
+        #expect(manager.isMirror(sessionId: existing.sessionId))
+
+        state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
+
+        let tabs = acpTabs(in: state)
+        #expect(tabs.count == 2)
+        #expect(sessionFor(tab: existing, in: state)?.composerDraft == .empty)
+        let newTab = try #require(tabs.last)
+        #expect(newTab.id != existing.id)
+        #expect(sessionFor(tab: newTab, in: state)?.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
+
+        mirrorOwner.releaseWriterLease(sessionId: existing.sessionId)
+    }
+
     @Test func handoffOpensNewACPChatWhenNoActiveACPChatExists() throws {
         let state = makeState()
 
