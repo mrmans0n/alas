@@ -115,6 +115,7 @@ struct TabsManagerReviewEvidenceTests {
 
         #expect(state.matches(Self.snapshot(number: 42)))
         #expect(!state.matches(Self.snapshot(number: 43)))
+        #expect(!state.matches(Self.snapshot(number: 42, host: "github.example.com")))
     }
 
     @Test func reviewEvidenceTabStateCodableRoundTrips() throws {
@@ -136,15 +137,17 @@ struct TabsManagerReviewEvidenceTests {
     private static func snapshot(
         number: Int = 42,
         title: String = "Review evidence",
-        url: URL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        url: URL? = nil,
+        host: String = "github.com"
     ) -> ReviewLoopSnapshot {
+        let url = url ?? URL(string: "https://\(host)/mrmans0n/alas/pull/\(number)")!
         let remote = CodeHostRemote(
             kind: .github,
-            host: "github.com",
+            host: host,
             owner: "mrmans0n",
             repository: "alas",
             remoteName: "origin",
-            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+            webURL: URL(string: "https://\(host)/mrmans0n/alas")!
         )
         let request = ReviewRequest(
             remote: remote,

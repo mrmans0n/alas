@@ -103,10 +103,12 @@ struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
         self.title = request?.title ?? ""
         self.selectedSection = initialSection ?? .ci
         self.selectedItemID = nil
+        let host = remote?.host ?? self.url.host ?? ""
         self.id = [
             "review-evidence",
             worktreeId,
             provider.rawValue,
+            host,
             repositorySlug,
             "\(number)",
         ].joined(separator: ":")
@@ -121,6 +123,7 @@ struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
     func matches(_ snapshot: ReviewLoopSnapshot) -> Bool {
         guard let request = snapshot.reviewRequest else { return false }
         return request.provider == provider
+            && request.remote.host.lowercased() == (url.host ?? "").lowercased()
             && request.remote.repositorySlug == repositorySlug
             && request.number == number
     }
