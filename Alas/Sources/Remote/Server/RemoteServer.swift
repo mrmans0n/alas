@@ -55,11 +55,17 @@ final class RemoteServer {
             switch state {
             case .ready:
                 let assigned = listener.port?.rawValue
-                Task { @MainActor in self?.port = assigned
-                self?.onPortChange?(assigned) }
+                Task { @MainActor in
+                    // Ignore events from a superseded listener (e.g. the old one's
+                    // late `.cancelled` after a port-fallback) so they can't wipe
+                    // the live port/address.
+                    guard let self, self.listener === listener else { return }
+                    self.port = assigned
+                    self.onPortChange?(assigned)
+                }
             case .failed:
                 Task { @MainActor in
-                    guard let self else { return }
+                    guard let self, self.listener === listener else { return }
                     if desired != 0 && !self.didFallback {
                         self.didFallback = true
                         try? self.start(port: 0)   // preferred port taken — fall back to OS-assigned
@@ -69,8 +75,11 @@ final class RemoteServer {
                     }
                 }
             case .cancelled:
-                Task { @MainActor in self?.port = nil
-                self?.onPortChange?(nil) }
+                Task { @MainActor in
+                    guard let self, self.listener === listener else { return }
+                    self.port = nil
+                    self.onPortChange?(nil)
+                }
             default:
                 break
             }

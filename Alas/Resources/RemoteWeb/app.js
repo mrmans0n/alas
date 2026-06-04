@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
 let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
-let dismissedQuestionReq = null;   // requestId the user closed; suppress re-shows
+let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 
 function setStatus(s) { $("status").textContent = s; }
 function showGate(title, msg, retry) {
@@ -79,7 +79,7 @@ function handle(msg) {
     case "permissionRequest": showPermission(msg.sessionId, msg.payload); break;
     case "permissionResolved": hidePermission(); break;
     case "questionRequest": showQuestion(msg.sessionId, msg.payload); break;
-    case "questionResolved": hideQuestion(); break;
+    case "questionResolved": dismissedQuestion = null; hideQuestion(); break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "error": setStatus("error: " + (msg.message ?? "(unknown)")); break;
     default: console.warn("unknown message type", msg.type);
@@ -106,7 +106,7 @@ function renderSessions(sessions) {
 }
 
 function openSession(id) {
-  currentSession = id; messages = new Map();
+  currentSession = id; messages = new Map(); dismissedQuestion = null;
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("messages").innerHTML = ""; send({ type: "subscribe", sessionId: id });
 }
@@ -231,7 +231,7 @@ let questionSelections = new Map();
 function showQuestion(sessionId, payload) {
   const questions = payload.questions || [];
   if (questions.length === 0) { hideQuestion(); return; }   // nothing to answer — don't show a trapping empty sheet
-  if (payload.requestId === dismissedQuestionReq) { hideQuestion(); return; }   // user already closed this one
+  if (dismissedQuestion && dismissedQuestion.sessionId === sessionId && dismissedQuestion.requestId === payload.requestId) { hideQuestion(); return; }   // user already closed this exact prompt
   questionState = { sessionId, requestId: payload.requestId };
   questionSelections = new Map();
 
@@ -316,7 +316,7 @@ function hideQuestion() {
 }
 
 function dismissQuestion() {
-  if (questionState) dismissedQuestionReq = questionState.requestId;   // and keep it dismissed across re-sends
+  if (questionState) dismissedQuestion = { sessionId: questionState.sessionId, requestId: questionState.requestId };   // keep this exact prompt dismissed across re-sends
   hideQuestion();
 }
 $("question-submit").onclick = submitQuestion;
