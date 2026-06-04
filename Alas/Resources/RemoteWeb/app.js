@@ -1,3 +1,4 @@
+const APP_BUILD = "v4";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
@@ -232,4 +233,5 @@ $("question").onclick = (e) => { if (e.target.id === "question") hideQuestion();
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 
 $("back").onclick = showSessions;
+$("ver").textContent = " · " + APP_BUILD;
 connect();

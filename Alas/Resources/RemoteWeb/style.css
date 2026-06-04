@@ -2,6 +2,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: #14151a; color: #e7e7ea; }
 #bar { padding: env(safe-area-inset-top) 12px 8px; background: #1c1d24; font-size: 13px; color: #9aa; }
+#ver { color: #556; }
 .view { padding: 12px; }
 .hidden { display: none; }
 #session-list { padding: 0; margin: 0; }
