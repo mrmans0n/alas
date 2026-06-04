@@ -38,6 +38,9 @@ struct RemoteHTTPResponder {
         var head = "HTTP/1.1 \(status)\r\n"
         head += "Content-Type: \(contentType)\r\n"
         head += "Content-Length: \(body.count)\r\n"
+        // Never cache: the web bundle changes between builds and a stale cached
+        // page can silently point at a dead server / hide an update.
+        head += "Cache-Control: no-store\r\n"
         head += "Connection: close\r\n\r\n"
         return Data(head.utf8) + body
     }

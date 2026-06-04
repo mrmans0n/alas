@@ -83,7 +83,10 @@ final class AppState {
             let server = RemoteServer(pairing: remotePairing, assets: assets, provider: self)
             server.onPortChange = { [weak self] p in self?.remotePort = p }
             do {
-                try server.start(port: config.remote.port)
+                // Pin a stable default port so a paired phone's URL survives app
+                // restarts (config 0 means "use the default", not OS-assigned).
+                let boundPort: UInt16 = config.remote.port != 0 ? config.remote.port : 8765
+                try server.start(port: boundPort)
                 remoteServer = server
                 lastRemoteError = nil
             } catch {
