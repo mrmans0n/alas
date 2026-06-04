@@ -122,6 +122,31 @@ struct RemoteSessionGatewayTests {
         #expect(msgs.contains { $0.kind == "agent" && $0.text == "hello" })
     }
 
+    @Test func takeOverPushesSnapshotWithCanDrive() async throws {
+        // Regression: takeover seizes the writer lease synchronously but mutates
+        // lease/agent state rather than the transcript, so the objectWillChange
+        // delta may never fire on an idle session. The gateway must push a
+        // snapshot itself so the client learns canDrive=true and unlocks the
+        // composer instead of waiting for an unrelated transcript mutation.
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.takeOver(sessionId: "s1"))
+        #expect(provider.tookOver == ["s1"])
+        let snap = sent.last { msg in
+            if case .transcriptSnapshot = msg { return true }
+            return false
+        }
+        guard case .transcriptSnapshot(let id, _, let canDrive, _)? = snap else {
+            Issue.record("expected a snapshot after takeOver, got \(sent)")
+            return
+        }
+        #expect(id == "s1")
+        #expect(canDrive == true)
+    }
+
     @Test func permissionDecisionCallsPolicyWhenRequestMatches() async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("x")
