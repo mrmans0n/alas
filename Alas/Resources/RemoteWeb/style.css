@@ -82,6 +82,15 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .m-tool[open] .tool-chev { transform: rotate(180deg); }
 .tool-body { margin: 0; padding: 9px 11px; border-top: 0.5px solid var(--line-soft); background: color-mix(in oklab, var(--bg-0) 55%, transparent); font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.45; color: var(--fg-muted); white-space: pre; overflow-x: auto; max-height: 46vh; overflow-y: auto; }
 
+/* Composer / drive bar */
+#drivebar { position: sticky; bottom: 0; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in oklab, var(--bg-1), transparent 4%); backdrop-filter: blur(8px); border-top: 0.5px solid var(--line-soft); }
+#takeover { width: 100%; padding: 12px; border: 0.5px solid var(--accent); border-radius: 10px; background: color-mix(in oklab, var(--accent) 16%, transparent); color: var(--fg); font-size: 15px; cursor: pointer; }
+#composer { display: flex; gap: 8px; align-items: flex-end; }
+#prompt { flex: 1; min-height: 38px; max-height: 40vh; padding: 9px 12px; border: 0.5px solid var(--line); border-radius: 12px; background: var(--bg-0); color: var(--fg); font: inherit; font-size: 15px; resize: none; }
+#composer button { padding: 0 16px; height: 38px; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; }
+#send { background: var(--accent); color: var(--bg-0); }
+#stop { background: var(--del); color: var(--fg); }
+
 /* Pair / error gate (full screen) */
 #gate { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 28px; background: linear-gradient(180deg, var(--bg-1), var(--bg-0)); }
 .gate-card { text-align: center; max-width: 320px; }

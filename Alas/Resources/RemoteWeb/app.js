@@ -1,6 +1,7 @@
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
+let canDrive = false;
 let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
@@ -72,10 +73,10 @@ function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); 
 function handle(msg) {
   switch (msg.type) {
     case "sessionList": renderSessions(msg.sessions); break;
-    case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(true); break;
+    case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; renderMessages(true); renderDriveBar(msg.streamingState); } break;
     // The server re-sends the full transcript each time, keyed by stable position
     // ids, so replace (don't append) to avoid accumulating duplicate copies.
-    case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(false); break;
+    case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; renderMessages(false); renderDriveBar(msg.streamingState); } break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
     case "permissionRequest": if (msg.sessionId === currentSession) showPermission(msg.sessionId, msg.payload); break;
@@ -108,14 +109,16 @@ function renderSessions(sessions) {
 }
 
 function openSession(id) {
-  currentSession = id; messages = new Map(); dismissedQuestion = null;
+  currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false;
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
-  $("messages").innerHTML = ""; send({ type: "subscribe", sessionId: id });
+  $("messages").innerHTML = ""; renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
-  currentSession = null;
+  currentSession = null; canDrive = false;
   hidePermission(); hideQuestion();          // never leave a sheet over the list
+  $("takeover").classList.add("hidden");
+  $("composer").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   send({ type: "listSessions" });
 }
@@ -321,6 +324,32 @@ function dismissQuestion() {
   if (questionState) dismissedQuestion = { sessionId: questionState.sessionId, requestId: questionState.requestId };   // keep this exact prompt dismissed across re-sends
   hideQuestion();
 }
+function renderDriveBar(streamingState) {
+  const driving = currentSession && canDrive;
+  $("takeover").classList.toggle("hidden", !currentSession || canDrive);
+  $("composer").classList.toggle("hidden", !driving);
+  if (driving) {
+    const busy = streamingState === "streaming" || streamingState === "sending";
+    $("send").classList.toggle("hidden", busy);
+    $("stop").classList.toggle("hidden", !busy);
+  }
+}
+
+function sendPrompt() {
+  const ta = $("prompt");
+  const text = ta.value.trim();
+  if (!text || !currentSession || !canDrive) return;
+  send({ type: "sendPrompt", sessionId: currentSession, text });
+  ta.value = "";
+}
+
+$("takeover").onclick = () => { if (currentSession) send({ type: "takeOver", sessionId: currentSession }); };
+$("send").onclick = sendPrompt;
+$("stop").onclick = () => { if (currentSession) send({ type: "stop", sessionId: currentSession }); };
+$("prompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+});
+
 $("question-submit").onclick = submitQuestion;
 // Explicit Close + backdrop tap — a sheet can always be dismissed, and a closed
 // question stays closed even if the server keeps re-sending it.

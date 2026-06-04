@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=14" />
+  <link rel="stylesheet" href="/style.css?v=15" />
 </head>
 <body>
   <header id="bar"><span id="status">connecting…</span></header>
@@ -13,6 +13,14 @@
     <section id="transcript" class="view hidden">
       <button id="back">‹ Sessions</button>
       <div id="messages"></div>
+      <div id="drivebar">
+        <button id="takeover" class="hidden">Take over to drive</button>
+        <div id="composer" class="hidden">
+          <textarea id="prompt" rows="1" placeholder="Message…"></textarea>
+          <button id="send">Send</button>
+          <button id="stop" class="hidden">Stop</button>
+        </div>
+      </div>
     </section>
   </main>
   <div id="permission" class="sheet hidden">
@@ -38,8 +46,8 @@
       <button id="gate-retry" class="hidden">Try again</button>
     </div>
   </div>
-  <script src="/marked.min.js?v=14"></script>
-  <script src="/purify.min.js?v=14"></script>
-  <script src="/app.js?v=14"></script>
+  <script src="/marked.min.js?v=15"></script>
+  <script src="/purify.min.js?v=15"></script>
+  <script src="/app.js?v=15"></script>
 </body>
 </html>
