@@ -117,6 +117,13 @@ struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
         url = request.url
         title = request.title
     }
+
+    func matches(_ snapshot: ReviewLoopSnapshot) -> Bool {
+        guard let request = snapshot.reviewRequest else { return false }
+        return request.provider == provider
+            && request.remote.repositorySlug == repositorySlug
+            && request.number == number
+    }
 }
 
 struct CommitTabState: Codable, Equatable, Identifiable {

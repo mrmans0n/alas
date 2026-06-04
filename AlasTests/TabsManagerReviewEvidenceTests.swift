@@ -106,6 +106,17 @@ struct TabsManagerReviewEvidenceTests {
         #expect(manager.activeTabId(forWorktree: worktreeId) == second.id)
     }
 
+    @Test func reviewEvidenceTabStateMatchesOnlyItsRequest() {
+        let state = ReviewEvidenceTabState(
+            worktreeId: "review-evidence-match",
+            snapshot: Self.snapshot(number: 42),
+            initialSection: nil
+        )
+
+        #expect(state.matches(Self.snapshot(number: 42)))
+        #expect(!state.matches(Self.snapshot(number: 43)))
+    }
+
     @Test func reviewEvidenceTabStateCodableRoundTrips() throws {
         let state = ReviewEvidenceTabState(
             worktreeId: "wt-1",

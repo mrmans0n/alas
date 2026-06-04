@@ -21,8 +21,13 @@ struct ReviewEvidenceTabView: View {
         _selectedSection = State(initialValue: tabState.selectedSection)
     }
 
-    private var snapshot: ReviewLoopSnapshot? {
+    private var activeSnapshot: ReviewLoopSnapshot? {
         appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop.snapshot
+    }
+
+    private var snapshot: ReviewLoopSnapshot? {
+        guard let activeSnapshot, tabState.matches(activeSnapshot) else { return nil }
+        return activeSnapshot
     }
 
     private var loadKey: String {
@@ -301,9 +306,13 @@ struct ReviewEvidenceTabView: View {
     }
 
     private var unavailableMessage: String? {
-        guard let snapshot else {
+        guard let activeSnapshot else {
             return "Review evidence is unavailable because review state is not loaded."
         }
+        guard tabState.matches(activeSnapshot) else {
+            return staleReviewRequestMessage(activeSnapshot)
+        }
+        let snapshot = activeSnapshot
         guard snapshot.remote != nil else {
             return "Review evidence is unavailable because the code host remote was not found."
         }
@@ -317,6 +326,14 @@ struct ReviewEvidenceTabView: View {
             return "Review evidence is unavailable because \(snapshotProvider.displayName) is not supported."
         }
         return nil
+    }
+
+    private func staleReviewRequestMessage(_ snapshot: ReviewLoopSnapshot) -> String {
+        let expected = "\(tabState.provider.displayName) \(tabState.provider.reviewRequestNumberPrefix)\(tabState.number)"
+        guard let request = snapshot.reviewRequest else {
+            return "Review evidence is for \(expected), but no active review request was found."
+        }
+        return "Review evidence is for \(expected), but the active review request is \(request.displayIdentity)."
     }
 
     private var snapshotProvider: CodeHostKind {
