@@ -55,6 +55,90 @@ struct CodeHostProviderTests {
         #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "/custom/provider/bin:/usr/bin:/bin")
     }
 
+    @Test func defaultEvidenceMethodsUseSummaryData() async throws {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+        let request = ReviewRequest(
+            remote: remote,
+            number: 42,
+            title: "Review evidence",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/evidence",
+            baseRefName: "main",
+            reviewDecision: .changesRequested,
+            mergeState: .blocked,
+            checks: [
+                ReviewCheck(
+                    id: "check-passed",
+                    name: "build",
+                    workflow: "CI",
+                    bucket: .pass,
+                    detailURL: URL(string: "https://github.com/build")!,
+                    completedAt: nil
+                ),
+                ReviewCheck(
+                    id: "check-1",
+                    name: "test",
+                    workflow: "CI",
+                    bucket: .fail,
+                    detailURL: URL(string: "https://github.com/run")!,
+                    completedAt: nil
+                ),
+                ReviewCheck(
+                    id: "check-pending",
+                    name: "lint",
+                    workflow: "CI",
+                    bucket: .pending,
+                    detailURL: URL(string: "https://github.com/lint")!,
+                    completedAt: nil
+                ),
+            ],
+            threads: [
+                ReviewThreadSummary(
+                    id: "thread-1",
+                    author: "reviewer",
+                    body: "Please fix this.",
+                    url: URL(string: "https://github.com/thread")!,
+                    isResolved: false,
+                    isActionable: true
+                ),
+                ReviewThreadSummary(
+                    id: "thread-resolved",
+                    author: "reviewer",
+                    body: "Already handled.",
+                    url: URL(string: "https://github.com/resolved")!,
+                    isResolved: true,
+                    isActionable: true
+                ),
+                ReviewThreadSummary(
+                    id: "thread-non-actionable",
+                    author: "reviewer",
+                    body: "Looks good.",
+                    url: URL(string: "https://github.com/non-actionable")!,
+                    isResolved: false,
+                    isActionable: false
+                ),
+            ]
+        )
+        let provider = FakeCodeHostProvider(kind: .github)
+
+        let ci = try await provider.failedCheckEvidence(remote: remote, request: request, cwd: URL(fileURLWithPath: "/tmp/alas"))
+        let feedback = try await provider.feedbackEvidence(remote: remote, request: request, cwd: URL(fileURLWithPath: "/tmp/alas"))
+
+        #expect(ci.map(\.id) == ["check-1"])
+        #expect(ci.first?.status == .failed)
+        #expect(feedback.map(\.id) == ["thread-1"])
+        #expect(feedback.first?.status == .actionable)
+    }
+
     private struct FakeCodeHostProvider: CodeHostProvider {
         let kind: CodeHostKind
         let capabilities: CodeHostProviderCapabilities = .readOnly
