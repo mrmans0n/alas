@@ -356,6 +356,80 @@ struct GitHubCLIProviderTests {
         #expect(checks[0].bucket == .fail)
     }
 
+    @Test func failedCheckEvidenceUsesFailedChecksOnly() async throws {
+        let checks = try GitHubCLIProvider.parseChecks(Self.failedChecksOutput)
+        let request = Self.makeRequest(checks: checks)
+
+        let evidence = try await GitHubCLIProvider().failedCheckEvidence(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(evidence == [
+            ReviewEvidenceItem(
+                id: checks[0].id,
+                section: .ci,
+                title: "test",
+                subtitle: "CI",
+                status: .failed,
+                providerURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/1/job/3")
+            ),
+        ])
+    }
+
+    @Test func checkEvidenceDetailLoadsRunLogForWorkflowCheck() async throws {
+        let checks = try GitHubCLIProvider.parseChecks(Self.failedChecksOutput)
+        let request = Self.makeRequest(checks: checks)
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "failure details", stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let item = try #require(try await provider.failedCheckEvidence(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        ).first)
+
+        let detail = try await provider.checkEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(detail.body.contains("failure details"))
+        #expect(detail.isTruncated == false)
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: ["run", "view", "1", "--log-failed", "-R", "mrmans0n/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func feedbackEvidenceDetailUsesThreadBody() async throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(Self.reviewThreadsOutput)
+        let request = Self.makeRequest(threads: threads)
+        let provider = GitHubCLIProvider()
+        let item = try #require(try await provider.feedbackEvidence(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        ).first)
+
+        let detail = try await provider.feedbackEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(detail.body == "Please tighten this branch lookup.")
+        #expect(detail.item.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
+    }
+
     @Test func checksTreatNoChecksReportedAsEmptyChecks() async throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
@@ -556,6 +630,26 @@ struct GitHubCLIProviderTests {
     )
 
     private static let cwd = URL(fileURLWithPath: "/tmp/alas")
+
+    private static func makeRequest(
+        checks: [ReviewCheck] = [],
+        threads: [ReviewThreadSummary] = []
+    ) -> ReviewRequest {
+        ReviewRequest(
+            remote: Self.remote,
+            number: 42,
+            title: "Add GitHub provider",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/github-provider",
+            baseRefName: "main",
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: checks,
+            threads: threads
+        )
+    }
 
     private static let prListOutput = """
     [
