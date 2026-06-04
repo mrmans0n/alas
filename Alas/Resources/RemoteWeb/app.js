@@ -1,7 +1,7 @@
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
-let canDrive = false;
+let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
@@ -73,10 +73,10 @@ function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); 
 function handle(msg) {
   switch (msg.type) {
     case "sessionList": renderSessions(msg.sessions); break;
-    case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; renderMessages(true); renderDriveBar(msg.streamingState); } break;
+    case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; canDriveKnown = true; renderMessages(true); renderDriveBar(msg.streamingState); } break;
     // The server re-sends the full transcript each time, keyed by stable position
     // ids, so replace (don't append) to avoid accumulating duplicate copies.
-    case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; renderMessages(false); renderDriveBar(msg.streamingState); } break;
+    case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; canDriveKnown = true; renderMessages(false); renderDriveBar(msg.streamingState); } break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
     case "permissionRequest": if (msg.sessionId === currentSession) showPermission(msg.sessionId, msg.payload); break;
@@ -109,16 +109,15 @@ function renderSessions(sessions) {
 }
 
 function openSession(id) {
-  currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false;
+  currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("messages").innerHTML = ""; renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
-  currentSession = null; canDrive = false;
+  currentSession = null; canDrive = false; canDriveKnown = false;
   hidePermission(); hideQuestion();          // never leave a sheet over the list
-  $("takeover").classList.add("hidden");
-  $("composer").classList.add("hidden");
+  $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   send({ type: "listSessions" });
 }
@@ -325,10 +324,15 @@ function dismissQuestion() {
   hideQuestion();
 }
 function renderDriveBar(streamingState) {
-  const driving = currentSession && canDrive;
-  $("takeover").classList.toggle("hidden", !currentSession || canDrive);
-  $("composer").classList.toggle("hidden", !driving);
-  if (driving) {
+  // Keep the whole bar hidden until the first snapshot tells us the real
+  // canDrive — otherwise the take-over banner flashes while opening a session
+  // we actually own, and an empty bar strip shows before any state arrives.
+  const known = !!currentSession && canDriveKnown;
+  $("drivebar").classList.toggle("hidden", !known);
+  if (!known) return;
+  $("takeover").classList.toggle("hidden", canDrive);
+  $("composer").classList.toggle("hidden", !canDrive);
+  if (canDrive) {
     const busy = streamingState === "streaming" || streamingState === "sending";
     $("send").classList.toggle("hidden", busy);
     $("stop").classList.toggle("hidden", !busy);
