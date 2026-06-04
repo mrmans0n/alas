@@ -51,6 +51,8 @@ function handle(msg) {
     case "transcriptDelta": msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(); break;
     case "permissionRequest": showPermission(msg.sessionId, msg.payload); break;
     case "permissionResolved": hidePermission(); break;
+    case "questionRequest": showQuestion(msg.sessionId, msg.payload); break;
+    case "questionResolved": hideQuestion(); break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "error": setStatus("error: " + (msg.message ?? "(unknown)")); break;
     default: console.warn("unknown message type", msg.type);
@@ -121,6 +123,97 @@ function showPermission(sessionId, payload) {
   $("permission").classList.remove("hidden");
 }
 function hidePermission() { $("permission").classList.add("hidden"); permState = null; }
+
+// --- Question sheet ---
+let questionState = null;
+// Map<questionId, Set<optionId>> — tracks selected option ids per question.
+let questionSelections = new Map();
+
+function showQuestion(sessionId, payload) {
+  questionState = { sessionId, requestId: payload.requestId };
+  questionSelections = new Map();
+
+  const titleEl = $("question-title");
+  if (payload.title) {
+    titleEl.textContent = payload.title;
+    titleEl.classList.remove("hidden");
+  } else {
+    titleEl.textContent = "";
+    titleEl.classList.add("hidden");
+  }
+
+  const body = $("question-body");
+  body.innerHTML = "";
+
+  payload.questions.forEach(q => {
+    questionSelections.set(q.id, new Set());
+
+    const block = document.createElement("div");
+    block.className = "question-block";
+
+    const prompt = document.createElement("p");
+    prompt.className = "question-prompt";
+    prompt.textContent = q.prompt;
+    block.appendChild(prompt);
+
+    q.options.forEach(o => {
+      const btn = document.createElement("button");
+      btn.className = "option-btn";
+      btn.textContent = o.label;
+      btn.onclick = () => {
+        const sel = questionSelections.get(q.id);
+        if (q.allowMultiple) {
+          if (sel.has(o.id)) {
+            sel.delete(o.id);
+            btn.classList.remove("is-selected");
+          } else {
+            sel.add(o.id);
+            btn.classList.add("is-selected");
+          }
+        } else {
+          // Single-select: deselect all siblings, then select this one.
+          const allBtns = block.querySelectorAll(".option-btn");
+          sel.clear();
+          allBtns.forEach(b => b.classList.remove("is-selected"));
+          sel.add(o.id);
+          btn.classList.add("is-selected");
+        }
+        updateSubmitState();
+      };
+      block.appendChild(btn);
+    });
+
+    body.appendChild(block);
+  });
+
+  updateSubmitState();
+  $("question").classList.remove("hidden");
+}
+
+function updateSubmitState() {
+  // Submit is enabled only when every question has at least one selected option.
+  let complete = questionSelections.size > 0;
+  questionSelections.forEach(sel => { if (sel.size === 0) complete = false; });
+  $("question-submit").disabled = !complete;
+}
+
+function submitQuestion() {
+  if (!questionState) return;
+  const answers = [];
+  questionSelections.forEach((sel, questionId) => {
+    answers.push({ questionId, selectedOptionIds: Array.from(sel) });
+  });
+  send({ type: "questionAnswer", sessionId: questionState.sessionId, requestId: questionState.requestId, answers });
+  hideQuestion();
+}
+
+function hideQuestion() {
+  $("question").classList.add("hidden");
+  questionState = null;
+  questionSelections = new Map();
+}
+
+$("question-submit").onclick = submitQuestion;
 
 $("back").onclick = showSessions;
 connect();

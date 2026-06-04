@@ -16,3 +16,10 @@ body { margin: 0; background: #14151a; color: #e7e7ea; }
 .sheet-card { background: #20212a; width: 100%; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; }
 .sheet-card button { display: block; width: 100%; padding: 14px; margin: 8px 0; border: none; border-radius: 10px; font-size: 16px; }
 .btn-allow { background: #2a7; color: #021; } .btn-deny { background: #a33; color: #fee; }
+.sheet-title { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: #e7e7ea; }
+.question-block { margin-bottom: 18px; }
+.question-prompt { margin: 0 0 8px; font-size: 14px; color: #c5c5cc; }
+.option-btn { display: block; width: 100%; padding: 12px 14px; margin: 6px 0; border: 1.5px solid #3a3b46; border-radius: 10px; background: #2a2b36; color: #e7e7ea; font-size: 15px; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+.option-btn.is-selected { border-color: #7bd; background: #1b2d3f; color: #c9e8ff; }
+.btn-submit { background: #2a7; color: #021; font-weight: 600; }
+.btn-submit:disabled { background: #2a3b30; color: #4a6a54; cursor: not-allowed; opacity: .6; }
