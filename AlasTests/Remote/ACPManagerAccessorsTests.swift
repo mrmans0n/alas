@@ -72,7 +72,9 @@ struct ACPManagerAccessorsTests {
         let mgr = try makeManager()
         let s = mgr.createSession(agentId: "claude")
         #expect(mgr.isWriter(for: s.id) == false)
-        #expect(mgr.sendPrompt(for: s.id, text: "hi") == false)
+        var result: Bool?
+        mgr.sendPrompt(for: s.id, text: "hi") { result = $0 }
+        #expect(result == false)   // refused synchronously
         #expect(s.queue.isEmpty)   // nothing enqueued/persisted as a mirror
     }
 }

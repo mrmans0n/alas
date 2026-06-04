@@ -62,17 +62,17 @@ final class RemoteSessionGateway {
             }
         case .sendPrompt(let id, let text):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard provider.isWriter(for: id), !trimmed.isEmpty else {
-                // Drop, but tell the client so it can restore the user's text
-                // rather than silently losing it (e.g. canDrive went stale
-                // because a takeover's attach failed and released the lease).
+            guard !trimmed.isEmpty else {
                 send(.promptRejected(sessionId: id))
                 return
             }
-            // We're the writer, but the manager can still refuse (e.g. the
-            // session needs auth) — surface that as a rejection too.
-            if !provider.sendPrompt(for: id, text: trimmed) {
-                send(.promptRejected(sessionId: id))
+            // The manager owns the writer/lease re-check and the eventual
+            // delivery result. Emit promptRejected on any failure — refused
+            // now (not writer / needs auth) OR a session/prompt RPC that fails
+            // later — so the client restores the user's text instead of losing
+            // it.
+            provider.sendPrompt(for: id, text: trimmed) { [weak self] accepted in
+                if !accepted { self?.send(.promptRejected(sessionId: id)) }
             }
         case .stop(let id):
             guard provider.isWriter(for: id) else { return }

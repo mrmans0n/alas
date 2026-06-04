@@ -27,9 +27,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         writers.insert(id)
     }
 
-    func sendPrompt(for id: String, text: String) -> Bool {
-        prompts.append((id, text))
-        return sendPromptAccepts
+    func sendPrompt(for id: String, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+        let accepted = writers.contains(id) && sendPromptAccepts
+        if accepted { prompts.append((id, text)) }
+        onResult(accepted)
     }
     func stop(for id: String) { stopped.append(id) }
 }

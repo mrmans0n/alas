@@ -58,18 +58,29 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Submit a prompt using the same path the local composer uses (`.auto`
-    /// intent resolves to send-now or enqueue based on agent state). Returns
-    /// false if we no longer hold the lease, or the session isn't live / needs
-    /// auth (the `submit` guards).
+    /// intent resolves to send-now or enqueue based on agent state).
+    ///
+    /// `onResult` fires exactly once with the final outcome so the gateway can
+    /// tell the client to restore the text on failure (the local composer uses
+    /// the same callback to reinstate its draft):
+    /// - `false` immediately when we no longer hold the lease or `submit`
+    ///   refuses synchronously (no live session / needs auth);
+    /// - otherwise the eventual `submit` completion — `true` once the prompt is
+    ///   sent or safely queued, `false` if the `session/prompt` RPC later fails
+    ///   (auth/network/agent error) on the already-`.ready` path.
     ///
     /// Re-checks `isWriter` at the point of action: a cross-process takeover can
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    @discardableResult
-    func sendPrompt(for id: ACPSession.ID, text: String) -> Bool {
-        guard isWriter(for: id) else { return false }
-        return submit(sessionId: id, text: text, attachments: [], intent: .auto, onCompleted: { _ in })
+    func sendPrompt(for id: ACPSession.ID, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+        guard isWriter(for: id) else {
+            onResult(false)
+            return
+        }
+        let accepted = submit(sessionId: id, text: text, attachments: [], intent: .auto,
+                              onCompleted: { ok in onResult(ok) })
+        if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
     }
 
     /// Interrupt the in-flight turn (same as the composer Stop / Esc). Guarded

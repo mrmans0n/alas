@@ -3272,14 +3272,14 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    /// Returns whether the prompt was accepted (false when the owning manager
-    /// refuses it — e.g. the session needs auth — or no manager owns the id),
-    /// so the gateway can tell the client to restore the text.
-    func sendPrompt(for id: String, text: String) -> Bool {
+    /// `onResult` fires once (false when no manager owns the id, the manager
+    /// refuses, or delivery later fails) so the gateway can restore the text.
+    func sendPrompt(for id: String, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            return mgr.sendPrompt(for: id, text: text)
+            mgr.sendPrompt(for: id, text: text, onResult: onResult)
+            return
         }
-        return false
+        onResult(false)
     }
 
     func stop(for id: String) {
