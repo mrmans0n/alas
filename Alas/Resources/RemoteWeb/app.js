@@ -6,6 +6,7 @@ let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
+let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
 let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
 let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
@@ -375,20 +376,27 @@ function sendPrompt() {
   ensureWriter();                                    // grab the wheel first; ordered before the prompt
   send({ type: "sendPrompt", sessionId: currentSession, text, attachments: pendingAttachments });
   lastSentText = text;                               // keep until the server accepts (or rejects) it
+  lastSentAttachments = pendingAttachments;          // ditto for the staged images
   ta.value = "";
   clearAttachments();
   autoGrowPrompt();                                  // collapse back to one row
 }
 
-// The server dropped our prompt (lease went stale, etc.). Put the text back so
-// the message isn't silently lost — but only if the user hasn't typed a new one.
+// The server dropped our prompt (lease went stale, materialize failed, etc.).
+// Put the text AND staged images back so the message isn't silently lost — but
+// only if the user hasn't started composing a new one.
 function restoreRejectedPrompt() {
   const ta = $("prompt");
   if (lastSentText && !ta.value) {
     ta.value = lastSentText;
     autoGrowPrompt();
   }
+  if (lastSentAttachments.length && pendingAttachments.length === 0) {
+    pendingAttachments = lastSentAttachments.slice();
+    renderChips();
+  }
   lastSentText = null;
+  lastSentAttachments = [];
 }
 
 // --- Session config sheet (⚙) + attachments (📎) ---
