@@ -306,16 +306,26 @@ private struct ACPSessionView: View {
                             guard let entries = await entries else { return [] }
                             let root = worktree.path
                             var result: [URL] = []
+                            var dirEntries: [(path: String, isDirectory: Bool)] = []
                             for entry in entries {
                                 let url = root.appendingPathComponent(entry.relativePath)
                                 guard (try? url.checkResourceIsReachable()) ?? false else { continue }
-                                if let isDir = try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory, isDir {
+                                let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                                if isDir {
+                                    // Untracked directory or submodule gitlink; expand
+                                    // it so its files and subdirectories show too.
                                     let sub = MentionFuzzy.collectFiles(under: url, limit: 5000)
                                     result.append(contentsOf: sub)
                                 } else {
                                     result.append(url)
                                 }
+                                dirEntries.append((entry.relativePath, isDir))
                             }
+                            // `git ls-files` lists files only — reconstruct every
+                            // directory (tracked dirs and submodules included) so
+                            // they are pickable in the @ menu, flagged for the
+                            // folder icon.
+                            result += MentionFuzzy.pickerDirectories(forEntries: dirEntries, root: root)
                             return result
                         }
                     ) { text, attachments, intent, draft, onPromptFinished -> Bool in

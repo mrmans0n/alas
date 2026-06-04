@@ -45,7 +45,7 @@ struct ACPMentionPickerView: View {
             Image(systemName: "at")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
-            TextField("Search files in worktree…", text: $query)
+            TextField("Search files & folders…", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .focused($searchFocused)
@@ -98,7 +98,7 @@ struct ACPMentionPickerView: View {
 
         Button { onPick(file) } label: {
             HStack(spacing: 8) {
-                Image(systemName: "doc.text")
+                Image(systemName: file.hasDirectoryPath ? "folder" : "doc.text")
                     .font(.system(size: 10))
                     .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-faint"))
                     .frame(width: 14)
@@ -214,12 +214,49 @@ enum MentionFuzzy {
                 it.skipDescendants()
                 continue
             }
-            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            if isDir { continue }
+            // Directories are pickable too — the enumerator yields them with
+            // `hasDirectoryPath` set, which the picker uses to show a folder
+            // icon and to emit a directory resource link. We still recurse into
+            // them (no `skipDescendants`) so their files remain available.
             out.append(url)
         }
         out.sort { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
         return out
+    }
+
+    /// Derive every directory implied by a set of worktree-relative paths, as
+    /// directory-flagged URLs under `root`. `git ls-files` only emits files
+    /// (collapsing untracked directories to a trailing-slash entry), so tracked
+    /// directories never appear on their own — we reconstruct the full set from
+    /// each path's ancestors. A trailing slash marks the whole path as a
+    /// directory; otherwise the last component is a file and is dropped.
+    static func ancestorDirectories(forRelativePaths paths: [String], root: URL) -> [URL] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for path in paths {
+            let isDirEntry = path.hasSuffix("/")
+            let comps = path.split(separator: "/").map(String.init)
+            let dirCount = isDirEntry ? comps.count : comps.count - 1
+            guard dirCount > 0 else { continue }
+            for end in 1...dirCount {
+                let dir = comps[0..<end].joined(separator: "/")
+                if seen.insert(dir).inserted { ordered.append(dir) }
+            }
+        }
+        return ordered.map { root.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    /// Directory URLs to add to the picker for a `git ls-files`-style listing.
+    /// The caller resolves each entry's on-disk directory-ness: untracked
+    /// directories arrive collapsed with git's trailing slash, but submodule
+    /// gitlinks arrive like a file path (no slash). Normalizing directory
+    /// entries to a trailing slash lets `ancestorDirectories` emit the entry
+    /// itself — not just its parent — so submodule folders stay pickable.
+    static func pickerDirectories(forEntries entries: [(path: String, isDirectory: Bool)], root: URL) -> [URL] {
+        let normalized = entries.map { entry -> String in
+            entry.isDirectory && !entry.path.hasSuffix("/") ? entry.path + "/" : entry.path
+        }
+        return ancestorDirectories(forRelativePaths: normalized, root: root)
     }
 
     static func rank(files: [URL], query: String, limit: Int, relativeTo root: URL) -> [URL] {
