@@ -28,6 +28,11 @@ final class RemoteConnection: @unchecked Sendable {
     private var isWebSocket = false
     private var gateway: RemoteSessionGateway?
     private var closed = false
+    /// Tail of the per-connection message-processing chain. Each decoded frame's
+    /// `gateway.handle` awaits the previous one, so messages are processed in
+    /// arrival order — clients rely on this (e.g. a `takeOver` must land before
+    /// the `sendPrompt` that follows it). Mutated only on `queue`.
+    private var processingTail: Task<Void, Never>?
     /// The device this connection authenticated as, set on `queue` once the WS
     /// upgrade succeeds. Queue-confined; the server learns it via the
     /// `onAuthenticated` hop rather than reading this cross-queue.
@@ -232,7 +237,15 @@ final class RemoteConnection: @unchecked Sendable {
             case .text, .binary:
                 if let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: frame.payload),
                    let gateway {
-                    Task { @MainActor in await gateway.handle(msg) }
+                    // Chain onto the tail so messages are handled strictly in
+                    // arrival order (each awaits the previous). Independent
+                    // tasks could otherwise interleave and, e.g., run a
+                    // `sendPrompt` before the `takeOver` sent just before it.
+                    let previous = processingTail
+                    processingTail = Task { @MainActor in
+                        await previous?.value
+                        await gateway.handle(msg)
+                    }
                 }
             case .ping:
                 send(WebSocketFrame.encode(opcode: .pong, payload: frame.payload)) {}
@@ -266,6 +279,8 @@ final class RemoteConnection: @unchecked Sendable {
     private func teardown() {
         guard !closed else { return }
         closed = true
+        processingTail?.cancel()
+        processingTail = nil
         if let gateway { Task { @MainActor in gateway.close() } }
         gateway = nil
         conn.cancel()
