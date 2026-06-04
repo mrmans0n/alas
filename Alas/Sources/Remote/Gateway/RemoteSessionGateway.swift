@@ -14,6 +14,9 @@ final class RemoteSessionGateway {
     private let provider: RemoteSessionsProvider
     private let send: (RemoteServerMessage) -> Void
     private var subscriptions: [String: AnyCancellable] = [:]
+    private var configSubscriptions: [String: AnyCancellable] = [:]
+    private var configCoalesce: [String: Task<Void, Never>] = [:]
+    private var lastConfig: [String: RemoteSessionConfig] = [:]
     private var coalesce: [String: Task<Void, Never>] = [:]
     // Per-session request id of the permission/question prompt we last surfaced,
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
@@ -43,6 +46,10 @@ final class RemoteSessionGateway {
             observe(id: id, session: session)
         case .unsubscribe(let id):
             subscriptions[id] = nil
+            configSubscriptions[id] = nil
+            configCoalesce[id]?.cancel()
+            configCoalesce[id] = nil
+            lastConfig[id] = nil
             coalesce[id]?.cancel()
             coalesce[id] = nil
             lastPermissionReq[id] = nil
@@ -95,6 +102,10 @@ final class RemoteSessionGateway {
     /// Tear down all observation (called when the connection closes).
     func close() {
         subscriptions.removeAll()
+        configSubscriptions.removeAll()
+        configCoalesce.values.forEach { $0.cancel() }
+        configCoalesce.removeAll()
+        lastConfig.removeAll()
         coalesce.values.forEach { $0.cancel() }
         coalesce.removeAll()
         lastPermissionReq.removeAll()
@@ -128,6 +139,32 @@ final class RemoteSessionGateway {
                 try? await Task.sleep(nanoseconds: Self.coalesceNanos)
                 guard !Task.isCancelled, let self, let session else { return }
                 self.sendDelta(id: id, session: session)
+            }
+        }
+        // Re-emit sessionConfig when the session's config publishers change.
+        // ACPSession.objectWillChange fires for ANY @Published change (agentState,
+        // queue, etc.), not just config — and BEFORE the value settles. Coalesce
+        // a run-loop turn's worth of fires into one next-tick read (zero-delay,
+        // mirroring the transcript coalesce above) and dedupe against the last
+        // config so non-config churn never reaches the wire.
+        configSubscriptions[id]?.cancel()
+        configCoalesce[id]?.cancel()
+        configSubscriptions[id] = session.objectWillChange.sink { [weak self, weak session] _ in
+            guard let self, let session else { return }
+            self.configCoalesce[id]?.cancel()
+            self.configCoalesce[id] = Task { @MainActor [weak self, weak session] in
+                guard !Task.isCancelled, let self, let session else { return }
+                let cfg = RemoteSessionConfig(
+                    sessionId: id,
+                    models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
+                    modes: session.availableModes.map { RemoteModelInfo(id: $0.id, name: $0.name) },
+                    currentModel: session.currentModel,
+                    currentMode: session.currentMode,
+                    autoRunEnabled: session.autoRunEnabled,
+                    acceptsImages: session.promptCapabilities.image)
+                guard self.lastConfig[id] != cfg else { return }
+                self.lastConfig[id] = cfg
+                self.send(.sessionConfig(cfg))
             }
         }
     }

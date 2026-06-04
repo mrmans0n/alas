@@ -437,4 +437,20 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.subscribe(sessionId: "s1"))
         #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
     }
+
+    @Test func sessionConfigChangeEmitsUpdate() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        s.availableModels = [.init(id: "opus", name: "Opus", description: nil)]
+        provider.sessions["s1"] = s
+        provider.configs["s1"] = .init(sessionId: "s1", models: [], modes: [], currentModel: nil,
+            currentMode: nil, autoRunEnabled: false, acceptsImages: false)
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        s.currentModel = "opus"                    // mutate config
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
+    }
 }
