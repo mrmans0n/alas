@@ -64,4 +64,15 @@ struct ACPManagerAccessorsTests {
                              pid: Int64(ProcessInfo.processInfo.processIdentifier), now: now)
         #expect(mgr.isWriter(for: s.id) == false)  // store says another live instance owns it
     }
+
+    @Test func sendPromptRefusedWhenNotWriter() throws {
+        // Re-checks the lease at call time: a manager that isn't the writer must
+        // refuse the remote prompt instead of enqueuing it as a mirror (closing
+        // the TOCTOU window between the gateway's isWriter gate and submit).
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        #expect(mgr.isWriter(for: s.id) == false)
+        #expect(mgr.sendPrompt(for: s.id, text: "hi") == false)
+        #expect(s.queue.isEmpty)   // nothing enqueued/persisted as a mirror
+    }
 }
