@@ -48,6 +48,35 @@ final class RemoteSessionGateway {
             applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
+        case .takeOver(let id):
+            provider.takeOver(for: id)
+            // Takeover seizes the writer lease synchronously but mostly mutates
+            // lease/agent state, not the transcript — so the objectWillChange
+            // delta that normally carries `canDrive` may never fire on an idle
+            // session. Push a snapshot now so the client learns canDrive=true
+            // immediately and the composer unlocks (otherwise the take-over
+            // button stays up and sendPrompt stays blocked until some unrelated
+            // transcript mutation happens to occur).
+            if let session = provider.session(for: id) {
+                sendSnapshot(id: id, session: session)
+            }
+        case .sendPrompt(let id, let text):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                send(.promptRejected(sessionId: id))
+                return
+            }
+            // The manager owns the writer/lease re-check and the eventual
+            // delivery result. Emit promptRejected on any failure — refused
+            // now (not writer / needs auth) OR a session/prompt RPC that fails
+            // later — so the client restores the user's text instead of losing
+            // it.
+            provider.sendPrompt(for: id, text: trimmed) { [weak self] accepted in
+                if !accepted { self?.send(.promptRejected(sessionId: id)) }
+            }
+        case .stop(let id):
+            guard provider.isWriter(for: id) else { return }
+            provider.stop(for: id)
         }
     }
 
@@ -66,6 +95,7 @@ final class RemoteSessionGateway {
         let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
+                                 canDrive: provider.isWriter(for: id),
                                  messages: wire))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
@@ -96,6 +126,7 @@ final class RemoteSessionGateway {
         let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
         send(.transcriptDelta(sessionId: id,
                               streamingState: Self.stateString(session.transcript.streamingState),
+                              canDrive: provider.isWriter(for: id),
                               upserts: wire))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)

@@ -4,15 +4,30 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=14" />
+  <link rel="stylesheet" href="/style.css?v=22" />
 </head>
 <body>
-  <header id="bar"><span id="status">connecting…</span></header>
+  <header id="bar">
+    <button id="back" class="hidden">‹ Sessions</button>
+    <span id="nav-title">Alas Remote</span>
+    <span id="status" class="chip" data-state="connecting">connecting…</span>
+  </header>
   <main>
     <section id="sessions" class="view"><h1>Sessions</h1><div id="session-list"></div></section>
     <section id="transcript" class="view hidden">
-      <button id="back">‹ Sessions</button>
       <div id="messages"></div>
+      <div id="drivebar">
+        <button id="takeover" class="hidden">Take over to drive</button>
+        <div id="composer" class="hidden">
+          <textarea id="prompt" rows="1" placeholder="Message…"></textarea>
+          <button id="send" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button id="stop" class="hidden" aria-label="Stop">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.6" fill="currentColor"/></svg>
+          </button>
+        </div>
+      </div>
     </section>
   </main>
   <div id="permission" class="sheet hidden">
@@ -38,8 +53,8 @@
       <button id="gate-retry" class="hidden">Try again</button>
     </div>
   </div>
-  <script src="/marked.min.js?v=14"></script>
-  <script src="/purify.min.js?v=14"></script>
-  <script src="/app.js?v=14"></script>
+  <script src="/marked.min.js?v=22"></script>
+  <script src="/purify.min.js?v=22"></script>
+  <script src="/app.js?v=22"></script>
 </body>
 </html>

@@ -29,7 +29,7 @@ struct RemoteServerIntegrationTests {
         let s = mgr.createSession(agentId: "claude")
         s.transcript.messages = [.agent(id: UUID(), StreamingText("hello-remote"))]
         provider.sessions[s.id] = s
-        provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle")]
+        provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle", canDrive: false)]
 
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
@@ -66,7 +66,7 @@ struct RemoteServerIntegrationTests {
         @unknown default: payload = nil
         }
         guard let data = payload,
-              case .transcriptSnapshot(_, _, let msgs)? = try? JSONDecoder().decode(RemoteServerMessage.self, from: data) else {
+              case .transcriptSnapshot(_, _, _, let msgs)? = try? JSONDecoder().decode(RemoteServerMessage.self, from: data) else {
             Issue.record("expected snapshot frame, got \(received)")
             task.cancel(with: .goingAway, reason: nil)
             server.stop()
@@ -84,7 +84,7 @@ struct RemoteServerIntegrationTests {
         let s = mgr.createSession(agentId: "claude")
         s.transcript.messages = [.agent(id: UUID(), StreamingText("hello-remote"))]
         provider.sessions[s.id] = s
-        provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle")]
+        provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle", canDrive: false)]
 
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
         let pairing = RemotePairingService(store: InMemoryDeviceStore())

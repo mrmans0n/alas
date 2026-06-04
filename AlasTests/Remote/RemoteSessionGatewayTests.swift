@@ -8,6 +8,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var sessions: [String: ACPSession] = [:]
     var policies: [String: ACPPermissionPolicy] = [:]
     var lastQuestionResponse: (id: String, response: ACPQuestionResponse)?
+    var writers: Set<String> = []
+    var tookOver: [String] = []
+    var prompts: [(id: String, text: String)] = []
+    var sendPromptAccepts = true   // simulate the manager refusing a submit (e.g. needs auth)
+    var stopped: [String] = []
     func sessionSummaries() -> [RemoteSessionSummary] { summaries }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
@@ -15,6 +20,19 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
         lastQuestionResponse = (id, response)
     }
+
+    func isWriter(for id: String) -> Bool { writers.contains(id) }
+    func takeOver(for id: String) {
+        tookOver.append(id)
+        writers.insert(id)
+    }
+
+    func sendPrompt(for id: String, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+        let accepted = writers.contains(id) && sendPromptAccepts
+        if accepted { prompts.append((id, text)) }
+        onResult(accepted)
+    }
+    func stop(for id: String) { stopped.append(id) }
 }
 
 #if DEBUG
@@ -87,7 +105,7 @@ struct RemoteSessionGatewayTests {
 
     @Test func listSessionsEmitsSummaries() async {
         let provider = FakeSessionsProvider()
-        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle")]
+        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.listSessions)
@@ -101,12 +119,37 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(let id, _, let msgs)? = sent.first else {
+        guard case .transcriptSnapshot(let id, _, _, let msgs)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
         }
         #expect(id == "s1")
         #expect(msgs.contains { $0.kind == "agent" && $0.text == "hello" })
+    }
+
+    @Test func takeOverPushesSnapshotWithCanDrive() async throws {
+        // Regression: takeover seizes the writer lease synchronously but mutates
+        // lease/agent state rather than the transcript, so the objectWillChange
+        // delta may never fire on an idle session. The gateway must push a
+        // snapshot itself so the client learns canDrive=true and unlocks the
+        // composer instead of waiting for an unrelated transcript mutation.
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.takeOver(sessionId: "s1"))
+        #expect(provider.tookOver == ["s1"])
+        let snap = sent.last { msg in
+            if case .transcriptSnapshot = msg { return true }
+            return false
+        }
+        guard case .transcriptSnapshot(let id, _, let canDrive, _)? = snap else {
+            Issue.record("expected a snapshot after takeOver, got \(sent)")
+            return
+        }
+        #expect(id == "s1")
+        #expect(canDrive == true)
     }
 
     @Test func permissionDecisionCallsPolicyWhenRequestMatches() async throws {
@@ -262,7 +305,7 @@ struct RemoteSessionGatewayTests {
         s.transcript.messages.append(.agent(id: UUID(), StreamingText("more")))  // fires objectWillChange
         try await Task.sleep(nanoseconds: 250_000_000)  // > coalesce window
         let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
-            if case .transcriptDelta(_, _, let upserts) = msg { return upserts }
+            if case .transcriptDelta(_, _, _, let upserts) = msg { return upserts }
             return nil
         }.last
         let delta2 = try #require(delta, "expected a transcriptDelta after mutation")
@@ -281,5 +324,81 @@ struct RemoteSessionGatewayTests {
         try await Task.sleep(nanoseconds: 250_000_000)
         #expect(!sent.contains { if case .transcriptDelta = $0 { return true }
         return false })
+    }
+
+    @Test func takeOverRoutesToProvider() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.takeOver(sessionId: "s1"))
+        #expect(provider.tookOver == ["s1"])
+    }
+
+    @Test func sendPromptRoutesOnlyWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi")) // not writer → ignored
+        #expect(provider.prompts.isEmpty)
+        provider.writers.insert("s1")
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi"))
+        #expect(provider.prompts.map(\.text) == ["hi"])
+    }
+
+    @Test func sendPromptTrimsAndIgnoresBlankEvenWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ")) // blank → ignored
+        #expect(provider.prompts.isEmpty)
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ")) // trimmed before forwarding
+        #expect(provider.prompts.map(\.text) == ["hi"])
+    }
+
+    @Test func droppedSendPromptEmitsRejection() async {
+        // A non-writer sendPrompt must tell the client it was dropped so the
+        // composer can restore the text instead of silently losing the message.
+        let provider = FakeSessionsProvider()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi")) // not writer
+        #expect(provider.prompts.isEmpty)
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        // When we ARE the writer and the manager accepts, the prompt routes
+        // and no rejection is sent.
+        sent.removeAll()
+        provider.writers.insert("s1")
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi"))
+        #expect(provider.prompts.map(\.text) == ["hi"])
+        #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
+        // Writer, but the manager refuses the submit (e.g. needs auth) — the
+        // client must still be told so it can restore the text.
+        sent.removeAll()
+        provider.sendPromptAccepts = false
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "later"))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+    }
+
+    @Test func stopRoutesOnlyWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.stop(sessionId: "s1"))
+        #expect(provider.stopped.isEmpty)
+        provider.writers.insert("s1")
+        await gw.handle(.stop(sessionId: "s1"))
+        #expect(provider.stopped == ["s1"])
+    }
+
+    @Test func snapshotCarriesCanDrive() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hello")
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        let drive = sent.compactMap { msg -> Bool? in
+            if case .transcriptSnapshot(_, _, let canDrive, _) = msg { return canDrive }
+            return nil
+        }.first
+        #expect(drive == true)
     }
 }

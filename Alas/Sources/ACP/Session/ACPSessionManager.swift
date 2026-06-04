@@ -43,6 +43,53 @@ final class ACPSessionManager: ObservableObject {
     /// Lightweight summaries for the remote sessions list.
     var sessionRows: [ACPSessionRow] { recent }
 
+    /// Whether this instance is the legitimate current writer for the session —
+    /// gates every remote drive action (`canDrive`, `sendPrompt`, `stop`).
+    ///
+    /// Requires BOTH the in-memory claim AND store agreement: after another
+    /// window takes over, the former owner keeps the id in `_ownedLeases` until
+    /// its heartbeat stands down (~5s). Trusting the in-memory set alone would
+    /// let a phone connected to the old owner keep writing into a session
+    /// another instance now drives — corrupting the active conversation. So we
+    /// also consult the store row via `anotherLiveInstanceOwnsLease`, the same
+    /// guard the local write path (`holdsLeaseForWrite`) relies on.
+    func isWriter(for id: ACPSession.ID) -> Bool {
+        _ownedLeases.contains(id) && !anotherLiveInstanceOwnsLease(sessionId: id)
+    }
+
+    /// Submit a prompt using the same path the local composer uses (`.auto`
+    /// intent resolves to send-now or enqueue based on agent state).
+    ///
+    /// `onResult` fires exactly once with the final outcome so the gateway can
+    /// tell the client to restore the text on failure (the local composer uses
+    /// the same callback to reinstate its draft):
+    /// - `false` immediately when we no longer hold the lease or `submit`
+    ///   refuses synchronously (no live session / needs auth);
+    /// - otherwise the eventual `submit` completion — `true` once the prompt is
+    ///   sent or safely queued, `false` if the `session/prompt` RPC later fails
+    ///   (auth/network/agent error) on the already-`.ready` path.
+    ///
+    /// Re-checks `isWriter` at the point of action: a cross-process takeover can
+    /// land between the gateway's `isWriter` gate and here, and `submit`'s
+    /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
+    /// as a mirror — injecting it into a session another instance now drives.
+    func sendPrompt(for id: ACPSession.ID, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+        guard isWriter(for: id) else {
+            onResult(false)
+            return
+        }
+        let accepted = submit(sessionId: id, text: text, attachments: [], intent: .auto,
+                              onCompleted: { ok in onResult(ok) })
+        if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
+    }
+
+    /// Interrupt the in-flight turn (same as the composer Stop / Esc). Guarded
+    /// on the live lease for the same cross-process-takeover reason as `sendPrompt`.
+    func interrupt(for id: ACPSession.ID) {
+        guard isWriter(for: id), let runner = runners[id] else { return }
+        Task { await runner.userCancel() }
+    }
+
     /// Sessions for which THIS instance holds the writer lease (backing store).
     var _ownedLeases: Set<ACPSession.ID> = []
     /// Per-session periodic heartbeat tasks (backing store).

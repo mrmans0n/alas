@@ -36,4 +36,45 @@ struct ACPManagerAccessorsTests {
         let session = mgr.createSession(agentId: "claude")
         #expect(mgr.sessionRows.contains { $0.id == session.id })
     }
+
+    @Test func isWriterReflectsOwnedLeases() throws {
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        #expect(mgr.isWriter(for: s.id) == false)
+        mgr._ownedLeases.insert(s.id)
+        #expect(mgr.isWriter(for: s.id) == true)
+    }
+
+    @Test func isWriterFalseWhenAnotherLiveInstanceOwnsLease() throws {
+        // Regression: after another window seizes the lease, the former owner
+        // keeps the id in `_ownedLeases` until its heartbeat stands down
+        // (~leaseStaleAfter seconds). isWriter must consult the store and report
+        // false in that window so a phone on the old owner can't keep writing
+        // into a session another instance now drives.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-accessors-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
+        let s = mgr.createSession(agentId: "claude")
+        mgr._ownedLeases.insert(s.id)
+        #expect(mgr.isWriter(for: s.id) == true)   // we claim it; no conflicting store row
+        // Another LIVE instance seizes the store lease (fresh heartbeat, live pid).
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: s.id, instanceId: "other-window",
+                             pid: Int64(ProcessInfo.processInfo.processIdentifier), now: now)
+        #expect(mgr.isWriter(for: s.id) == false)  // store says another live instance owns it
+    }
+
+    @Test func sendPromptRefusedWhenNotWriter() throws {
+        // Re-checks the lease at call time: a manager that isn't the writer must
+        // refuse the remote prompt instead of enqueuing it as a mirror (closing
+        // the TOCTOU window between the gateway's isWriter gate and submit).
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        #expect(mgr.isWriter(for: s.id) == false)
+        var result: Bool?
+        mgr.sendPrompt(for: s.id, text: "hi") { result = $0 }
+        #expect(result == false)   // refused synchronously
+        #expect(s.queue.isEmpty)   // nothing enqueued/persisted as a mirror
+    }
 }

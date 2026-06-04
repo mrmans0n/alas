@@ -3226,7 +3226,8 @@ extension AppState: RemoteSessionsProvider {
                     id: row.id,
                     title: row.title,
                     agentId: row.agentId,
-                    status: state.map(RemoteSessionGateway.stateString) ?? "idle"
+                    status: state.map(RemoteSessionGateway.stateString) ?? "idle",
+                    canDrive: mgr.isWriter(for: row.id)
                 ))
             }
         }
@@ -3265,6 +3266,35 @@ extension AppState: RemoteSessionsProvider {
     func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             mgr.answerQuestion(for: id, response)
+            return
+        }
+    }
+
+    func isWriter(for id: String) -> Bool {
+        for mgr in acpManagers.values where mgr.isWriter(for: id) { return true }
+        return false
+    }
+
+    func takeOver(for id: String) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.takeOver(sessionId: id)
+            return
+        }
+    }
+
+    /// `onResult` fires once (false when no manager owns the id, the manager
+    /// refuses, or delivery later fails) so the gateway can restore the text.
+    func sendPrompt(for id: String, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.sendPrompt(for: id, text: text, onResult: onResult)
+            return
+        }
+        onResult(false)
+    }
+
+    func stop(for id: String) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.interrupt(for: id)
             return
         }
     }

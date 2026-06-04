@@ -44,6 +44,7 @@ struct RemoteProtocolTests {
         let snap = RemoteServerMessage.transcriptSnapshot(
             sessionId: "s1",
             streamingState: "streaming",
+            canDrive: false,
             messages: [RemoteWireMessage(stableId: "m0", kind: "agent", text: "hi", json: nil)]
         )
         #expect(try roundTrip(snap) == snap)
@@ -51,7 +52,7 @@ struct RemoteProtocolTests {
 
     @Test func sessionListRoundTrips() throws {
         let list = RemoteServerMessage.sessionList(sessions: [
-            RemoteSessionSummary(id: "s1", title: "Build feature", agentId: "claude", status: "streaming")
+            RemoteSessionSummary(id: "s1", title: "Build feature", agentId: "claude", status: "streaming", canDrive: false)
         ])
         #expect(try roundTrip(list) == list)
     }
@@ -60,6 +61,7 @@ struct RemoteProtocolTests {
         let delta = RemoteServerMessage.transcriptDelta(
             sessionId: "s1",
             streamingState: "idle",
+            canDrive: false,
             upserts: [RemoteWireMessage(stableId: "m1", kind: "toolCall", text: nil, json: #"{"name":"bash"}"#)]
         )
         #expect(try roundTrip(delta) == delta)
@@ -81,6 +83,11 @@ struct RemoteProtocolTests {
     @Test func permissionResolvedRoundTrips() throws {
         let resolved = RemoteServerMessage.permissionResolved(sessionId: "s1", requestId: 9)
         #expect(try roundTrip(resolved) == resolved)
+    }
+
+    @Test func promptRejectedRoundTrips() throws {
+        let rejected = RemoteServerMessage.promptRejected(sessionId: "s1")
+        #expect(try roundTrip(rejected) == rejected)
     }
 
     @Test func questionRequestRoundTrips() throws {
@@ -122,5 +129,38 @@ struct RemoteProtocolTests {
             requestId: 4,
             answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])])
         #expect(try roundTrip(msg) == msg)
+    }
+
+    @Test func clientMessageDecodesSendPrompt() throws {
+        let json = #"{"type":"sendPrompt","sessionId":"s1","text":"hello"}"#.data(using: .utf8)!
+        let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
+        #expect(msg == .sendPrompt(sessionId: "s1", text: "hello"))
+    }
+
+    @Test func clientMessageDecodesTakeOverAndStop() throws {
+        let t = try JSONDecoder().decode(RemoteClientMessage.self, from: #"{"type":"takeOver","sessionId":"s1"}"#.data(using: .utf8)!)
+        #expect(t == .takeOver(sessionId: "s1"))
+        let s = try JSONDecoder().decode(RemoteClientMessage.self, from: #"{"type":"stop","sessionId":"s1"}"#.data(using: .utf8)!)
+        #expect(s == .stop(sessionId: "s1"))
+    }
+
+    @Test func sessionSummaryCarriesCanDrive() throws {
+        let list = RemoteServerMessage.sessionList(sessions: [
+            RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: true)
+        ])
+        let data = try JSONEncoder().encode(list)
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == list)
+    }
+
+    @Test func snapshotCarriesCanDrive() throws {
+        let snap = RemoteServerMessage.transcriptSnapshot(sessionId: "s1", streamingState: "idle", canDrive: true, messages: [])
+        let data = try JSONEncoder().encode(snap)
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == snap)
+    }
+
+    @Test func clientDriveVerbsRoundTrip() throws {
+        #expect(try roundTrip(RemoteClientMessage.takeOver(sessionId: "s1")) == .takeOver(sessionId: "s1"))
+        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello")) == .sendPrompt(sessionId: "s1", text: "hello"))
+        #expect(try roundTrip(RemoteClientMessage.stop(sessionId: "s1")) == .stop(sessionId: "s1"))
     }
 }
