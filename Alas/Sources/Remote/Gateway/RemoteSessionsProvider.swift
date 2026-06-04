@@ -8,4 +8,5 @@ protocol RemoteSessionsProvider: AnyObject {
     func session(for id: String) -> ACPSession?
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async
+    func answerQuestion(for id: String, _ response: ACPQuestionResponse)
 }

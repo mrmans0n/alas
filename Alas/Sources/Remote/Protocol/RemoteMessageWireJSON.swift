@@ -29,3 +29,30 @@ struct RemotePermissionOption: Codable, Equatable, Sendable {
     let name: String
     let kind: String
 }
+
+/// A question option as sent to the client.
+struct RemoteQuestionOption: Codable, Equatable, Sendable {
+    let id: String
+    let label: String
+}
+
+/// A single question surfaced to the client.
+struct RemoteQuestion: Codable, Equatable, Sendable {
+    let id: String
+    let prompt: String
+    let options: [RemoteQuestionOption]
+    let allowMultiple: Bool
+}
+
+/// A question request (one or more questions) surfaced to the client.
+struct RemoteQuestionPayload: Codable, Equatable, Sendable {
+    let requestId: Int
+    let title: String?
+    let questions: [RemoteQuestion]
+}
+
+/// The client's answer to one question.
+struct RemoteQuestionAnswer: Codable, Equatable, Sendable {
+    let questionId: String
+    let selectedOptionIds: [String]
+}

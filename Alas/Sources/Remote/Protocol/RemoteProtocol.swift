@@ -6,10 +6,11 @@ enum RemoteClientMessage: Equatable, Sendable {
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
     case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
+    case questionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer])
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -23,6 +24,11 @@ extension RemoteClientMessage: Codable {
                 requestId: try c.decode(Int.self, forKey: .requestId),
                 optionId: try c.decode(String.self, forKey: .optionId),
                 persistScope: try c.decodeIfPresent(String.self, forKey: .persistScope))
+        case "questionAnswer":
+            self = .questionAnswer(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(Int.self, forKey: .requestId),
+                answers: try c.decode([RemoteQuestionAnswer].self, forKey: .answers))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -38,6 +44,10 @@ extension RemoteClientMessage: Codable {
             try c.encode("permissionDecision", forKey: .type)
             try c.encode(s, forKey: .sessionId); try c.encode(r, forKey: .requestId)
             try c.encode(o, forKey: .optionId); try c.encodeIfPresent(p, forKey: .persistScope)
+        case .questionAnswer(let s, let r, let a):
+            try c.encode("questionAnswer", forKey: .type)
+            try c.encode(s, forKey: .sessionId); try c.encode(r, forKey: .requestId)
+            try c.encode(a, forKey: .answers)
         }
     }
 }
@@ -49,6 +59,8 @@ enum RemoteServerMessage: Equatable, Sendable {
     case transcriptDelta(sessionId: String, streamingState: String, upserts: [RemoteWireMessage])
     case permissionRequest(sessionId: String, payload: RemotePermissionPayload)
     case permissionResolved(sessionId: String, requestId: Int)
+    case questionRequest(sessionId: String, payload: RemoteQuestionPayload)
+    case questionResolved(sessionId: String, requestId: Int)
     case sessionClosed(sessionId: String)
     case error(message: String)
 }
@@ -80,6 +92,14 @@ extension RemoteServerMessage: Codable {
             self = .permissionResolved(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 requestId: try c.decode(Int.self, forKey: .requestId))
+        case "questionRequest":
+            self = .questionRequest(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                payload: try c.decode(RemoteQuestionPayload.self, forKey: .payload))
+        case "questionResolved":
+            self = .questionResolved(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                requestId: try c.decode(Int.self, forKey: .requestId))
         case "sessionClosed": self = .sessionClosed(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "error": self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
@@ -102,6 +122,12 @@ extension RemoteServerMessage: Codable {
             try c.encode(p, forKey: .payload)
         case .permissionResolved(let id, let r):
             try c.encode("permissionResolved", forKey: .type); try c.encode(id, forKey: .sessionId)
+            try c.encode(r, forKey: .requestId)
+        case .questionRequest(let id, let p):
+            try c.encode("questionRequest", forKey: .type); try c.encode(id, forKey: .sessionId)
+            try c.encode(p, forKey: .payload)
+        case .questionResolved(let id, let r):
+            try c.encode("questionResolved", forKey: .type); try c.encode(id, forKey: .sessionId)
             try c.encode(r, forKey: .requestId)
         case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type); try c.encode(id, forKey: .sessionId)
         case .error(let m): try c.encode("error", forKey: .type); try c.encode(m, forKey: .message)

@@ -7,11 +7,36 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var summaries: [RemoteSessionSummary] = []
     var sessions: [String: ACPSession] = [:]
     var policies: [String: ACPPermissionPolicy] = [:]
+    var lastQuestionResponse: (id: String, response: ACPQuestionResponse)?
     func sessionSummaries() -> [RemoteSessionSummary] { summaries }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
     func hydrateIfNeeded(id: String) async {}
+    func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
+        lastQuestionResponse = (id, response)
+    }
 }
+
+#if DEBUG
+extension ACPQuestionRequestParams {
+    /// Test factory: a single question with two options.
+    static func stub(title: String? = "Pick one") -> ACPQuestionRequestParams {
+        ACPQuestionRequestParams(
+            toolCallId: "tc-q-stub",
+            title: title,
+            questions: [
+                ACPQuestion(
+                    id: "q1",
+                    prompt: "Which approach?",
+                    options: [
+                        ACPQuestionOption(id: "o1", label: "A"),
+                        ACPQuestionOption(id: "o2", label: "B"),
+                    ],
+                    allowMultiple: false)
+            ])
+    }
+}
+#endif
 
 #if DEBUG
 extension ACPPermissionRequestParams {
@@ -108,6 +133,65 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.subscribe(sessionId: "s1"))
         await gw.handle(.permissionDecision(sessionId: "s1", requestId: 0, optionId: "allow_once", persistScope: nil))
         #expect(s.transcript.pendingPermission != nil)  // unchanged: stale requestId ignored
+    }
+
+    @Test func subscribeEmitsQuestionRequest() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        let req = sent.compactMap { msg -> RemoteQuestionPayload? in
+            if case .questionRequest(_, let p) = msg { return p }
+            return nil
+        }.first
+        let payload = try #require(req, "expected a questionRequest")
+        #expect(payload.requestId == 0)
+        #expect(payload.title == "Pick one")
+        #expect(payload.questions.count == 1)
+        #expect(payload.questions[0].id == "q1")
+        #expect(payload.questions[0].prompt == "Which approach?")
+        #expect(payload.questions[0].allowMultiple == false)
+        #expect(payload.questions[0].options == [
+            RemoteQuestionOption(id: "o1", label: "A"),
+            RemoteQuestionOption(id: "o2", label: "B"),
+        ])
+    }
+
+    @Test func questionAnswerCallsProviderWhenRequestMatches() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        await gw.handle(.questionAnswer(
+            sessionId: "s1",
+            requestId: 0,
+            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])]))
+        let last = try #require(provider.lastQuestionResponse, "expected answerQuestion call")
+        #expect(last.id == "s1")
+        #expect(last.response == .init(outcome: .answered(answers: [
+            ACPQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])
+        ])))
+        #expect(sent.contains { if case .questionResolved(_, 0) = $0 { return true }; return false })
+    }
+
+    @Test func staleQuestionAnswerIsNoOp() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.pendingQuestion = .init(id: .number(5), params: .stub())  // current request is 5
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        await gw.handle(.questionAnswer(
+            sessionId: "s1",
+            requestId: 0,
+            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])]))
+        #expect(provider.lastQuestionResponse == nil)  // stale requestId ignored
     }
 
     @Test func transcriptMutationEmitsCoalescedDelta() async throws {

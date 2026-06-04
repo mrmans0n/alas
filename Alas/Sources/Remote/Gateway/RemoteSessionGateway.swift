@@ -39,6 +39,8 @@ final class RemoteSessionGateway {
             coalesce[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
             applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
+        case .questionAnswer(let id, let requestId, let answers):
+            applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
         }
     }
 
@@ -57,6 +59,7 @@ final class RemoteSessionGateway {
                                  streamingState: Self.stateString(session.transcript.streamingState),
                                  messages: wire))
         emitPendingPermissionIfAny(id: id, session: session)
+        emitPendingQuestionIfAny(id: id, session: session)
     }
 
     private func observe(id: String, session: ACPSession) {
@@ -86,6 +89,7 @@ final class RemoteSessionGateway {
                               streamingState: Self.stateString(session.transcript.streamingState),
                               upserts: wire))
         emitPendingPermissionIfAny(id: id, session: session)
+        emitPendingQuestionIfAny(id: id, session: session)
     }
 
     private func emitPendingPermissionIfAny(id: String, session: ACPSession) {
@@ -98,6 +102,21 @@ final class RemoteSessionGateway {
                 RemotePermissionOption(optionId: $0.optionId, name: $0.name, kind: $0.kind)
             })
         send(.permissionRequest(sessionId: id, payload: payload))
+    }
+
+    private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
+        guard let pending = session.transcript.pendingQuestion else { return }
+        let payload = RemoteQuestionPayload(
+            requestId: Self.requestIdInt(pending.id),
+            title: pending.params.title,
+            questions: pending.params.questions.map { q in
+                RemoteQuestion(
+                    id: q.id,
+                    prompt: q.prompt,
+                    options: q.options.map { RemoteQuestionOption(id: $0.id, label: $0.label) },
+                    allowMultiple: q.allowMultiple == true)
+            })
+        send(.questionRequest(sessionId: id, payload: payload))
     }
 
     // MARK: decision
@@ -129,6 +148,18 @@ final class RemoteSessionGateway {
         let scopeKey = Self.scopeKey(for: pending.params)
         policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
         send(.permissionResolved(sessionId: sessionId, requestId: requestId))
+    }
+
+    private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {
+        guard let session = provider.session(for: sessionId),
+              let pending = session.transcript.pendingQuestion,
+              Self.requestIdInt(pending.id) == requestId          // first-wins guard
+        else { return }
+        let acpAnswers = answers.map {
+            ACPQuestionAnswer(questionId: $0.questionId, selectedOptionIds: $0.selectedOptionIds)
+        }
+        provider.answerQuestion(for: sessionId, .init(outcome: .answered(answers: acpAnswers)))
+        send(.questionResolved(sessionId: sessionId, requestId: requestId))
     }
 
     // MARK: serialization helpers

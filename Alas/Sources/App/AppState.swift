@@ -3201,4 +3201,11 @@ extension AppState: RemoteSessionsProvider {
             return
         }
     }
+
+    func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.answerQuestion(for: id, response)
+            return
+        }
+    }
 }

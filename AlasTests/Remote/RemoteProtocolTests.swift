@@ -82,4 +82,45 @@ struct RemoteProtocolTests {
         let resolved = RemoteServerMessage.permissionResolved(sessionId: "s1", requestId: 9)
         #expect(try roundTrip(resolved) == resolved)
     }
+
+    @Test func questionRequestRoundTrips() throws {
+        let req = RemoteServerMessage.questionRequest(
+            sessionId: "s1",
+            payload: RemoteQuestionPayload(
+                requestId: 4,
+                title: "Pick one",
+                questions: [
+                    RemoteQuestion(
+                        id: "q1",
+                        prompt: "Which approach?",
+                        options: [
+                            RemoteQuestionOption(id: "o1", label: "A"),
+                            RemoteQuestionOption(id: "o2", label: "B"),
+                        ],
+                        allowMultiple: false)
+                ]))
+        #expect(try roundTrip(req) == req)
+    }
+
+    @Test func questionResolvedRoundTrips() throws {
+        let resolved = RemoteServerMessage.questionResolved(sessionId: "s1", requestId: 4)
+        #expect(try roundTrip(resolved) == resolved)
+    }
+
+    @Test func clientMessageDecodesQuestionAnswer() throws {
+        let json = #"{"type":"questionAnswer","sessionId":"s1","requestId":4,"answers":[{"questionId":"q1","selectedOptionIds":["o1","o2"]}]}"#.data(using: .utf8)!
+        let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
+        #expect(msg == .questionAnswer(
+            sessionId: "s1",
+            requestId: 4,
+            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1", "o2"])]))
+    }
+
+    @Test func questionAnswerRoundTrips() throws {
+        let msg = RemoteClientMessage.questionAnswer(
+            sessionId: "s1",
+            requestId: 4,
+            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])])
+        #expect(try roundTrip(msg) == msg)
+    }
 }

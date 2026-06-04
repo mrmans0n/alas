@@ -35,6 +35,11 @@ final class ACPSessionManager: ObservableObject {
     /// Returns nil if no runner is attached (session not actively connected).
     func permissionPolicy(for id: ACPSession.ID) -> ACPPermissionPolicy? { runners[id]?.policy }
 
+    /// Answers a pending question for a session that currently has an attached runner.
+    func answerQuestion(for id: ACPSession.ID, _ response: ACPQuestionResponse) {
+        runners[id]?.answerQuestion(response)
+    }
+
     /// Lightweight summaries for the remote sessions list.
     var sessionRows: [ACPSessionRow] { recent }
 
