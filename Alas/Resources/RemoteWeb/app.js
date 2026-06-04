@@ -6,6 +6,9 @@ let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
+let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
+let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
+const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
 function setStatus(s, state) { const e = $("status"); e.textContent = s; e.dataset.state = state || "connecting"; }
@@ -85,6 +88,7 @@ function handle(msg) {
     case "permissionResolved": if (msg.sessionId === currentSession) hidePermission(); break;
     case "questionRequest": if (msg.sessionId === currentSession) showQuestion(msg.sessionId, msg.payload); break;
     case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
+    case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
     case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
@@ -113,13 +117,15 @@ function renderSessions(sessions) {
 
 function openSession(id) {
   currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false; canDriveKnown = false;
+  sessionConfig = null; clearAttachments();
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
-  $("messages").innerHTML = ""; renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
+  $("messages").innerHTML = ""; renderConfigAffordances(); renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
+  sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances();
   hidePermission(); hideQuestion();          // never leave a sheet over the list
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
   $("drivebar").classList.add("hidden");
@@ -335,18 +341,25 @@ function renderDriveBar(streamingState) {
   const known = !!currentSession && canDriveKnown;
   $("drivebar").classList.toggle("hidden", !known);
   if (!known) return;
+  // The composer is always available — typing/acting as a non-writer
+  // auto-takes the wheel (ensureWriter). The take-over PILL only appears when
+  // we don't hold the lease, as a no-typing way to grab it.
+  $("composer").classList.remove("hidden");
   $("takeover").classList.toggle("hidden", canDrive);
-  $("composer").classList.toggle("hidden", !canDrive);
-  if (canDrive) {
-    // A turn is interruptible in every non-idle state — including while it's
-    // blocked on a permission/question prompt — mirroring the native composer
-    // (composerAction returns .stop for sending/streaming/awaiting*). Without
-    // the awaiting states, dismissing a prompt sheet would strand the user on
-    // Send with no way to cancel the running turn.
-    const busy = streamingState !== "idle";
-    $("send").classList.toggle("hidden", busy);
-    $("stop").classList.toggle("hidden", !busy);
-  }
+  // A turn is interruptible in every non-idle state — including while it's
+  // blocked on a permission/question prompt — mirroring the native composer
+  // (composerAction returns .stop for sending/streaming/awaiting*). Without
+  // the awaiting states, dismissing a prompt sheet would strand the user on
+  // Send with no way to cancel the running turn.
+  const busy = streamingState !== "idle";
+  $("send").classList.toggle("hidden", busy);
+  $("stop").classList.toggle("hidden", !busy);
+}
+
+// takeOver seizes the lease synchronously server-side and messages are ordered,
+// so a follow-up action sent right after lands as the writer.
+function ensureWriter() {
+  if (!canDrive && currentSession) send({ type: "takeOver", sessionId: currentSession });
 }
 
 function autoGrowPrompt() {
@@ -357,10 +370,13 @@ function autoGrowPrompt() {
 function sendPrompt() {
   const ta = $("prompt");
   const text = ta.value.trim();
-  if (!text || !currentSession || !canDrive) return;
-  send({ type: "sendPrompt", sessionId: currentSession, text });
+  if (!currentSession) return;
+  if (!text && pendingAttachments.length === 0) return;   // nothing to send
+  ensureWriter();                                    // grab the wheel first; ordered before the prompt
+  send({ type: "sendPrompt", sessionId: currentSession, text, attachments: pendingAttachments });
   lastSentText = text;                               // keep until the server accepts (or rejects) it
   ta.value = "";
+  clearAttachments();
   autoGrowPrompt();                                  // collapse back to one row
 }
 
@@ -375,9 +391,102 @@ function restoreRejectedPrompt() {
   lastSentText = null;
 }
 
+// --- Session config sheet (⚙) + attachments (📎) ---
+// Show/hide the 📎 button and rebuild the config sheet from the latest
+// sessionConfig. Called on every sessionConfig and when entering/leaving a
+// session so affordances reflect the open session (or nothing).
+function renderConfigAffordances() {
+  const cfg = sessionConfig;
+  $("attach").classList.toggle("hidden", !(cfg && cfg.acceptsImages));
+  renderConfigSheet();
+}
+
+function renderConfigSheet() {
+  const cfg = sessionConfig;
+  const models = (cfg && cfg.models) || [];
+  const modes = (cfg && cfg.modes) || [];
+  $("cfg-model-section").classList.toggle("hidden", models.length === 0);
+  $("cfg-mode-section").classList.toggle("hidden", modes.length === 0);
+
+  const fill = (box, items, current, act) => {
+    box.innerHTML = "";
+    items.forEach(it => {
+      const btn = el("button", "option-btn", it.name);
+      if (it.id === current) btn.classList.add("is-selected");
+      btn.onclick = () => { ensureWriter(); act(it.id); };
+      box.appendChild(btn);
+    });
+  };
+  fill($("cfg-models"), models, cfg && cfg.currentModel, id => send({ type: "setModel", sessionId: currentSession, modelId: id }));
+  fill($("cfg-modes"), modes, cfg && cfg.currentMode, id => send({ type: "setMode", sessionId: currentSession, modeId: id }));
+  $("cfg-autorun").checked = !!(cfg && cfg.autoRunEnabled);
+}
+
+function showConfig() { renderConfigSheet(); $("cfg").classList.remove("hidden"); }
+function hideConfig() { $("cfg").classList.add("hidden"); }
+
+// --- Attachments ---
+function b64Bytes(b64) { return Math.floor(b64.length * 3 / 4); }   // decoded size estimate, good enough for the cap
+function attachedBytes() { return pendingAttachments.reduce((n, a) => n + b64Bytes(a.dataBase64), 0); }
+
+function clearAttachments() { pendingAttachments = []; renderChips(); }
+
+function renderChips() {
+  const box = $("chips");
+  box.innerHTML = "";
+  pendingAttachments.forEach((a, i) => {
+    const chip = el("div", "chip");
+    const img = el("img");
+    img.src = "data:" + a.mimeType + ";base64," + a.dataBase64;
+    img.alt = a.name;
+    const x = el("button", "chip-x", "✕");
+    x.setAttribute("aria-label", "Remove attachment");
+    x.onclick = () => { pendingAttachments.splice(i, 1); renderChips(); };
+    chip.append(img, x);
+    box.appendChild(chip);
+  });
+  box.classList.toggle("hidden", pendingAttachments.length === 0);
+}
+
+function readAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result);
+      const comma = s.indexOf(",");                  // strip the "data:<mime>;base64," prefix
+      resolve(comma >= 0 ? s.slice(comma + 1) : s);
+    };
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+async function onFilesPicked(files) {
+  for (const file of files) {
+    const b64 = await readAttachment(file);
+    if (attachedBytes() + b64Bytes(b64) > ATTACH_CAP) {
+      alert("Attachments can total at most 10 MB.");
+      break;
+    }
+    pendingAttachments.push({ name: file.name, mimeType: file.type, dataBase64: b64 });
+    renderChips();
+  }
+}
+
+$("config").onclick = showConfig;
+$("cfg-close").onclick = hideConfig;
+$("cfg").onclick = (e) => { if (e.target.id === "cfg") hideConfig(); };
+$("cfg-autorun").onchange = (e) => { ensureWriter(); send({ type: "setAutoRun", sessionId: currentSession, enabled: e.target.checked }); };
+$("attach").onclick = () => $("file").click();
+$("file").onchange = async (e) => {
+  const files = Array.from(e.target.files || []);
+  $("file").value = "";                              // reset so the same file can be re-picked
+  await onFilesPicked(files);
+};
+
 $("takeover").onclick = () => { if (currentSession) send({ type: "takeOver", sessionId: currentSession }); };
 $("send").onclick = sendPrompt;
-$("stop").onclick = () => { if (currentSession) send({ type: "stop", sessionId: currentSession }); };
+$("stop").onclick = () => { if (!currentSession) return; ensureWriter(); send({ type: "stop", sessionId: currentSession }); };
 $("prompt").addEventListener("input", autoGrowPrompt);
 $("prompt").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }

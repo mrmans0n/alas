@@ -102,20 +102,36 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 
 /* Composer / drive bar */
 #drivebar { flex: 0 0 auto; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in oklab, var(--bg-1), transparent 4%); backdrop-filter: blur(8px); border-top: 0.5px solid var(--line-soft); }
-#takeover { width: 100%; padding: 13px; border: 0.5px solid color-mix(in oklab, var(--accent) 55%, transparent); border-radius: 21px; background: color-mix(in oklab, var(--accent) 16%, transparent); color: var(--fg); font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+/* Take-over PILL: a compact, no-typing way to grab the lease. Sits above the
+   always-present composer (the composer itself also auto-takes on any action). */
+#takeover { display: block; margin: 0 auto 8px; padding: 7px 16px; border: 0.5px solid color-mix(in oklab, var(--accent) 55%, transparent); border-radius: 999px; background: color-mix(in oklab, var(--accent) 16%, transparent); color: var(--fg); font-size: 13px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 #takeover:active { background: color-mix(in oklab, var(--accent) 24%, transparent); }
 /* One rounded field; the action button docks bottom-right and the textarea
    grows above it. align-items:flex-end keeps the button pinned to the last line. */
-#composer { display: flex; gap: 7px; align-items: flex-end; padding: 5px 5px 5px 15px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 22px; }
-#composer:focus-within { border-color: color-mix(in oklab, var(--accent) 60%, var(--line)); }
+#composer-row { display: flex; gap: 7px; align-items: flex-end; padding: 5px 5px 5px 5px; background: var(--bg-0); border: 0.5px solid var(--line); border-radius: 22px; }
+#composer-row:focus-within { border-color: color-mix(in oklab, var(--accent) 60%, var(--line)); }
+/* Thumbnail row above the composer — horizontal, scrollable small previews. */
+#chips { display: flex; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 2px 4px 8px; }
+#chips .chip { position: relative; flex: 0 0 auto; }
+#chips .chip img { width: 54px; height: 54px; object-fit: cover; border-radius: 9px; border: 0.5px solid var(--line); display: block; }
+#chips .chip-x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%; background: var(--bg-4); color: var(--fg); font-size: 11px; line-height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 /* font-size MUST be ≥16px: iOS auto-zooms (and inflates the viewport) on focus
    of any smaller field. */
 #prompt { flex: 1; min-height: 24px; max-height: 40vh; padding: 7px 0; border: none; background: none; color: var(--fg); font: inherit; font-size: 16px; line-height: 1.35; resize: none; outline: none; }
+#attach.hidden + #prompt { padding-left: 9px; }   /* breathing room when the attach button is hidden */
 #prompt::placeholder { color: var(--fg-faint); }
-#composer button { flex-shrink: 0; width: 34px; height: 34px; padding: 0; border: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform .08s; }
-#composer button:active { transform: scale(0.92); }
+#composer-row button { flex-shrink: 0; width: 34px; height: 34px; padding: 0; border: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform .08s; }
+#composer-row button:active { transform: scale(0.92); }
 #send { background: var(--accent); color: var(--bg-0); }
 #stop { background: var(--del); color: var(--fg); }
+/* Secondary icon buttons (attach, config) — muted, no fill. */
+#attach, #config { background: none; color: var(--fg-dim); }
+#attach:active, #config:active { color: var(--fg-muted); }
+
+/* Config sheet (⚙) — reuses .option-btn / .is-selected for the radio lists. */
+#cfg-model-section, #cfg-mode-section { margin-bottom: 14px; }
+#cfg-autorun-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin: 6px 0; border: 1px solid var(--bg-4); border-radius: 10px; background: var(--bg-1); color: var(--fg); font-size: 15px; cursor: pointer; }
+#cfg-autorun { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
 
 /* Pair / error gate (full screen) */
 #gate { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 28px; background: linear-gradient(180deg, var(--bg-1), var(--bg-0)); }
