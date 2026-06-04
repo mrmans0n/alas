@@ -37,6 +37,9 @@ final class RemoteSessionGateway {
                 return
             }
             sendSnapshot(id: id, session: session)
+            if let cfg = provider.sessionConfig(for: id) {
+                send(.sessionConfig(cfg))
+            }
             observe(id: id, session: session)
         case .unsubscribe(let id):
             subscriptions[id] = nil
@@ -77,6 +80,15 @@ final class RemoteSessionGateway {
         case .stop(let id):
             guard provider.isWriter(for: id) else { return }
             provider.stop(for: id)
+        case .setModel(let id, let modelId):
+            guard provider.isWriter(for: id) else { return }
+            provider.setModel(for: id, modelId: modelId)
+        case .setMode(let id, let modeId):
+            guard provider.isWriter(for: id) else { return }
+            provider.setMode(for: id, modeId: modeId)
+        case .setAutoRun(let id, let enabled):
+            guard provider.isWriter(for: id) else { return }
+            provider.setAutoRun(for: id, enabled: enabled)
         }
     }
 

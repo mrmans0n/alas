@@ -410,4 +410,31 @@ struct RemoteSessionGatewayTests {
         }.first
         #expect(drive == true)
     }
+
+    @Test func configVerbsRouteOnlyWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))   // not writer
+        await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
+        #expect(provider.models.isEmpty && provider.autoRuns.isEmpty)
+        provider.writers.insert("s1")
+        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
+        await gw.handle(.setMode(sessionId: "s1", modeId: "ask"))
+        await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
+        #expect(provider.models.map(\.model) == ["opus"])
+        #expect(provider.modes.map(\.mode) == ["ask"])
+        #expect(provider.autoRuns.map(\.enabled) == [true])
+    }
+
+    @Test func subscribeEmitsSessionConfig() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        provider.sessions["s1"] = s
+        provider.configs["s1"] = .init(sessionId: "s1", models: [.init(id: "opus", name: "Opus")],
+            modes: [], currentModel: "opus", currentMode: nil, autoRunEnabled: false, acceptsImages: true)
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
+    }
 }
