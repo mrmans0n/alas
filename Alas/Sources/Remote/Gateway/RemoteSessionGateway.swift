@@ -62,7 +62,13 @@ final class RemoteSessionGateway {
             }
         case .sendPrompt(let id, let text):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard provider.isWriter(for: id), !trimmed.isEmpty else { return }
+            guard provider.isWriter(for: id), !trimmed.isEmpty else {
+                // Drop, but tell the client so it can restore the user's text
+                // rather than silently losing it (e.g. canDrive went stale
+                // because a takeover's attach failed and released the lease).
+                send(.promptRejected(sessionId: id))
+                return
+            }
             provider.sendPrompt(for: id, text: trimmed)
         case .stop(let id):
             guard provider.isWriter(for: id) else { return }

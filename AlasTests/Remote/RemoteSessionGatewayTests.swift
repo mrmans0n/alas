@@ -348,6 +348,23 @@ struct RemoteSessionGatewayTests {
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
+    @Test func droppedSendPromptEmitsRejection() async {
+        // A non-writer sendPrompt must tell the client it was dropped so the
+        // composer can restore the text instead of silently losing the message.
+        let provider = FakeSessionsProvider()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi")) // not writer
+        #expect(provider.prompts.isEmpty)
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        // When we ARE the writer the prompt routes and no rejection is sent.
+        sent.removeAll()
+        provider.writers.insert("s1")
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi"))
+        #expect(provider.prompts.map(\.text) == ["hi"])
+        #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
+    }
+
     @Test func stopRoutesOnlyWhenWriter() async {
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }

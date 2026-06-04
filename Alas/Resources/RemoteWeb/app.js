@@ -5,6 +5,7 @@ let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
+let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
 function setStatus(s, state) { const e = $("status"); e.textContent = s; e.dataset.state = state || "connecting"; }
@@ -85,6 +86,7 @@ function handle(msg) {
     case "questionRequest": if (msg.sessionId === currentSession) showQuestion(msg.sessionId, msg.payload); break;
     case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
+    case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
     case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
     default: console.warn("unknown message type", msg.type);
   }
@@ -357,8 +359,20 @@ function sendPrompt() {
   const text = ta.value.trim();
   if (!text || !currentSession || !canDrive) return;
   send({ type: "sendPrompt", sessionId: currentSession, text });
+  lastSentText = text;                               // keep until the server accepts (or rejects) it
   ta.value = "";
   autoGrowPrompt();                                  // collapse back to one row
+}
+
+// The server dropped our prompt (lease went stale, etc.). Put the text back so
+// the message isn't silently lost — but only if the user hasn't typed a new one.
+function restoreRejectedPrompt() {
+  const ta = $("prompt");
+  if (lastSentText && !ta.value) {
+    ta.value = lastSentText;
+    autoGrowPrompt();
+  }
+  lastSentText = null;
 }
 
 $("takeover").onclick = () => { if (currentSession) send({ type: "takeOver", sessionId: currentSession }); };

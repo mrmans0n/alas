@@ -85,6 +85,11 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(resolved) == resolved)
     }
 
+    @Test func promptRejectedRoundTrips() throws {
+        let rejected = RemoteServerMessage.promptRejected(sessionId: "s1")
+        #expect(try roundTrip(rejected) == rejected)
+    }
+
     @Test func questionRequestRoundTrips() throws {
         let req = RemoteServerMessage.questionRequest(
             sessionId: "s1",

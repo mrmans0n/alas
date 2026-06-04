@@ -88,6 +88,10 @@ enum RemoteServerMessage: Equatable, Sendable {
     case questionRequest(sessionId: String, payload: RemoteQuestionPayload)
     case questionResolved(sessionId: String, requestId: Int)
     case sessionClosed(sessionId: String)
+    /// The server dropped a `sendPrompt` (caller is no longer the writer, or
+    /// the prompt was empty), so the client should restore the user's text
+    /// instead of silently losing it.
+    case promptRejected(sessionId: String)
     case error(message: String)
 }
 
@@ -129,6 +133,7 @@ extension RemoteServerMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 requestId: try c.decode(Int.self, forKey: .requestId))
         case "sessionClosed": self = .sessionClosed(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "error": self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
@@ -169,6 +174,8 @@ extension RemoteServerMessage: Codable {
             try c.encode(id, forKey: .sessionId)
             try c.encode(r, forKey: .requestId)
         case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type)
+        try c.encode(id, forKey: .sessionId)
+        case .promptRejected(let id): try c.encode("promptRejected", forKey: .type)
         try c.encode(id, forKey: .sessionId)
         case .error(let m): try c.encode("error", forKey: .type)
         try c.encode(m, forKey: .message)
