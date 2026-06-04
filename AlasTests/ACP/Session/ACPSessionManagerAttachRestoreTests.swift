@@ -557,6 +557,46 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
+    @Test("failed automatic transcript recovery keeps queued prompt blocked")
+    func failedAutomaticTranscriptRecoveryKeepsQueuedPromptBlocked() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        try appendMessage(
+            .user(id: UUID(), text: "Prior context", attachments: []),
+            to: store,
+            seq: 0
+        )
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("queued prompt")])
+        ])
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32601, message: "Method not found", data: nil)
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.script(method: "session/prompt") { _ in
+            throw ACPClientError.noScript(method: "session/prompt")
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            session.contextRecoveryStatus == .failed("Transcript recovery failed.")
+                && session.transcript.streamingState == .idle
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
+        #expect(session.queue.count == 1)
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.lastError == nil)
+        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == true)
+    }
+
     @Test("missing remote id falls back to session/new with no-transcript warning")
     func missingRemoteIdFallsBackToNewWithWarning() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

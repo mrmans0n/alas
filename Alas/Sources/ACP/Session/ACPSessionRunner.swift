@@ -1099,9 +1099,7 @@ extension ACPSessionRunner {
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
-                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
-                            self.flushQueueIfIdle()
-                        }
+                        self.session.transcript.streamingState = .idle
                     }
                     if !hasNewerActivePrompt {
                         onCompleted?(false)
