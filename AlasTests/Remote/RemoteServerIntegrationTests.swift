@@ -78,6 +78,66 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    @Test func revokingDeviceDropsLiveWebSocket() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        s.transcript.messages = [.agent(id: UUID(), StreamingText("hello-remote"))]
+        provider.sessions[s.id] = s
+        provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle")]
+
+        let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        try server.start(port: 0)
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        // Pair + connect.
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"test"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        task.resume()
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+
+        // Drain the initial snapshot so we know the socket is live and the
+        // server has recorded this connection's device mapping.
+        _ = try await task.receive()
+
+        // Revoke the just-paired device and immediately drop its socket. Go
+        // through the same path AppState.revokeRemoteDevice uses.
+        let deviceId = try #require(pairing.devices.first?.id)
+        pairing.revoke(deviceId: deviceId)
+        server.disconnectDevice(deviceId)
+
+        // The server-side cancel closes the socket; the next receive must fail.
+        // Poll a few times so we don't depend on exact delivery timing of the
+        // close frame / FIN through URLSession.
+        var closed = false
+        for _ in 0..<50 {
+            do {
+                _ = try await task.receive()
+            } catch {
+                closed = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(closed, "expected the WS to close after the device was revoked")
+
+        task.cancel(with: .goingAway, reason: nil)
+        server.stop()
+    }
+
     @Test func unknownPathReturns404() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing)

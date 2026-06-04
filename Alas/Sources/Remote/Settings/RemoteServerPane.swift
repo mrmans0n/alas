@@ -71,7 +71,7 @@ struct RemoteServerPane: View {
                                 desc: device.lastSeenAt.map { "Last seen \($0.formatted())" } ?? "Never connected"
                             ) {
                                 Button {
-                                    state.remotePairing.revoke(deviceId: device.id)
+                                    state.revokeRemoteDevice(device.id)
                                 } label: {
                                     Text("Revoke")
                                         .font(.system(size: 12, weight: .medium))

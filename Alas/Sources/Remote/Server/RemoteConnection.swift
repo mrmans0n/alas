@@ -19,7 +19,8 @@ final class RemoteConnection: @unchecked Sendable {
     private let queue: DispatchQueue
     private let makeGateway: @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway
     private let responder: @MainActor (HTTPRequest, Data) -> Data
-    private let authorize: @MainActor (String) -> Bool   // token → ok
+    private let authorize: @MainActor (String) -> String?   // token → deviceId (nil = reject)
+    private let onAuthenticated: ((RemoteConnection, String) -> Void)?
     private let onClose: (RemoteConnection) -> Void
 
     // Queue-confined state.
@@ -27,18 +28,24 @@ final class RemoteConnection: @unchecked Sendable {
     private var isWebSocket = false
     private var gateway: RemoteSessionGateway?
     private var closed = false
+    /// The device this connection authenticated as, set on `queue` once the WS
+    /// upgrade succeeds. Queue-confined; the server learns it via the
+    /// `onAuthenticated` hop rather than reading this cross-queue.
+    private var deviceId: String?
 
     init(conn: NWConnection,
          queue: DispatchQueue,
          responder: @escaping @MainActor (HTTPRequest, Data) -> Data,
-         authorize: @escaping @MainActor (String) -> Bool,
+         authorize: @escaping @MainActor (String) -> String?,
          makeGateway: @escaping @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway,
+         onAuthenticated: ((RemoteConnection, String) -> Void)? = nil,
          onClose: @escaping (RemoteConnection) -> Void = { _ in }) {
         self.conn = conn
         self.queue = queue
         self.responder = responder
         self.authorize = authorize
         self.makeGateway = makeGateway
+        self.onAuthenticated = onAuthenticated
         self.onClose = onClose
     }
 
@@ -152,16 +159,18 @@ final class RemoteConnection: @unchecked Sendable {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let ok = self.authorize(token)
+            let deviceId = self.authorize(token)
             self.onQueue { [weak self] in
                 guard let self else { return }
-                guard ok else {
+                guard let deviceId else {
                     self.send(RemoteHTTPResponder.http(status: "401 Unauthorized",
                                                        contentType: "text/plain", body: Data())) {
                         [weak self] in self?.teardown()
                     }
                     return
                 }
+                self.deviceId = deviceId
+                self.onAuthenticated?(self, deviceId)
                 self.completeUpgrade(token: token, key: key)
             }
         }

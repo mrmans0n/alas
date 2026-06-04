@@ -98,6 +98,14 @@ final class AppState {
             lastRemoteError = nil
         }
     }
+
+    /// Revokes a paired device and immediately drops any live connection(s) it
+    /// holds, so an already-connected phone stops streaming at once rather than
+    /// when its socket happens to close.
+    func revokeRemoteDevice(_ deviceId: String) {
+        remotePairing.revoke(deviceId: deviceId)
+        remoteServer?.disconnectDevice(deviceId)
+    }
     @ObservationIgnored
     private var lspManager: WorkspaceLSPManager?
     @ObservationIgnored lazy var updates = UpdateController(

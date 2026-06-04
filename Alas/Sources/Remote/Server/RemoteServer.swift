@@ -13,6 +13,11 @@ final class RemoteServer {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "io.alas.remote.server")
     private var connections: [ObjectIdentifier: RemoteConnection] = [:]
+    /// Maps each authenticated connection to the device it logged in as, so a
+    /// revoked device's live sockets can be closed. Populated via the
+    /// connection's `onAuthenticated` hop (MainActor), never by reading
+    /// queue-confined connection state cross-queue.
+    private var connectionDevice: [ObjectIdentifier: String] = [:]
     /// Cap on simultaneous sockets. An unauthenticated peer can open a socket
     /// (auth only happens at WS upgrade), so bound the count defensively.
     private let maxConnections = 64
@@ -65,6 +70,15 @@ final class RemoteServer {
         // to drop the NWConnections when the table clears.
         for conn in connections.values { conn.cancel() }
         connections.removeAll()
+        connectionDevice.removeAll()
+    }
+
+    /// Immediately closes every live connection authenticated as `deviceId`.
+    /// `cancel()` tears the connection down, whose `onClose` clears both maps.
+    func disconnectDevice(_ deviceId: String) {
+        for (oid, did) in connectionDevice where did == deviceId {
+            connections[oid]?.cancel()
+        }
     }
 
     private func accept(_ nwConn: NWConnection) {
@@ -76,15 +90,22 @@ final class RemoteServer {
             queue: queue,
             responder: { req, body in responder.response(for: req, body: body) },
             authorize: { [weak self] token in
-                guard let self, let id = self.pairing.validate(token: token) else { return false }
+                guard let self, let id = self.pairing.validate(token: token) else { return nil }
                 self.pairing.touch(deviceId: id)
-                return true
+                return id
             },
             makeGateway: { send in
                 RemoteSessionGateway(provider: provider, send: send)
             },
+            onAuthenticated: { [weak self] conn, did in
+                Task { @MainActor in self?.connectionDevice[ObjectIdentifier(conn)] = did }
+            },
             onClose: { [weak self] conn in
-                Task { @MainActor in self?.connections[ObjectIdentifier(conn)] = nil }
+                Task { @MainActor in
+                    let oid = ObjectIdentifier(conn)
+                    self?.connections[oid] = nil
+                    self?.connectionDevice[oid] = nil
+                }
             })
         connections[ObjectIdentifier(conn)] = conn
         conn.start()
