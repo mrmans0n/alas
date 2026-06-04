@@ -31,6 +31,7 @@ struct SettingsWindow: View {
                 Group {
                     switch section {
                     case .general:    GeneralPane(state: state)
+                    case .remote:     RemoteServerPane(state: state)
                     case .debug:      AdvancedPane(state: state)
                     case .agents:     AgentsPane(state: state) { section = $0 }
                     case .appearance: AppearancePane(state: state)
