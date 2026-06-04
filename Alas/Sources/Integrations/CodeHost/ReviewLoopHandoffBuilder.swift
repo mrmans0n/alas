@@ -55,6 +55,64 @@ enum ReviewLoopHandoffBuilder {
         return truncate(lines.joined(separator: "\n"))
     }
 
+    static func buildSelectedEvidencePrompt(snapshot: ReviewLoopSnapshot, detail: ReviewEvidenceDetail) -> String {
+        let finalInstruction = "Please inspect the relevant files, explain the likely cause, and propose the smallest safe fix. Do not merge or post remote comments."
+        let header: [String]
+        guard let request = snapshot.reviewRequest else {
+            header = [
+                "Investigate this review-loop evidence item for Alas.",
+                "",
+                "Branch: \(snapshot.local.branchName)",
+                "Base: \(snapshot.local.baseBranch)",
+                "Evidence section: \(detail.item.section.displayName)",
+                "",
+            ]
+            return buildSelectedEvidencePrompt(header: header, detail: detail, finalInstruction: finalInstruction)
+        }
+
+        header = [
+            "Investigate this review-loop evidence item for Alas.",
+            "",
+            "\(request.provider.displayName) \(request.provider.reviewRequestLabel): \(request.url.absoluteString)",
+            "Title: \(request.title)",
+            "Branch: \(snapshot.local.branchName)",
+            "Base: \(request.baseRefName)",
+            "Head SHA: \(snapshot.local.headSHA)",
+            "Evidence section: \(detail.item.section.displayName)",
+            "",
+        ]
+        return buildSelectedEvidencePrompt(header: header, detail: detail, finalInstruction: finalInstruction)
+    }
+
+    private static func buildSelectedEvidencePrompt(
+        header: [String],
+        detail: ReviewEvidenceDetail,
+        finalInstruction: String
+    ) -> String {
+        let headerText = header.joined(separator: "\n")
+        let footerText = "\n\n\(finalInstruction)"
+        let availableContextLength = maxPromptLength - headerText.count - footerText.count
+        let context = truncateEvidenceContext(
+            ReviewEvidenceContextFormatter.format(detail),
+            maxLength: max(0, availableContextLength)
+        )
+        let prompt = headerText + context + footerText
+        guard prompt.count <= maxPromptLength else {
+            let availableHeaderLength = max(0, maxPromptLength - context.count - footerText.count)
+            return String(headerText.prefix(availableHeaderLength)) + context + footerText
+        }
+        return prompt
+    }
+
+    private static func truncateEvidenceContext(_ context: String, maxLength: Int) -> String {
+        guard context.count > maxLength else { return context }
+        let marker = "\n\n[Evidence context truncated by Alas.]"
+        guard maxLength > marker.count else {
+            return String(marker.prefix(max(0, maxLength)))
+        }
+        return String(context.prefix(maxLength - marker.count)) + marker
+    }
+
     private static func truncate(_ prompt: String) -> String {
         guard prompt.count > maxPromptLength else { return prompt }
         return String(prompt.prefix(maxPromptLength)) + "\n\n[Context truncated by Alas.]"

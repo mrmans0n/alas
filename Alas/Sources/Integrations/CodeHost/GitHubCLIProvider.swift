@@ -159,6 +159,76 @@ struct GitHubCLIProvider: CodeHostProvider {
         return try Self.parseChecks(result.stdout)
     }
 
+    func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
+        request.checks
+            .filter { $0.bucket == .fail }
+            .map {
+                ReviewEvidenceItem(
+                    id: $0.id,
+                    section: .ci,
+                    title: $0.name,
+                    subtitle: $0.workflow,
+                    status: .failed,
+                    providerURL: $0.detailURL
+                )
+            }
+    }
+
+    func checkEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail {
+        _ = request
+        guard let runID = Self.githubRunID(from: item.providerURL) else {
+            return ReviewEvidenceDetail(
+                item: item,
+                body: "Open this check in GitHub to inspect full logs.",
+                filePath: nil,
+                line: nil,
+                isTruncated: false
+            )
+        }
+
+        var args = ["run", "view", runID, "--log-failed", "-R", remote.repositorySlug]
+        if let jobID = Self.githubJobID(from: item.providerURL) {
+            args.append(contentsOf: ["--job", jobID])
+        }
+
+        let result = try await runner.run(
+            "gh",
+            args: args,
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh run view", stderr: result.stderr)
+        }
+
+        return ReviewEvidenceDetail.truncated(item: item, body: result.stdout, filePath: nil, line: nil)
+    }
+
+    func feedbackEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail {
+        _ = remote
+        _ = cwd
+        if item.id == ReviewEvidenceFallbacks.changesRequestedID {
+            return ReviewEvidenceFallbacks.changesRequestedDetail(item: item, request: request)
+        }
+        let thread = request.threads.first { $0.id == item.id }
+        return ReviewEvidenceDetail(
+            item: item,
+            body: thread?.body ?? "Open this thread in GitHub to inspect full context.",
+            filePath: nil,
+            line: nil,
+            isTruncated: false
+        )
+    }
+
     private func reviewThreads(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -326,6 +396,34 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     static func parseReviewThreads(_ json: String) throws -> [ReviewThreadSummary] {
         try parseReviewThreadsPage(json).threads
+    }
+
+    static func githubRunID(from url: URL?) -> String? {
+        guard let url else { return nil }
+        let components = url.pathComponents
+        guard let runsIndex = components.firstIndex(of: "runs") else {
+            return nil
+        }
+        let runIDIndex = components.index(after: runsIndex)
+        guard runIDIndex < components.endIndex else {
+            return nil
+        }
+        let runID = components[runIDIndex]
+        return runID.isEmpty ? nil : runID
+    }
+
+    static func githubJobID(from url: URL?) -> String? {
+        guard let url else { return nil }
+        let components = url.pathComponents
+        guard let jobIndex = components.firstIndex(of: "job") else {
+            return nil
+        }
+        let jobIDIndex = components.index(after: jobIndex)
+        guard jobIDIndex < components.endIndex else {
+            return nil
+        }
+        let jobID = components[jobIDIndex]
+        return jobID.isEmpty ? nil : jobID
     }
 
     private static func parseReviewThreadsPage(_ json: String) throws -> ReviewThreadsPage {

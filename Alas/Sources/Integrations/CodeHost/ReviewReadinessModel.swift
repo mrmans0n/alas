@@ -47,6 +47,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             case .createReviewRequest: "plus"
             case .openReviewRequest: "arrow.up.right.square"
             case .rerunFailedChecks: "arrow.clockwise"
+            case .inspectReviewEvidence: "doc.text.magnifyingglass"
             case .openAgentHandoff: "sparkle"
             case .merge: "arrow.triangle.merge"
             }
@@ -54,9 +55,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
 
         var emphasis: Emphasis {
             switch kind {
-            case .pushBranch, .forcePushBranch, .createReviewRequest, .openAgentHandoff:
+            case .pushBranch, .forcePushBranch, .createReviewRequest, .inspectReviewEvidence:
                 .primary
-            case .refresh, .openReviewRequest, .rerunFailedChecks, .merge:
+            case .refresh, .openReviewRequest, .rerunFailedChecks, .openAgentHandoff, .merge:
                 .normal
             }
         }
@@ -203,8 +204,8 @@ struct ReviewReadinessModel: Equatable, Sendable {
             if request.hasRerunnableFailedCheck, snapshot.providerCapabilities.canRerunFailedChecks {
                 actions.append(Action(kind: .rerunFailedChecks, title: "Rerun", isEnabled: true))
             }
-            if (request.worstCheckBucket == .fail || request.hasActionableFeedback), canOpenAgentHandoff {
-                actions.append(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true))
+            if request.worstCheckBucket == .fail || request.hasActionableFeedback {
+                actions.append(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true))
             }
         } else if canCreateReviewRequest(snapshot) {
             actions.append(Action(kind: .createReviewRequest, title: "Create \(requestLabel)", isEnabled: true))
@@ -276,6 +277,7 @@ enum ReviewReadinessActionKind: String, Codable, Equatable, Sendable {
     case createReviewRequest
     case openReviewRequest
     case rerunFailedChecks
+    case inspectReviewEvidence
     case openAgentHandoff
     case merge
 }

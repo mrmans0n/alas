@@ -3136,6 +3136,16 @@ final class AppState {
         openACPHandoff(agentID: agentID, initialPrompt: prompt)
     }
 
+    func openReviewEvidenceHandoff(snapshot: ReviewLoopSnapshot, detail: ReviewEvidenceDetail) {
+        let agentID = config.changes.aiToolId
+        guard agentID != "none", agent(id: agentID) != nil else { return }
+        let prompt = ReviewLoopHandoffBuilder.buildSelectedEvidencePrompt(
+            snapshot: snapshot,
+            detail: detail
+        )
+        openACPHandoff(agentID: agentID, initialPrompt: prompt)
+    }
+
     nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
         if request?.hasActionableFeedback == true {
             return .prepareReviewHandoff

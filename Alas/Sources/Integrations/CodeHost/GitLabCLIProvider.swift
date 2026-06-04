@@ -138,6 +138,76 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try Self.parsePipeline(result.stdout)
     }
 
+    func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
+        request.checks
+            .filter { $0.bucket == .fail }
+            .map {
+                ReviewEvidenceItem(
+                    id: $0.id,
+                    section: .ci,
+                    title: $0.name,
+                    subtitle: $0.workflow,
+                    status: .failed,
+                    providerURL: $0.detailURL
+                )
+            }
+    }
+
+    func checkEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail {
+        _ = request
+        guard let jobID = Self.gitLabJobID(from: item.providerURL) else {
+            return ReviewEvidenceDetail(
+                item: item,
+                body: "Open this job in GitLab to inspect full logs.",
+                filePath: nil,
+                line: nil,
+                isTruncated: false
+            )
+        }
+
+        let result = try await runner.run(
+            "glab",
+            args: ["ci", "trace", jobID, "-R", remote.repositorySlug],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab ci trace", stderr: result.stderr)
+        }
+
+        return ReviewEvidenceDetail.truncated(
+            item: item,
+            body: result.stdout,
+            filePath: nil,
+            line: nil
+        )
+    }
+
+    func feedbackEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail {
+        _ = remote
+        _ = cwd
+        if item.id == ReviewEvidenceFallbacks.changesRequestedID {
+            return ReviewEvidenceFallbacks.changesRequestedDetail(item: item, request: request)
+        }
+        let thread = request.threads.first { $0.id == item.id }
+        return ReviewEvidenceDetail(
+            item: item,
+            body: thread?.body ?? "Open this discussion in GitLab to inspect full context.",
+            filePath: nil,
+            line: nil,
+            isTruncated: false
+        )
+    }
+
     func rerunFailedChecks(
         remote: CodeHostRemote,
         branch: String,
@@ -595,6 +665,22 @@ struct GitLabCLIProvider: CodeHostProvider {
         var components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
         components?.fragment = "note_\(id)"
         return components?.url
+    }
+
+    static func gitLabJobID(from url: URL?) -> String? {
+        guard let url else {
+            return nil
+        }
+        let pathComponents = url.pathComponents
+        guard let jobsIndex = pathComponents.firstIndex(of: "jobs") else {
+            return nil
+        }
+        let idIndex = pathComponents.index(after: jobsIndex)
+        guard idIndex < pathComponents.endIndex else {
+            return nil
+        }
+        let id = pathComponents[idIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? nil : id
     }
 
     private static func checkID(for pipeline: GitLabPipeline) -> String {

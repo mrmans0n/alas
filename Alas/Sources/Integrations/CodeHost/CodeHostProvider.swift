@@ -62,6 +62,20 @@ protocol CodeHostProvider: Sendable {
         cwd: URL
     ) async throws -> URL
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck]
+    func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem]
+    func checkEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail
+    func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem]
+    func feedbackEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail
     func rerunFailedChecks(
         remote: CodeHostRemote,
         branch: String,
@@ -73,6 +87,74 @@ protocol CodeHostProvider: Sendable {
 
 extension CodeHostProvider {
     var capabilities: CodeHostProviderCapabilities { .readOnly }
+
+    func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
+        request.checks
+            .filter { $0.bucket == .fail }
+            .map {
+                ReviewEvidenceItem(
+                    id: $0.id,
+                    section: .ci,
+                    title: $0.name,
+                    subtitle: $0.workflow,
+                    status: .failed,
+                    providerURL: $0.detailURL
+                )
+            }
+    }
+
+    func checkEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail {
+        ReviewEvidenceDetail(
+            item: item,
+            body: "Open this check in the provider to inspect full logs.",
+            filePath: nil,
+            line: nil,
+            isTruncated: false
+        )
+    }
+
+    func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
+        let items = request.threads
+            .filter { !$0.isResolved && $0.isActionable }
+            .map {
+                ReviewEvidenceItem(
+                    id: $0.id,
+                    section: .feedback,
+                    title: $0.author ?? "reviewer",
+                    subtitle: String($0.body.prefix(120)),
+                    status: .actionable,
+                    providerURL: $0.url
+                )
+            }
+        if items.isEmpty, request.reviewDecision == .changesRequested {
+            return [ReviewEvidenceFallbacks.changesRequestedItem(request: request)]
+        }
+        return items
+    }
+
+    func feedbackEvidenceDetail(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        item: ReviewEvidenceItem,
+        cwd: URL
+    ) async throws -> ReviewEvidenceDetail {
+        if item.id == ReviewEvidenceFallbacks.changesRequestedID {
+            return ReviewEvidenceFallbacks.changesRequestedDetail(item: item, request: request)
+        }
+        let thread = request.threads.first { $0.id == item.id }
+        return ReviewEvidenceDetail(
+            item: item,
+            body: thread?.body ?? "Open this feedback in the provider to inspect full context.",
+            filePath: nil,
+            line: nil,
+            isTruncated: false
+        )
+    }
 }
 
 struct CodeHostProviderRegistry: Sendable {

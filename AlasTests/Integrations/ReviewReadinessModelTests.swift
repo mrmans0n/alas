@@ -130,7 +130,7 @@ struct ReviewReadinessModelTests {
         #expect(model.actions.contains(Action(kind: .createReviewRequest, title: "Create MR", isEnabled: true)))
     }
 
-    @Test func failedChecksExposeRerunAndAgentHandoffWhenSupported() {
+    @Test func failedChecksExposeRerunAndInspectWhenSupported() {
         let request = Self.makeReviewRequest(checks: [Self.makeCheck(bucket: .fail)])
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: request),
@@ -141,10 +141,11 @@ struct ReviewReadinessModelTests {
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["CI failed"])
         #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.danger])
         #expect(model.actions.contains(Action(kind: .rerunFailedChecks, title: "Rerun", isEnabled: true)))
-        #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+        #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    @Test func failedChecksHideRerunForReadOnlyProviderButKeepAgentHandoff() {
+    @Test func failedChecksHideRerunForReadOnlyProviderButKeepInspect() {
         let request = Self.makeReviewRequest(checks: [Self.makeCheck(bucket: .fail)])
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: request, providerCapabilities: .readOnly),
@@ -154,10 +155,11 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["CI failed"])
         #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.rerunFailedChecks))
-        #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+        #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    @Test func externalFailedChecksHideRerunButKeepAgentHandoff() {
+    @Test func externalFailedChecksHideRerunButKeepInspect() {
         let externalCheck = ReviewCheck(
             id: "buildkite",
             name: "Buildkite",
@@ -175,10 +177,11 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["CI failed"])
         #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.rerunFailedChecks))
-        #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+        #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    @Test func changesRequestedExposesReviewFeedbackAndAgentHandoff() {
+    @Test func changesRequestedExposesReviewFeedbackAndInspect() {
         let request = Self.makeReviewRequest(reviewDecision: .changesRequested)
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: request),
@@ -188,7 +191,29 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Review feedback"])
         #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.warning])
-        #expect(model.actions.contains(Action(kind: .openAgentHandoff, title: "Open in Agent", isEnabled: true)))
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+        #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
+    }
+
+    @Test func actionableReviewThreadExposesInspect() {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please adjust this",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/428#discussion_r1"),
+            isResolved: false,
+            isActionable: true
+        )
+        let request = Self.makeReviewRequest(threads: [thread])
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Review feedback"])
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+        #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
     @Test func approvedCleanRequestIsReadyWithoutMergeAction() {
@@ -246,8 +271,9 @@ struct ReviewReadinessModelTests {
         #expect(actions[.openReviewRequest]?.emphasis == .normal)
         #expect(actions[.rerunFailedChecks]?.iconName == "arrow.clockwise")
         #expect(actions[.rerunFailedChecks]?.emphasis == .normal)
-        #expect(actions[.openAgentHandoff]?.iconName == "sparkle")
-        #expect(actions[.openAgentHandoff]?.emphasis == .primary)
+        #expect(actions[.inspectReviewEvidence]?.iconName == "doc.text.magnifyingglass")
+        #expect(actions[.inspectReviewEvidence]?.emphasis == .primary)
+        #expect(actions[.openAgentHandoff] == nil)
     }
 
     @Test func lastErrorBecomesBlockingTextWhileFactsStillIncludeBranch() {
