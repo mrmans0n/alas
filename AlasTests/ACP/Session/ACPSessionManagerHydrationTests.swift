@@ -268,6 +268,7 @@ struct ACPSessionManagerHydrationTests {
         #expect(s.hasConversationTranscript == false)
         let warning = try #require(s.contextRestoreWarning)
         #expect(warning.canSendTranscript)
+        #expect(s.contextRecoveryStatus == .sendingTranscript)
     }
 
     @Test("hydrateIfNeeded for short transcripts skips backfill")

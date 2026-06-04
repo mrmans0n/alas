@@ -47,6 +47,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
     @Published var contextRestoreWarning: ContextRestoreWarning?
+    @Published var contextRecoveryStatus: ContextRecoveryStatus?
     /// Runtime-only transcript scroll intent. When true, the ACP message
     /// list follows new content and restores to the latest bottom after
     /// returning to this session. Set false when the user scrolls upward.
@@ -119,6 +120,13 @@ final class ACPSession: ObservableObject, Identifiable {
     struct ContextRestoreWarning: Equatable {
         var message: String
         var canSendTranscript: Bool
+    }
+
+    enum ContextRecoveryStatus: Hashable {
+        case restoring
+        case sendingTranscript
+        case restored
+        case failed(String)
     }
 
     var hasConversationTranscript: Bool {

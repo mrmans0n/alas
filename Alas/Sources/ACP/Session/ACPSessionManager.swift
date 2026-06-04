@@ -304,10 +304,14 @@ final class ACPSessionManager: ObservableObject {
             // calls / file edits would look conversation-less here and
             // permanently disable the "Send transcript" action — the
             // warning is set once and never recomputed after backfill.
+            let canSendTranscript = Self.wireMessagesHaveConversation(result.wireMessages)
             session.contextRestoreWarning = .init(
                 message: "Agent context could not be restored.",
-                canSendTranscript: Self.wireMessagesHaveConversation(result.wireMessages)
+                canSendTranscript: canSendTranscript
             )
+            if canSendTranscript {
+                session.contextRecoveryStatus = .sendingTranscript
+            }
         }
         session.autoRunEnabled = result.row.autoRun
         // Title intentionally NOT overwritten: `placeholderSession` already
@@ -1152,6 +1156,7 @@ extension ACPSessionManager {
         // `lastError` with the new reason.
         session.lastError = nil
         session.contextRestoreWarning = nil
+        session.contextRecoveryStatus = nil
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
@@ -1248,11 +1253,17 @@ extension ACPSessionManager {
             if freshlyCreated {
                 result = try await connection.newSession(cwd: worktreePath)
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
+                if session.hasConversationTranscript {
+                    session.contextRecoveryStatus = .restoring
+                }
                 do {
                     result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
                     runner.finishSuppressingLoadReplay(
                         throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                     )
+                    if !pendingRecovery {
+                        session.contextRecoveryStatus = nil
+                    }
                 } catch {
                     runner.finishSuppressingLoadReplay(
                         throughYieldedUpdateCount: connection.client.yieldedUpdateCount
@@ -1274,6 +1285,9 @@ extension ACPSessionManager {
                         message: "Agent context could not be restored.",
                         canSendTranscript: session.hasConversationTranscript
                     )
+                    if session.hasConversationTranscript {
+                        session.contextRecoveryStatus = .sendingTranscript
+                    }
                 }
             } else {
                 result = try await connection.newSession(cwd: worktreePath)
@@ -1290,12 +1304,18 @@ extension ACPSessionManager {
                     message: "Agent context could not be restored.",
                     canSendTranscript: session.hasConversationTranscript
                 )
+                if session.hasConversationTranscript {
+                    session.contextRecoveryStatus = .sendingTranscript
+                }
             }
             if restoreWarning == nil, pendingRecovery {
                 restoreWarning = .init(
                     message: "Agent context could not be restored.",
                     canSendTranscript: session.hasConversationTranscript
                 )
+                if session.hasConversationTranscript {
+                    session.contextRecoveryStatus = .sendingTranscript
+                }
             }
             // Abort the commit if we were taken over OR the manager was disposed
             // while we awaited spawn/initialize — never register a runner or
@@ -1322,7 +1342,9 @@ extension ACPSessionManager {
             runners[sessionId] = runner
             attachSucceeded = true
             session.agentState = .ready
-            if !shouldHoldQueueForRecovery {
+            if shouldHoldQueueForRecovery {
+                sendTranscriptAsContext(sessionId: sessionId, agentName: nil)
+            } else {
                 runner.flushQueueIfIdle()
             }
             stderrTask.cancel()
@@ -1336,6 +1358,7 @@ extension ACPSessionManager {
             let base = "ACP initialize/new failed: \(baseMessage)"
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
+            session.contextRecoveryStatus = nil
             if let authReason {
                 session.setupState = .needsAuth(methods: session.authMethods, reason: authReason)
                 session.agentState = .failed(authReason)
@@ -1384,10 +1407,14 @@ extension ACPSessionManager {
               let prompt = transcriptContextPrompt(for: session, agentName: agentName)
         else { return false }
 
+        session.contextRecoveryStatus = .sendingTranscript
         runner.sendRecoveryContext(prompt) { delivered in
             if delivered {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil
+                session.contextRecoveryStatus = .restored
+            } else {
+                session.contextRecoveryStatus = .failed("Transcript recovery failed.")
             }
         }
         return true
