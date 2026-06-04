@@ -26,6 +26,13 @@ struct GitServiceReviewRequestDraftTests {
         )
 
         #expect(context.commitSubjects == ["feat: add committed file"])
+        #expect(context.commits.count == 1)
+        #expect(context.commits[0].subject == "add committed file")
+        #expect(context.commits[0].conventionalTag == "feat")
+        #expect(context.commits[0].author == "Test User")
+        #expect(context.commits[0].filesChanged == 1)
+        #expect(context.commits[0].insertions == 1)
+        #expect(context.commits[0].deletions == 0)
         #expect(context.changedFiles.map(\.path) == ["Sources/A.swift"])
         #expect(context.diff.contains("Sources/A.swift"))
         #expect(context.fileDiffsByPath["Sources/A.swift"]?.contains("Sources/A.swift") == true)
@@ -62,6 +69,31 @@ struct GitServiceReviewRequestDraftTests {
         #expect(!aDiff.contains("Sources/B.swift"))
         #expect(bDiff.contains("Sources/B.swift"))
         #expect(!bDiff.contains("Sources/A.swift"))
+    }
+
+    @Test func loadsDiffForNonASCIIChangedFile() async throws {
+        let repo = try makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await git(["init", "-b", "main"], cwd: repo)
+        try await git(["config", "user.email", "test@example.com"], cwd: repo)
+        try await git(["config", "user.name", "Test User"], cwd: repo)
+        try write("README.md", "Initial\n", in: repo)
+        try await git(["add", "README.md"], cwd: repo)
+        try await git(["commit", "-m", "chore: initial"], cwd: repo)
+        try await git(["checkout", "-b", "feature/unicode-path"], cwd: repo)
+        try write("Sources/Café.swift", "let café = 1\n", in: repo)
+        try await git(["add", "Sources/Café.swift"], cwd: repo)
+        try await git(["commit", "-m", "feat: add unicode path"], cwd: repo)
+
+        let context = try await GitService().reviewRequestDraftContext(
+            worktreePath: repo,
+            baseRef: "main"
+        )
+
+        #expect(context.changedFiles.map(\.path) == ["Sources/Café.swift"])
+        #expect(context.diff.contains("Sources/Café.swift"))
+        #expect(context.fileDiffsByPath["Sources/Café.swift"]?.contains("let café = 1") == true)
     }
 
     @Test func loadsBranchDiffFromMergeBaseWhenBaseBranchHasAdvanced() async throws {

@@ -10,6 +10,9 @@ struct CommitMessageEditorView: View {
     let availableAgents: [AgentDefinition]
     let onGenerate: () -> Void
     let primaryAction: CommitPrimaryAction
+    var iconName: String = "commit"
+    var editorDisabled: Bool = false
+    var onDismissError: () -> Void = {}
     var accessory: AnyView? = nil
 
     @Environment(\.theme) private var theme
@@ -33,7 +36,7 @@ struct CommitMessageEditorView: View {
             subjectField
             bodyField
             if let error {
-                InlineErrorStrip(message: error, onDismiss: {})
+                InlineErrorStrip(message: error, onDismiss: onDismissError)
             }
         }
         .padding(12)
@@ -61,10 +64,12 @@ struct CommitMessageEditorView: View {
 
     private var headerRow: some View {
         HStack(spacing: 8) {
-            Icon(name: "commit", size: 12, color: theme.color("accent"))
+            Icon(name: iconName, size: 12, color: theme.color("accent"))
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer()
             if let accessory {
                 accessory
@@ -127,7 +132,7 @@ struct CommitMessageEditorView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .focused($focused, equals: .subject)
-            .disabled(busy)
+            .disabled(busy || editorDisabled)
     }
 
     private var bodyField: some View {
@@ -154,7 +159,7 @@ struct CommitMessageEditorView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .focused($focused, equals: .body)
-            .disabled(busy)
+            .disabled(busy || editorDisabled)
     }
 
     /// Render the modifier + key glyphs of a `KeyboardShortcut` for display

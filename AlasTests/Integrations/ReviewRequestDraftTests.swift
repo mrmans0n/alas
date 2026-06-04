@@ -3,6 +3,29 @@ import Testing
 @testable import Alas
 
 struct ReviewRequestDraftTests {
+    @Test func parsesSelectedFileDiffPreviewIntoHunks() {
+        let raw = """
+        diff --git a/Sources/A.swift b/Sources/A.swift
+        index 1111111..2222222 100644
+        --- a/Sources/A.swift
+        +++ b/Sources/A.swift
+        @@ -1,1 +1,1 @@
+        -let value = 1
+        +let value = 2
+        """
+
+        let preview = DraftReviewRequestDiffPreview(
+            path: "Sources/A.swift",
+            file: CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1),
+            rawDiff: raw
+        )
+
+        #expect(preview.parsedDiff.hunks.count == 1)
+        #expect(preview.fileExtension == "swift")
+        #expect(preview.title == "A.swift")
+        #expect(preview.directory == "Sources")
+    }
+
     @Test func parsesGeneratedTitleAndBody() throws {
         let parsed = try ReviewRequestDraft.parseGeneratedMessage("""
         Add review request drafts
