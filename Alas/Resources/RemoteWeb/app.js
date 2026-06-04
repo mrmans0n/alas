@@ -76,10 +76,12 @@ function handle(msg) {
     // The server re-sends the full transcript each time, keyed by stable position
     // ids, so replace (don't append) to avoid accumulating duplicate copies.
     case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(false); break;
-    case "permissionRequest": showPermission(msg.sessionId, msg.payload); break;
-    case "permissionResolved": hidePermission(); break;
-    case "questionRequest": showQuestion(msg.sessionId, msg.payload); break;
-    case "questionResolved": dismissedQuestion = null; hideQuestion(); break;
+    // Scope prompt events to the session currently open — a stale/in-flight
+    // event for a session the user already left must not pop or close a sheet.
+    case "permissionRequest": if (msg.sessionId === currentSession) showPermission(msg.sessionId, msg.payload); break;
+    case "permissionResolved": if (msg.sessionId === currentSession) hidePermission(); break;
+    case "questionRequest": if (msg.sessionId === currentSession) showQuestion(msg.sessionId, msg.payload); break;
+    case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "error": setStatus("error: " + (msg.message ?? "(unknown)")); break;
     default: console.warn("unknown message type", msg.type);
