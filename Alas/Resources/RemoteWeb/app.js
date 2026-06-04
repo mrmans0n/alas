@@ -7,16 +7,22 @@ const maxReconnectDelay = 30000;
 function setStatus(s) { $("status").textContent = s; }
 
 async function ensureToken() {
-  let token = localStorage.getItem(tokenKey);
-  if (token) return token;
+  // A freshly-scanned QR (?code present) always re-pairs, REPLACING any stored
+  // token — otherwise a phone holding a stale/rejected token could never
+  // recover by scanning a new code (it would keep reusing the dead token).
   const code = new URLSearchParams(location.search).get("code");
-  if (!code) { setStatus("open the QR link from Alas to pair"); throw new Error("no code"); }
-  const res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }) });
-  if (!res.ok) { setStatus("pairing failed — get a fresh QR"); throw new Error("pair failed"); }
-  token = (await res.json()).token;
-  localStorage.setItem(tokenKey, token);
-  history.replaceState({}, "", "/");   // strip code from URL (history + referrer)
-  return token;
+  if (code) {
+    const res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }) });
+    if (!res.ok) { localStorage.removeItem(tokenKey); setStatus("pairing failed — get a fresh QR"); throw new Error("pair failed"); }
+    const token = (await res.json()).token;
+    localStorage.setItem(tokenKey, token);
+    history.replaceState({}, "", "/");   // strip code from URL (history + referrer)
+    return token;
+  }
+  const token = localStorage.getItem(tokenKey);
+  if (token) return token;
+  setStatus("open the QR link from Alas to pair");
+  throw new Error("no code");
 }
 
 async function connect() {
