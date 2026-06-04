@@ -313,6 +313,16 @@ struct RemoteSessionGatewayTests {
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
+    @Test func sendPromptTrimsAndIgnoresBlankEvenWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ")) // blank → ignored
+        #expect(provider.prompts.isEmpty)
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ")) // trimmed before forwarding
+        #expect(provider.prompts.map(\.text) == ["hi"])
+    }
+
     @Test func stopRoutesOnlyWhenWriter() async {
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }
