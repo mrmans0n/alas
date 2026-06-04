@@ -31,12 +31,31 @@ struct AppConfig: Codable, Equatable {
     var changes: Changes
     var agents: Agents
     var files: Files
+    var remote: Remote = .init()
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
     var collapsedProjectIds: [String] = []
     var sidebarChromeOverrides: [String: SidebarChromeOverride] = [:]
     var shortcutOverrides: [String: ShortcutBinding?] = [:]
+
+    struct Remote: Codable, Equatable {
+        var enabled: Bool = false
+        var port: UInt16 = 0          // 0 = OS-assigned
+
+        init(enabled: Bool = false, port: UInt16 = 0) {
+            self.enabled = enabled
+            self.port = port
+        }
+
+        enum CodingKeys: String, CodingKey { case enabled, port }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+            port = (try? c.decode(UInt16.self, forKey: .port)) ?? 0
+        }
+    }
 
     struct General: Codable, Equatable {
         var launchAtLogin: Bool
@@ -493,6 +512,7 @@ extension AppConfig {
              general, worktrees, terminal, harness, code, markdown, changes,
              agents,
              files,
+             remote,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -671,6 +691,8 @@ extension AppConfig {
         } else {
             files = Files(showIgnored: true)
         }
+        // Older configs predate `remote`; default to disabled so they still load.
+        remote = (try? c.decodeIfPresent(Remote.self, forKey: .remote)) ?? .init()
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
