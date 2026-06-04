@@ -54,7 +54,7 @@ final class RemoteSessionGateway {
     // MARK: snapshot / delta
 
     private func sendSnapshot(id: String, session: ACPSession) {
-        let wire = session.transcript.messages.map { Self.toWire($0) }
+        let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
                                  messages: wire))
@@ -84,7 +84,7 @@ final class RemoteSessionGateway {
     private func sendDelta(id: String, session: ACPSession) {
         // v1: send a full re-snapshot as the "delta" (simple + always correct).
         // A true per-message diff optimization is intentionally deferred (YAGNI).
-        let wire = session.transcript.messages.map { Self.toWire($0) }
+        let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
         send(.transcriptDelta(sessionId: id,
                               streamingState: Self.stateString(session.transcript.streamingState),
                               upserts: wire))
@@ -210,22 +210,30 @@ final class RemoteSessionGateway {
 
     /// Maps a live ACPMessage to the wire DTO. Simple kinds carry `text`;
     /// structured kinds carry a JSON blob the web client renders specially.
-    static func toWire(_ message: ACPMessage) -> RemoteWireMessage {
+    ///
+    /// The id is the message's POSITION, not `ACPMessage.stableId`: a read-only
+    /// mirror re-decodes the transcript on every refresh, minting fresh UUIDs
+    /// each time (`ACPMessageWire.toMessage`), so the per-message id is not
+    /// stable across our full re-snapshots. Position is — the Nth message stays
+    /// the Nth — so the client can upsert idempotently instead of accumulating
+    /// duplicate copies of the whole transcript on each refresh.
+    static func toWire(_ message: ACPMessage, index: Int) -> RemoteWireMessage {
+        let sid = "m\(index)"
         switch message {
         case .user(_, let text, _):
-            return .init(stableId: message.stableId, kind: "user", text: text, json: nil)
+            return .init(stableId: sid, kind: "user", text: text, json: nil)
         case .agent(_, let streaming):
-            return .init(stableId: message.stableId, kind: "agent", text: streaming.value, json: nil)
+            return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil)
         case .thought(_, let streaming):
-            return .init(stableId: message.stableId, kind: "thought", text: streaming.value, json: nil)
+            return .init(stableId: sid, kind: "thought", text: streaming.value, json: nil)
         case .systemNotice(_, let text):
-            return .init(stableId: message.stableId, kind: "systemNotice", text: text, json: nil)
+            return .init(stableId: sid, kind: "systemNotice", text: text, json: nil)
         case .toolCall(let call):
-            return .init(stableId: message.stableId, kind: "toolCall", text: nil, json: Self.encodeJSON(call))
+            return .init(stableId: sid, kind: "toolCall", text: nil, json: Self.encodeJSON(call))
         case .fileEdit(_, let edit):
-            return .init(stableId: message.stableId, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit))
+            return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit))
         case .plan(_, let items):
-            return .init(stableId: message.stableId, kind: "plan", text: nil, json: Self.encodeJSON(items))
+            return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items))
         }
     }
 

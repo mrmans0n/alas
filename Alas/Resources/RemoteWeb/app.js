@@ -1,4 +1,4 @@
-const APP_BUILD = "v9";   // visible in the top bar to confirm the phone has fresh JS
+const APP_BUILD = "v10";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
@@ -81,8 +81,10 @@ function handle(msg) {
   setBar();
   switch (msg.type) {
     case "sessionList": renderSessions(msg.sessions); break;
-    case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(); break;
-    case "transcriptDelta": msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(); break;
+    case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(true); break;
+    // The server re-sends the full transcript each time, keyed by stable position
+    // ids, so replace (don't append) to avoid accumulating duplicate copies.
+    case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(false); break;
     case "permissionRequest": showPermission(msg.sessionId, msg.payload); break;
     case "permissionResolved": hidePermission(); break;
     case "questionRequest": showQuestion(msg.sessionId, msg.payload); break;
@@ -125,13 +127,16 @@ function showSessions() {
   send({ type: "listSessions" });
 }
 
-function renderMessages() {
+function renderMessages(forceBottom) {
   const box = $("messages");
-  // Preserve the user's scroll position unless they're already at the bottom.
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  // The page itself scrolls (sticky bar + body), so use window scroll metrics.
+  const atBottom = forceBottom || (window.innerHeight + window.scrollY >= document.body.scrollHeight - 120);
+  // Preserve which tool/thought cards the user expanded across re-renders.
+  const open = new Set();
+  box.querySelectorAll("details[open]").forEach(d => { if (d.dataset.sid) open.add(d.dataset.sid); });
   box.innerHTML = "";
-  for (const m of messages.values()) box.appendChild(renderMessage(m));
-  if (atBottom) box.scrollTop = box.scrollHeight;
+  for (const [sid, m] of messages) box.appendChild(renderMessage(m, sid, open));
+  if (atBottom) requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
 }
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -143,18 +148,28 @@ const TOOL_STATUS = { completed: ["✓", "ok"], failed: ["✕", "err"], in_progr
 
 // Mirrors the native ACP pane: plain agent prose, accent user bubbles, a
 // collapsed "Thinking…" row, and collapsed tool/structured cards.
-function renderMessage(m) {
-  if (m.kind === "user" || m.kind === "agent" || m.kind === "systemNotice")
-    return el("div", "msg m-" + m.kind, m.text || "");
-  if (m.kind === "thought") {
-    const d = el("details", "msg m-thought");
-    d.append(el("summary", null, "Thinking…"), el("div", "thought-body", m.text || ""));
-    return d;
+function renderMessage(m, sid, open) {
+  let node;
+  if (m.kind === "user" || m.kind === "agent" || m.kind === "systemNotice") {
+    node = el("div", "msg m-" + m.kind, m.text || "");
+  } else if (m.kind === "thought") {
+    node = el("details", "msg m-thought");
+    node.append(el("summary", null, "Thinking…"), el("div", "thought-body", m.text || ""));
+  } else if (m.kind === "toolCall") {
+    node = toolCard(jparse(m.json) || {});
+  } else if (m.kind === "fileEdit") {
+    const o = jparse(m.json) || {};
+    node = structCard("Edit", o.path || o.title || "file", o.diff || o.content || m.json || "");
+  } else if (m.kind === "plan") {
+    node = structCard("Plan", "", planText(jparse(m.json)) || m.json || "");
+  } else {
+    node = el("div", "msg m-agent", m.text || "");
   }
-  if (m.kind === "toolCall") return toolCard(jparse(m.json) || {});
-  if (m.kind === "fileEdit") { const o = jparse(m.json) || {}; return structCard("Edit", o.path || o.title || "file", o.diff || o.content || m.json || ""); }
-  if (m.kind === "plan") return structCard("Plan", "", planText(jparse(m.json)) || m.json || "");
-  return el("div", "msg m-agent", m.text || "");
+  if (node.tagName === "DETAILS") {            // restore prior expand state
+    node.dataset.sid = sid;
+    if (open && open.has(sid)) node.open = true;
+  }
+  return node;
 }
 
 function toolCard(tc) {
