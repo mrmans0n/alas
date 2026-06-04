@@ -339,17 +339,24 @@ function renderDriveBar(streamingState) {
   }
 }
 
+function autoGrowPrompt() {
+  const ta = $("prompt");
+  ta.style.height = "auto";                          // shrink back before measuring
+  ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + "px";
+}
 function sendPrompt() {
   const ta = $("prompt");
   const text = ta.value.trim();
   if (!text || !currentSession || !canDrive) return;
   send({ type: "sendPrompt", sessionId: currentSession, text });
   ta.value = "";
+  autoGrowPrompt();                                  // collapse back to one row
 }
 
 $("takeover").onclick = () => { if (currentSession) send({ type: "takeOver", sessionId: currentSession }); };
 $("send").onclick = sendPrompt;
 $("stop").onclick = () => { if (currentSession) send({ type: "stop", sessionId: currentSession }); };
+$("prompt").addEventListener("input", autoGrowPrompt);
 $("prompt").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
 });
