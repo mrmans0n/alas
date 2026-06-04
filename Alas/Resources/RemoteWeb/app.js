@@ -1,6 +1,8 @@
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
+let reconnectDelay = 1500;
+const maxReconnectDelay = 30000;
 
 function setStatus(s) { $("status").textContent = s; }
 
@@ -13,15 +15,30 @@ async function ensureToken() {
   if (!res.ok) { setStatus("pairing failed — get a fresh QR"); throw new Error("pair failed"); }
   token = (await res.json()).token;
   localStorage.setItem(tokenKey, token);
-  history.replaceState({}, "", "/");   // strip code from URL
+  history.replaceState({}, "", "/");   // strip code from URL (history + referrer)
   return token;
 }
 
 async function connect() {
-  const token = await ensureToken();
+  let token;
+  try {
+    token = await ensureToken();
+  } catch (_) {
+    return;   // no code/token yet (or pairing failed); status is set — wait for the user
+  }
+  if (ws) { try { ws.close(); } catch (_) {} }   // drop any prior (possibly half-open) socket
   ws = new WebSocket(`ws://${location.host}/ws`, [token]);   // token as subprotocol
-  ws.onopen = () => { setStatus("connected"); send({ type: "listSessions" }); };
-  ws.onclose = () => { setStatus("disconnected — reconnecting…"); setTimeout(connect, 1500); };
+  ws.onopen = () => {
+    setStatus("connected");
+    reconnectDelay = 1500;   // reset back-off after a good connection
+    send({ type: "listSessions" });
+    if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
+  };
+  ws.onclose = () => {
+    setStatus("disconnected — reconnecting…");
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);   // capped exponential back-off
+  };
   ws.onmessage = (e) => handle(JSON.parse(e.data));
 }
 
@@ -35,7 +52,8 @@ function handle(msg) {
     case "permissionRequest": showPermission(msg.sessionId, msg.payload); break;
     case "permissionResolved": hidePermission(); break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
-    case "error": setStatus("error: " + msg.message); break;
+    case "error": setStatus("error: " + (msg.message ?? "(unknown)")); break;
+    default: console.warn("unknown message type", msg.type);
   }
 }
 
@@ -43,7 +61,12 @@ function renderSessions(sessions) {
   const ul = $("session-list"); ul.innerHTML = "";
   sessions.forEach(s => {
     const li = document.createElement("li");
-    li.innerHTML = `<span>${escapeHTML(s.title)}</span><span class="status">${s.status}</span>`;
+    const title = document.createElement("span");
+    title.textContent = s.title;                 // textContent: safe against agent-set titles
+    const status = document.createElement("span");
+    status.className = "status";
+    status.textContent = s.status;
+    li.append(title, status);
     li.onclick = () => openSession(s.id);
     ul.appendChild(li);
   });
@@ -62,14 +85,18 @@ function showSessions() {
 }
 
 function renderMessages() {
-  const box = $("messages"); box.innerHTML = "";
+  const box = $("messages");
+  // Preserve the user's scroll position unless they're already at the bottom.
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  box.innerHTML = "";
   for (const m of messages.values()) {
     const div = document.createElement("div");
-    div.className = "m-" + m.kind;
+    const kind = /^[a-zA-Z][a-zA-Z0-9]*$/.test(m.kind) ? m.kind : "unknown";
+    div.className = "m-" + kind;
     div.textContent = m.text != null ? m.text : (m.json != null ? prettyStructured(m) : "");
     box.appendChild(div);
   }
-  box.scrollTop = box.scrollHeight;
+  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 function prettyStructured(m) { try { return m.kind + ": " + JSON.stringify(JSON.parse(m.json)).slice(0, 400); } catch { return m.kind; } }
 
@@ -92,7 +119,5 @@ function showPermission(sessionId, payload) {
 }
 function hidePermission() { $("permission").classList.add("hidden"); permState = null; }
 
-function escapeHTML(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-
 $("back").onclick = showSessions;
-connect().catch(() => {});
+connect();
