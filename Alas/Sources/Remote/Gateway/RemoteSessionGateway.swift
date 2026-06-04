@@ -138,6 +138,7 @@ final class RemoteSessionGateway {
         case .idle: return "idle"
         case .sending, .streaming: return "streaming"
         case .awaitingPermission: return "awaitingPermission"
+        case .awaitingInput: return "awaitingInput"
         }
     }
 
