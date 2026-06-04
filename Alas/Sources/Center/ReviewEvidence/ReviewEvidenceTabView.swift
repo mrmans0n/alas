@@ -27,8 +27,48 @@ struct ReviewEvidenceTabView: View {
 
     private var loadKey: String {
         let head = snapshot?.local.headSHA ?? "no-head"
-        let request = snapshot?.reviewRequest.map { "\($0.provider.rawValue):\($0.number)" } ?? "no-request"
-        return "\(tabState.id):\(head):\(request):\(loadNonce)"
+        let providerState = "\(snapshot?.providerAvailable == true):\(snapshot?.providerAuthenticated == true)"
+        let request = snapshot?.reviewRequest.map(reviewEvidenceRevisionKey) ?? "no-request"
+        return "\(tabState.id):\(head):\(providerState):\(request):\(loadNonce)"
+    }
+
+    private func reviewEvidenceRevisionKey(for request: ReviewRequest) -> String {
+        let checks = request.checks
+            .sorted { $0.id < $1.id }
+            .map { check in
+                let completedAt = check.completedAt.map { String($0.timeIntervalSince1970) } ?? "nil"
+                return [
+                    check.id,
+                    check.name,
+                    check.workflow ?? "nil",
+                    check.bucket.rawValue,
+                    check.detailURL?.absoluteString ?? "nil",
+                    completedAt
+                ].joined(separator: ",")
+            }
+            .joined(separator: ";")
+        let threads = request.threads
+            .sorted { $0.id < $1.id }
+            .map { thread in
+                [
+                    thread.id,
+                    thread.author ?? "nil",
+                    thread.body,
+                    thread.url?.absoluteString ?? "nil",
+                    String(thread.isResolved),
+                    String(thread.isActionable)
+                ].joined(separator: ",")
+            }
+            .joined(separator: ";")
+        return [
+            request.id,
+            request.state.rawValue,
+            String(request.isDraft),
+            request.reviewDecision.rawValue,
+            request.mergeState.rawValue,
+            checks,
+            threads
+        ].joined(separator: "|")
     }
 
     var body: some View {
