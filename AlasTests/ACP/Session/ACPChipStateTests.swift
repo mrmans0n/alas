@@ -272,6 +272,27 @@ extension ACPChipStateTests {
         #expect(state.thinking?.options.map { $0.name } == ["None", "Low", "Medium", "High", "Extra High"])
         #expect(state.parameters.map { $0.label } == ["Context", "Fast"])
         #expect(state.parameters.map { $0.spec.currentId } == ["272k", "false"])
+        #expect(state.parameters.map { $0.presentation } == [.cursorContextWindow, .cursorFast])
+    }
+
+    @Test("non-cursor agent: context and fast remain generic parameters")
+    func nonCursorContextAndFastRemainGeneric() {
+        let state = ACPChipState.normalize(
+            agentId: "future-agent",
+            availableModels: [],
+            currentModel: nil,
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [
+                configOption("context",
+                             current: "272k",
+                             options: [("272k", "272k"), ("1m", "1m")]),
+                configOption("fast",
+                             current: "false",
+                             options: [("false", "Off"), ("true", "On")]),
+            ])
+
+        #expect(state.parameters.map { $0.presentation } == [.standard, .standard])
     }
 
     @Test("cursor-agent: no brackets -> no synthesized chips")
