@@ -60,17 +60,21 @@ function handle(msg) {
 }
 
 function renderSessions(sessions) {
-  const ul = $("session-list"); ul.innerHTML = "";
+  const list = $("session-list"); list.innerHTML = "";
   sessions.forEach(s => {
-    const li = document.createElement("li");
+    // A real <button> is natively tappable on iOS Safari (a plain <li> with a
+    // JS click handler is not, even with cursor:pointer).
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "session-row";
     const title = document.createElement("span");
     title.textContent = s.title;                 // textContent: safe against agent-set titles
     const status = document.createElement("span");
     status.className = "status";
     status.textContent = s.status;
-    li.append(title, status);
-    li.onclick = () => openSession(s.id);
-    ul.appendChild(li);
+    row.append(title, status);
+    row.onclick = () => openSession(s.id);
+    list.appendChild(row);
   });
 }
 

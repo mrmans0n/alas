@@ -4,11 +4,11 @@ body { margin: 0; background: #14151a; color: #e7e7ea; }
 #bar { padding: env(safe-area-inset-top) 12px 8px; background: #1c1d24; font-size: 13px; color: #9aa; }
 .view { padding: 12px; }
 .hidden { display: none; }
-#session-list { list-style: none; padding: 0; margin: 0; }
-/* cursor:pointer is required for iOS Safari to fire click on a non-button <li>. */
-#session-list li { padding: 14px 12px; border-bottom: 1px solid #2a2b33; display: flex; justify-content: space-between; cursor: pointer; -webkit-tap-highlight-color: rgba(123,205,255,.25); }
-#session-list li:active { background: #1c1d24; }
-#session-list li .status { color: #7bd; font-size: 12px; }
+#session-list { padding: 0; margin: 0; }
+/* Rows are real <button>s so iOS Safari fires taps reliably. */
+.session-row { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 16px 12px; border: none; border-bottom: 1px solid #2a2b33; background: #14151a; color: #e7e7ea; font-size: 16px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: rgba(123,205,255,.25); }
+.session-row:active { background: #1c1d24; }
+.session-row .status { color: #7bd; font-size: 12px; }
 #messages > div { padding: 10px 12px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; line-height: 1.4; }
 .m-user { background: #243; } .m-agent { background: #222530; } .m-thought { background: #1a1b22; color: #99a; font-style: italic; }
 .m-toolCall, .m-fileEdit, .m-plan { background: #1d2733; font-family: ui-monospace, monospace; font-size: 12px; }
