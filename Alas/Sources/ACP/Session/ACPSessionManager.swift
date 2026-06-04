@@ -37,6 +37,7 @@ final class ACPSessionManager: ObservableObject {
 
     /// Lightweight summaries for the remote sessions list.
     var sessionRows: [ACPSessionRow] { recent }
+
     /// Sessions for which THIS instance holds the writer lease (backing store).
     var _ownedLeases: Set<ACPSession.ID> = []
     /// Per-session periodic heartbeat tasks (backing store).

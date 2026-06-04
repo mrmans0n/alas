@@ -3,6 +3,7 @@ import Foundation
 @testable import Alas
 
 @MainActor
+@Suite("ACPSessionManager - remote accessors")
 struct ACPManagerAccessorsTests {
     private func makeManager() throws -> ACPSessionManager {
         let url = FileManager.default.temporaryDirectory
@@ -14,7 +15,7 @@ struct ACPManagerAccessorsTests {
     @Test func liveSessionReturnsCachedSession() throws {
         let mgr = try makeManager()
         let session = mgr.createSession(agentId: "claude")
-        #expect(mgr.liveSession(for: session.id)?.id == session.id)
+        #expect(mgr.liveSession(for: session.id) === session)  // exact cached instance
     }
 
     @Test func liveSessionReturnsNilForUnknownId() throws {
