@@ -60,15 +60,19 @@ final class RemoteSessionGateway {
     }
 
     private func observe(id: String, session: ACPSession) {
+        // Replace any existing subscription / pending coalesce for this id so a
+        // re-subscribe can't leave an orphaned timer firing one stray delta.
+        subscriptions[id]?.cancel()
+        coalesce[id]?.cancel()
         // ACPTranscript is an ObservableObject; objectWillChange fires on any
         // @Published mutation (new message, streaming chunk, pending permission).
         subscriptions[id] = session.transcript.objectWillChange.sink { [weak self, weak session] _ in
             guard let self, let session else { return }
             // Coalesce bursts of streaming chunks into one delta.
             self.coalesce[id]?.cancel()
-            self.coalesce[id] = Task { @MainActor in
+            self.coalesce[id] = Task { @MainActor [weak self, weak session] in
                 try? await Task.sleep(nanoseconds: Self.coalesceNanos)
-                if Task.isCancelled { return }
+                guard !Task.isCancelled, let self, let session else { return }
                 self.sendDelta(id: id, session: session)
             }
         }
@@ -137,6 +141,11 @@ final class RemoteSessionGateway {
         }
     }
 
+    /// Extracts the integer request id. In practice `pendingPermission.id` is
+    /// always `.number(0)` (set by ACPPermissionPolicy), so the first-wins guard
+    /// distinguishes "this prompt is still pending" from "already resolved"
+    /// (pending goes nil) rather than telling sequential requests apart — which
+    /// is fine because the agent blocks on each prompt before issuing the next.
     static func requestIdInt(_ id: JSONRPCID) -> Int {
         if case .number(let n) = id { return n }
         return -1

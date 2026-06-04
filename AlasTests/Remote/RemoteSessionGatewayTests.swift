@@ -109,4 +109,34 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.permissionDecision(sessionId: "s1", requestId: 0, optionId: "allow_once", persistScope: nil))
         #expect(s.transcript.pendingPermission != nil)  // unchanged: stale requestId ignored
     }
+
+    @Test func transcriptMutationEmitsCoalescedDelta() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hello")
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        s.transcript.messages.append(.agent(id: UUID(), StreamingText("more")))  // fires objectWillChange
+        try await Task.sleep(nanoseconds: 250_000_000)  // > coalesce window
+        let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
+            if case .transcriptDelta(_, _, let upserts) = msg { return upserts }
+            return nil
+        }.last
+        let delta2 = try #require(delta, "expected a transcriptDelta after mutation")
+        #expect(delta2.contains { $0.text == "more" })
+    }
+
+    @Test func closeStopsFurtherDeltas() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hello")
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        gw.close()
+        s.transcript.messages.append(.agent(id: UUID(), StreamingText("after-close")))
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(!sent.contains { if case .transcriptDelta = $0 { return true }; return false })
+    }
 }
