@@ -65,7 +65,7 @@ struct DraftReviewRequestTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            reviewRequestEditor
             contextBrowser
         }
         .onAppear { hydrateFromTabState() }
@@ -79,11 +79,54 @@ struct DraftReviewRequestTabView: View {
         }
     }
 
-    private var header: some View {
+    private var reviewRequestEditor: some View {
+        VStack(spacing: 0) {
+            CommitMessageEditorView(
+                subject: $title,
+                bodyText: $bodyText,
+                aiToolId: appState.bind(\.changes.aiToolId),
+                title: editorTitle,
+                busy: busy,
+                error: error,
+                availableAgents: appState.agentRegistry.enabled(),
+                onGenerate: handleGenerate,
+                primaryAction: CommitPrimaryAction(
+                    label: "Create \(tabState.provider.reviewRequestLabel)",
+                    isEnabled: canCreate,
+                    showSavedState: false,
+                    handler: createReviewRequest
+                ),
+                iconName: "branch",
+                editorDisabled: tabState.createdURL != nil,
+                onDismissError: { self.error = nil },
+                accessory: AnyView(
+                    Toggle(isOn: $createAsDraft) {
+                        Text("Draft")
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.color("fg-dim"))
+                    }
+                    .toggleStyle(.checkbox)
+                    .disabled(busy || tabState.createdURL != nil)
+                )
+            )
+            if hasEditorMessages {
+                editorMessages
+            }
+        }
+    }
+
+    private var hasEditorMessages: Bool {
+        warning != nil || (validationMessage != nil && tabState.createdURL == nil) || tabState.createdURL != nil
+    }
+
+    private var editorTitle: String {
+        let repo = tabState.repositorySlug.isEmpty ? "Unknown repository" : tabState.repositorySlug
+        return "\(tabState.provider.displayName) \(tabState.provider.reviewRequestLabel) · \(repo) · \(tabState.branchName) -> \(tabState.baseBranch)"
+    }
+
+    @ViewBuilder
+    private var editorMessages: some View {
         VStack(alignment: .leading, spacing: 8) {
-            headerRow
-            titleField
-            bodyEditor
             if let warning {
                 Text(warning)
                     .font(.system(size: 10.5))
@@ -96,9 +139,6 @@ struct DraftReviewRequestTabView: View {
                     .foregroundColor(theme.color("fg-dim"))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let error {
-                InlineErrorStrip(message: error, onDismiss: { self.error = nil })
-            }
             if let createdURL = tabState.createdURL {
                 HStack(spacing: 6) {
                     Icon(name: "link", size: 11, color: theme.color("accent"))
@@ -108,11 +148,16 @@ struct DraftReviewRequestTabView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
+                    Spacer()
+                    AlasButton(title: "Open \(tabState.provider.reviewRequestLabel)", icon: "arrow.up.right.square") {
+                        NSWorkspace.shared.open(createdURL)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(
             LinearGradient(
                 colors: [theme.color("composer-bg-top"), theme.color("composer-bg-bot")],
@@ -120,18 +165,6 @@ struct DraftReviewRequestTabView: View {
                 endPoint: .bottom
             )
         )
-        .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [
-                    Color.clear,
-                    theme.color("accent-glow"),
-                    Color.clear,
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .frame(height: 1)
-        }
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 
@@ -272,14 +305,13 @@ struct DraftReviewRequestTabView: View {
             contextSectionTitle("Commits")
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array((context?.commitSubjects ?? []).enumerated()), id: \.offset) { _, subject in
-                        Text(subject)
-                            .font(.system(size: 11))
-                            .foregroundColor(theme.color("fg"))
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
+                    ForEach(Array((context?.commits ?? []).enumerated()), id: \.element.id) { index, commit in
+                        CommitRow(
+                            commit: commit,
+                            isLast: index == (context?.commits.count ?? 0) - 1,
+                            onSelect: {},
+                            onCopySHA: { Clipboard.copy(commit.sha) }
+                        )
                     }
                 }
             }
@@ -334,39 +366,39 @@ struct DraftReviewRequestTabView: View {
                     let preview = selectedDiffPreview(in: context)
                     if let selectedPath,
                        let file = context.changedFiles.first(where: { $0.path == selectedPath }) {
-                        HStack(spacing: 8) {
-                            Text(file.path)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(theme.color("fg"))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            Text("\(file.status)  +\(file.add) -\(file.del)")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(theme.color("fg-dim"))
-                        }
+                        DraftReviewRequestDiffPreviewView(
+                            preview: DraftReviewRequestDiffPreview(
+                                path: selectedPath,
+                                file: file,
+                                rawDiff: preview.diff
+                            ),
+                            codeFontFamily: appState.config.code.fontFamily,
+                            codeFontSize: CGFloat(appState.config.code.fontSize)
+                        )
                     } else {
                         Text("Branch diff")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(theme.color("fg"))
-                    }
-                    ScrollView([.horizontal, .vertical]) {
-                        Text(preview.diff.isEmpty ? "No committed diff." : preview.diff)
-                            .font(.system(
-                                size: CGFloat(appState.config.code.fontSize),
-                                design: .monospaced
-                            ))
-                            .foregroundColor(theme.color("fg"))
-                            .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
+                        ScrollView([.horizontal, .vertical]) {
+                            Text(preview.diff.isEmpty ? "No committed diff." : preview.diff)
+                                .font(CenterTypography.codeFont(
+                                    family: appState.config.code.fontFamily,
+                                    size: CGFloat(appState.config.code.fontSize)
+                                ))
+                                .foregroundColor(theme.color("fg"))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .padding(12)
+                        }
+                        .background(theme.color("field-bg"))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
-                    .background(theme.color("field-bg"))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .padding(12)
             } else {
@@ -560,6 +592,101 @@ struct DraftReviewRequestTabView: View {
         case "D": return theme.color("del")
         case "R", "C": return theme.color("accent")
         default: return theme.color("fg-dim")
+        }
+    }
+}
+
+struct DraftReviewRequestDiffPreview {
+    let path: String
+    let file: CommitChangedFile
+    let rawDiff: String
+
+    var parsedDiff: ParsedDiff {
+        DiffParser.parse(rawDiff)
+    }
+
+    var fileExtension: String {
+        LanguageRegistry.highlighterExtension(forPath: path)
+    }
+
+    var title: String {
+        (path as NSString).lastPathComponent
+    }
+
+    var directory: String {
+        (path as NSString).deletingLastPathComponent
+    }
+}
+
+private struct DraftReviewRequestDiffPreviewView: View {
+    let preview: DraftReviewRequestDiffPreview
+    let codeFontFamily: String
+    let codeFontSize: CGFloat
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            content
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.color("bg-1"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(preview.title)
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(1)
+            if !preview.directory.isEmpty {
+                Text("·").foregroundColor(theme.color("fg-faint"))
+                Text(preview.directory)
+                    .font(.system(size: codeFontSize - 2))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Text("\(preview.file.status)  +\(preview.file.add) -\(preview.file.del)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(theme.color("fg-dim"))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.4), alignment: .bottom)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        let parsed = preview.parsedDiff
+        if parsed.hunks.isEmpty {
+            Text("No changes for \(preview.path)")
+                .foregroundColor(theme.color("fg-dim"))
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(parsed.hunks.enumerated()), id: \.offset) { _, hunk in
+                        HunkView(
+                            hunk: hunk,
+                            fileExtension: preview.fileExtension,
+                            codeFontFamily: codeFontFamily,
+                            codeFontSize: codeFontSize
+                        )
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            .defaultScrollAnchor(.topLeading)
         }
     }
 }

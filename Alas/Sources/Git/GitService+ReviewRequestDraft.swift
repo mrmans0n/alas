@@ -2,6 +2,7 @@ import Foundation
 
 struct ReviewRequestDraftContext: Equatable {
     let commitSubjects: [String]
+    let commits: [CommitInfo]
     let changedFiles: [CommitChangedFile]
     let diff: String
     let fileDiffsByPath: [String: String]
@@ -15,16 +16,20 @@ extension GitService {
             ["log", "\(baseRef)..HEAD", "--pretty=format:%s"],
             cwd: worktreePath
         )
+        async let commitsResult = Process.git(
+            ["log", "\(baseRef)..HEAD", "--pretty=tformat:%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s", "--numstat"],
+            cwd: worktreePath
+        )
         async let diffResult = Process.git(
-            ["diff", "--no-color", "-M", diffRange],
+            ["-c", "core.quotePath=false", "diff", "--no-color", "-M", diffRange],
             cwd: worktreePath
         )
         async let filesResult = Process.git(
-            ["diff", "--no-color", "-M", "--numstat", diffRange],
+            ["-c", "core.quotePath=false", "diff", "--no-color", "-M", "--numstat", diffRange],
             cwd: worktreePath
         )
         async let namesResult = Process.git(
-            ["diff", "--no-color", "-M", "--name-status", diffRange],
+            ["-c", "core.quotePath=false", "diff", "--no-color", "-M", "--name-status", diffRange],
             cwd: worktreePath
         )
         async let statusResult = Process.git(
@@ -33,12 +38,14 @@ extension GitService {
         )
 
         let subjects = try await subjectsResult
+        let commits = try await commitsResult
         let diff = try await diffResult
         let files = try await filesResult
         let names = try await namesResult
         let status = try await statusResult
 
         try Self.assertReviewRequestSuccess(subjects)
+        try Self.assertReviewRequestSuccess(commits)
         try Self.assertReviewRequestSuccess(diff)
         try Self.assertReviewRequestSuccess(files)
         try Self.assertReviewRequestSuccess(names)
@@ -53,6 +60,8 @@ extension GitService {
         for file in changedFiles {
             let fileDiff = try await Process.git(
                 [
+                    "-c",
+                    "core.quotePath=false",
                     "diff",
                     "--no-color",
                     "-M",
@@ -67,6 +76,7 @@ extension GitService {
 
         return ReviewRequestDraftContext(
             commitSubjects: commitSubjects,
+            commits: Self.reviewRequestCommits(log: commits.stdout),
             changedFiles: changedFiles,
             diff: diff.stdout,
             fileDiffsByPath: fileDiffsByPath,
@@ -100,6 +110,51 @@ extension GitService {
                     del: stat.del
                 )
             }
+    }
+
+    private static func reviewRequestCommits(log: String) -> [CommitInfo] {
+        let records = log
+            .split(separator: "\u{1e}", omittingEmptySubsequences: true)
+            .map(String.init)
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        return records.compactMap { record in
+            let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+            guard let headerLine = lines.first else { return nil }
+            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 4, omittingEmptySubsequences: false)
+            guard fields.count == 5 else { return nil }
+
+            let rawSubject = String(fields[4])
+            let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
+            var filesChanged = 0
+            var additions = 0
+            var deletions = 0
+            for line in lines.dropFirst() {
+                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                if trimmedLine.isEmpty { continue }
+                let parts = trimmedLine.split(separator: "\t", omittingEmptySubsequences: false)
+                guard parts.count >= 3 else { continue }
+                filesChanged += 1
+                if let add = Int(parts[0]) { additions += add }
+                if let del = Int(parts[1]) { deletions += del }
+            }
+
+            return CommitInfo(
+                sha: String(fields[0]),
+                shortSha: String(fields[1]),
+                author: String(fields[2]),
+                authorInitials: CommitInfo.initials(for: String(fields[2])),
+                date: isoFormatter.date(from: String(fields[3])) ?? Date(timeIntervalSince1970: 0),
+                subject: subject,
+                conventionalTag: tag,
+                filesChanged: filesChanged,
+                insertions: additions,
+                deletions: deletions
+            )
+        }
     }
 }
 
