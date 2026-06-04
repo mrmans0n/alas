@@ -155,8 +155,18 @@ final class RemoteSessionGateway {
               let pending = session.transcript.pendingQuestion,
               Self.requestIdInt(pending.id) == requestId          // first-wins guard
         else { return }
-        let acpAnswers = answers.map {
-            ACPQuestionAnswer(questionId: $0.questionId, selectedOptionIds: $0.selectedOptionIds)
+        // Require a non-empty selection for every question and order each by the
+        // question's option order — the same completeness rule the local prompt
+        // enforces (ACPQuestionPrompt.answeredResponse). Ignore malformed/partial
+        // input rather than resuming the agent with vacuous answers.
+        let selectionByQuestion = Dictionary(answers.map { ($0.questionId, Set($0.selectedOptionIds)) },
+                                             uniquingKeysWith: { $1 })
+        var acpAnswers: [ACPQuestionAnswer] = []
+        for question in pending.params.questions {
+            let selected = selectionByQuestion[question.id] ?? []
+            guard !selected.isEmpty else { return }   // incomplete — keep the question pending
+            let ordered = question.options.map(\.id).filter { selected.contains($0) }
+            acpAnswers.append(ACPQuestionAnswer(questionId: question.id, selectedOptionIds: ordered))
         }
         provider.answerQuestion(for: sessionId, .init(outcome: .answered(answers: acpAnswers)))
         send(.questionResolved(sessionId: sessionId, requestId: requestId))

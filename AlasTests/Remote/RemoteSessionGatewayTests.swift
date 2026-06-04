@@ -194,6 +194,23 @@ struct RemoteSessionGatewayTests {
         #expect(provider.lastQuestionResponse == nil)  // stale requestId ignored
     }
 
+    @Test func incompleteQuestionAnswerIsNoOp() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        // Empty selection for the only question — must not resume the agent.
+        await gw.handle(.questionAnswer(
+            sessionId: "s1",
+            requestId: 0,
+            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: [])]))
+        #expect(provider.lastQuestionResponse == nil)
+        #expect(!sent.contains { if case .questionResolved = $0 { return true }; return false })
+    }
+
     @Test func transcriptMutationEmitsCoalescedDelta() async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("hello")
