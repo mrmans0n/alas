@@ -191,9 +191,14 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
         }
 
+        var args = ["run", "view", runID, "--log-failed", "-R", remote.repositorySlug]
+        if let jobID = Self.githubJobID(from: item.providerURL) {
+            args.append(contentsOf: ["--job", jobID])
+        }
+
         let result = try await runner.run(
             "gh",
-            args: ["run", "view", runID, "--log-failed", "-R", remote.repositorySlug],
+            args: args,
             cwd: cwd
         )
         guard result.exitCode == 0 else {
@@ -402,6 +407,20 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
         let runID = components[runIDIndex]
         return runID.isEmpty ? nil : runID
+    }
+
+    static func githubJobID(from url: URL?) -> String? {
+        guard let url else { return nil }
+        let components = url.pathComponents
+        guard let jobIndex = components.firstIndex(of: "job") else {
+            return nil
+        }
+        let jobIDIndex = components.index(after: jobIndex)
+        guard jobIDIndex < components.endIndex else {
+            return nil
+        }
+        let jobID = components[jobIDIndex]
+        return jobID.isEmpty ? nil : jobID
     }
 
     private static func parseReviewThreadsPage(_ json: String) throws -> ReviewThreadsPage {

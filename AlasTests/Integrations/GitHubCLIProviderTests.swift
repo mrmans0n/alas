@@ -403,6 +403,37 @@ struct GitHubCLIProviderTests {
         #expect(await runner.commands == [
             FakeRunner.Command(
                 executable: "gh",
+                args: ["run", "view", "1", "--log-failed", "-R", "mrmans0n/alas", "--job", "3"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func checkEvidenceDetailFallsBackToRunLogWhenJobIDIsUnavailable() async throws {
+        let request = Self.makeRequest(checks: [])
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "failure details", stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let item = ReviewEvidenceItem(
+            id: "ci:test",
+            section: .ci,
+            title: "test",
+            subtitle: "CI",
+            status: .failed,
+            providerURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/1")
+        )
+
+        _ = try await provider.checkEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
                 args: ["run", "view", "1", "--log-failed", "-R", "mrmans0n/alas"],
                 cwd: Self.cwd
             ),
