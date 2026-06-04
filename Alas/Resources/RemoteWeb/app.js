@@ -110,7 +110,10 @@ function showPermission(sessionId, payload) {
     b.textContent = o.name;
     b.className = o.kind.startsWith("allow") ? "btn-allow" : "btn-deny";
     b.onclick = () => {
-      send({ type: "permissionDecision", sessionId, requestId: payload.requestId, optionId: o.optionId, persistScope: o.kind.endsWith("always") ? "project" : "session" });
+      // "once" kinds send null so the server reproduces the local prompt's
+      // mapping (once → don't persist / re-ask next time); only "*_always"
+      // persists. Sending "session" here would silently auto-approve later calls.
+      send({ type: "permissionDecision", sessionId, requestId: payload.requestId, optionId: o.optionId, persistScope: o.kind.endsWith("always") ? "project" : null });
       hidePermission();
     };
     box.appendChild(b);
