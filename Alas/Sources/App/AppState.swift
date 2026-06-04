@@ -3216,7 +3216,8 @@ extension AppState: RemoteSessionsProvider {
                     id: row.id,
                     title: row.title,
                     agentId: row.agentId,
-                    status: state.map(RemoteSessionGateway.stateString) ?? "idle"
+                    status: state.map(RemoteSessionGateway.stateString) ?? "idle",
+                    canDrive: false // TODO(P2-T4): real canDrive via isWriter
                 ))
             }
         }

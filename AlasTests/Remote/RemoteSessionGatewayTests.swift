@@ -87,7 +87,7 @@ struct RemoteSessionGatewayTests {
 
     @Test func listSessionsEmitsSummaries() async {
         let provider = FakeSessionsProvider()
-        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle")]
+        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.listSessions)
@@ -101,7 +101,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(let id, _, let msgs)? = sent.first else {
+        guard case .transcriptSnapshot(let id, _, _, let msgs)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
         }
@@ -262,7 +262,7 @@ struct RemoteSessionGatewayTests {
         s.transcript.messages.append(.agent(id: UUID(), StreamingText("more")))  // fires objectWillChange
         try await Task.sleep(nanoseconds: 250_000_000)  // > coalesce window
         let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
-            if case .transcriptDelta(_, _, let upserts) = msg { return upserts }
+            if case .transcriptDelta(_, _, _, let upserts) = msg { return upserts }
             return nil
         }.last
         let delta2 = try #require(delta, "expected a transcriptDelta after mutation")

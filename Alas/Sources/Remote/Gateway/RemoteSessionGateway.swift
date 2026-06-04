@@ -48,6 +48,8 @@ final class RemoteSessionGateway {
             applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
+        case .takeOver, .sendPrompt, .stop:
+            break // TODO(P2-T3): implement drive verbs
         }
     }
 
@@ -66,6 +68,7 @@ final class RemoteSessionGateway {
         let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
+                                 canDrive: false, // TODO(P2-T3): real canDrive
                                  messages: wire))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
@@ -96,6 +99,7 @@ final class RemoteSessionGateway {
         let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
         send(.transcriptDelta(sessionId: id,
                               streamingState: Self.stateString(session.transcript.streamingState),
+                              canDrive: false, // TODO(P2-T3): real canDrive
                               upserts: wire))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)

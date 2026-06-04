@@ -14,7 +14,8 @@ struct RemoteSessionSummary: Codable, Equatable, Sendable {
     let id: String
     let title: String
     let agentId: String
-    let status: String        // "idle" | "streaming" | "awaitingPermission"
+    let status: String       // "idle" | "streaming" | "awaitingPermission" | "awaitingInput"
+    let canDrive: Bool       // this remote-host instance currently holds the writer lease
 }
 
 /// A permission request surfaced to the client.
